@@ -11,7 +11,27 @@ requires-python = ">=3.11"
 server  = ["fastapi", "uvicorn[standard]", "websockets"]
 cli     = ["rich", "httpx"]
 desktop = ["pywebview", "httpx"]
-dev     = ["pytest", "ruff", "mypy", "hatchling"]
+dev     = ["pytest", "ruff", "mypy", "hatchling", "pytest-xdist"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
+
+[tool.pytest.ini_options]
+addopts = "-n auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
