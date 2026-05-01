@@ -29,7 +29,7 @@ class Config:
 
         config = Config()
         port = config.get("PORT", 8080)
-        data = config.data_dir  # resolves VBOT_DATA_DIR or ~/.vbot
+        data = config.data_dir  # ~/.vbot
     """
 
     def __init__(
@@ -72,19 +72,13 @@ class Config:
 
     @property
     def data_dir(self) -> Path:
-        """Resolve the vBot data directory.
+        """The vBot data directory.
 
-        Resolution order:
-
-        1. ``VBOT_DATA_DIR`` environment variable (or ``.env`` setting).
-        2. ``~/.vbot`` (a ``.vbot`` directory in the user's home).
+        Always ``~/.vbot``.
 
         Returns:
             An absolute path.  The directory is **not** created automatically.
         """
-        raw = self._data.get("VBOT_DATA_DIR")
-        if raw and isinstance(raw, str):
-            return Path(raw).expanduser().resolve()
         return Path.home() / ".vbot"
 
     # ------------------------------------------------------------------
