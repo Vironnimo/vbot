@@ -1,0 +1,22 @@
+.claude/
+.github/
+.vscode/
+.venv/
+.tmp/
+.worktrees/
+
+# Python
+.mypy_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Environment / secrets
+.env
+
+# Local app data (user-specific, not committed)
+stuff/
+TODO.md
