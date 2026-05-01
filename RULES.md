@@ -1,3 +1,0 @@
-- Deep Modules -> lots of hidden functionality, simple interfaces.
-- TDD mal testen?
-- keine Einschraenkungen fuer agents. keine verbotenen befehle (ausser echt kritische sachen wie rm -rf / und so)

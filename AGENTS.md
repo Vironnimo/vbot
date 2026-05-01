@@ -9,6 +9,7 @@ These rules apply to every agent, every task, unconditionally.
 |---|---|
 | Git (branches, commits, merges) | **Orchestrator** |
 | Project docs (`.vorch/PROJECT.md`) | **Orchestrator only** |
+| Spec files (`.vorch/specs/`) | **Orchestrator only** |
 | Planning & file-scope assignment | **Planner** |
 | Application code, tests, and UI | **Builder** |
 | Code review | **Reviewer** |
@@ -93,3 +94,5 @@ Do NOT install packages speculatively. Only request what the current task requir
 ## Project Context
 
 If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
+
+When working on a domain, read its spec file from `.vorch/specs/`. Your task will list which specs to read — treat that as a starting point, not a ceiling. Read others if you need them.

@@ -1,10 +1,7 @@
 .claude/
 .github/
 .vscode/
-# OpenCode — nur agents/ und skills/ sind getrackt
-.opencode/*
-!.opencode/agents/
-!.opencode/skills/
+.opencode/
 .venv/
 .tmp/
 .worktrees/
