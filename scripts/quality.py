@@ -105,7 +105,7 @@ def main() -> int:
         ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate"),
         (
             "pytest",
-            [sys.executable, "-m", "pytest", "-v", "--tb=short"] + test_paths,
+            [sys.executable, "-m", "pytest", "-v", "--tb=short", "--timeout=30"] + test_paths,
             "pytest",
         ),
     ]
