@@ -6,11 +6,14 @@ export default [
   js.configs.recommended,
   ...svelte.configs.recommended,
   {
-    files: ['**/*.svelte', '**/*.js'],
+    files: ['src/**/*.svelte', 'src/**/*.js'],
     languageOptions: {
       globals: {
         ...globals.browser,
       },
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
 ];

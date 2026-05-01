@@ -3,5 +3,5 @@ export function t(key, fallback) {
 }
 
 export function init(_locale) {
-  void _locale; // Stub: locale support will be implemented later.
+  /* locale support will be implemented later */
 }

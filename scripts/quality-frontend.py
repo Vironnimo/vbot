@@ -17,8 +17,8 @@ import subprocess
 import sys
 import time
 
-
 # ---------- path helpers ----------
+
 
 def _has_extension(path: str) -> bool:
     """Return True if the last segment of *path* looks like a file name."""
@@ -44,7 +44,7 @@ def deduplicate_paths(paths: list[str]) -> list[str]:
 def strip_webui_prefix(path: str) -> str:
     """Remove the ``webui/`` prefix so paths are relative to the webui dir."""
     if path.startswith("webui/"):
-        return path[len("webui/"):]
+        return path[len("webui/") :]
     return path
 
 
@@ -69,9 +69,7 @@ def translate_to_parent_dir(paths: list[str]) -> list[str]:
 #   Tests  2 passed (2)
 #   Tests  1 failed | 2 passed (3)
 
-_VITEST_FAILED_PASSED_RE = re.compile(
-    r"Tests\s+(\d+)\s+failed\s+\|\s+(\d+)\s+passed\s+\((\d+)\)"
-)
+_VITEST_FAILED_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+failed\s+\|\s+(\d+)\s+passed\s+\((\d+)\)")
 _VITEST_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+passed\s+\((\d+)\)")
 
 
@@ -89,6 +87,7 @@ def parse_vitest_counts(output: str) -> tuple[int, int]:
 
 
 # ---------- main ----------
+
 
 def main() -> int:
     # Resolve full executable paths so subprocess.run works on Windows
@@ -200,9 +199,7 @@ def main() -> int:
         print(f"All gates passed in {total_elapsed:.1f}s.")
     else:
         # Count validation-gate failures (eslint, vitest, build) for the summary.
-        failed_count = sum(
-            1 for label, _ in failures if label not in ("prettier", "eslint fix")
-        )
+        failed_count = sum(1 for label, _ in failures if label not in ("prettier", "eslint fix"))
         gate_word = "s" if failed_count != 1 else ""
         print(f"{failed_count} gate{gate_word} failed in {total_elapsed:.1f}s.")
 
