@@ -1,9 +1,14 @@
 .claude/
 .github/
 .vscode/
+# OpenCode — nur agents/ und skills/ sind getrackt
+.opencode/*
+!.opencode/agents/
+!.opencode/skills/
 .venv/
 .tmp/
 .worktrees/
+.vorch/
 
 # Python
 .mypy_cache/
