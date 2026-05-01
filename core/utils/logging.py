@@ -80,7 +80,16 @@ class LogManager:
 
     @staticmethod
     def _resolve_level(level: int | str) -> int:
-        """Normalise a log level name (string) or int to an int."""
+        """Normalise a log level name (string) or int to an int.
+
+        ``logging.getLevelName()`` is annotated ``-> int`` for string
+        input but can return a string for unrecognised level names
+        (e.g. ``"Level GARBAGE"``).  We guard against that by falling
+        back to ``logging.INFO`` when the result is not an ``int``.
+        """
         if isinstance(level, int):
             return level
-        return logging.getLevelName(level.upper())
+        numeric = logging.getLevelName(level.upper())
+        if not isinstance(numeric, int):
+            return logging.INFO
+        return numeric

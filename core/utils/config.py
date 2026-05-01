@@ -81,11 +81,15 @@ class Config:
         1. ``VCONTROL_DATA_DIR`` environment variable (or ``.env`` setting).
         2. ``~/.vbot`` (a ``.vbot`` directory in the user's home).
 
+        Reads the raw value from ``self._data`` to avoid coercion —
+        a boolean-coerced ``"true"`` would become ``Path("True")`` instead
+        of being rejected as a non-path value.
+
         Returns:
             An absolute path.  The directory is **not** created automatically.
         """
-        raw = self.get("VCONTROL_DATA_DIR")
-        if raw:
+        raw = self._data.get("VCONTROL_DATA_DIR")
+        if raw and isinstance(raw, str):
             return Path(raw).expanduser().resolve()
         return Path.home() / ".vbot"
 
@@ -152,8 +156,14 @@ class Config:
                 self._data[key] = self._coerce_value(value)
 
     def _load_os_environ(self) -> None:
-        """Overlay process environment variables (highest priority)."""
-        self._data.update(os.environ)
+        """Overlay process environment variables (highest priority).
+
+        Values are coerced through :meth:`_coerce_value` for consistency
+        with ``.env``-file handling — e.g. ``LOG_LEVEL=20`` becomes
+        ``int(20)`` from either source.
+        """
+        for key, value in os.environ.items():
+            self._data[key] = self._coerce_value(value)
 
     @staticmethod
     def _coerce_value(value: str) -> Any:

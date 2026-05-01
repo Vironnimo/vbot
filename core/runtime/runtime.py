@@ -37,14 +37,22 @@ class Runtime:
         log_level = config.get("LOG_LEVEL", "INFO")
         self._log_manager = LogManager(level=log_level)
         self.logger: LoggerProtocol | None = None
+        self._started: bool = False
 
     def start(self) -> None:
         """Start the runtime and initialise all services.
 
         Creates the ``vbot.core`` logger and signals that the
-        application is ready.
+        application is ready.  Idempotent — calling ``start()``
+        more than once is a no-op (logged at debug level).
         """
+        if self._started:
+            logger = self._log_manager.get_logger("core")
+            logger.debug("Runtime already started — skipping")
+            return
+
         self.logger = self._log_manager.get_logger("core")
+        self._started = True
         self.logger.info("Runtime started")
 
     def stop(self) -> None:
@@ -54,3 +62,4 @@ class Runtime:
         """
         if self.logger is not None:
             self.logger.info("Runtime stopped")
+        self._started = False
