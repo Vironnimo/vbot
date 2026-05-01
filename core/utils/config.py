@@ -29,7 +29,7 @@ class Config:
 
         config = Config()
         port = config.get("PORT", 8080)
-        data = config.data_dir  # resolves VCONTROL_DATA_DIR or ~/.vbot
+        data = config.data_dir  # resolves VBOT_DATA_DIR or ~/.vbot
     """
 
     def __init__(
@@ -76,17 +76,13 @@ class Config:
 
         Resolution order:
 
-        1. ``VCONTROL_DATA_DIR`` environment variable (or ``.env`` setting).
+        1. ``VBOT_DATA_DIR`` environment variable (or ``.env`` setting).
         2. ``~/.vbot`` (a ``.vbot`` directory in the user's home).
-
-        Reads the raw value from ``self._data`` to avoid coercion —
-        a boolean-coerced ``"true"`` would become ``Path("True")`` instead
-        of being rejected as a non-path value.
 
         Returns:
             An absolute path.  The directory is **not** created automatically.
         """
-        raw = self._data.get("VCONTROL_DATA_DIR")
+        raw = self._data.get("VBOT_DATA_DIR")
         if raw and isinstance(raw, str):
             return Path(raw).expanduser().resolve()
         return Path.home() / ".vbot"
