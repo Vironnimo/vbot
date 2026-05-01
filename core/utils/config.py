@@ -36,6 +36,7 @@ class Config:
         self,
         env_path: str | Path | None = None,
         settings_path: str | Path | None = None,
+        data_dir: str | Path | None = None,
     ) -> None:
         """Initialise the configuration.
 
@@ -44,12 +45,14 @@ class Config:
                       relative to the current working directory.
             settings_path: Path to a ``settings.json`` file.  Defaults
                            to ``./settings.json`` relative to CWD.
+            data_dir: vBot data directory.  Defaults to ``~/.vbot``.
         """
         self._data: dict[str, Any] = {}
         root = Path.cwd()
 
         self._env_path = Path(env_path) if env_path else root / ".env"
         self._settings_path = Path(settings_path) if settings_path else root / "settings.json"
+        self._data_dir = Path(data_dir) if data_dir else Path.home() / ".vbot"
 
         self._load()
 
@@ -74,12 +77,12 @@ class Config:
     def data_dir(self) -> Path:
         """The vBot data directory.
 
-        Always ``~/.vbot``.
+        Defaults to ``~/.vbot`` unless overridden via constructor.
 
         Returns:
             An absolute path.  The directory is **not** created automatically.
         """
-        return Path.home() / ".vbot"
+        return self._data_dir
 
     # ------------------------------------------------------------------
     # Loading helpers
