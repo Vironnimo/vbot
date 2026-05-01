@@ -22,3 +22,7 @@ __pycache__/
 # Local app data (user-specific, not committed)
 stuff/
 TODO.md
+
+# Node / webui
+node_modules/
+webui/dist/
