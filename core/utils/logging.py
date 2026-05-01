@@ -6,7 +6,6 @@ prefixed with ``vbot.`` (e.g., ``vbot.core``, ``vbot.server``).
 """
 
 import logging
-from typing import Optional
 
 
 class LogManager:
@@ -34,7 +33,7 @@ class LogManager:
                    or a level name string (e.g. ``"INFO"``).
         """
         self._level: int = self._resolve_level(level)
-        self._handler: Optional[logging.Handler] = None
+        self._handler: logging.Handler | None = None
         self._loggers: dict[str, logging.Logger] = {}
 
     # ------------------------------------------------------------------
@@ -72,9 +71,7 @@ class LogManager:
         if self._handler is None:
             handler = logging.StreamHandler()
             handler.setLevel(self._level)
-            handler.setFormatter(
-                logging.Formatter(self._FORMAT, datefmt=self._DATE_FORMAT)
-            )
+            handler.setFormatter(logging.Formatter(self._FORMAT, datefmt=self._DATE_FORMAT))
             self._handler = handler
         return self._handler
 

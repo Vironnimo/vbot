@@ -49,9 +49,7 @@ class Config:
         root = Path.cwd()
 
         self._env_path = Path(env_path) if env_path else root / ".env"
-        self._settings_path = (
-            Path(settings_path) if settings_path else root / "settings.json"
-        )
+        self._settings_path = Path(settings_path) if settings_path else root / "settings.json"
 
         self._load()
 
@@ -117,8 +115,7 @@ class Config:
 
         if not isinstance(data, dict):
             raise ConfigError(
-                f"Expected a JSON object at {self._settings_path}, "
-                f"got {type(data).__name__}"
+                f"Expected a JSON object at {self._settings_path}, got {type(data).__name__}"
             )
 
         self._data.update(data)
@@ -133,7 +130,7 @@ class Config:
         except OSError as exc:
             raise ConfigError(f"Cannot read {self._env_path}: {exc}") from exc
 
-        for line_no, line in enumerate(raw.splitlines(), start=1):
+        for _line_no, line in enumerate(raw.splitlines(), start=1):
             stripped = line.strip()
 
             # Skip blank lines and comments
