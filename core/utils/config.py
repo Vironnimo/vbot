@@ -34,25 +34,23 @@ class Config:
 
     def __init__(
         self,
+        data_dir: str | Path | None = None,
         env_path: str | Path | None = None,
         settings_path: str | Path | None = None,
-        data_dir: str | Path | None = None,
     ) -> None:
         """Initialise the configuration.
 
         Args:
-            env_path: Path to a ``.env`` file.  Defaults to ``./.env``
-                      relative to the current working directory.
-            settings_path: Path to a ``settings.json`` file.  Defaults
-                           to ``./settings.json`` relative to CWD.
             data_dir: vBot data directory.  Defaults to ``~/.vbot``.
+            env_path: Path to a ``.env`` file.  Defaults to
+                      ``<data_dir>/.env``.
+            settings_path: Path to a ``settings.json`` file.  Defaults
+                           to ``<data_dir>/settings.json``.
         """
         self._data: dict[str, Any] = {}
-        root = Path.cwd()
-
-        self._env_path = Path(env_path) if env_path else root / ".env"
-        self._settings_path = Path(settings_path) if settings_path else root / "settings.json"
         self._data_dir = Path(data_dir) if data_dir else Path.home() / ".vbot"
+        self._env_path = Path(env_path) if env_path else self._data_dir / ".env"
+        self._settings_path = Path(settings_path) if settings_path else self._data_dir / "settings.json"
 
         self._load()
 
