@@ -11,7 +11,6 @@ import pytest
 
 from core.providers.adapter import ProviderAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helper: minimal concrete subclass that satisfies the ABC
 # ---------------------------------------------------------------------------
@@ -47,7 +46,9 @@ class TestProviderAdapterABC:
         """A subclass that doesn't implement send() raises TypeError."""
 
         class _MissingSend(ProviderAdapter):
-            async def stream(self, messages: list[dict], *, model_id: str, **kwargs) -> AsyncIterator[dict]:
+            async def stream(
+                self, messages: list[dict], *, model_id: str, **kwargs
+            ) -> AsyncIterator[dict]:
                 yield {}
 
         with pytest.raises(TypeError, match="abstract method"):
