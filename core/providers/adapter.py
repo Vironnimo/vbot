@@ -20,6 +20,16 @@ class ProviderAdapter(ABC):
     """
 
     @abstractmethod
+    async def aclose(self) -> None:
+        """Close the HTTP client and release resources.
+
+        Subclasses that hold an ``httpx.AsyncClient`` should await
+        its ``aclose()`` method.  Callers should use the async context
+        manager interface (``async with``) or call this explicitly
+        when the adapter is no longer needed.
+        """
+
+    @abstractmethod
     async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict:
         """Send a non-streaming chat request.
 

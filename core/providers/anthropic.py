@@ -25,39 +25,20 @@ from typing import Any
 
 import httpx
 
+from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import (
-    ProviderAuthError,
-    ProviderError,
-    ProviderRateLimitError,
-    ProviderTimeoutError,
-)
+from core.providers.errors import ProviderError
 from core.providers.providers import ProviderConfig
 from core.utils.retry import retry_async
 
 # ---------------------------------------------------------------------------
-# HTTP status constants
+# Anthropic-specific constants
 # ---------------------------------------------------------------------------
 
-HTTP_UNAUTHORIZED = 401
-HTTP_FORBIDDEN = 403
-HTTP_RATE_LIMITED = 429
-HTTP_BAD_GATEWAY = 502
-HTTP_SERVICE_UNAVAILABLE = 503
-HTTP_OVERLOADED = 529  # Anthropic-specific: server overloaded
+# Status code 529 is Anthropic-specific: server overloaded.
+_HTTP_OVERLOADED = 529
 
-RETRYABLE_STATUS_CODES = {
-    HTTP_RATE_LIMITED,
-    HTTP_BAD_GATEWAY,
-    HTTP_SERVICE_UNAVAILABLE,
-    HTTP_OVERLOADED,
-}
-AUTH_ERROR_STATUS_CODES = {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}
-
-# ---------------------------------------------------------------------------
 # SSE / API constants
-# ---------------------------------------------------------------------------
-
 SSE_DATA_PREFIX = "data: "
 SSE_EVENT_PREFIX = "event: "
 MESSAGES_ENDPOINT = "/messages"
@@ -83,6 +64,20 @@ class AnthropicAdapter(ProviderAdapter):
             base_url=config.base_url,
             timeout=60.0,
         )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def aclose(self) -> None:
+        """Close the HTTP client and release resources."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> AnthropicAdapter:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
 
     # ------------------------------------------------------------------
     # Header / payload helpers
@@ -144,12 +139,12 @@ class AnthropicAdapter(ProviderAdapter):
         return payload
 
     # ------------------------------------------------------------------
-    # Error classification
+    # Error detail helper (Anthropic-specific)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _classify_error(status_code: int, response_body: str = "") -> None:
-        """Classify an HTTP status code and raise the appropriate provider error.
+    def _build_error_detail(status_code: int, response_body: str = "") -> str:
+        """Build an error detail string from an Anthropic error response.
 
         Parses the Anthropic error response format for richer error messages.
         The Anthropic API returns errors as::
@@ -160,12 +155,10 @@ class AnthropicAdapter(ProviderAdapter):
             status_code: HTTP response status code.
             response_body: Response body text for context.
 
-        Raises:
-            ProviderAuthError: 401 / 403 (not retryable).
-            ProviderRateLimitError: 429 (retryable).
-            ProviderError: Other 4xx/5xx (retryable for 429/502/503/529).
+        Returns:
+            A human-readable detail string combining the status code with
+            any structured error information available.
         """
-        # Build a detail string; try to parse Anthropic's error format first.
         detail = str(status_code)
         try:
             error_data = json.loads(response_body) if response_body else {}
@@ -179,23 +172,7 @@ class AnthropicAdapter(ProviderAdapter):
         except (json.JSONDecodeError, AttributeError):
             if response_body:
                 detail = f"{status_code}: {response_body}"
-
-        if status_code in AUTH_ERROR_STATUS_CODES:
-            raise ProviderAuthError(f"Authentication error: {detail}")
-        if status_code == HTTP_RATE_LIMITED:
-            raise ProviderRateLimitError(f"Rate limited: {detail}")
-        if status_code >= 400:
-            retryable = status_code in RETRYABLE_STATUS_CODES
-            raise ProviderError(f"Provider error: {detail}", retryable=retryable)
-
-    # ------------------------------------------------------------------
-    # Network error wrapping
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _wrap_network_error(exc: Exception) -> ProviderTimeoutError:
-        """Wrap a network-level exception in ``ProviderTimeoutError``."""
-        return ProviderTimeoutError(f"Request failed: {exc}")
+        return detail
 
     # ------------------------------------------------------------------
     # send() — non-streaming
@@ -239,11 +216,14 @@ class AnthropicAdapter(ProviderAdapter):
                     headers=headers,
                 )
             except httpx.TimeoutException as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
 
-            self._classify_error(response.status_code, response.text)
+            detail = self._build_error_detail(response.status_code, response.text)
+            classify_http_status(
+                response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
+            )
             return dict(response.json())
 
         return await retry_async(_do_request)
@@ -299,17 +279,20 @@ class AnthropicAdapter(ProviderAdapter):
             try:
                 response = await self._client.send(request, stream=True)
             except httpx.TimeoutException as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
             # before classifying — this frees the connection for retry.
             if response.status_code >= 400:
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
-                self._classify_error(response.status_code, error_body)
-                # _classify_error always raises for >= 400; this is unreachable
+                detail = self._build_error_detail(response.status_code, error_body)
+                classify_http_status(
+                    response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
+                )
+                # classify_http_status always raises for >= 400; this is unreachable
                 # but satisfies type checkers.
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
 

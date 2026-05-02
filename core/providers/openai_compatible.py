@@ -14,28 +14,11 @@ from typing import Any
 
 import httpx
 
+from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import (
-    ProviderAuthError,
-    ProviderError,
-    ProviderRateLimitError,
-    ProviderTimeoutError,
-)
+from core.providers.errors import ProviderError
 from core.providers.providers import ProviderConfig
 from core.utils.retry import retry_async
-
-# ---------------------------------------------------------------------------
-# HTTP status constants
-# ---------------------------------------------------------------------------
-
-HTTP_UNAUTHORIZED = 401
-HTTP_FORBIDDEN = 403
-HTTP_RATE_LIMITED = 429
-HTTP_BAD_GATEWAY = 502
-HTTP_SERVICE_UNAVAILABLE = 503
-
-RETRYABLE_STATUS_CODES = {HTTP_RATE_LIMITED, HTTP_BAD_GATEWAY, HTTP_SERVICE_UNAVAILABLE}
-AUTH_ERROR_STATUS_CODES = {HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}
 
 # ---------------------------------------------------------------------------
 # SSE parsing constants
@@ -68,6 +51,20 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
 
     # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def aclose(self) -> None:
+        """Close the HTTP client and release resources."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> OpenAICompatibleAdapter:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
+
+    # ------------------------------------------------------------------
     # Header / payload helpers
     # ------------------------------------------------------------------
 
@@ -98,46 +95,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Apply caller overrides (highest priority)
         payload.update(kwargs)
         return payload
-
-    # ------------------------------------------------------------------
-    # Error classification
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _classify_status(status_code: int, reason: str = "") -> None:
-        """Classify an HTTP status code and raise the appropriate provider error.
-
-        If *status_code* indicates success (< 400) the function returns
-        silently.  Otherwise it raises the correct subclass of
-        ``ProviderError`` with the ``retryable`` flag set appropriately.
-
-        Args:
-            status_code: HTTP response status code.
-            reason: Optional reason phrase or response body for context.
-
-        Raises:
-            ProviderAuthError: 401 / 403 (not retryable).
-            ProviderRateLimitError: 429 (retryable).
-            ProviderError: Other 4xx/5xx (retryable only for 502/503).
-        """
-        detail = f"{status_code} {reason}".strip() if reason else str(status_code)
-
-        if status_code in AUTH_ERROR_STATUS_CODES:
-            raise ProviderAuthError(f"Authentication error: {detail}")
-        if status_code == HTTP_RATE_LIMITED:
-            raise ProviderRateLimitError(f"Rate limited: {detail}")
-        if status_code >= 400:
-            retryable = status_code in RETRYABLE_STATUS_CODES
-            raise ProviderError(f"Provider error: {detail}", retryable=retryable)
-
-    # ------------------------------------------------------------------
-    # Network error wrapping
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _wrap_network_error(exc: Exception) -> ProviderTimeoutError:
-        """Wrap a network-level exception in ``ProviderTimeoutError``."""
-        return ProviderTimeoutError(f"Request failed: {exc}")
 
     # ------------------------------------------------------------------
     # send() — non-streaming
@@ -180,11 +137,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     headers=headers,
                 )
             except httpx.TimeoutException as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
 
-            self._classify_status(response.status_code, response.text)
+            reason = response.text
+            detail = (
+                f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
+            )
+            classify_http_status(response.status_code, detail=detail)
             return dict(response.json())
 
         return await retry_async(_do_request)
@@ -234,17 +195,22 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             try:
                 response = await self._client.send(request, stream=True)
             except httpx.TimeoutException as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
-                raise self._wrap_network_error(exc) from exc
+                raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
             # before classifying — this frees the connection for retry.
             if response.status_code >= 400:
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
-                self._classify_status(response.status_code, error_body)
-                # _classify_status always raises for >= 400; this is unreachable
+                detail = (
+                    f"{response.status_code} {error_body}".strip()
+                    if error_body
+                    else str(response.status_code)
+                )
+                classify_http_status(response.status_code, detail=detail)
+                # classify_http_status always raises for >= 400; this is unreachable
                 # but satisfies type checkers.
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
 

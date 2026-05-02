@@ -1139,3 +1139,33 @@ class TestStreamSSE:
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["thinking"] == thinking
         assert request_body["output_config"] == output_config
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: aclose() and async context manager
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycle:
+    """Verify that aclose() and async context manager work correctly."""
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_http_client(self):
+        """aclose() closes the underlying httpx.AsyncClient."""
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY)
+        assert not adapter._client.is_closed
+        await adapter.aclose()
+        assert adapter._client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_context_manager_closes_client(self):
+        """Using 'async with' closes the client on exit."""
+        async with AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY) as adapter:
+            assert not adapter._client.is_closed
+        assert adapter._client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_context_manager_yields_adapter(self):
+        """The context manager yields the adapter instance."""
+        async with AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY) as adapter:
+            assert isinstance(adapter, AnthropicAdapter)

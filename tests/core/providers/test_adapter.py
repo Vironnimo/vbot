@@ -20,6 +20,9 @@ from core.providers.adapter import ProviderAdapter
 class _StubAdapter(ProviderAdapter):
     """Minimal concrete adapter used by contract tests."""
 
+    async def aclose(self) -> None:
+        """No-op close for stub adapter."""
+
     async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict:
         return {"model": model_id, "messages": messages}
 
