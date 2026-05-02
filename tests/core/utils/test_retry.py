@@ -78,8 +78,10 @@ async def test_retry_stops_after_max_retries_rate_limit():
     mock_fn = AsyncMock(side_effect=ProviderRateLimitError("Rate limited"))
 
     # Act / Assert
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
-         pytest.raises(ProviderRateLimitError, match="Rate limited"):
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(ProviderRateLimitError, match="Rate limited"),
+    ):
         await retry_async(mock_fn)
 
     assert mock_fn.call_count == MAX_RETRIES + 1
@@ -92,8 +94,10 @@ async def test_retry_stops_after_max_retries_timeout():
     mock_fn = AsyncMock(side_effect=ProviderTimeoutError("Connection timed out"))
 
     # Act / Assert
-    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
-         pytest.raises(ProviderTimeoutError, match="Connection timed out"):
+    with (
+        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+        pytest.raises(ProviderTimeoutError, match="Connection timed out"),
+    ):
         await retry_async(mock_fn)
 
     assert mock_fn.call_count == MAX_RETRIES + 1
@@ -161,15 +165,17 @@ async def test_retry_exponential_backoff_increases_delay():
         recorded_delays.append(delay)
 
     # Act / Assert
-    with patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep), \
-         patch("core.utils.retry.random.uniform", return_value=0.0), \
-         pytest.raises(ProviderRateLimitError):
+    with (
+        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        patch("core.utils.retry.random.uniform", return_value=0.0),
+        pytest.raises(ProviderRateLimitError),
+    ):
         await retry_async(mock_fn)
 
     assert len(recorded_delays) == MAX_RETRIES
     assert recorded_delays[0] == pytest.approx(INITIAL_DELAY_SECONDS)
     assert recorded_delays[1] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR)
-    assert recorded_delays[2] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR ** 2)
+    assert recorded_delays[2] == pytest.approx(INITIAL_DELAY_SECONDS * BACKOFF_FACTOR**2)
 
 
 # ----- Jitter bounds -----
@@ -186,13 +192,15 @@ async def test_retry_jitter_is_bounded():
         recorded_delays.append(delay)
 
     # Act / Assert
-    with patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep), \
-         pytest.raises(ProviderRateLimitError):
+    with (
+        patch("core.utils.retry.asyncio.sleep", side_effect=mock_sleep),
+        pytest.raises(ProviderRateLimitError),
+    ):
         await retry_async(mock_fn)
 
     assert len(recorded_delays) == MAX_RETRIES
     for attempt, delay in enumerate(recorded_delays):
-        base_delay = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR ** attempt)
+        base_delay = INITIAL_DELAY_SECONDS * (BACKOFF_FACTOR**attempt)
         # delay = base_delay + uniform(0, base_delay * JITTER_FACTOR)
         # So delay is in [base_delay, base_delay * (1 + JITTER_FACTOR)]
         assert delay >= base_delay
