@@ -1,5 +1,10 @@
 """Model data classes and registry."""
 
-from core.models.models import Model, ModelRegistry
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 
-__all__ = ["Model", "ModelRegistry"]
+__all__ = [
+    "Capabilities",
+    "Model",
+    "ModelRegistry",
+    "ReasoningCapabilities",
+]
