@@ -25,7 +25,9 @@ desktop/       ← pywebview shell. Imports nothing from the project — HTTP on
 
 **Core modules:** runtime, models, chat, agents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
-public API, soft limit 600 lines per file.
+public API, soft limit 600 lines per file. Providers has a subfolder structure:
+`providers/` contains the adapter ABC, OpenAI-compatible and Anthropic adapters,
+shared HTTP utilities, and error classes in addition to the registry.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
 + SSE (streaming). No auth (single-user-local).
@@ -79,8 +81,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. See `pyproject.toml`
-for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependency: `httpx`. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -134,6 +135,19 @@ eslint). Quality gate pipeline established: `python scripts/quality-frontend.py`
 passes all five gates (prettier, eslint, vitest, build) on full and scoped scans.
 Fixed `scripts/quality-frontend.py` to resolve `npx`/`npm` via `shutil.which()`
 for Windows compatibility. No real frontend app yet — placeholder only.
+
+**2026-05-03 — Phase 1 complete (Provider + Model System):** Two-layer
+architecture implemented: Provider layer (wire protocol, auth, config) and
+Model layer (provider-specific model data with registry). Adapter hierarchy
+with `ProviderAdapter` ABC, `OpenAICompatibleAdapter` (covers OpenAI,
+OpenRouter, Groq, Together), and `AnthropicAdapter` (own wire protocol).
+Both registries load from JSON files in `resources/`, cache after first load,
+and are wired into `Runtime.start()`. `Runtime.get_adapter()` factory resolves
+API keys from environment and instantiates the correct adapter class. Error
+hierarchy: `ProviderError` (retryable/fatal) with `ProviderAuthError`,
+`ProviderRateLimitError`, `ProviderTimeoutError`. Retry utility with exponential
+backoff + jitter. 166 tests passing. New core dependency: `httpx`. New dev
+dependencies: `respx`, `pytest-asyncio`.
 
 ## Specs
 
