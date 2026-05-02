@@ -19,6 +19,14 @@ class ConfigError(VBotError):
 class ProviderError(VBotError):
     """Provider / API errors.
 
-    Placeholder — will be expanded with provider-specific subclasses
-    (rate limiting, authentication, timeout, etc.) in later phases.
+    Base class for all provider-related exceptions.  Carries a ``retryable``
+    flag that the retry utility checks to decide whether to re-attempt the
+    call.
+
+    Subclasses like ``ProviderAuthError`` hard-code ``retryable`` to a fixed
+    value; callers should not override it.
     """
+
+    def __init__(self, message: str = "", retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable

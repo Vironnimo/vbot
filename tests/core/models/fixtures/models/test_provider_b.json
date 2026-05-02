@@ -1,0 +1,31 @@
+{
+  "provider_id": "test_provider_b",
+  "models": {
+    "model-beta": {
+      "name": "Model Beta",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384
+    },
+    "model-gamma": {
+      "name": "Model Gamma",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 64000,
+      "max_output_tokens": 8192
+    }
+  }
+}

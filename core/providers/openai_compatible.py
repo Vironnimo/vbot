@@ -1,0 +1,230 @@
+"""OpenAI-compatible provider adapter.
+
+Handles the ``/chat/completions`` endpoint format used by OpenAI, OpenRouter,
+Groq, Together, and other providers that follow the OpenAI API convention.
+Differences in base URL, auth headers, and default parameters are expressed
+through ``ProviderConfig`` — no subclassing needed.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+
+from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.adapter import ProviderAdapter
+from core.providers.errors import ProviderError
+from core.providers.providers import ProviderConfig
+from core.utils.retry import retry_async
+
+# ---------------------------------------------------------------------------
+# SSE parsing constants
+# ---------------------------------------------------------------------------
+
+SSE_DATA_PREFIX = "data: "
+SSE_DONE_MARKER = "[DONE]"
+CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+
+
+class OpenAICompatibleAdapter(ProviderAdapter):
+    """Adapter for OpenAI-compatible API providers.
+
+    Uses the ``/chat/completions`` endpoint with the standard OpenAI request
+    and response format.  Provider-specific differences (base URL, auth header,
+    extra headers, default parameters) come from ``ProviderConfig`` — no
+    subclassing required.
+
+    Args:
+        config: Immutable provider configuration.
+        api_key: API key for authentication.
+    """
+
+    def __init__(self, config: ProviderConfig, api_key: str) -> None:
+        self._config = config
+        self._api_key = api_key
+        self._client = httpx.AsyncClient(
+            base_url=config.base_url,
+            timeout=60.0,
+        )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def aclose(self) -> None:
+        """Close the HTTP client and release resources."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> OpenAICompatibleAdapter:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.aclose()
+
+    # ------------------------------------------------------------------
+    # Header / payload helpers
+    # ------------------------------------------------------------------
+
+    def _build_headers(self) -> dict[str, str]:
+        """Build request headers from provider config auth and extra_headers."""
+        headers: dict[str, str] = {
+            self._config.auth.header: f"{self._config.auth.prefix}{self._api_key}",
+        }
+        if self._config.extra_headers:
+            headers.update(self._config.extra_headers)
+        return headers
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Build the request payload with model, messages, defaults, and overrides."""
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "messages": messages,
+        }
+        # Apply provider defaults (lower priority — caller kwargs win)
+        if self._config.defaults:
+            for key, value in self._config.defaults.items():
+                payload.setdefault(key, value)
+        # Apply caller overrides (highest priority)
+        payload.update(kwargs)
+        return payload
+
+    # ------------------------------------------------------------------
+    # send() — non-streaming
+    # ------------------------------------------------------------------
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Send a non-streaming chat completion request.
+
+        Retries on retryable errors (429, 502, 503) via ``retry_async``.
+        Fails immediately on auth errors (401/403).
+
+        Args:
+            messages: Conversation messages in OpenAI format.
+            model_id: Exact model identifier sent to the API.
+            **kwargs: Additional parameters (temperature, max_tokens, …).
+
+        Returns:
+            Parsed response dict from the provider.
+
+        Raises:
+            ProviderAuthError: 401 / 403 responses.
+            ProviderRateLimitError: 429 responses (retried, then raised).
+            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            ProviderError: Other HTTP errors.
+        """
+
+        async def _do_request() -> dict[str, Any]:
+            headers = self._build_headers()
+            payload = self._build_payload(messages, model_id, **kwargs)
+            try:
+                response = await self._client.post(
+                    CHAT_COMPLETIONS_ENDPOINT,
+                    json=payload,
+                    headers=headers,
+                )
+            except httpx.TimeoutException as exc:
+                raise wrap_network_error(exc) from exc
+            except httpx.ConnectError as exc:
+                raise wrap_network_error(exc) from exc
+
+            reason = response.text
+            detail = (
+                f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
+            )
+            classify_http_status(response.status_code, detail=detail)
+            return dict(response.json())
+
+        return await retry_async(_do_request)
+
+    # ------------------------------------------------------------------
+    # stream() — SSE streaming
+    # ------------------------------------------------------------------
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Send a streaming chat completion request and yield SSE chunks.
+
+        Retries the initial connection on retryable errors (429, 502, 503).
+        Once the stream is established, yields parsed SSE data chunks as
+        dicts until the ``[DONE]`` marker is received.
+
+        Args:
+            messages: Conversation messages in OpenAI format.
+            model_id: Exact model identifier sent to the API.
+            **kwargs: Additional parameters (temperature, max_tokens, …).
+
+        Yields:
+            Parsed response chunk dicts from the SSE event stream.
+
+        Raises:
+            ProviderAuthError: 401 / 403 responses.
+            ProviderRateLimitError: 429 responses (retried, then raised).
+            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            ProviderError: Other HTTP errors.
+        """
+        headers = self._build_headers()
+        payload = self._build_payload(messages, model_id, **kwargs)
+        payload["stream"] = True
+
+        async def _connect_stream() -> httpx.Response:
+            request = self._client.build_request(
+                "POST",
+                CHAT_COMPLETIONS_ENDPOINT,
+                json=payload,
+                headers=headers,
+            )
+            try:
+                response = await self._client.send(request, stream=True)
+            except httpx.TimeoutException as exc:
+                raise wrap_network_error(exc) from exc
+            except httpx.ConnectError as exc:
+                raise wrap_network_error(exc) from exc
+
+            # If the status indicates an error, read and close the response
+            # before classifying — this frees the connection for retry.
+            if response.status_code >= 400:
+                error_body = (await response.aread()).decode("utf-8", errors="replace")
+                await response.aclose()
+                detail = (
+                    f"{response.status_code} {error_body}".strip()
+                    if error_body
+                    else str(response.status_code)
+                )
+                classify_http_status(response.status_code, detail=detail)
+                # classify_http_status always raises for >= 400; this is unreachable
+                # but satisfies type checkers.
+                raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
+
+            return response
+
+        response = await retry_async(_connect_stream)
+
+        try:
+            async for line in response.aiter_lines():
+                if not line.startswith(SSE_DATA_PREFIX):
+                    continue
+                data = line[len(SSE_DATA_PREFIX) :]
+                if data.strip() == SSE_DONE_MARKER:
+                    break
+                yield json.loads(data)
+        finally:
+            await response.aclose()

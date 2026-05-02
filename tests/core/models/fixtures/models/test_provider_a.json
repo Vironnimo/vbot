@@ -1,0 +1,18 @@
+{
+  "provider_id": "test_provider_a",
+  "models": {
+    "model-alpha": {
+      "name": "Model Alpha",
+      "capabilities": {
+        "vision": true,
+        "tools": false,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 32000,
+      "max_output_tokens": 4096
+    }
+  }
+}
