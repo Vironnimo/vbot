@@ -104,12 +104,10 @@ class TestSendRequestFormat:
     async def test_send_includes_model_and_messages(self, openai_adapter):
         """The request payload contains the model ID and messages."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
         # Act
-        result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
         # Assert
         assert route.called
@@ -122,9 +120,7 @@ class TestSendRequestFormat:
     async def test_send_applies_defaults_from_config(self, openai_adapter):
         """Defaults from ProviderConfig are included when not overridden."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
         # Act
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -139,14 +135,10 @@ class TestSendRequestFormat:
     async def test_send_kwargs_override_defaults(self, openai_adapter):
         """Caller kwargs take precedence over provider defaults."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
         # Act
-        await openai_adapter.send(
-            SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=1.2
-        )
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=1.2)
 
         # Assert
         request_body = json.loads(route.calls.last.request.content)
@@ -187,9 +179,7 @@ class TestSendHeaders:
     async def test_send_bearer_auth_header(self, openai_adapter):
         """OpenAI config sends Authorization: Bearer <key>."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
         # Act
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -247,9 +237,7 @@ class TestSendSuccess:
     async def test_send_returns_parsed_response(self, openai_adapter):
         """send() returns the full response body as a dict."""
         # Arrange
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
         # Act
         result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
@@ -273,9 +261,7 @@ class TestSendErrorClassification:
     async def test_send_401_raises_provider_auth_error(self, openai_adapter):
         """HTTP 401 raises ProviderAuthError (not retryable)."""
         # Arrange
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(401, text="Invalid API key")
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(401, text="Invalid API key"))
 
         # Act / Assert
         with pytest.raises(ProviderAuthError, match="401"):
@@ -286,9 +272,7 @@ class TestSendErrorClassification:
     async def test_send_403_raises_provider_auth_error(self, openai_adapter):
         """HTTP 403 raises ProviderAuthError (not retryable)."""
         # Arrange
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(403, text="Forbidden")
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(403, text="Forbidden"))
 
         # Act / Assert
         with pytest.raises(ProviderAuthError, match="403"):
@@ -299,14 +283,12 @@ class TestSendErrorClassification:
     async def test_send_429_raises_provider_rate_limit_error(self, openai_adapter):
         """HTTP 429 raises ProviderRateLimitError (retryable), retried then raised."""
         # Arrange — 4 requests: 3 retries + 1 final that also fails
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(429, text="Rate limited")
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(429, text="Rate limited"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(ProviderRateLimitError, match="429"):
-                await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
+             pytest.raises(ProviderRateLimitError, match="429"):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
     @respx.mock
     @pytest.mark.asyncio
@@ -316,18 +298,16 @@ class TestSendErrorClassification:
         respx.post(OPENAI_URL).mock(side_effect=httpx.TimeoutException("timed out"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(ProviderTimeoutError, match="timed out"):
-                await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
+             pytest.raises(ProviderTimeoutError, match="timed out"):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_send_500_raises_non_retryable_provider_error(self, openai_adapter):
         """HTTP 500 raises ProviderError with retryable=False (not in retryable set)."""
         # Arrange
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(500, text="Internal Server Error")
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(500, text="Internal Server Error"))
 
         # Act / Assert
         with pytest.raises(ProviderError) as exc_info:
@@ -340,9 +320,7 @@ class TestSendErrorClassification:
     async def test_send_502_raises_retryable_provider_error(self, openai_adapter):
         """HTTP 502 raises ProviderError with retryable=True."""
         # Arrange — all retries fail
-        respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(502, text="Bad Gateway")
-        )
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(502, text="Bad Gateway"))
 
         # Act / Assert
         with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
@@ -425,9 +403,7 @@ class TestSendRetry:
     async def test_send_no_retry_on_401(self, openai_adapter):
         """send() raises ProviderAuthError immediately on 401 — no retry."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(401, text="Unauthorized")
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(401, text="Unauthorized"))
 
         # Act / Assert
         with pytest.raises(ProviderAuthError):
@@ -440,9 +416,7 @@ class TestSendRetry:
     async def test_send_no_retry_on_403(self, openai_adapter):
         """send() raises ProviderAuthError immediately on 403 — no retry."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(403, text="Forbidden")
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(403, text="Forbidden"))
 
         # Act / Assert
         with pytest.raises(ProviderAuthError):
@@ -548,12 +522,14 @@ class TestStreamSSE:
         """stream() parses SSE data lines and yields parsed JSON chunks."""
         # Arrange
         sse_body = (
-            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n"
-            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n"
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hello"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":" world"}}]}\n\n'
             "data: [DONE]\n\n"
         )
         route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
         )
 
         # Act
@@ -572,9 +548,13 @@ class TestStreamSSE:
     async def test_stream_includes_stream_true_in_payload(self, openai_adapter):
         """stream() sends stream=true in the request payload."""
         # Arrange
-        sse_body = 'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
         route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
         )
 
         # Act
@@ -593,11 +573,13 @@ class TestStreamSSE:
         sse_body = (
             ": this is a comment\n"
             "\n"
-            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\n"
+            'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}\n\n'
             "data: [DONE]\n\n"
         )
         respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
         )
 
         # Act
@@ -614,9 +596,7 @@ class TestStreamSSE:
     async def test_stream_401_raises_provider_auth_error(self, openai_adapter):
         """stream() raises ProviderAuthError on 401 — no retry."""
         # Arrange
-        route = respx.post(OPENAI_URL).mock(
-            return_value=httpx.Response(401, text="Unauthorized")
-        )
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(401, text="Unauthorized"))
 
         # Act / Assert
         with pytest.raises(ProviderAuthError):
@@ -632,7 +612,9 @@ class TestStreamSSE:
         # Arrange
         sse_body = 'data: {"id":"1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
         route = respx.post(OPENROUTER_URL).mock(
-            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
         )
 
         # Act
@@ -652,10 +634,10 @@ class TestStreamSSE:
         respx.post(OPENAI_URL).mock(side_effect=httpx.TimeoutException("timed out"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
-            with pytest.raises(ProviderTimeoutError, match="timed out"):
-                async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
-                    pass
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
+             pytest.raises(ProviderTimeoutError, match="timed out"):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
 
 
 # ---------------------------------------------------------------------------
