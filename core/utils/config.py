@@ -50,7 +50,9 @@ class Config:
         self._data: dict[str, Any] = {}
         self._data_dir = Path(data_dir) if data_dir else Path.home() / ".vbot"
         self._env_path = Path(env_path) if env_path else self._data_dir / ".env"
-        self._settings_path = Path(settings_path) if settings_path else self._data_dir / "settings.json"
+        self._settings_path = (
+            Path(settings_path) if settings_path else self._data_dir / "settings.json"
+        )
 
         self._load()
 
