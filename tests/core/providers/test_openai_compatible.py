@@ -286,8 +286,10 @@ class TestSendErrorClassification:
         respx.post(OPENAI_URL).mock(return_value=httpx.Response(429, text="Rate limited"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
-             pytest.raises(ProviderRateLimitError, match="429"):
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(ProviderRateLimitError, match="429"),
+        ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
     @respx.mock
@@ -298,8 +300,10 @@ class TestSendErrorClassification:
         respx.post(OPENAI_URL).mock(side_effect=httpx.TimeoutException("timed out"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
-             pytest.raises(ProviderTimeoutError, match="timed out"):
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(ProviderTimeoutError, match="timed out"),
+        ):
             await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
 
     @respx.mock
@@ -634,8 +638,10 @@ class TestStreamSSE:
         respx.post(OPENAI_URL).mock(side_effect=httpx.TimeoutException("timed out"))
 
         # Act / Assert
-        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock), \
-             pytest.raises(ProviderTimeoutError, match="timed out"):
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(ProviderTimeoutError, match="timed out"),
+        ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass
 
