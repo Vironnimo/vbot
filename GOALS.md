@@ -1,7 +1,8 @@
 # Phase 2 Goals — Contracts
 
-Items not yet decided are marked **(open)**. This document captures how things
-*will* look, not how they'll be built (see ROADMAP for the build plan).
+Items not yet decided are marked **(open)**. This document captures the stable
+Phase 2 contracts and current defaults, not how they'll be built (see ROADMAP
+for the build plan).
 
 ## 1. Agent Schema
 
@@ -28,18 +29,24 @@ but never fewer.
 - `model`: `<provider>/<model-id>` (from Phase 1). Empty = error at chat time ("no model set").
   Must reference an existing provider — if provider not found, error. If model-id doesn't exist
   at that provider, the provider API will error (we don't pre-validate model existence).
-- `fallback_model`: empty = no fallback
+- `fallback_model`: empty = no fallback configured. Exact automatic fallback behavior
+  is still **(open)**.
 - `workspace`: absolute path to the agent's workspace directory. Default on creation is
   `<data_dir>/workspace-<id>/`. User can override to a custom path.
 - `thinking_effort`: `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` —
   reasoning effort level. Empty string = provider default. Each adapter translates this
   into its provider's wire format.
-- `allowed_tools` / `allowed_skills`: `["*"]` = all, otherwise explicit list
+- `allowed_tools`: `["*"]` = all, `[]` = none, otherwise explicit list. Only allowed
+  tools appear in the `{tools}` prompt block and in the official provider API tool
+  definitions. Tools not on the allowlist are blocked by the system.
+- `allowed_skills`: `["*"]` = all, `[]` = none, otherwise explicit list. Only allowed
+  skills appear in the `{skills}` prompt block. Skills are not hard-blocked outside
+  the prompt.
 - `created_at` / `updated_at`: ISO 8601, explicit UTC offset
 
 ## Agent Lifecycle
 
-- **Create**: New agent → `data_dir/agents/<id>/agent.json` + workspace seeded from `resources/workspace-templates/` (the four files). `workspace` field in agent.json defaults to `<data_dir>/workspace-<id>/`.
+- **Create**: New agent → `data_dir/agents/<id>/agent.json` + workspace seeded from `resources/workspace-templates/` (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`). `workspace` field in agent.json defaults to `<data_dir>/workspace-<id>/`.
 - **Delete**: Agent deleted → all files (agent.json, sessions, workspace) moved to `archive/<agent-id>/`. Not permanently destroyed — can be inspected or restored.
 - **Update**: Any field except `id` can be changed. `id` is immutable (it's the directory name).
 
@@ -86,7 +93,7 @@ No hardcoded strings.
 ### Main Template
 
 ```
-You are an agent for vControl, App version: {app_version}.
+You are an agent for vBot, App version: {app_version}.
 Use the instructions below and the tools available to you to assist the user.
 
 {runtime}
@@ -95,15 +102,62 @@ Use the instructions below and the tools available to you to assist the user.
 
 {skills}
 
+{include:SOUL.md}
+{include:IDENTITY.md}
 {include:AGENTS.md}
 {include:USER.md}
 ```
 
 - `{app_version}`: application version
-- `{runtime}`: runtime info **(open)**
+- `{runtime}`: injected runtime snippet
 - `{tools}`: injected tool snippet
 - `{skills}`: injected skill snippet
-- `{include:<filename>}`: content of the workspace file inserted inline
+- `{include:<filename>}`: content of the named workspace file inserted inline
+
+### Runtime Snippet
+
+Injected into `{runtime}`:
+
+```
+## Runtime
+
+Here is useful information about the environment you are running in:
+
+- Host: {host}
+- OS: {os}
+- You are powered by the model {model}
+- Your Workspace (HOME, your CWD for tools, where you and your files live): {agent_workspace}
+- App Path: {app_dir}
+- Data Path: All app data (sessions, workspaces, skills, configs, etc.) lives here: {data_root}
+- Thinking level: {thinking_effort}
+- Date: {current_date}
+- Current time: use the `status` tool if you need the time.
+```
+
+### Tool Snippet
+
+Injected into `{tools}`:
+
+```
+## Tool Call Style
+
+- Relative paths in tool calls are always resolved to your workspace path, so use full paths when working outside of your workspace.
+- Call tools directly without first explaining what you will do.
+- If a tool returns an error, read it, correct parameters, and retry.
+- Use the fitting tool instead of asking the user to do manual steps.
+- For action-based tools, always set action and all required parameters.
+
+## Available Tools
+
+{tool_list}
+```
+
+- `{tool_list}` contains only the tool name and description for each allowed tool.
+- The same allowed tool set is used in two places: the official provider API tool
+  definitions and this prompt reminder block.
+- The official provider API tool definitions contain the tool name, a description,
+  and a parameter schema (JSON Schema).
+- If tools are not allowed, they are omitted from both places.
 
 ### Skill Snippet
 
@@ -126,12 +180,12 @@ inside the skill directory for detailed instructions to follow.
   <skill>
     <name>agent-cli</name>
     <description>Delegate coding tasks to an external AI coding agent CLI...</description>
-    <path>C:\Users\Viro\AppData\Local\vControl\skills\agent-cli\SKILL.md</path>
+    <path>C:\Users\Viro\.vbot\skills\agent-cli\SKILL.md</path>
   </skill>
   <skill>
     <name>get-news</name>
     <description>Fetch current news via RSS feeds...</description>
-    <path>C:\Users\Viro\AppData\Local\vControl\skills\get-news\SKILL.md</path>
+    <path>C:\Users\Viro\.vbot\skills\get-news\SKILL.md</path>
   </skill>
 </available_skills>
 ```
@@ -139,6 +193,7 @@ inside the skill directory for detailed instructions to follow.
 - `<name>`: skill identifier
 - `<description>`: short description of what the skill does and when to use it
 - `<path>`: absolute path to the skill's `SKILL.md`
+- `{skill_list}` is filtered by `allowed_skills`.
 
 ## 4. Session Storage
 
@@ -177,24 +232,29 @@ Every line is a ChatMessage. This is the canonical message type between the chat
 - `id`: UUID — unique per message, searchable, correlatable
 - `timestamp`: ISO 8601 with explicit UTC offset
 - `model`: `<provider>/<model-id>` — which provider/model produced this message. Used by the adapter to decide whether to round-trip `reasoning_meta` opaque data.
-- `reasoning`: readable thinking text from the model. Stored for search, display, and as context for any provider.
-- `reasoning_meta`: opaque provider-specific data (Anthropic `signature`/`redacted_thinking`, OpenAI `encrypted_content`, Gemini `thoughtSignature`, OpenRouter `reasoning_details`). The adapter serializes this from the API response and uses it for round-tripping. The chat layer never interprets it. Unknown fields are ignored — new fields can be added later without breaking old files.
+- `reasoning`: readable thinking text from the model. Stored for search, display, and as normal plain-text context.
+- `reasoning_meta`: opaque provider-specific data (Anthropic `signature`/`redacted_thinking`, OpenAI `encrypted_content`, Gemini `thoughtSignature`, OpenRouter `reasoning_details`). The adapter serializes this from the API response and uses it for round-tripping when needed. The chat layer never interprets it. Unknown fields are ignored — new fields can be added later without breaking old files.
 
 ### CoT Round-Trip Rules
 
-- **Same provider, same session**: Adapter round-trips `reasoning_meta` opaque data unchanged — full reasoning continuity.
-- **Different provider, same session**: Adapter skips stale `reasoning_meta` from the old provider. The `reasoning` text stays in the message and can be sent as normal context. Reasoning continuity is lost for the old provider, but the new provider starts fresh.
-- **Tool-use loop (mandatory)**: CoT data from the current assistant turn must be sent back unchanged with the tool result. Dropping opaque data breaks model continuity (Anthropic, Gemini 3) or loses reasoning context (OpenAI).
-- **After a completed turn (fresh user message)**: Provider-dependent. Anthropic recommends sending all previous thinking blocks. Other providers may not require it. This is not yet decided for vBot — the session stores everything, but what gets sent is an adapter decision we'll refine per provider.
+- **Tool-use loop (mandatory)**: `reasoning_meta` from the current assistant turn must be sent back unchanged with the tool result. Dropping opaque data breaks model continuity.
+- **After a completed turn (fresh user message)**: by default, old `reasoning_meta` is not sent again. The readable `reasoning` text can still remain in history as normal context.
+- **Different provider, same session**: stale `reasoning_meta` from the old provider is never sent to the new provider.
+- **Keep this easy to change**: provider-specific resend rules after completed turns are still **(open)** and should stay easy to adjust later.
 
 ## Decided
 
 - **Reasoning effort levels**: `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` — single string in agent schema, adapters translate to wire format
-- **System prompt `{runtime}` block**: will contain app version, OS, workspace path, etc. Exact content not decided yet — but the mechanism needs to work from the start (placeholder is fine, what matters is that it's assembled and injected).
-- **Fallback behavior**: model fails + no fallback model → error. Simple.
+- **System prompt `{runtime}` block**: concrete format defined in Section 3
+- **System prompt `{tools}` block**: concrete reminder format defined in Section 3
+- **`{tool_list}` contents**: name + description only; parameter schemas stay in the official provider API tool definitions
+- **Workspace prompt includes**: `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`
+- **Allowed tools**: filter both the prompt tool block and the official provider API tool definitions
+- **Allowed skills**: filter the prompt skill block only
 - **ChatMessage format**: JSONL with fields per role as defined in Section 4
-- **CoT storage and round-tripping**: `reasoning` for readable text, `reasoning_meta` for opaque provider data. Mandatory during tool-use loops, provider-dependent after completed turns.
+- **CoT storage and round-tripping**: `reasoning` for readable text, `reasoning_meta` for opaque provider data. Mandatory during tool-use loops; old `reasoning_meta` is not resent after completed turns by default.
 
 ## Still open
 
-- **Tool snippet format**: how tool documentation looks
+- **Fallback behavior**: exact automatic behavior for `fallback_model`
+- **Provider-specific `reasoning_meta` resend after completed turns**
