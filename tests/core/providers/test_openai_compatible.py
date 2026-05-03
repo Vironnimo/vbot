@@ -78,6 +78,42 @@ SAMPLE_MESSAGES = [
     {"role": "user", "content": "Hello"},
 ]
 
+CANONICAL_MESSAGES_WITH_TOOL_LOOP = [
+    {"role": "system", "model": "openai/gpt-5.2", "content": "You are helpful."},
+    {"role": "user", "content": "Weather?"},
+    {
+        "role": "assistant",
+        "model": "openai/gpt-5.2",
+        "content": None,
+        "reasoning_meta": {"encrypted_content": "opaque-current-turn"},
+        "tool_calls": [
+            {
+                "id": "call_abc",
+                "name": "get_weather",
+                "arguments": {"city": "Berlin"},
+            }
+        ],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "call_abc",
+        "name": "get_weather",
+        "content": '{"temp":22}',
+    },
+]
+
+SAMPLE_TOOLS = [
+    {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+]
+
 
 @pytest.fixture()
 def openai_adapter():
@@ -165,6 +201,69 @@ class TestSendRequestFormat:
         assert "max_tokens" not in request_body
         assert "temperature" not in request_body
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_canonical_messages_tools_and_reasoning(self, openai_adapter):
+        """Canonical messages, tool definitions, and effort map to OpenAI wire format."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        await openai_adapter.send(
+            CANONICAL_MESSAGES_WITH_TOOL_LOOP,
+            model_id="gpt-5.2",
+            tools=SAMPLE_TOOLS,
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Berlin"}',
+                        },
+                    }
+                ],
+                "encrypted_content": "opaque-current-turn",
+            },
+            {"role": "tool", "tool_call_id": "call_abc", "content": '{"temp":22}'},
+        ]
+        assert request_body["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": SAMPLE_TOOLS[0]["parameters"],
+                },
+            }
+        ]
+        assert request_body["reasoning_effort"] == "high"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openrouter_reasoning_uses_openrouter_wire_format(self, openrouter_adapter):
+        """OpenRouter gets reasoning object and include_reasoning instead of OpenAI string."""
+        route = respx.post(OPENROUTER_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await openrouter_adapter.send(
+            SAMPLE_MESSAGES, model_id="openai/gpt-5.2", thinking_effort="xhigh"
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning"] == {"effort": "xhigh"}
+        assert request_body["include_reasoning"] is True
+        assert "reasoning_effort" not in request_body
+
 
 # ---------------------------------------------------------------------------
 # send() — headers and auth
@@ -246,6 +345,65 @@ class TestSendSuccess:
         assert result == SUCCESS_RESPONSE
         assert result["id"] == "chatcmpl-abc123"
         assert result["choices"][0]["message"]["content"] == "Hello!"
+
+    def test_normalize_response_extracts_text_tool_calls_and_reasoning(self, openai_adapter):
+        """Provider response is normalized to canonical assistant fields."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning": "Need weather.",
+                        "encrypted_content": "opaque",
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city":"Berlin"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized == {
+            "role": "assistant",
+            "content": None,
+            "reasoning": "Need weather.",
+            "reasoning_meta": {"encrypted_content": "opaque"},
+            "tool_calls": [
+                {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
+            ],
+        }
+
+    def test_normalize_response_preserves_openrouter_reasoning_details(self, openrouter_adapter):
+        """OpenRouter opaque reasoning_details are preserved unchanged."""
+        reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Visible reasoning",
+                        "reasoning_details": reasoning_details,
+                    }
+                }
+            ]
+        }
+
+        normalized = openrouter_adapter.normalize_response(response)
+
+        assert normalized["content"] == "Done"
+        assert normalized["reasoning"] == "Visible reasoning"
+        assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
 
 
 # ---------------------------------------------------------------------------

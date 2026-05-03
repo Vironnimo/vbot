@@ -83,6 +83,47 @@ SAMPLE_MESSAGES = [
     {"role": "user", "content": "Hello"},
 ]
 
+CANONICAL_MESSAGES_WITH_TOOL_LOOP = [
+    {
+        "role": "system",
+        "model": "anthropic/claude-sonnet-4-20250219",
+        "content": "You are helpful.",
+    },
+    {"role": "user", "content": "Weather?"},
+    {
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4-20250219",
+        "content": None,
+        "reasoning": "Need weather.",
+        "reasoning_meta": {"signature": "opaque-current-turn"},
+        "tool_calls": [
+            {
+                "id": "toolu_abc",
+                "name": "get_weather",
+                "arguments": {"city": "Berlin"},
+            }
+        ],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "toolu_abc",
+        "name": "get_weather",
+        "content": '{"temp":22}',
+    },
+]
+
+SAMPLE_TOOLS = [
+    {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+]
+
 SAMPLE_MESSAGES_WITH_SYSTEM = [
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello"},
@@ -141,7 +182,9 @@ class TestSendRequestFormat:
         assert route.called
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["model"] == "claude-sonnet-4-20250219"
-        assert request_body["messages"] == SAMPLE_MESSAGES
+        assert request_body["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        ]
 
     @respx.mock
     @pytest.mark.asyncio
@@ -352,6 +395,79 @@ class TestSendRequestFormat:
         request = route.calls.last.request
         assert "/messages" in str(request.url)
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_canonical_messages_tools_and_reasoning(self, anthropic_adapter):
+        """Canonical messages, tool definitions, and effort map to Anthropic wire format."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            CANONICAL_MESSAGES_WITH_TOOL_LOOP,
+            model_id="claude-sonnet-4-20250219",
+            tools=SAMPLE_TOOLS,
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["system"] == "You are helpful."
+        assert request_body["messages"] == [
+            {"role": "user", "content": [{"type": "text", "text": "Weather?"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Need weather.",
+                        "signature": "opaque-current-turn",
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_abc",
+                        "name": "get_weather",
+                        "input": {"city": "Berlin"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_abc",
+                        "content": '{"temp":22}',
+                    }
+                ],
+            },
+        ]
+        assert request_body["tools"] == [
+            {
+                "name": "get_weather",
+                "description": "Get current weather",
+                "input_schema": SAMPLE_TOOLS[0]["parameters"],
+            }
+        ]
+        assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert request_body["output_config"] == {"effort": "high"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_none_thinking_effort_disables_thinking(self, anthropic_adapter):
+        """The vBot 'none' effort maps to Anthropic disabled thinking."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "disabled"}
+
 
 # ---------------------------------------------------------------------------
 # send() — headers and auth
@@ -448,6 +564,51 @@ class TestSendSuccess:
         assert result == SUCCESS_RESPONSE
         assert result["id"] == "msg_01XFDUDYJGAAC8998t2N3v"
         assert result["content"][0]["text"] == "Hello!"
+
+    def test_normalize_response_extracts_text_tool_calls_and_reasoning(self, anthropic_adapter):
+        """Anthropic response blocks normalize to canonical assistant fields."""
+        response = {
+            "content": [
+                {"type": "thinking", "thinking": "Need weather.", "signature": "opaque"},
+                {"type": "text", "text": "Checking."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_abc",
+                    "name": "get_weather",
+                    "input": {"city": "Berlin"},
+                },
+            ]
+        }
+
+        normalized = anthropic_adapter.normalize_response(response)
+
+        assert normalized == {
+            "role": "assistant",
+            "content": "Checking.",
+            "reasoning": "Need weather.",
+            "reasoning_meta": {"signature": "opaque"},
+            "tool_calls": [
+                {"id": "toolu_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
+            ],
+        }
+
+    def test_normalize_response_preserves_redacted_thinking_meta(self, anthropic_adapter):
+        """Opaque redacted thinking metadata is preserved unchanged."""
+        redacted = {"data": "opaque"}
+        response = {
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Visible reasoning",
+                    "redacted_thinking": redacted,
+                }
+            ]
+        }
+
+        normalized = anthropic_adapter.normalize_response(response)
+
+        assert normalized["reasoning"] == "Visible reasoning"
+        assert normalized["reasoning_meta"] == {"redacted_thinking": redacted}
 
 
 # ---------------------------------------------------------------------------

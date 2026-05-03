@@ -77,3 +77,9 @@ class TestProviderAdapterABC:
         """A subclass implementing both methods can be instantiated."""
         adapter = _StubAdapter()
         assert isinstance(adapter, ProviderAdapter)
+
+    def test_default_normalize_response_requires_adapter_implementation(self) -> None:
+        """Response normalization is optional for ABC construction but required at use."""
+        adapter = _StubAdapter()
+        with pytest.raises(NotImplementedError, match="normalize_response"):
+            adapter.normalize_response({})
