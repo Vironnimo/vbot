@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 
@@ -29,7 +30,24 @@ class TestChatSession:
 
         assert session.path.exists()
         assert session.path.suffix == ".jsonl"
-        assert session.id
+        assert UUID(session.id)
+
+    @pytest.mark.parametrize(
+        "session_id",
+        [
+            "",
+            "../outside",
+            "..\\outside",
+            ".hidden",
+            "with space",
+            "name.jsonl",
+            "name/slash",
+            "a" * 129,
+        ],
+    )
+    def test_create_rejects_unsafe_session_id(self, tmp_path, session_id):
+        with pytest.raises(ChatSessionError, match="session id"):
+            ChatSession.create(tmp_path, session_id=session_id)
 
     def test_init_rejects_non_jsonl_path(self, tmp_path):
         with pytest.raises(ChatSessionError, match=".jsonl"):
@@ -129,6 +147,15 @@ class TestChatSessionManager:
         with pytest.raises(ChatSessionError, match="does not exist"):
             manager.get("coder", "missing")
 
+    @pytest.mark.parametrize("session_id", ["../outside", "..\\outside", "with space"])
+    def test_get_rejects_unsafe_session_id_before_path_lookup(self, tmp_path, session_id):
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="session id"):
+            manager.get("coder", session_id)
+
+        assert not (tmp_path / "agents").exists()
+
     def test_list_returns_sessions_sorted_by_filename(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         manager.create("coder", session_id="session-b")
@@ -137,6 +164,16 @@ class TestChatSessionManager:
         sessions = manager.list("coder")
 
         assert [session.id for session in sessions] == ["session-a", "session-b"]
+
+    def test_list_ignores_unsafe_session_filenames(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-one")
+        unsafe_path = session.path.parent / "unsafe.name.jsonl"
+        unsafe_path.write_text("", encoding="utf-8")
+
+        sessions = manager.list("coder")
+
+        assert [listed.id for listed in sessions] == ["session-one"]
 
     def test_list_returns_empty_for_agent_without_sessions(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -150,6 +187,12 @@ class TestChatSessionManager:
         manager.delete("coder", "session-one")
 
         assert not session.path.exists()
+
+    def test_delete_rejects_unsafe_session_id(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        with pytest.raises(ChatSessionError, match="session id"):
+            manager.delete("coder", "../outside")
 
     def test_rejects_empty_agent_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)

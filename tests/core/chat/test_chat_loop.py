@@ -82,6 +82,15 @@ class StubAdapter:
         return response
 
 
+class ClosingStubAdapter(StubAdapter):
+    def __init__(self, responses: list[JsonObject]) -> None:
+        super().__init__(responses)
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -133,6 +142,29 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
         ],
     }
     assert [message["role"] for message in adapter.requests[0]["messages"]] == ["system", "user"]
+
+
+@pytest.mark.asyncio
+async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = ClosingStubAdapter([ProviderError("provider failed", retryable=False)])  # type: ignore[list-item]
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ProviderError, match="provider failed"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert adapter.closed is True
 
 
 @pytest.mark.asyncio

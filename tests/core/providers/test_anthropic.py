@@ -453,6 +453,79 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_groups_multiple_tool_results_in_one_user_message(self, anthropic_adapter):
+        """Consecutive canonical tool messages become one Anthropic user message."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {"role": "user", "content": "Check two cities."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "toolu_a", "name": "get_weather", "arguments": {"city": "Berlin"}},
+                    {"id": "toolu_b", "name": "get_weather", "arguments": {"city": "Paris"}},
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_a",
+                "name": "get_weather",
+                "content": '{"temp":22}',
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_b",
+                "name": "get_weather",
+                "content": '{"temp":19}',
+            },
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"][2] == {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_a", "content": '{"temp":22}'},
+                {"type": "tool_result", "tool_use_id": "toolu_b", "content": '{"temp":19}'},
+            ],
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_round_trips_reasoning_meta_blocks_unchanged(self, anthropic_adapter):
+        """Supported opaque reasoning blocks keep provider wire shape on resend."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        thinking_block = {
+            "type": "thinking",
+            "thinking": "Need weather.",
+            "signature": "opaque-signature",
+        }
+        redacted_block = {"type": "redacted_thinking", "data": "opaque-redacted"}
+        messages = [
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning": "Need weather.",
+                "reasoning_meta": {"content_blocks": [thinking_block, redacted_block]},
+                "tool_calls": [
+                    {"id": "toolu_a", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"][1]["content"][:2] == [thinking_block, redacted_block]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_none_thinking_effort_disables_thinking(self, anthropic_adapter):
         """The vBot 'none' effort maps to Anthropic disabled thinking."""
         route = respx.post(ANTHROPIC_URL).mock(
@@ -586,29 +659,43 @@ class TestSendSuccess:
             "role": "assistant",
             "content": "Checking.",
             "reasoning": "Need weather.",
-            "reasoning_meta": {"signature": "opaque"},
+            "reasoning_meta": {
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Need weather.", "signature": "opaque"}
+                ]
+            },
             "tool_calls": [
                 {"id": "toolu_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
             ],
         }
 
-    def test_normalize_response_preserves_redacted_thinking_meta(self, anthropic_adapter):
+    def test_normalize_response_preserves_redacted_thinking_block(self, anthropic_adapter):
         """Opaque redacted thinking metadata is preserved unchanged."""
-        redacted = {"data": "opaque"}
+        redacted_block = {"type": "redacted_thinking", "data": "opaque"}
         response = {
             "content": [
                 {
                     "type": "thinking",
                     "thinking": "Visible reasoning",
-                    "redacted_thinking": redacted,
-                }
+                    "signature": "opaque-signature",
+                },
+                redacted_block,
             ]
         }
 
         normalized = anthropic_adapter.normalize_response(response)
 
         assert normalized["reasoning"] == "Visible reasoning"
-        assert normalized["reasoning_meta"] == {"redacted_thinking": redacted}
+        assert normalized["reasoning_meta"] == {
+            "content_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Visible reasoning",
+                    "signature": "opaque-signature",
+                },
+                redacted_block,
+            ]
+        }
 
 
 # ---------------------------------------------------------------------------

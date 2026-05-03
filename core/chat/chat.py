@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -15,9 +17,11 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
+UTC_Z_SUFFIX = "Z"
 SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
 MAX_TOOL_ITERATIONS = 8
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 class ChatError(VBotError):
@@ -204,9 +208,8 @@ class ChatSession:
     @classmethod
     def create(cls, sessions_dir: Path, session_id: str | None = None) -> ChatSession:
         """Create an empty session file under a sessions directory."""
-        session_identifier = session_id or str(uuid.uuid4())
-        if not session_identifier:
-            raise ChatSessionError("session id must not be empty")
+        session_identifier = str(uuid.uuid4()) if session_id is None else session_id
+        _validate_session_id(session_identifier)
         sessions_dir.mkdir(parents=True, exist_ok=True)
         session_path = sessions_dir / f"{session_identifier}{SESSION_FILE_EXTENSION}"
         if session_path.exists():
@@ -277,8 +280,7 @@ class ChatSessionManager:
 
     def get(self, agent_id: str, session_id: str) -> ChatSession:
         """Return a session handle for an existing agent session."""
-        if not session_id:
-            raise ChatSessionError("session id must not be empty")
+        _validate_session_id(session_id)
         session_path = self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
         if not session_path.exists():
             raise ChatSessionError(f"session does not exist: {session_id}")
@@ -290,7 +292,9 @@ class ChatSessionManager:
         if not sessions_dir.exists():
             return []
         return [
-            ChatSession(path) for path in sorted(sessions_dir.glob(f"*{SESSION_FILE_EXTENSION}"))
+            ChatSession(path)
+            for path in sorted(sessions_dir.glob(f"*{SESSION_FILE_EXTENSION}"))
+            if _is_valid_session_id(path.stem)
         ]
 
     def delete(self, agent_id: str, session_id: str) -> None:
@@ -326,11 +330,14 @@ class ChatLoop:
         adapter = self._runtime.get_adapter(provider_id)
         session = self._get_or_create_session(agent_id, session_id)
 
-        session.append(ChatMessage.user(content))
-        messages = self._build_request_messages(agent, session)
-        tools = self._runtime.system_prompts.provider_tool_definitions(agent)
+        try:
+            session.append(ChatMessage.user(content))
+            messages = self._build_request_messages(agent, session)
+            tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
-        return await self._send_until_final(agent, adapter, model_id, session, messages, tools)
+            return await self._send_until_final(agent, adapter, model_id, session, messages, tools)
+        finally:
+            await _close_adapter(adapter)
 
     def _get_or_create_session(self, agent_id: str, session_id: str | None) -> ChatSession:
         session_manager = cast(ChatSessionManager, self._runtime.chat_sessions)
@@ -430,6 +437,26 @@ class ChatLoop:
 
 def _new_message_id() -> str:
     return str(uuid.uuid4())
+
+
+def _validate_session_id(session_id: str) -> None:
+    if not _is_valid_session_id(session_id):
+        raise ChatSessionError(
+            "session id must be 1-128 characters using only letters, numbers, hyphen, or underscore"
+        )
+
+
+def _is_valid_session_id(session_id: str) -> bool:
+    return bool(SESSION_ID_PATTERN.fullmatch(session_id))
+
+
+async def _close_adapter(adapter: Any) -> None:
+    close_method = getattr(adapter, "aclose", None)
+    if not callable(close_method):
+        return
+    result = close_method()
+    if inspect.isawaitable(result):
+        await result
 
 
 def _split_agent_model(model: str) -> tuple[str, str]:
@@ -536,8 +563,24 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError("id must be a non-empty string")
     if not message.timestamp:
         raise ChatMessageValidationError("timestamp must be a non-empty string")
-    if TIMESTAMP_SUFFIX not in message.timestamp:
+    if not _has_explicit_utc_offset(message.timestamp):
         raise ChatMessageValidationError("timestamp must include explicit UTC offset")
+
+
+def _has_explicit_utc_offset(timestamp: str) -> bool:
+    if timestamp.endswith(UTC_Z_SUFFIX):
+        return _is_valid_iso_utc_timestamp(timestamp[:-1] + TIMESTAMP_SUFFIX)
+    if TIMESTAMP_SUFFIX in timestamp:
+        return _is_valid_iso_utc_timestamp(timestamp)
+    return False
+
+
+def _is_valid_iso_utc_timestamp(timestamp: str) -> bool:
+    try:
+        value = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return False
+    return value.tzinfo is not None and value.utcoffset() == UTC.utcoffset(value)
 
 
 def _validate_system_message(message: ChatMessage) -> None:

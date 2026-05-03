@@ -44,6 +44,9 @@ SSE_EVENT_PREFIX = "event: "
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+THINKING_BLOCK_TYPE = "thinking"
+REDACTED_THINKING_BLOCK_TYPE = "redacted_thinking"
+REASONING_META_CONTENT_BLOCKS = "content_blocks"
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -123,7 +126,7 @@ class AnthropicAdapter(ProviderAdapter):
         """
         request_kwargs = dict(kwargs)
         system_content: str | list[dict[str, Any]] | None = None
-        anthropic_messages: list[dict[str, Any]] = []
+        conversation_messages: list[dict[str, Any]] = []
 
         for message in messages:
             role = message.get("role")
@@ -134,11 +137,11 @@ class AnthropicAdapter(ProviderAdapter):
                 if isinstance(content, (str, list)):
                     system_content = content
             else:
-                anthropic_messages.append(_to_anthropic_message(message))
+                conversation_messages.append(message)
 
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": anthropic_messages,
+            "messages": _to_anthropic_messages(conversation_messages),
         }
         if system_content is not None:
             payload["system"] = system_content
@@ -336,19 +339,30 @@ class AnthropicAdapter(ProviderAdapter):
             await response.aclose()
 
 
+def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    anthropic_messages: list[dict[str, Any]] = []
+    pending_tool_results: list[dict[str, Any]] = []
+
+    for message in messages:
+        if message.get("role") == "tool":
+            pending_tool_results.append(_to_anthropic_tool_result_block(message))
+            continue
+
+        if pending_tool_results:
+            anthropic_messages.append(_to_anthropic_tool_result_message(pending_tool_results))
+            pending_tool_results = []
+        anthropic_messages.append(_to_anthropic_message(message))
+
+    if pending_tool_results:
+        anthropic_messages.append(_to_anthropic_tool_result_message(pending_tool_results))
+
+    return anthropic_messages
+
+
 def _to_anthropic_message(message: dict[str, Any]) -> dict[str, Any]:
     role = message.get("role")
     if role == "tool":
-        return {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": message["tool_call_id"],
-                    "content": message["content"],
-                }
-            ],
-        }
+        return _to_anthropic_tool_result_message([_to_anthropic_tool_result_block(message)])
     if role == "assistant":
         return {
             "role": "assistant",
@@ -357,6 +371,18 @@ def _to_anthropic_message(message: dict[str, Any]) -> dict[str, Any]:
     return {
         "role": role,
         "content": _to_anthropic_text_content(message.get("content", "")),
+    }
+
+
+def _to_anthropic_tool_result_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"role": "user", "content": blocks}
+
+
+def _to_anthropic_tool_result_block(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "tool_result",
+        "tool_use_id": message["tool_call_id"],
+        "content": message["content"],
     }
 
 
@@ -369,12 +395,12 @@ def _to_anthropic_text_content(content: Any) -> list[dict[str, Any]]:
 def _to_anthropic_assistant_content(message: dict[str, Any]) -> list[dict[str, Any]]:
     content_blocks: list[dict[str, Any]] = []
     reasoning = message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning:
-        thinking_block = {"type": "thinking", "thinking": reasoning}
-        reasoning_meta = message.get("reasoning_meta")
-        if isinstance(reasoning_meta, dict):
-            thinking_block.update(reasoning_meta)
-        content_blocks.append(thinking_block)
+    reasoning_meta = message.get("reasoning_meta")
+    reasoning_blocks = _reasoning_blocks_from_meta(reasoning_meta)
+    if reasoning_blocks:
+        content_blocks.extend(reasoning_blocks)
+    elif isinstance(reasoning, str) and reasoning:
+        content_blocks.append(_legacy_thinking_block(reasoning, reasoning_meta))
 
     content = message.get("content")
     if isinstance(content, str) and content:
@@ -392,6 +418,31 @@ def _to_anthropic_assistant_content(message: dict[str, Any]) -> list[dict[str, A
             }
         )
     return content_blocks
+
+
+def _reasoning_blocks_from_meta(reasoning_meta: Any) -> list[dict[str, Any]]:
+    if not isinstance(reasoning_meta, dict):
+        return []
+    blocks = reasoning_meta.get(REASONING_META_CONTENT_BLOCKS)
+    if not isinstance(blocks, list):
+        return []
+    return [dict(block) for block in blocks if _is_supported_reasoning_block(block)]
+
+
+def _is_supported_reasoning_block(block: Any) -> bool:
+    if not isinstance(block, dict):
+        return False
+    return block.get("type") in (THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE)
+
+
+def _legacy_thinking_block(reasoning: str, reasoning_meta: Any) -> dict[str, Any]:
+    thinking_block: dict[str, Any] = {"type": THINKING_BLOCK_TYPE, "thinking": reasoning}
+    if not isinstance(reasoning_meta, dict):
+        return thinking_block
+    for key in ("signature",):
+        if key in reasoning_meta:
+            thinking_block[key] = reasoning_meta[key]
+    return thinking_block
 
 
 def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
@@ -433,20 +484,20 @@ def _extract_anthropic_reasoning(content_blocks: Any) -> str | None:
     reasoning_parts = [
         block["thinking"]
         for block in _content_blocks(content_blocks)
-        if block.get("type") == "thinking" and isinstance(block.get("thinking"), str)
+        if block.get("type") == THINKING_BLOCK_TYPE and isinstance(block.get("thinking"), str)
     ]
     return "".join(reasoning_parts) if reasoning_parts else None
 
 
 def _extract_anthropic_reasoning_meta(content_blocks: Any) -> dict[str, Any] | None:
-    meta: dict[str, Any] = {}
-    for block in _content_blocks(content_blocks):
-        if block.get("type") != "thinking":
-            continue
-        for key in ("signature", "redacted_thinking"):
-            if key in block:
-                meta[key] = block[key]
-    return meta or None
+    reasoning_blocks = [
+        dict(block)
+        for block in _content_blocks(content_blocks)
+        if _is_supported_reasoning_block(block)
+    ]
+    if not reasoning_blocks:
+        return None
+    return {REASONING_META_CONTENT_BLOCKS: reasoning_blocks}
 
 
 def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | None:

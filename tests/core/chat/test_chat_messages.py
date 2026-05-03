@@ -117,6 +117,18 @@ class TestChatMessageParsing:
 
         assert message.to_dict() == data
 
+    def test_from_dict_accepts_z_utc_timestamp(self):
+        data = {
+            "id": "d4e5f6",
+            "timestamp": "2026-05-03T14:30:01Z",
+            "role": "user",
+            "content": "Hello",
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.to_dict() == data
+
     def test_unknown_extra_fields_are_ignored(self):
         data = {
             "id": "d4e5f6",

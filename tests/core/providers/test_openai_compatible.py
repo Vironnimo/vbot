@@ -383,6 +383,35 @@ class TestSendSuccess:
             ],
         }
 
+    def test_normalize_response_uses_empty_arguments_for_malformed_tool_json(self, openai_adapter):
+        """Malformed provider tool-call JSON does not leak JSONDecodeError."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": "{not-json}",
+                                },
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["tool_calls"] == [
+            {"id": "call_abc", "name": "get_weather", "arguments": {}}
+        ]
+
     def test_normalize_response_preserves_openrouter_reasoning_details(self, openrouter_adapter):
         """OpenRouter opaque reasoning_details are preserved unchanged."""
         reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]

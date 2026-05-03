@@ -350,7 +350,10 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
         return dict(arguments)
     if not isinstance(arguments, str) or not arguments:
         return {}
-    parsed = json.loads(arguments)
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
     return parsed if isinstance(parsed, dict) else {}
 
 
