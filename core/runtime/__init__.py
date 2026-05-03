@@ -1,3 +1,27 @@
-# core.runtime
+"""Runtime bootstrap and dependency-injection protocol exports."""
 
-from core.runtime.runtime import Runtime as Runtime
+from core.runtime.interfaces import (
+    AgentStoreProtocol,
+    ChatSessionManagerProtocol,
+    ConfigProtocol,
+    LoggerProtocol,
+    ModelRegistryProtocol,
+    ProviderRegistryProtocol,
+    SkillRegistryProtocol,
+    StorageManagerProtocol,
+    ToolRegistryProtocol,
+)
+from core.runtime.runtime import Runtime
+
+__all__ = [
+    "AgentStoreProtocol",
+    "ChatSessionManagerProtocol",
+    "ConfigProtocol",
+    "LoggerProtocol",
+    "ModelRegistryProtocol",
+    "ProviderRegistryProtocol",
+    "Runtime",
+    "SkillRegistryProtocol",
+    "StorageManagerProtocol",
+    "ToolRegistryProtocol",
+]
