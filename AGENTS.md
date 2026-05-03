@@ -10,11 +10,12 @@ These rules apply to every agent, every task, unconditionally.
 | Git (branches, commits, merges) | **Orchestrator** |
 | Project docs (`.vorch/PROJECT.md`) | **Orchestrator only** |
 | Spec files (`.vorch/specs/`) | **Orchestrator only** |
+| Glossary (`.vorch/GLOSSARY.md`) | **Orchestrator only** |
 | Planning & file-scope assignment | **Planner** |
 | Application code, tests, and UI | **Builder** |
 | Code review | **Reviewer** |
 
-**No agent operates outside their role.** Only the Orchestrator touches git. Only the Orchestrator writes `.vorch/PROJECT.md`. All other agents write application files — nothing more.
+**No agent operates outside their role.** Only the Orchestrator touches git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. All other agents write application files — nothing more.
 
 ## Code Quality
 
