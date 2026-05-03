@@ -15,39 +15,41 @@ from core.utils.errors import ConfigError
 
 
 @pytest.fixture
-def runtime() -> Runtime:
+def config(tmp_path) -> Config:
+    """Provide isolated runtime config."""
+    return Config(data_dir=tmp_path / "data")
+
+
+@pytest.fixture
+def runtime(config: Config) -> Runtime:
     """Provide a started Runtime instance loaded from resources."""
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     return runtime
 
 
 @pytest.fixture
-def runtime_with_openai_key(monkeypatch: pytest.MonkeyPatch) -> Runtime:
+def runtime_with_openai_key(monkeypatch: pytest.MonkeyPatch, config: Config) -> Runtime:
     """Provide a started Runtime with a fake OpenAI API key."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key-12345")
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     return runtime
 
 
 @pytest.fixture
-def runtime_with_anthropic_key(monkeypatch: pytest.MonkeyPatch) -> Runtime:
+def runtime_with_anthropic_key(monkeypatch: pytest.MonkeyPatch, config: Config) -> Runtime:
     """Provide a started Runtime with a fake Anthropic API key."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-fake-key-12345")
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     return runtime
 
 
 @pytest.fixture
-def runtime_with_openrouter_key(monkeypatch: pytest.MonkeyPatch) -> Runtime:
+def runtime_with_openrouter_key(monkeypatch: pytest.MonkeyPatch, config: Config) -> Runtime:
     """Provide a started Runtime with a fake OpenRouter API key."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-fake-key-12345")
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     return runtime
@@ -159,11 +161,11 @@ def test_get_model_nonexistent_raises_key_error(runtime: Runtime) -> None:
 
 def test_get_adapter_missing_api_key_raises_config_error(
     monkeypatch: pytest.MonkeyPatch,
+    config: Config,
 ) -> None:
     """Runtime.get_adapter() raises ConfigError when the API key is not set."""
     # Arrange — ensure OPENAI_API_KEY is absent from the environment
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
 
@@ -174,6 +176,7 @@ def test_get_adapter_missing_api_key_raises_config_error(
 
 def test_get_adapter_unknown_adapter_type_raises_config_error(
     monkeypatch: pytest.MonkeyPatch,
+    config: Config,
 ) -> None:
     """Runtime.get_adapter() raises ConfigError for an unknown adapter type.
 
@@ -182,7 +185,6 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
     """
     # Arrange
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key")
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
 
@@ -204,10 +206,9 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
 # ------------------------------------------------------------------
 
 
-def test_get_adapter_before_start_raises_runtime_error() -> None:
+def test_get_adapter_before_start_raises_runtime_error(config: Config) -> None:
     """Runtime.get_adapter() before start() raises RuntimeError."""
     # Arrange
-    config = Config()
     runtime = Runtime(config)
 
     # Act & Assert
@@ -215,10 +216,9 @@ def test_get_adapter_before_start_raises_runtime_error() -> None:
         runtime.get_adapter("openai")
 
 
-def test_get_model_before_start_raises_runtime_error() -> None:
+def test_get_model_before_start_raises_runtime_error(config: Config) -> None:
     """Runtime.get_model() before start() raises RuntimeError."""
     # Arrange
-    config = Config()
     runtime = Runtime(config)
 
     # Act & Assert
@@ -231,14 +231,15 @@ def test_get_model_before_start_raises_runtime_error() -> None:
 # ------------------------------------------------------------------
 
 
-def test_runtime_start_idempotent_with_registries() -> None:
+def test_runtime_start_idempotent_with_registries(config: Config) -> None:
     """Calling start() twice is still a no-op after adding registry loading."""
     # Arrange
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     providers_first = runtime.providers
     models_first = runtime.models
+    storage_first = runtime.storage
+    agents_first = runtime.agents
 
     # Act — second call is a no-op
     runtime.start()
@@ -246,12 +247,13 @@ def test_runtime_start_idempotent_with_registries() -> None:
     # Assert — same registry instances (cached)
     assert runtime.providers is providers_first
     assert runtime.models is models_first
+    assert runtime.storage is storage_first
+    assert runtime.agents is agents_first
 
 
-def test_runtime_stop_then_start_reloads_registries() -> None:
+def test_runtime_stop_then_start_reloads_registries(config: Config) -> None:
     """After stop() and start(), registries are available again."""
     # Arrange
-    config = Config()
     runtime = Runtime(config)
     runtime.start()
     runtime.stop()
@@ -263,3 +265,5 @@ def test_runtime_stop_then_start_reloads_registries() -> None:
     assert runtime.providers is not None
     assert runtime.models is not None
     assert "openai" in runtime.providers.list_ids()
+    assert runtime.storage is not None
+    assert runtime.agents is not None

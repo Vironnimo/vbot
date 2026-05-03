@@ -5,9 +5,22 @@ and that the logger is properly created after ``start()``.
 """
 
 import logging
+from pathlib import Path
 
+import pytest
+
+from core.agents.agents import AgentStore, SystemPromptManager
+from core.chat.chat import ChatSessionManager
 from core.runtime.runtime import Runtime
+from core.skills.skills import SkillRegistry
+from core.storage.storage import StorageManager
+from core.tools.tools import ToolRegistry
 from core.utils.config import Config
+
+
+@pytest.fixture
+def config(tmp_path: Path) -> Config:
+    return Config(data_dir=tmp_path / "data")
 
 
 def test_runtime_start_no_error():
@@ -65,3 +78,66 @@ def test_runtime_stop_without_start_does_not_crash():
     runtime.stop()
 
     # Assert — reaching here without exception proves it is a safe no-op
+
+
+def test_phase_two_services_available_after_start(config: Config):
+    """Runtime.start() wires all Phase 2 domain services."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime.storage, StorageManager)
+    assert isinstance(runtime.agents, AgentStore)
+    assert isinstance(runtime.tools, ToolRegistry)
+    assert isinstance(runtime.skills, SkillRegistry)
+    assert isinstance(runtime.chat_sessions, ChatSessionManager)
+    assert isinstance(runtime.system_prompts, SystemPromptManager)
+
+
+def test_phase_two_services_inaccessible_before_start(config: Config):
+    """Runtime service properties raise a startup error before start()."""
+    runtime = Runtime(config)
+
+    for attribute_name in (
+        "storage",
+        "agents",
+        "tools",
+        "skills",
+        "chat_sessions",
+        "system_prompts",
+    ):
+        with pytest.raises(RuntimeError, match="not started"):
+            getattr(runtime, attribute_name)
+
+
+def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
+    """Runtime.start() prepares the Phase 2 data directory structure."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    data_dir = runtime.storage.data_dir
+    for directory_name in (
+        ".tmp",
+        "agents",
+        "archive",
+        "channels",
+        "cron",
+        "oauth",
+        "prompts",
+        "skills",
+        "logs",
+    ):
+        assert (data_dir / directory_name).is_dir()
+    assert (data_dir / "prompts" / "system.md").is_file()
+
+
+def test_runtime_stop_clears_phase_two_services(config: Config):
+    """After stop(), Phase 2 service properties are inaccessible again."""
+    runtime = Runtime(config)
+    runtime.start()
+
+    runtime.stop()
+
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.storage

@@ -7,6 +7,9 @@ wire protocol.
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from typing import Any
+
+JsonObject = dict[str, Any]
 
 
 class ProviderAdapter(ABC):
@@ -54,3 +57,12 @@ class ProviderAdapter(ABC):
         Yields:
             Parsed response chunk dicts from the SSE event stream.
         """
+
+    def normalize_response(self, response: JsonObject) -> JsonObject:
+        """Normalize a provider response into canonical assistant-message fields.
+
+        Concrete adapters own provider-specific response parsing.  The default
+        raises so subclasses can add this capability without making the legacy
+        ABC constructor contract stricter during Phase 2.
+        """
+        raise NotImplementedError("normalize_response must be implemented by provider adapters")

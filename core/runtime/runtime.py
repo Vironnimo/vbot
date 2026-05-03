@@ -7,13 +7,19 @@ all core services and manages the application lifecycle.
 import os
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
+from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
+from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import ProviderConfig, ProviderRegistry
 from core.runtime.interfaces import ConfigProtocol, LoggerProtocol
+from core.skills.skills import SkillRegistry
+from core.storage.storage import StorageManager
+from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 
@@ -24,6 +30,7 @@ from core.utils.logging import LogManager
 # Three directories up from this file (core/runtime/runtime.py) → project root.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
+_DEFAULT_APP_VERSION = "0.1.0"
 
 # ---------------------------------------------------------------------------
 # Adapter factory mapping
@@ -68,6 +75,12 @@ class Runtime:
         self._started: bool = False
         self._providers: ProviderRegistry | None = None
         self._models: ModelRegistry | None = None
+        self._storage: StorageManager | None = None
+        self._agents: AgentStore | None = None
+        self._tools: ToolRegistry | None = None
+        self._skills: SkillRegistry | None = None
+        self._chat_sessions: ChatSessionManager | None = None
+        self._system_prompts: SystemPromptManager | None = None
 
     def start(self) -> None:
         """Start the runtime and initialise all services.
@@ -84,15 +97,29 @@ class Runtime:
 
         self.logger = self._log_manager.get_logger("core")
 
-        # Load provider and model registries from resources.
-        resources_path_raw = self._config.get("RESOURCES_PATH")
-        if resources_path_raw is not None:
-            resources_path = Path(resources_path_raw)
-        else:
-            resources_path = _DEFAULT_RESOURCES_DIR
+        resources_path = self._resolve_resources_path()
+
+        self._storage = StorageManager(config=self._config, resources_dir=resources_path)
+        self._storage.ensure_directories()
+        self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)
         self._models = ModelRegistry.load(resources_path)
+        self._agents = AgentStore(
+            self._storage.data_dir,
+            template_dir=resources_path / "workspace-templates",
+        )
+        self._tools = ToolRegistry()
+        self._skills = SkillRegistry.load(self._storage.data_dir / "skills")
+        self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        self._system_prompts = SystemPromptManager(
+            self._storage,
+            self._tools,
+            cast(SkillPromptRegistry, self._skills),
+            app_version=str(self._config.get("APP_VERSION", _DEFAULT_APP_VERSION)),
+            app_dir=_PROJECT_ROOT,
+            data_root=self._storage.data_dir,
+        )
 
         self._started = True
         self.logger.info("Runtime started")
@@ -105,6 +132,20 @@ class Runtime:
         if self.logger is not None:
             self.logger.info("Runtime stopped")
         self._started = False
+        self._providers = None
+        self._models = None
+        self._storage = None
+        self._agents = None
+        self._tools = None
+        self._skills = None
+        self._chat_sessions = None
+        self._system_prompts = None
+
+    def _resolve_resources_path(self) -> Path:
+        resources_path_raw = self._config.get("RESOURCES_PATH")
+        if resources_path_raw is not None:
+            return Path(resources_path_raw)
+        return _DEFAULT_RESOURCES_DIR
 
     # ------------------------------------------------------------------
     # Read-only registry access
@@ -120,8 +161,9 @@ class Runtime:
         Raises:
             RuntimeError: If the runtime has not been started.
         """
+        self._ensure_started()
         if self._providers is None:
-            raise RuntimeError("Runtime not started — call start() first")
+            raise RuntimeError("Provider registry not available")
         return self._providers
 
     @property
@@ -134,9 +176,58 @@ class Runtime:
         Raises:
             RuntimeError: If the runtime has not been started.
         """
+        self._ensure_started()
         if self._models is None:
-            raise RuntimeError("Runtime not started — call start() first")
+            raise RuntimeError("Model registry not available")
         return self._models
+
+    @property
+    def storage(self) -> StorageManager:
+        """Access to data-directory and prompt-fragment storage."""
+        self._ensure_started()
+        if self._storage is None:
+            raise RuntimeError("Storage service not available")
+        return self._storage
+
+    @property
+    def agents(self) -> AgentStore:
+        """Access to persisted agent CRUD and workspace lifecycle."""
+        self._ensure_started()
+        if self._agents is None:
+            raise RuntimeError("Agent service not available")
+        return self._agents
+
+    @property
+    def tools(self) -> ToolRegistry:
+        """Access to the runtime tool registry."""
+        self._ensure_started()
+        if self._tools is None:
+            raise RuntimeError("Tool service not available")
+        return self._tools
+
+    @property
+    def skills(self) -> SkillRegistry:
+        """Access to local skill prompt metadata."""
+        self._ensure_started()
+        if self._skills is None:
+            raise RuntimeError("Skill service not available")
+        return self._skills
+
+    @property
+    def chat_sessions(self) -> ChatSessionManager:
+        """Access to agent chat session files."""
+        self._ensure_started()
+        if self._chat_sessions is None:
+            raise RuntimeError("Chat session service not available")
+        return self._chat_sessions
+
+    @property
+    def system_prompts(self) -> SystemPromptManager:
+        """Access to system prompt assembly."""
+        self._ensure_started()
+        if self._system_prompts is None:
+            raise RuntimeError("System prompt service not available")
+        return self._system_prompts
 
     # ------------------------------------------------------------------
     # Adapter factory
@@ -206,3 +297,7 @@ class Runtime:
             raise RuntimeError("Runtime not started — call start() first")
 
         return self.models.get(provider_id, model_id)
+
+    def _ensure_started(self) -> None:
+        if not self._started:
+            raise RuntimeError("Runtime not started — call start() first")

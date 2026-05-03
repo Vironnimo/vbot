@@ -27,6 +27,8 @@ from core.utils.retry import retry_async
 SSE_DATA_PREFIX = "data: "
 SSE_DONE_MARKER = "[DONE]"
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
+OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -77,6 +79,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
+    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Normalize an OpenAI-compatible response to canonical assistant fields."""
+        message = _first_choice_message(response)
+        content = message.get("content")
+        return {
+            "role": "assistant",
+            "content": content if isinstance(content, str) or content is None else str(content),
+            "reasoning": _extract_openai_reasoning(message),
+            "reasoning_meta": _extract_openai_reasoning_meta(message),
+            "tool_calls": _extract_openai_tool_calls(message),
+        }
+
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -84,16 +98,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Build the request payload with model, messages, defaults, and overrides."""
+        request_kwargs = dict(kwargs)
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": messages,
+            "messages": [_to_openai_message(message) for message in messages],
         }
+        _apply_openai_tools(payload, request_kwargs)
+        _apply_openai_reasoning(payload, self._config.id, request_kwargs)
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
-        payload.update(kwargs)
+        payload.update(request_kwargs)
         return payload
 
     # ------------------------------------------------------------------
@@ -228,3 +245,140 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 yield json.loads(data)
         finally:
             await response.aclose()
+
+
+def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:
+    role = message.get("role")
+    if role == "assistant":
+        return _to_openai_assistant_message(message)
+    if role == "tool":
+        return {
+            "role": "tool",
+            "tool_call_id": message["tool_call_id"],
+            "content": message["content"],
+        }
+
+    return {
+        "role": role,
+        "content": message.get("content", ""),
+    }
+
+
+def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
+    openai_message: dict[str, Any] = {
+        "role": "assistant",
+        "content": message.get("content"),
+    }
+    if message.get("tool_calls") is not None:
+        openai_message["tool_calls"] = [
+            {
+                "id": tool_call["id"],
+                "type": "function",
+                "function": {
+                    "name": tool_call["name"],
+                    "arguments": json.dumps(tool_call.get("arguments", {}), separators=(",", ":")),
+                },
+            }
+            for tool_call in message["tool_calls"]
+        ]
+    _apply_openai_reasoning_meta(openai_message, message.get("reasoning_meta"))
+    return openai_message
+
+
+def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
+    tools = kwargs.pop("tools", None)
+    if not tools:
+        return
+    payload["tools"] = [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["parameters"],
+            },
+        }
+        for tool in tools
+    ]
+
+
+def _apply_openai_reasoning(
+    payload: dict[str, Any],
+    provider_id: str,
+    kwargs: dict[str, Any],
+) -> None:
+    thinking_effort = kwargs.pop("thinking_effort", "")
+    if not thinking_effort or thinking_effort == "none":
+        return
+    if provider_id == "openrouter":
+        if thinking_effort in OPENROUTER_REASONING_EFFORTS:
+            payload["reasoning"] = {"effort": thinking_effort}
+            payload["include_reasoning"] = True
+        return
+    if thinking_effort in OPENAI_REASONING_EFFORTS:
+        payload["reasoning_effort"] = thinking_effort
+
+
+def _first_choice_message(response: dict[str, Any]) -> dict[str, Any]:
+    choices = response.get("choices", [])
+    if not choices:
+        return {}
+    message = choices[0].get("message", {})
+    return message if isinstance(message, dict) else {}
+
+
+def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] | None:
+    raw_tool_calls = message.get("tool_calls")
+    if not raw_tool_calls:
+        return None
+    tool_calls: list[dict[str, Any]] = []
+    for raw_call in raw_tool_calls:
+        function = raw_call.get("function", {})
+        arguments = _parse_tool_arguments(function.get("arguments"))
+        tool_calls.append(
+            {
+                "id": raw_call["id"],
+                "name": function.get("name", ""),
+                "arguments": arguments,
+            }
+        )
+    return tool_calls
+
+
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    if not isinstance(arguments, str) or not arguments:
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
+    for key in ("reasoning", "reasoning_content"):
+        value = message.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | None:
+    meta: dict[str, Any] = {}
+    for key in ("encrypted_content", "reasoning_details"):
+        if key in message:
+            meta[key] = message[key]
+    return meta or None
+
+
+def _apply_openai_reasoning_meta(
+    message: dict[str, Any],
+    reasoning_meta: Any,
+) -> None:
+    if not isinstance(reasoning_meta, dict):
+        return
+    for key in ("encrypted_content", "reasoning_details"):
+        if key in reasoning_meta:
+            message[key] = reasoning_meta[key]

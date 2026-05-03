@@ -6,8 +6,12 @@ and testability without dragging in concrete implementations.
 
 from typing import Any, Protocol
 
+from core.agents.agents import Agent
+from core.chat.chat import ChatSession
 from core.models.models import Model
 from core.providers.providers import ProviderConfig
+from core.skills.skills import SkillMetadata
+from core.tools.tools import Tool
 
 
 class LoggerProtocol(Protocol):
@@ -100,4 +104,56 @@ class ModelRegistryProtocol(Protocol):
         Returns:
             A sorted list of ``Model`` entries for the provider.
         """
+        ...
+
+
+class StorageManagerProtocol(Protocol):
+    """Protocol for runtime storage services."""
+
+    def ensure_directories(self) -> None:
+        """Create required data directories."""
+        ...
+
+    def read_prompt_fragment(self, fragment_name: str) -> str:
+        """Read a prompt fragment by name."""
+        ...
+
+
+class AgentStoreProtocol(Protocol):
+    """Protocol for persisted agent CRUD."""
+
+    def create(self, agent_id: str, name: str, **fields: Any) -> Agent:
+        """Create a persisted agent."""
+        ...
+
+    def get(self, agent_id: str) -> Agent:
+        """Load a persisted agent."""
+        ...
+
+    def list(self) -> list[Agent]:
+        """List persisted agents."""
+        ...
+
+
+class ToolRegistryProtocol(Protocol):
+    """Protocol for runtime tool registry access."""
+
+    def list_tools(self, allowed_tools: list[str] | None = None) -> list[Tool]:
+        """List tools filtered by allowlist."""
+        ...
+
+
+class SkillRegistryProtocol(Protocol):
+    """Protocol for runtime skill metadata access."""
+
+    def list_all(self) -> list[SkillMetadata]:
+        """List all loaded skills."""
+        ...
+
+
+class ChatSessionManagerProtocol(Protocol):
+    """Protocol for runtime chat session access."""
+
+    def create(self, agent_id: str, session_id: str | None = None) -> ChatSession:
+        """Create a chat session for an agent."""
         ...
