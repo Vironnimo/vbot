@@ -124,10 +124,11 @@ Minimal JSON für `agent.json` — kann später grown, aber nie shrinkn:
 
 - `id`: unique, auch als Verzeichnisname verwendet. Immutable — kann nach Erstellung nicht geändert werden.
 - `model`: `<provider>/<model-id>` (aus Phase 1). Leer = Fehler zur Chat-Zeit ("no model set"). Provider muss existieren — sonst Fehler. Model-Existenz wird nicht vorgeprüft; der Provider-API liefert den Fehler, wenn's nicht passt.
-- `fallback_model`: leer = kein Fallback
+- `fallback_model`: leer = kein Fallback konfiguriert. Exaktes automatisches Fallback-Verhalten bleibt in Phase 2 noch offen.
 - `workspace`: absoluter Pfad zum Workspace-Verzeichnis. Default bei Erstellung: `<data_dir>/workspace-<id>/`. User kann auf eigenen Pfad setzen.
 - `thinking_effort`: `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` — leer = Provider-Default. Adapter übersetzt ins Wire-Format.
-- `allowed_tools` / `allowed_skills`: `["*"]` = alle, sonst explizite Liste
+- `allowed_tools`: `["*"]` = alle, `[]` = keine, sonst explizite Liste. Nur erlaubte Tools kommen in den Prompt-Toolblock und — wenn vom Provider unterstützt — in den offiziellen Tool-Teil des API-Requests. Nicht erlaubte Tools werden vom System blockiert.
+- `allowed_skills`: `["*"]` = alle, `[]` = keine, sonst explizite Liste. Nur erlaubte Skills kommen in den Prompt-Skillblock.
 - `created_at` / `updated_at`: ISO 8601 mit explizitem UTC-Offset
 
 ### Agent-Lifecycle
@@ -177,7 +178,7 @@ Wird zur Laufzeit aus Templates und Snippets zusammengesetzt. Keine hardcoded St
 **Main Template:**
 
 ```
-You are an agent for vControl, App version: {app_version}.
+You are an agent for vBot, App version: {app_version}.
 Use the instructions below and the tools available to you to assist the user.
 
 {runtime}
@@ -186,13 +187,15 @@ Use the instructions below and the tools available to you to assist the user.
 
 {skills}
 
+{include:SOUL.md}
+{include:IDENTITY.md}
 {include:AGENTS.md}
 {include:USER.md}
 ```
 
 - `{app_version}`: App-Version
-- `{runtime}`: Runtime-Infos (App-Version, OS, Workspace-Pfad etc. — Inhalt noch offen, aber der Mechanismus funktioniert von Anfang an, Placeholder reicht)
-- `{tools}`: Injiziertes Tool-Snippet **(offen — Format)**
+- `{runtime}`: konkreter Runtime-Block mit Host, OS, Modell, Workspace, App-Pfad, Data-Root, Thinking-Level und Datum
+- `{tools}`: konkreter Tool-Reminder-Block im Prompt; `{tool_list}` enthält nur Name + Beschreibung. Dieselben erlaubten Tools werden zusätzlich im offiziellen Tool-Teil des Provider-Requests übergeben, dort mit Name, Beschreibung und Parameter-Schema (JSON Schema), wenn der Provider das unterstützt
 - `{skills}`: Injiziertes Skill-Snippet (XML, agentskills.io-Schema):
   ```xml
   <available_skills>
@@ -219,7 +222,7 @@ Jeder Adapter übersetzt den vBot-Wert ins jeweilige Wire-Format:
 
 Model-Daten enthalten nur `reasoning.supported: true/false` — die Effort-Übersetzung ist Adapter-Verantwortung.
 
-**CoT im Multi-Turn**: Session speichert alles (`reasoning` + `reasoning_meta`). Adapter round-trippt opaque Daten nur für denselben Provider. Siehe GOALS.md Abschnitt 4 "CoT Round-Trip Rules".
+**CoT im Multi-Turn**: Session speichert alles (`reasoning` + `reasoning_meta`). In Tool-Loops wird `reasoning_meta` unverändert zurückgegeben. Nach normalen abgeschlossenen Turns wird altes `reasoning_meta` zunächst nicht erneut gesendet. Das soll später leicht pro Provider anpassbar bleiben. Siehe `GOALS.md` Abschnitt 4.
 
 ### Aufgaben
 
@@ -228,13 +231,14 @@ Model-Daten enthalten nur `reasoning.supported: true/false` — die Effort-Über
 - [ ] `core/chat/` — Reasoning-Konfiguration: `thinking_effort`-Wert im Agent-Schema, Adapter übersetzt ins Wire-Format
 - [ ] `core/chat/` — ChatMessage-Typen (JSONL-Schema mit role-spezifischen Feldern, `reasoning`/`reasoning_meta` für CoT, `model` pro Nachricht, `tool_calls`/`tool_call_id` — siehe GOALS.md Abschnitt 4)
 - [ ] `core/agents/` — Agent-Store (CRUD mit Persistenz in `data_dir/agents/<id>/agent.json`)
-- [ ] `core/agents/` — System-Message-Manager (Template-Assembly mit `{app_version}`, `{runtime}`, `{tools}`, `{skills}`, `{include:*}`)
-- [ ] `core/tools/` — Tool-Registry (leer, nur `register()`/`dispatch()`)
+- [ ] `core/agents/` — System-Message-Manager (Template-Assembly mit `{app_version}`, `{runtime}`, `{tools}`, `{skills}`, `{include:*}` inkl. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`)
+- [ ] `core/tools/` — Tool-Registry (leer, nur `register()`/`dispatch()`) + Allowlist-Filterung für Prompt und Provider-Request
 - [ ] `core/storage/` — Settings-Manager, Prompt-Fragmente
 
 ### Noch offen in Phase 2
 
-- **Tool-Snippet-Format**: wie die Tool-Dokumentation im Prompt aussieht
+- **Fallback-Verhalten**: exaktes automatisches Verhalten für `fallback_model`
+- **Provider-spezifisches `reasoning_meta`-Resend nach abgeschlossenen Turns**
 
 ### Was Phase 2 aus Phase 1 bekommt
 
