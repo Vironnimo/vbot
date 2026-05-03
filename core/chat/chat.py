@@ -17,6 +17,7 @@ JsonObject = dict[str, Any]
 TIMESTAMP_SUFFIX = "+00:00"
 SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
+MAX_TOOL_ITERATIONS = 8
 
 
 class ChatError(VBotError):
@@ -297,8 +298,188 @@ class ChatSessionManager:
         self.get(agent_id, session_id).delete()
 
 
+class ChatLoop:
+    """Minimal non-streaming agentic chat loop."""
+
+    def __init__(
+        self,
+        runtime: Any,
+        *,
+        max_tool_iterations: int = MAX_TOOL_ITERATIONS,
+    ) -> None:
+        if max_tool_iterations < 0:
+            raise ChatError("max tool iterations must not be negative")
+        self._runtime = runtime
+        self._max_tool_iterations = max_tool_iterations
+
+    async def send(
+        self,
+        agent_id: str,
+        content: str,
+        *,
+        session_id: str | None = None,
+    ) -> ChatMessage:
+        """Run one persisted non-streaming chat turn and return the final assistant message."""
+        agent = self._runtime.agents.get(agent_id)
+        provider_id, model_id = _split_agent_model(agent.model)
+        _ensure_provider_exists(self._runtime.providers, provider_id)
+        adapter = self._runtime.get_adapter(provider_id)
+        session = self._get_or_create_session(agent_id, session_id)
+
+        session.append(ChatMessage.user(content))
+        messages = self._build_request_messages(agent, session)
+        tools = self._runtime.system_prompts.provider_tool_definitions(agent)
+
+        return await self._send_until_final(agent, adapter, model_id, session, messages, tools)
+
+    def _get_or_create_session(self, agent_id: str, session_id: str | None) -> ChatSession:
+        session_manager = cast(ChatSessionManager, self._runtime.chat_sessions)
+        if session_id is None:
+            return session_manager.create(agent_id)
+        try:
+            return session_manager.get(agent_id, session_id)
+        except ChatSessionError:
+            return session_manager.create(agent_id, session_id=session_id)
+
+    def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
+        system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
+        system_message = ChatMessage.system(system_prompt, agent.model)
+        history = [_message_to_request_dict(message) for message in session.load()]
+        return [system_message.to_dict(), *history]
+
+    async def _send_until_final(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        session: ChatSession,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+    ) -> ChatMessage:
+        for _ in range(self._max_tool_iterations + 1):
+            assistant_message = await self._send_assistant_request(
+                agent,
+                adapter,
+                model_id,
+                messages,
+                tools,
+            )
+            session.append(assistant_message)
+            messages.append(assistant_message.to_dict())
+
+            if not assistant_message.tool_calls:
+                return assistant_message
+
+            if self._tool_iterations_exhausted(messages):
+                raise ChatError("maximum tool iterations exceeded")
+
+            tool_messages = await self._dispatch_tool_calls(agent, assistant_message.tool_calls)
+            for tool_message in tool_messages:
+                session.append(tool_message)
+                messages.append(tool_message.to_dict())
+
+        raise ChatError("maximum tool iterations exceeded")
+
+    async def _send_assistant_request(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+    ) -> ChatMessage:
+        response = await adapter.send(
+            messages,
+            model_id=model_id,
+            temperature=agent.temperature,
+            thinking_effort=agent.thinking_effort,
+            tools=tools,
+        )
+        normalized = adapter.normalize_response(response)
+        return _assistant_message_from_response(agent.model, normalized)
+
+    async def _dispatch_tool_calls(
+        self,
+        agent: Any,
+        tool_calls: list[ToolCall],
+    ) -> list[ChatMessage]:
+        tool_messages: list[ChatMessage] = []
+        for tool_call in tool_calls:
+            result = await self._runtime.tools.dispatch(
+                tool_call.name,
+                tool_call.arguments,
+                agent.allowed_tools,
+            )
+            tool_messages.append(
+                ChatMessage.tool(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.name,
+                    content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                )
+            )
+        return tool_messages
+
+    def _tool_iterations_exhausted(self, messages: list[JsonObject]) -> bool:
+        assistant_tool_messages = [
+            message
+            for message in messages
+            if message.get("role") == "assistant" and message.get("tool_calls")
+        ]
+        return len(assistant_tool_messages) > self._max_tool_iterations
+
+
 def _new_message_id() -> str:
     return str(uuid.uuid4())
+
+
+def _split_agent_model(model: str) -> tuple[str, str]:
+    if not model:
+        raise ChatError("agent has no model set")
+    provider_id, separator, model_id = model.partition("/")
+    if not separator or not provider_id or not model_id:
+        raise ChatError("agent model must use <provider>/<model-id>")
+    return provider_id, model_id
+
+
+def _ensure_provider_exists(providers: Any, provider_id: str) -> None:
+    try:
+        providers.get(provider_id)
+    except KeyError as exc:
+        raise ChatError(f"provider not found: {provider_id}") from exc
+
+
+def _message_to_request_dict(message: ChatMessage) -> JsonObject:
+    data = message.to_dict()
+    if data.get("role") == "assistant" and "reasoning_meta" in data:
+        data.pop("reasoning_meta")
+    return data
+
+
+def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:
+    tool_calls = _parse_tool_calls(response.get("tool_calls"))
+    return ChatMessage.assistant(
+        model=model,
+        content=_nullable_response_string(response, "content"),
+        reasoning=_nullable_response_string(response, "reasoning"),
+        reasoning_meta=_response_reasoning_meta(response),
+        tool_calls=tool_calls,
+    )
+
+
+def _nullable_response_string(response: JsonObject, key: str) -> str | None:
+    value = response.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    raise ChatMessageValidationError(f"assistant response {key} must be a string or null")
+
+
+def _response_reasoning_meta(response: JsonObject) -> JsonObject | None:
+    reasoning_meta = response.get("reasoning_meta")
+    if reasoning_meta is None:
+        return None
+    if not isinstance(reasoning_meta, dict):
+        raise ChatMessageValidationError("assistant response reasoning_meta must be an object")
+    return dict(reasoning_meta)
 
 
 def _format_timestamp(timestamp: datetime | None) -> str:

@@ -5,6 +5,8 @@ Verifies that ``Runtime.start()`` loads ``ProviderRegistry`` and
 registries contain the expected data.
 """
 
+from pathlib import Path
+
 import pytest
 
 from core.models.models import ModelRegistry
@@ -14,9 +16,9 @@ from core.utils.config import Config
 
 
 @pytest.fixture
-def runtime() -> Runtime:
+def runtime(tmp_path: Path) -> Runtime:
     """Provide a started Runtime instance loaded from resources."""
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
     runtime.start()
     return runtime
@@ -99,10 +101,10 @@ def test_runtime_model_fields(runtime: Runtime) -> None:
 # ------------------------------------------------------------------
 
 
-def test_providers_not_accessible_before_start() -> None:
+def test_providers_not_accessible_before_start(tmp_path: Path) -> None:
     """Accessing providers before start() raises RuntimeError."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
     # Act & Assert
@@ -110,12 +112,39 @@ def test_providers_not_accessible_before_start() -> None:
         _ = runtime.providers
 
 
-def test_models_not_accessible_before_start() -> None:
+def test_models_not_accessible_before_start(tmp_path: Path) -> None:
     """Accessing models before start() raises RuntimeError."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
     # Act & Assert
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.models
+
+
+def test_phase_two_services_not_accessible_before_start(tmp_path: Path) -> None:
+    """Accessing Phase 2 services before start() raises RuntimeError."""
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+
+    for attribute_name in (
+        "storage",
+        "agents",
+        "tools",
+        "skills",
+        "chat_sessions",
+        "system_prompts",
+    ):
+        with pytest.raises(RuntimeError, match="not started"):
+            getattr(runtime, attribute_name)
+
+
+def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
+    """Runtime.start() loads Phase 2 services alongside registries."""
+    assert runtime.storage.data_dir.exists()
+    assert runtime.agents.data_dir == runtime.storage.data_dir
+    assert runtime.tools.list_tools() == []
+    assert runtime.skills.list_all() == []
+    assert runtime.chat_sessions.sessions_dir("coder") == (
+        runtime.storage.data_dir / "agents" / "coder" / "sessions"
+    )
