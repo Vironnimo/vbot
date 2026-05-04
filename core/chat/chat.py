@@ -477,8 +477,9 @@ def _ensure_provider_exists(providers: Any, provider_id: str) -> None:
 
 def _message_to_request_dict(message: ChatMessage) -> JsonObject:
     data = message.to_dict()
-    if data.get("role") == "assistant" and "reasoning_meta" in data:
-        data.pop("reasoning_meta")
+    if data.get("role") == "assistant":
+        data.pop("reasoning", None)
+        data.pop("reasoning_meta", None)
     return data
 
 

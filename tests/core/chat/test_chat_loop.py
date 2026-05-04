@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatError, ChatLoop, ChatSessionManager
+from core.chat import ChatError, ChatLoop, ChatMessage, ChatSessionManager
 from core.tools import ToolRegistry
 from core.utils.errors import ProviderError
 
@@ -210,6 +210,44 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     ]
     assert adapter.requests[1]["messages"][2]["reasoning_meta"] == {
         "encrypted_content": "opaque-current-turn"
+    }
+    assert adapter.requests[1]["messages"][2]["reasoning"] == "Need weather."
+
+
+@pytest.mark.asyncio
+async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_request(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Previous question"))
+    session.append(
+        ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4",
+            content="Previous answer",
+            reasoning="Old readable reasoning",
+            reasoning_meta={
+                "content_blocks": [{"type": "thinking", "thinking": "Old readable reasoning"}]
+            },
+        )
+    )
+
+    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+
+    assistant_history = adapter.requests[0]["messages"][2]
+    persisted = [message.to_dict() for message in session.load()]
+    assert assistant_history == {
+        "id": persisted[1]["id"],
+        "timestamp": persisted[1]["timestamp"],
+        "role": "assistant",
+        "model": "anthropic/claude-sonnet-4",
+        "content": "Previous answer",
+    }
+    assert persisted[1]["reasoning"] == "Old readable reasoning"
+    assert persisted[1]["reasoning_meta"] == {
+        "content_blocks": [{"type": "thinking", "thinking": "Old readable reasoning"}]
     }
 
 
