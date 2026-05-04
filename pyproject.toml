@@ -12,7 +12,7 @@ dependencies = ["httpx"]
 server  = ["fastapi", "uvicorn[standard]", "websockets"]
 cli     = ["rich"]
 desktop = ["pywebview"]
-dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx"]
+dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]

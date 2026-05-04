@@ -5,10 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-import pytest
-
-pytest.importorskip("fastapi")
-
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from server.app import create_app

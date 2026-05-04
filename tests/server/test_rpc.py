@@ -85,6 +85,12 @@ class StubRuntime:
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
 
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
     def get_adapter(self, _provider_id: str) -> StubAdapter:
         return self.adapter
 
