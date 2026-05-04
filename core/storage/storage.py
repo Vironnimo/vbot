@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
+from core.utils.config import load_env_file_into_environment
 from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
@@ -75,6 +76,15 @@ class StorageManager:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         for directory_name in PHASE_TWO_DIRECTORIES:
             (self.data_dir / directory_name).mkdir(parents=True, exist_ok=True)
+
+    def load_environment(self) -> None:
+        """Load ``<data_dir>/.env`` into the process environment.
+
+        Existing process environment variables stay authoritative so users can
+        override data-directory secrets from their shell or service manager.
+        """
+
+        load_env_file_into_environment(self.data_dir / ".env")
 
     def load_settings(self) -> dict[str, Any]:
         """Load ``settings.json`` or return an empty mapping when it does not exist."""
