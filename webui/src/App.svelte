@@ -1,6 +1,9 @@
 <script>
   import AppShell from './components/AppShell.svelte';
-  import PlaceholderView from './components/PlaceholderView.svelte';
+  import AgentsView from './components/AgentsView.svelte';
+  import ChatView from './components/ChatView.svelte';
+  import SettingsView from './components/SettingsView.svelte';
+  import SystemPromptView from './components/SystemPromptView.svelte';
   import './styles/app.css';
 
   const navigationItems = [
@@ -39,17 +42,57 @@
   ];
 
   let activeViewId = $state(navigationItems[0].id);
+  let agents = $state([]);
+  let selectedAgentId = $state('');
+  let agentsRefreshToken = $state(0);
 
   const selectView = (viewId) => {
     activeViewId = viewId;
   };
 
-  let activeView = $derived(
-    navigationItems.find((item) => item.id === activeViewId) ??
-      navigationItems[0],
-  );
+  const syncAgents = (nextAgents = []) => {
+    agents = Array.isArray(nextAgents) ? nextAgents : [];
+    if (
+      selectedAgentId &&
+      !agents.some((agent) => agent.id === selectedAgentId)
+    ) {
+      selectedAgentId = agents[0]?.id ?? '';
+      return;
+    }
+    if (!selectedAgentId && agents.length > 0) {
+      selectedAgentId = agents[0].id;
+    }
+  };
+
+  const selectAgent = (agentOrId) => {
+    selectedAgentId =
+      typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
+  };
+
+  const refreshAgents = (nextAgents = []) => {
+    syncAgents(nextAgents);
+    agentsRefreshToken += 1;
+  };
 </script>
 
 <AppShell items={navigationItems} {activeViewId} onSelectView={selectView}>
-  <PlaceholderView view={activeView} />
+  {#if activeViewId === 'chat'}
+    <ChatView
+      sharedAgents={agents}
+      sharedSelectedAgentId={selectedAgentId}
+      {agentsRefreshToken}
+      onAgentsChanged={syncAgents}
+      onAgentSelected={selectAgent}
+    />
+  {:else if activeViewId === 'agents'}
+    <AgentsView
+      sharedSelectedAgentId={selectedAgentId}
+      onAgentsChanged={refreshAgents}
+      onAgentSelected={selectAgent}
+    />
+  {:else if activeViewId === 'system-prompt'}
+    <SystemPromptView />
+  {:else if activeViewId === 'settings'}
+    <SettingsView />
+  {/if}
 </AppShell>

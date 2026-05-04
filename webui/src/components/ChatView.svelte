@@ -25,6 +25,14 @@
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
 
+  let {
+    sharedAgents = [],
+    sharedSelectedAgentId = '',
+    agentsRefreshToken = 0,
+    onAgentsChanged,
+    onAgentSelected,
+  } = $props();
+
   const chatState = $state(createChatState());
   let loadingHistory = $state(false);
   let creatingSession = $state(false);
@@ -37,18 +45,54 @@
   let activeSessionState = $derived(currentSessionState(chatState));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
+  let lastSharedSelectedAgentId = $state('');
+  let lastAgentsRefreshToken = $state(agentsRefreshToken);
+
+  $effect(() => {
+    if (sharedAgents.length > 0) {
+      setAgents(chatState, sharedAgents);
+    }
+  });
+
+  $effect(() => {
+    if (
+      sharedSelectedAgentId &&
+      sharedSelectedAgentId !== lastSharedSelectedAgentId &&
+      sharedSelectedAgentId !== chatState.selectedAgentId &&
+      chatState.agents.some((agent) => agent.id === sharedSelectedAgentId)
+    ) {
+      lastSharedSelectedAgentId = sharedSelectedAgentId;
+      handleSelectAgent(sharedSelectedAgentId);
+    }
+  });
+
+  $effect(() => {
+    if (agentsRefreshToken !== lastAgentsRefreshToken) {
+      lastAgentsRefreshToken = agentsRefreshToken;
+      loadAgents({ preferredAgentId: sharedSelectedAgentId });
+    }
+  });
 
   onMount(() => {
-    loadAgents();
+    loadAgents({ preferredAgentId: sharedSelectedAgentId });
     return () => closeSubscriptions();
   });
 
-  const loadAgents = async () => {
+  const loadAgents = async (options = {}) => {
     chatState.loadingAgents = true;
     chatState.agentsError = null;
     try {
       const result = await rpc('agent.list');
+      const preferredAgentId =
+        options.preferredAgentId ?? chatState.selectedAgentId;
+      if (preferredAgentId) {
+        selectAgent(chatState, preferredAgentId);
+      }
       const selectedAgentId = setAgents(chatState, result.agents ?? []);
+      onAgentsChanged?.(chatState.agents);
+      if (selectedAgentId) {
+        onAgentSelected?.(selectedAgentId);
+      }
       if (selectedAgentId) {
         await loadCurrentHistory();
       }
@@ -87,6 +131,7 @@
       return;
     }
     selectAgent(chatState, agentId);
+    onAgentSelected?.(agentId);
     await loadCurrentHistory();
   };
 
@@ -108,6 +153,8 @@
           : candidate,
       );
       setAgents(chatState, updatedAgents);
+      onAgentsChanged?.(updatedAgents);
+      onAgentSelected?.(agent.id);
       ensureSessionState(chatState, agent.id, session.session_id);
       await loadCurrentHistory();
     } catch (error) {

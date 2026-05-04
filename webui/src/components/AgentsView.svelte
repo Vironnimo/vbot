@@ -10,7 +10,11 @@
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
 
-  let { onAgentsChanged, onAgentSelected } = $props();
+  let {
+    sharedSelectedAgentId = '',
+    onAgentsChanged,
+    onAgentSelected,
+  } = $props();
 
   let agents = $state([]);
   let selectedAgentId = $state('');
@@ -40,8 +44,18 @@
       : t('agents.edit', 'Edit Agent'),
   );
 
+  $effect(() => {
+    if (
+      sharedSelectedAgentId &&
+      sharedSelectedAgentId !== selectedAgentId &&
+      agents.some((agent) => agent.id === sharedSelectedAgentId)
+    ) {
+      selectAgent(sharedSelectedAgentId);
+    }
+  });
+
   onMount(() => {
-    loadAgents();
+    loadAgents({ preferredAgentId: sharedSelectedAgentId });
   });
 
   async function loadAgents(options = {}) {
