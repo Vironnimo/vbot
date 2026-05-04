@@ -280,6 +280,15 @@ WebUI unavailable" rather than treated as startup failure. vBot detection for
 CLI lifecycle commands is based on the `/health` contract, and `server status`
 should report running state, URL, WebUI availability, and resolved `data_dir`.
 
+**2026-05-04 — Phase 5 CLI implemented:** `cli/main.py` now exposes
+non-interactive `server start`, `server stop`, `server restart`, and
+`server status` commands. `cli/server_management.py` resolves instances using
+the shared server port priority, detects vBot targets through the exact
+`/health` contract, redirects CLI-started server logs to `<data_dir>/logs/`,
+reports WebUI availability separately from API health, and uses `psutil` only
+after vBot identity is confirmed for graceful-then-forced local process stop.
+Full backend gate passes with 471 tests. New CLI/dev dependency: `psutil`.
+
 ## Specs
 
 Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any module or subsystem that has its own folder or clear boundary in the codebase — a chunk of code that has a distinct responsibility and that agents need context about before touching it. This includes technical modules (`hooks`, `tools`, `storage`), infrastructure modules (`server`, `channel`), and business modules (`auth`, `payments`). Size doesn't matter — what matters is that working on it without context risks misunderstanding its interfaces or conventions.
