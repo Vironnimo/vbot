@@ -135,7 +135,8 @@ Minimal JSON für `agent.json` — kann später grown, aber nie shrinkn:
 ### Agent-Lifecycle
 
 - **Erstellen**: Neuer Agent → `data_dir/agents/<id>/agent.json` + Workspace wird aus `resources/workspace-templates/` gesät (die vier Dateien). `workspace`-Feld defaultet auf `<data_dir>/workspace-<id>/`.
-- **Löschen**: Agent gelöscht → alle Dateien (agent.json, sessions, workspace) werden nach `archive/<agent-id>/` verschoben. Nicht permanent gelöscht — kann inspiziert oder wiederhergestellt werden.
+- **Bootstrap / Erststart**: Beim erstmaligen Erstellen des data-dir wird automatisch ein Agent `main` mit dem Namen `Main` angelegt.
+- **Löschen**: Agent gelöscht → alle Dateien (agent.json, sessions, workspace) werden nach `archive/<agent-id>/` verschoben. Nicht permanent gelöscht — kann inspiziert oder wiederhergestellt werden. Löschen ist nur erlaubt, wenn danach mindestens ein anderer Agent verbleibt.
 - **Updaten**: Jedes Feld außer `id` kann geändert werden. `id` ist immutable (Verzeichnisname).
 
 ### Datenverzeichnis-Struktur
@@ -340,16 +341,20 @@ laufenden Run best effort. ✅
 
 ## Phase 4 — WebUI (Minimal)
 
-Ziel: Svelte-App mit einem Chat-Fenster. Ping → Pong.
+Ziel: Svelte-App mit linker Navigation, rechter Inhaltsfläche und erstem echten Chat-UI.
 
-- [ ] `webui/` — bestehendes Vite + Svelte 5 + JS Scaffold zum ersten echten Chat-UI ausbauen
+- [ ] `webui/` — App-Shell mit linkem Menü (`Chat`, `Agents`, `System Prompt`, `Settings`) + rechter Inhaltsfläche
 - [ ] `webui/src/lib/api.js` — RPC + SSE + WebSocket-Client
+- [ ] Chat-Ansicht: Agent wählen statt Session; `New Session` startet für den gewählten Agenten eine neue aktive Session, ohne alte JSONL-Sessions zu löschen oder als Liste anzuzeigen
 - [ ] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen,
       sichtbare Thinking-Blöcke, Tool-Schritte und Assistant-Antworten
+- [ ] Agents-Ansicht: Agenten erstellen, bearbeiten und löschen; es muss immer mindestens ein Agent existieren
 - [ ] `npm run build` → statische Dateien, von FastAPI serviert
 
-**Exit:** `localhost:8420` → Session anlegen, Text eingeben, Run im Browser
-streamen, Thinking-/Tool-/Assistant-Schritte sichtbar sehen, Run abbrechen.
+**Exit:** `localhost:8420` → App-Shell mit linker Navigation sichtbar,
+Agent auswählen, neue Session starten, Text eingeben, Run im Browser streamen,
+Thinking-/Tool-/Assistant-Schritte sichtbar sehen, Run abbrechen und Agenten
+erstellen/bearbeiten/löschen (bei Minimum-ein-Agent-Regel).
 
 ---
 
