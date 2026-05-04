@@ -363,24 +363,24 @@ erstellen/bearbeiten/löschen (bei Minimum-ein-Agent-Regel). ✅
 
 ---
 
-## Phase 5 — CLI
+## Phase 5 — CLI ✅
 
 Ziel: Lokale vBot-Server-Instanzen von der Kommandozeile starten, stoppen,
 neu starten und ihren Status prüfen.
 
-- [ ] `cli/main.py` — `server start`, `server stop`, `server restart`, `server status`
-- [ ] Instanz-Modell: eine lokale Instanz wird über ihr `data_dir` identifiziert; die Port-Auflösung bleibt `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`
-- [ ] vBot-Server-Erkennung läuft über `/health`; nur ein Server mit gültiger vBot-Health-Response gilt als CLI-Ziel
-- [ ] `server start` wartet auf Readiness (`/health` antwortet), gibt die URL aus und öffnet niemals automatisch einen Browser
-- [ ] Läuft auf dem Ziel-Port bereits ein vBot-Server, wird das sauber gemeldet statt eine zweite Instanz zu starten
-- [ ] `server stop` / `server restart` / `server status` dürfen auch bereits laufende lokale vBot-Server adressieren, die nicht von derselben CLI-Invocation gestartet wurden; Nicht-vBot-Prozesse dürfen dabei nicht beendet werden
-- [ ] Belegt ein Nicht-vBot-Prozess den Ziel-Port, schlagen `server start` / `server stop` / `server restart` mit klarer Fehlermeldung fehl; `server status` meldet „läuft nicht“ plus Konflikt-Hinweis
-- [ ] Stop-Semantik: best effort graceful shutdown, mit Timeout und anschließendem Force-Stop falls nötig (insbesondere unter Windows)
-- [ ] `server restart` löst Host/Port/Data-Dir-Konfiguration jeweils neu aus aktuellen Args/Env/Settings auf
-- [ ] Logs der Instanz landen in `<data_dir>/logs/`; die CLI meldet den Log-Ort sowie bei `status` mindestens läuft/läuft nicht, URL, WebUI verfügbar/nicht verfügbar und `data_dir`
-- [ ] Fehlt `webui/dist`, darf der API-Server trotzdem starten; die CLI darf dann nicht behaupten, dass die WebUI verfügbar ist
+- [x] `cli/main.py` — `server start`, `server stop`, `server restart`, `server status`
+- [x] Instanz-Modell: eine lokale Instanz wird über ihr `data_dir` identifiziert; die Port-Auflösung bleibt `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`
+- [x] vBot-Server-Erkennung läuft über `/health`; nur ein Server mit gültiger vBot-Health-Response gilt als CLI-Ziel
+- [x] `server start` wartet auf Readiness (`/health` antwortet), gibt die URL aus und öffnet niemals automatisch einen Browser
+- [x] Läuft auf dem Ziel-Port bereits ein vBot-Server, wird das sauber gemeldet statt eine zweite Instanz zu starten
+- [x] `server stop` / `server restart` / `server status` dürfen auch bereits laufende lokale vBot-Server adressieren, die nicht von derselben CLI-Invocation gestartet wurden; Nicht-vBot-Prozesse dürfen dabei nicht beendet werden
+- [x] Belegt ein Nicht-vBot-Prozess den Ziel-Port, schlagen `server start` / `server stop` / `server restart` mit klarer Fehlermeldung fehl; `server status` meldet „läuft nicht“ plus Konflikt-Hinweis
+- [x] Stop-Semantik: best effort graceful shutdown, mit Timeout und anschließendem Force-Stop falls nötig (insbesondere unter Windows)
+- [x] `server restart` löst Host/Port/Data-Dir-Konfiguration jeweils neu aus aktuellen Args/Env/Settings auf
+- [x] Logs der Instanz landen in `<data_dir>/logs/`; die CLI meldet den Log-Ort sowie bei `status` mindestens läuft/läuft nicht, URL, WebUI verfügbar/nicht verfügbar und `data_dir`
+- [x] Fehlt `webui/dist`, darf der API-Server trotzdem starten; die CLI darf dann nicht behaupten, dass die WebUI verfügbar ist
 
-**Exit:** `python cli/main.py server start` startet den Server für das gewählte `data_dir`, wartet bis `/health` antwortet, gibt die URL aus und meldet, ob die WebUI verfügbar ist. `server stop`, `server restart` und `server status` arbeiten zuverlässig gegen die gewählte lokale vBot-Instanz.
+**Exit:** `python cli/main.py server start` startet den Server für das gewählte `data_dir`, wartet bis `/health` antwortet, gibt die URL aus und meldet, ob die WebUI verfügbar ist. `server stop`, `server restart` und `server status` arbeiten zuverlässig gegen die gewählte lokale vBot-Instanz. ✅
 
 ---
 
