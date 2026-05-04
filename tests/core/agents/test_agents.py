@@ -73,11 +73,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["updated_at"] == data["created_at"]
     assert (store.data_dir / "agents" / "coder" / "sessions").is_dir()
     assert (
-        store.data_dir
-        / "agents"
-        / "coder"
-        / "sessions"
-        / f"{data['current_session_id']}.jsonl"
+        store.data_dir / "agents" / "coder" / "sessions" / f"{data['current_session_id']}.jsonl"
     ).is_file()
     assert agent.current_session_id == data["current_session_id"]
     assert agent == store.get("coder")
@@ -200,11 +196,7 @@ def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore
     assert loaded.current_session_id
     assert loaded.current_session_id != agent.current_session_id
     assert (
-        store.data_dir
-        / "agents"
-        / "legacy"
-        / "sessions"
-        / f"{loaded.current_session_id}.jsonl"
+        store.data_dir / "agents" / "legacy" / "sessions" / f"{loaded.current_session_id}.jsonl"
     ).is_file()
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert normalized_data["current_session_id"] == loaded.current_session_id
