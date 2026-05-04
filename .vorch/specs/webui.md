@@ -9,6 +9,17 @@ does not talk to providers directly. The minimal Phase 4 product presents an
 Agent-first chat surface, Agent management, and placeholders for System Prompt
 and Settings.
 
+## Layout
+
+- The WebUI uses a two-pane app shell: navigation on the left and content on
+  the right.
+- The left navigation contains at least these entries:
+  - `Chat`
+  - `Agents`
+  - `System Prompt`
+  - `Settings`
+- Additional navigation entries may be added later.
+
 ## Interfaces
 
 - `webui/src/lib/api.js`

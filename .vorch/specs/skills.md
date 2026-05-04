@@ -10,6 +10,22 @@ Local skill metadata loading and prompt allowlist filtering.
 
 - `SkillMetadata`: `name`, `description`, `path`.
 - Metadata is read from Markdown front matter in each `SKILL.md`.
+- The prompt-visible skill block is XML and follows the official
+  `agentskills.io` schema used by vBot:
+
+```xml
+<available_skills>
+  <skill>
+    <name>agent-cli</name>
+    <description>Delegate coding tasks to an external AI coding agent CLI...</description>
+    <path>C:\Users\Viro\.vbot\skills\agent-cli\SKILL.md</path>
+  </skill>
+</available_skills>
+```
+
+- `available_skills` is the root element.
+- Each `skill` element contains `name`, `description`, and `path`.
+- `path` is the absolute path to that skill's `SKILL.md`.
 
 ## Interfaces
 
@@ -24,6 +40,9 @@ Local skill metadata loading and prompt allowlist filtering.
 - `allowed_skills=['*']` exposes all loaded skills.
 - `allowed_skills=[]` exposes none.
 - Explicit allowlists match exact skill names.
+- Prompt-facing skill metadata is XML, not JSON or Markdown.
+- `agentskills.io` is the canonical schema for the injected skill list block.
+- Skill values inserted into the XML block must be XML-escaped.
 
 ## Constraints & Gotchas
 

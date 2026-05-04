@@ -66,6 +66,8 @@ container; a Run is one active execution inside that session.
   does not yet exist. This describes current implementation behavior and should
   not be mistaken for the intended public/server product contract.
 - Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
+- If a Session later continues with a different provider, stale `reasoning_meta`
+  from the old provider must never be sent to the new provider.
 - `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
 - Tool calls are dispatched only through the runtime tool registry and agent allowlist. Disallowed tools raise before a tool result is appended.
