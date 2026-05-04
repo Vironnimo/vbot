@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,7 +10,16 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatError, ChatLoop, ChatMessage, ChatSessionManager
+from core.chat import (
+    ActiveRunError,
+    ChatError,
+    ChatLoop,
+    ChatMessage,
+    ChatRunManager,
+    ChatSessionManager,
+    RunCancelledError,
+    RunStatus,
+)
 from core.tools import ToolRegistry
 from core.utils.errors import ProviderError
 
@@ -91,6 +101,21 @@ class ClosingStubAdapter(StubAdapter):
         self.closed = True
 
 
+class BlockingStubAdapter(StubAdapter):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.request_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        self.requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        self.request_started.set()
+        await self.release.wait()
+        return {"content": "Late", "tool_calls": None}
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -105,6 +130,7 @@ class StubRuntime:
         self.chat_sessions = ChatSessionManager(data_dir)
         self.system_prompts = StubPrompts()
         self.tools = tools or ToolRegistry()
+        self.chat_runs = ChatRunManager()
         self.providers = StubProviders(provider_ids or {agent.model.split("/", 1)[0]})
         self.adapter = adapter
         self.adapter_provider_id: str | None = None
@@ -142,6 +168,15 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
         ],
     }
     assert [message["role"] for message in adapter.requests[0]["messages"]] == ["system", "user"]
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert run.events[1].payload["message"]["content"] == "Hi"
+    assert run.events[2].payload["message"]["content"] == "Hello"
 
 
 @pytest.mark.asyncio
@@ -249,6 +284,82 @@ async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_reque
     assert persisted[1]["reasoning_meta"] == {
         "content_blocks": [{"type": "thinking", "thinking": "Old readable reasoning"}]
     }
+
+
+@pytest.mark.asyncio
+async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(Exception, match="session does not exist"):
+        await ChatLoop(runtime).start_run("coder", "Hi", session_id="missing-session")
+
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_start_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStubAdapter()
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    await adapter.request_started.wait()
+
+    with pytest.raises(ActiveRunError, match="active run"):
+        await ChatLoop(runtime).start_run("coder", "Again", session_id="session-one")
+
+    first_run.request_cancel()
+    adapter.release.set()
+    with pytest.raises(RunCancelledError):
+        await first_run.wait()
+
+
+@pytest.mark.asyncio
+async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    first_adapter = BlockingStubAdapter()
+    second_adapter = StubAdapter([{"content": "Second", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
+    adapters = [first_adapter, second_adapter]
+    runtime.get_adapter = lambda provider_id: adapters.pop(0)  # type: ignore[method-assign]
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    runtime.chat_sessions.create("coder", session_id="session-two")
+
+    first_run = await ChatLoop(runtime).start_run("coder", "First", session_id="session-one")
+    await first_adapter.request_started.wait()
+    second_run = await ChatLoop(runtime).start_run("coder", "Second", session_id="session-two")
+
+    second_assistant = await second_run.wait()
+    first_run.request_cancel()
+    first_adapter.release.set()
+
+    assert second_assistant.content == "Second"
+    with pytest.raises(RunCancelledError):
+        await first_run.wait()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStubAdapter()
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    await adapter.request_started.wait()
+    run.request_cancel()
+    adapter.release.set()
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    session_messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.CANCELLED
+    assert [message.role for message in session_messages] == ["user"]
+    assert "assistant_output" not in [event.type for event in run.events]
 
 
 @pytest.mark.asyncio
