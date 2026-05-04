@@ -341,25 +341,25 @@ laufenden Run best effort. ✅
 
 ---
 
-## Phase 4 — WebUI (Minimal)
+## Phase 4 — WebUI (Minimal) ✅
 
 Ziel: Svelte-App mit linker Navigation, rechter Inhaltsfläche und erstem echten Chat-UI.
 
-- [ ] `webui/` — App-Shell mit linkem Menü (`Chat`, `Agents`, `System Prompt`, `Settings`) + rechter Inhaltsfläche
-- [ ] `webui/src/lib/api.js` — RPC + SSE + WebSocket-Client
-- [ ] Chat-Ansicht: Agent wählen statt Session; aktueller Chat kommt aus `current_session_id`; `New Session` startet für den gewählten Agenten eine neue aktive Session, ohne alte JSONL-Sessions zu löschen oder als Liste anzuzeigen
-- [ ] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen,
+- [x] `webui/` — App-Shell mit linkem Menü (`Chat`, `Agents`, `System Prompt`, `Settings`) + rechter Inhaltsfläche
+- [x] `webui/src/lib/api.js` — RPC + SSE + WebSocket-Client
+- [x] Chat-Ansicht: Agent wählen statt Session; aktueller Chat kommt aus `current_session_id`; `New Session` startet für den gewählten Agenten eine neue aktive Session, ohne alte JSONL-Sessions zu löschen oder als Liste anzuzeigen
+- [x] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen,
       sichtbare Thinking-Blöcke, Tool-Schritte und Assistant-Antworten
-- [ ] Queue-Verhalten in der Chat-Ansicht: weitere Nachrichten während laufendem Run FIFO-queuen, sichtbar anzeigen und vor dem Absenden abbrechbar machen
-- [ ] Agents-Ansicht: Agenten erstellen, bearbeiten und löschen; es muss immer mindestens ein Agent existieren
-- [ ] `System Prompt`-Ansicht vorerst als `Coming soon`; später editierbare Prompt-Bausteine aus `resources/prompts/` plus agentbezogene Vorschau des resultierenden System Prompts
+- [x] Queue-Verhalten in der Chat-Ansicht: weitere Nachrichten während laufendem Run FIFO-queuen, sichtbar anzeigen und vor dem Absenden abbrechbar machen
+- [x] Agents-Ansicht: Agenten erstellen, bearbeiten und löschen; es muss immer mindestens ein Agent existieren
+- [x] `System Prompt`-Ansicht vorerst als `Coming soon`; später editierbare Prompt-Bausteine aus `resources/prompts/` plus agentbezogene Vorschau des resultierenden System Prompts
 - [ ] Optional später: zuletzt gewählten Agenten accessor-lokal merken (nicht im data dir, nicht Phase-4-blockierend)
-- [ ] `npm run build` → statische Dateien, von FastAPI serviert
+- [x] `npm run build` → statische Dateien, von FastAPI serviert
 
 **Exit:** `localhost:8420` → App-Shell mit linker Navigation sichtbar,
 Agent auswählen, neue Session starten, Text eingeben, Run im Browser streamen,
 Thinking-/Tool-/Assistant-Schritte sichtbar sehen, Run abbrechen und Agenten
-erstellen/bearbeiten/löschen (bei Minimum-ein-Agent-Regel).
+erstellen/bearbeiten/löschen (bei Minimum-ein-Agent-Regel). ✅
 
 ---
 

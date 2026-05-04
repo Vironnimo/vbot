@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import math
+from typing import Any, cast
 
+from core.agents import AgentError
 from core.chat import (
     ASSISTANT_OUTPUT_EVENT,
     REASONING_EVENT,
@@ -29,12 +31,17 @@ from core.utils.errors import ConfigError, VBotError
 
 JsonObject = dict[str, Any]
 
+ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
+
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
 RPC_ERROR_DOMAIN = "domain_error"
 RPC_ERROR_ACTIVE_RUN = "active_run"
 RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
+RPC_ERROR_LAST_AGENT = "last_agent"
 
 
 class RpcError(Exception):
@@ -62,8 +69,18 @@ async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
 
 async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonObject:
     match method:
+        case "agent.list":
+            return _list_agents(state)
+        case "agent.create":
+            return _create_agent(state, params)
+        case "agent.update":
+            return _update_agent(state, params)
+        case "agent.delete":
+            return await _delete_agent(state, params)
         case "session.create":
             return _create_session(state, params)
+        case "chat.history":
+            return _chat_history(state, params)
         case "chat.send":
             return await _send_chat(state, params)
         case "chat.stream":
@@ -74,15 +91,80 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             raise RpcError(RPC_ERROR_METHOD_NOT_FOUND, f"unknown RPC method: {method}")
 
 
+def _list_agents(state: Any) -> JsonObject:
+    try:
+        agents = sorted(state.runtime.agents.list(), key=lambda agent: agent.id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"agents": [_agent_response(agent) for agent in agents]}
+
+
+def _create_agent(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "id")
+    name = _required_string(params, "name")
+    try:
+        agent = state.runtime.agents.create(
+            agent_id, name, **_agent_changes(params, blocked={"id", "name"}, for_create=True)
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _agent_response(agent)
+
+
+def _update_agent(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "id")
+    try:
+        agent = state.runtime.agents.update(
+            agent_id, **_agent_changes(params, blocked={"id"}, for_create=False)
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _agent_response(agent)
+
+
+async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "id")
+    try:
+        async with state.agent_delete_lock:
+            remaining_agents = [
+                agent for agent in state.runtime.agents.list() if agent.id != agent_id
+            ]
+            if not remaining_agents:
+                raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
+            state.runtime.agents.delete(agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {
+        "agent_id": agent_id,
+        "remaining_agents": [_agent_response(agent) for agent in remaining_agents],
+    }
+
+
 def _create_session(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _optional_string(params, "session_id")
+    make_current = _optional_bool(params, "make_current", default=False)
     try:
         state.runtime.agents.get(agent_id)
         session = state.runtime.chat_sessions.create(agent_id, session_id=session_id)
+        if make_current:
+            state.runtime.agents.update(agent_id, current_session_id=session.id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"agent_id": agent_id, "session_id": session.id}
+
+
+def _chat_history(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "agent_id")
+    session_id = _optional_string(params, "session_id")
+    try:
+        agent = state.runtime.agents.get(agent_id)
+        active_session_id = session_id or agent.current_session_id
+        session = state.runtime.chat_sessions.get(agent_id, active_session_id)
+        messages = [_visible_message(message) for message in session.load()]
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"agent_id": agent_id, "session_id": active_session_id, "messages": messages}
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -147,6 +229,91 @@ def _optional_string(params: JsonObject, key: str) -> str | None:
     return value
 
 
+def _optional_bool(params: JsonObject, key: str, *, default: bool) -> bool:
+    value = params.get(key, default)
+    if not isinstance(value, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
+    return value
+
+
+def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -> JsonObject:
+    public_fields = {
+        "name",
+        "model",
+        "fallback_model",
+        "temperature",
+        "thinking_effort",
+        "allowed_tools",
+        "allowed_skills",
+    }
+    if not for_create:
+        public_fields.add("current_session_id")
+
+    rejected_fields = sorted(set(params) - public_fields - blocked)
+    if rejected_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported agent fields: {', '.join(rejected_fields)}",
+        )
+
+    changes: JsonObject = {}
+    for key, value in params.items():
+        if key in blocked:
+            continue
+        changes[key] = _validate_agent_field(key, value)
+    return changes
+
+
+def _validate_agent_field(key: str, value: Any) -> Any:
+    if key in {"name", "current_session_id"}:
+        if not isinstance(value, str) or not value:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
+        return value
+    if key in {"model", "fallback_model"}:
+        if not isinstance(value, str):
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
+        return value
+    if key == "temperature":
+        return _validate_temperature(value)
+    if key == "thinking_effort":
+        return _validate_thinking_effort(value)
+    if key in {"allowed_tools", "allowed_skills"}:
+        return _validate_string_list(key, value)
+    raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
+
+
+def _validate_temperature(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.temperature must be a number")
+    temperature = float(value)
+    if not math.isfinite(temperature):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.temperature must be finite")
+    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.temperature must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}",
+        )
+    return temperature
+
+
+def _validate_thinking_effort(value: Any) -> str:
+    if not isinstance(value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.thinking_effort must be a string")
+    if value not in ALLOWED_THINKING_EFFORTS:
+        allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.thinking_effort must be one of: {allowed}",
+        )
+    return value
+
+
+def _validate_string_list(key: str, value: Any) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of strings")
+    return list(value)
+
+
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
@@ -156,7 +323,9 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_RUN_NOT_FOUND, str(error))
     if isinstance(error, RunCancelledError):
         return RpcError(RPC_ERROR_CANCELLED, str(error))
-    if isinstance(error, (ChatError, ChatSessionError, ConfigError, RunError, VBotError, KeyError)):
+    if isinstance(
+        error, (AgentError, ChatError, ChatSessionError, ConfigError, RunError, VBotError, KeyError)
+    ):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     raise error
 
@@ -172,7 +341,7 @@ def _run_response(
         "agent_id": run.agent_id,
         "session_id": run.session_id,
         "status": run.status.value,
-        "events": [event.to_dict() for event in run.events],
+        "events": [_remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
     }
     if final_message is not None:
         response["message"] = _visible_message(final_message)
@@ -182,9 +351,24 @@ def _run_response(
 
 
 def _visible_message(message: ChatMessage) -> JsonObject:
-    payload = message.to_dict()
-    payload.pop("reasoning_meta", None)
-    return payload
+    return cast(JsonObject, _remove_opaque_provider_metadata(message.to_dict()))
+
+
+def _agent_response(agent: Any) -> JsonObject:
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "model": agent.model,
+        "fallback_model": agent.fallback_model,
+        "workspace": agent.workspace,
+        "temperature": agent.temperature,
+        "thinking_effort": agent.thinking_effort,
+        "allowed_tools": list(agent.allowed_tools),
+        "allowed_skills": list(agent.allowed_skills),
+        "current_session_id": agent.current_session_id,
+        "created_at": agent.created_at,
+        "updated_at": agent.updated_at,
+    }
 
 
 def _bridge_run_to_event_bus(state: Any, run: Run) -> None:

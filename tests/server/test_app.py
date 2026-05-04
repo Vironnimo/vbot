@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -10,6 +11,18 @@ from core.chat import ChatLoop, ChatRunManager
 from core.runtime import Runtime
 from core.utils.config import Config
 from server.app import ServerEventBus, create_app
+
+
+def test_create_app_does_not_mount_webui_when_build_is_absent(monkeypatch, tmp_path: Path) -> None:
+    import server.app as server_app
+
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", tmp_path / "missing-dist")
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 404
 
 
 def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
@@ -24,6 +37,7 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert isinstance(app.state.chat_runs, ChatRunManager)
         assert isinstance(app.state.chat_loop, ChatLoop)
         assert isinstance(app.state.event_bus, ServerEventBus)
+        assert isinstance(app.state.agent_delete_lock, asyncio.Lock)
         assert runtime.chat_runs is app.state.chat_runs
 
     assert runtime.logger is not None
@@ -42,3 +56,54 @@ def test_create_app_lifecycle_stops_runtime_on_shutdown(tmp_path: Path) -> None:
         assert "not started" in str(exc)
     else:
         raise AssertionError("runtime storage should be unavailable after shutdown")
+
+
+def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:
+    import server.app as server_app
+
+    dist_dir = _write_webui_build(tmp_path)
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", dist_dir)
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        health_response = client.get("/health")
+        missing_sse_response = client.get("/api/runs/missing/events")
+        rpc_response = client.post("/api/rpc", json={"method": "unknown.method"})
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {"status": "ok"}
+    assert missing_sse_response.status_code == 404
+    assert rpc_response.status_code == 200
+    assert rpc_response.json()["ok"] is False
+
+
+def test_webui_serves_index_static_assets_and_spa_fallback(monkeypatch, tmp_path: Path) -> None:
+    import server.app as server_app
+
+    dist_dir = _write_webui_build(tmp_path)
+    monkeypatch.setattr(server_app, "WEBUI_DIST_DIR", dist_dir)
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        index_response = client.get("/")
+        asset_response = client.get("/assets/app.js")
+        fallback_response = client.get("/agents/main")
+
+    assert index_response.status_code == 200
+    assert '<div id="app"></div>' in index_response.text
+    assert asset_response.status_code == 200
+    assert asset_response.text == "console.log('webui');"
+    assert fallback_response.status_code == 200
+    assert '<script type="module" src="/assets/app.js"></script>' in fallback_response.text
+
+
+def _write_webui_build(tmp_path: Path) -> Path:
+    dist_dir = tmp_path / "webui" / "dist"
+    assets_dir = dist_dir / "assets"
+    assets_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text(
+        '<div id="app"></div><script type="module" src="/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (assets_dir / "app.js").write_text("console.log('webui');", encoding="utf-8")
+    return dist_dir

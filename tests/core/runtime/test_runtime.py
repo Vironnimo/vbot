@@ -23,10 +23,10 @@ def config(tmp_path: Path) -> Config:
     return Config(data_dir=tmp_path / "data")
 
 
-def test_runtime_start_no_error():
+def test_runtime_start_no_error(tmp_path: Path):
     """Instantiating Runtime and calling start() raises no exception."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
     # Act
@@ -36,10 +36,10 @@ def test_runtime_start_no_error():
     assert runtime.logger is not None
 
 
-def test_runtime_logger_exists_after_start():
+def test_runtime_logger_exists_after_start(tmp_path: Path):
     """After start(), runtime.logger is a valid logger object."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
     # Act
@@ -55,10 +55,10 @@ def test_runtime_logger_exists_after_start():
     assert isinstance(logger, logging.Logger)
 
 
-def test_runtime_stop_runs_cleanly():
+def test_runtime_stop_runs_cleanly(tmp_path: Path):
     """After start(), calling stop() completes without exception."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
     runtime.start()
 
@@ -68,10 +68,10 @@ def test_runtime_stop_runs_cleanly():
     # Assert — reaching here without exception is success
 
 
-def test_runtime_stop_without_start_does_not_crash():
+def test_runtime_stop_without_start_does_not_crash(tmp_path: Path):
     """Calling stop() before start() is a no-op and does not crash."""
     # Arrange
-    config = Config()
+    config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
     # Act
@@ -130,6 +130,20 @@ def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
     ):
         assert (data_dir / directory_name).is_dir()
     assert (data_dir / "prompts" / "system.md").is_file()
+
+
+def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
+    """Runtime.start() leaves a new data dir with a usable default agent."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    agents = runtime.agents.list()
+    assert [agent.id for agent in agents] == ["main"]
+    main_agent = agents[0]
+    assert main_agent.name == "Main"
+    assert main_agent.current_session_id
+    assert runtime.chat_sessions.get("main", main_agent.current_session_id).load() == []
 
 
 def test_runtime_stop_clears_phase_two_services(config: Config):
