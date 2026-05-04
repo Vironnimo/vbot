@@ -388,11 +388,14 @@ neu starten und ihren Status prüfen.
 
 Ziel: Thin-Client im pywebview-Fenster.
 
-- [ ] `desktop/main.py` — pywebview, zeigt WebUI-URL an
-- [ ] `--host` / `--port` CLI-Argumente
-- [ ] Fenster-Titel, Icon, Schließen-Verhalten
+- [ ] `desktop/main.py` — pywebview lädt die normale WebUI unter `/` des konfigurierten Servers; kein separates Desktop-Frontend
+- [ ] `--host` / `--port` CLI-Argumente; Desktop verbindet sich zu lokalen oder LAN-vBot-Servern über normales HTTP und startet/stoppt nie selbst einen Server
+- [ ] Accessor-lokale Desktop-Settings für zuletzt verwendeten Host/Port; nicht im gemeinsamen Server-`data_dir`
+- [ ] Bei fehlender WebUI im Zielserver zeigt die Desktop-App im Fenster eine klare Nachricht statt Exception/Crash (z.B. „server <ip>:<port> does not have a web ui“)
+- [ ] Fenster-Titel, Icon, Schließen-Verhalten; Schließen beendet nur den Desktop-Prozess, nicht den Server
+- [ ] Keine Python↔JavaScript-Bridge in Phase 6
 
-**Exit:** `python desktop/main.py` → Fenster mit WebUI, kommuniziert mit Remote-Server.
+**Exit:** `python desktop/main.py` → pywebview-Fenster lädt `/` des konfigurierten vBot-Servers (localhost oder LAN) über HTTP, zeigt bei fehlender WebUI eine In-App-Nachricht und beendet beim Schließen nur den Desktop-Client.
 
 ---
 

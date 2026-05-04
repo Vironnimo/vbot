@@ -483,3 +483,66 @@ implementation details.
 - If `webui/dist` is missing, the API server may still start successfully.
 - In that case, CLI output must say that the server is running but the WebUI is
   not available.
+
+## 8. Phase 6 Desktop Shell Decisions
+
+These are product-level decisions for the pywebview desktop accessor. They
+define the long-lived contract so Phase 6 stays a thin client instead of
+growing server-management or native-bridge responsibilities by accident.
+
+### Scope
+
+- Phase 6 adds a pywebview-based desktop shell in `desktop/main.py`.
+- The Desktop app is an **Accessor** like WebUI and CLI: it talks to the vBot
+  server and does not talk to providers directly.
+- Phase 6 is intentionally a thin client, not a second server-management layer.
+
+### Server Relationship
+
+- The Desktop app does **not** start, stop, restart, or otherwise manage a vBot
+  server process.
+- It connects to an already reachable server at the configured host and port.
+- Supported targets in Phase 6 are localhost and LAN-reachable vBot servers.
+- No authentication or TLS-specific Desktop behavior is added in Phase 6;
+  normal unencrypted HTTP is acceptable for this scope.
+
+### URL and UI Surface
+
+- The Desktop app loads the normal WebUI from the server root path `/`.
+- Phase 6 does **not** introduce a separate desktop-only frontend build,
+  desktop-only route, or alternate HTML shell.
+- The desktop window should therefore behave like an embedded version of the
+  existing WebUI accessor, backed by the same server contract.
+
+### Missing WebUI Behavior
+
+- A healthy server without `webui/dist` is still a valid vBot server, as already
+  established in the CLI/server contract.
+- In that case, the Desktop app does **not** crash or throw an unhandled error.
+- Instead, it shows a clear in-window message that the target server does not
+  provide a WebUI, including the host/port context when practical.
+
+### Window Lifecycle
+
+- Closing the Desktop window ends the Desktop client process only.
+- Closing the Desktop window has no effect on the target vBot server process.
+- Phase 6 does not introduce tray behavior, background persistence after close,
+  or hidden long-running desktop daemons.
+
+### Desktop-local Settings
+
+- The Desktop app may persist its last-used connection target (at minimum host
+  and port) in an accessor-local settings file.
+- This settings file belongs to the Desktop app itself and is **not** part of
+  the shared server `data_dir`.
+- Desktop-local preferences remain separate from shared agent/server state,
+  consistent with the accessor-local restoration rule already chosen for WebUI
+  and Desktop.
+
+### Native Integration Boundary
+
+- Phase 6 does **not** define a Python↔JavaScript bridge as part of the product
+  contract.
+- The Desktop app is only an embedded web client in this phase.
+- Native OS integrations (tray, file dialogs, notifications, local bridge APIs,
+  etc.) remain out of scope unless explicitly introduced by a later phase.

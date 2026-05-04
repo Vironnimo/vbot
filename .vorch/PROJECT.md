@@ -297,6 +297,14 @@ same-port listeners on other addresses are not selected for termination. Failed
 startup attempts clean up the just-spawned child process before returning an
 error. Full backend gate passes with 479 tests. No new dependencies.
 
+**2026-05-04 — Phase 6 desktop contract clarified:** The Desktop accessor stays a
+thin pywebview client. It does not manage server processes, loads the normal
+WebUI from `/`, may connect to localhost or LAN vBot servers over plain HTTP,
+shows an in-window message when the target server has no WebUI, and closing the
+window ends only the Desktop process. Desktop connection preferences such as the
+last-used host/port may be stored accessor-locally, never in the shared server
+`data_dir`. No Python↔JavaScript bridge is part of the Phase 6 contract.
+
 ## Specs
 
 Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any module or subsystem that has its own folder or clear boundary in the codebase — a chunk of code that has a distinct responsibility and that agents need context about before touching it. This includes technical modules (`hooks`, `tools`, `storage`), infrastructure modules (`server`, `channel`), and business modules (`auth`, `payments`). Size doesn't matter — what matters is that working on it without context risks misunderstanding its interfaces or conventions.
@@ -315,4 +323,5 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
+| `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
 | `.vorch/specs/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
