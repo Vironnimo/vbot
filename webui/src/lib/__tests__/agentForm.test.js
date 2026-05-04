@@ -60,19 +60,33 @@ describe('agent form helpers', () => {
       name: 'Coder',
       model: 'openai/gpt-4.1',
       fallback_model: '',
-      workspace: 'C:/workspace-coder',
       temperature: 0.25,
       thinking_effort: 'low',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
     });
+    expect(result.payload).not.toHaveProperty('workspace');
   });
 
-  it('omits blank workspace so the server can use its default', () => {
+  it('omits blank workspace from create payloads', () => {
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
       workspace: ' ',
+      temperature: '0.1',
+      allowed_tools: '*',
+      allowed_skills: '*',
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).not.toHaveProperty('workspace');
+  });
+
+  it('omits nonblank workspace from create payloads', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/workspace-coder',
       temperature: '0.1',
       allowed_tools: '*',
       allowed_skills: '*',
@@ -87,6 +101,7 @@ describe('agent form helpers', () => {
       {
         id: 'coder',
         name: 'Coder Prime',
+        workspace: 'C:/workspace-coder',
         temperature: '0.1',
         allowed_tools: '*',
         allowed_skills: '*',
@@ -97,6 +112,7 @@ describe('agent form helpers', () => {
     expect(result.isValid).toBe(true);
     expect(result.payload.id).toBe('coder');
     expect(result.payload.name).toBe('Coder Prime');
+    expect(result.payload).not.toHaveProperty('workspace');
   });
 
   it('reports required create fields and invalid temperature', () => {

@@ -324,10 +324,25 @@
         </label>
       </div>
 
-      <label>
+      <div class="agents-view__readonly-field">
         <span>{t('agents.form.workspace', 'Workspace')}</span>
-        <input type="text" bind:value={formValues.workspace} />
-      </label>
+        {#if formValues.workspace}
+          <code>{formValues.workspace}</code>
+        {:else}
+          <p class="agents-view__muted">
+            {t(
+              'agents.form.workspaceAssignedByServer',
+              'Workspace is assigned by the server when the agent is created.',
+            )}
+          </p>
+        {/if}
+        <small>
+          {t(
+            'agents.form.workspaceReadOnly',
+            'Workspace is read-only in this WebUI.',
+          )}
+        </small>
+      </div>
 
       <div class="agents-view__two-column">
         <label>
@@ -528,18 +543,31 @@
     background: var(--color-panel-strong);
   }
 
-  .agents-view__form label {
+  .agents-view__form label,
+  .agents-view__readonly-field {
     display: grid;
     gap: var(--space-xs);
   }
 
-  .agents-view__form label span {
+  .agents-view__form label span,
+  .agents-view__readonly-field > span {
     color: var(--color-accent-strong);
     font-family: 'Trebuchet MS', Verdana, sans-serif;
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .agents-view__readonly-field code {
+    display: block;
+    overflow-wrap: anywhere;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-muted);
+    background: rgba(21, 19, 15, 0.5);
+    font-family: 'Trebuchet MS', Verdana, sans-serif;
   }
 
   .agents-view input,

@@ -11,6 +11,7 @@ import {
   ensureSessionState,
   loadHistory,
   removeQueuedMessage,
+  restoreDequeuedMessage,
   selectedAgent,
   setAgents,
   startRun,
@@ -50,6 +51,75 @@ describe('chat state helpers', () => {
     expect(sessionState.queue).toHaveLength(1);
   });
 
+  it('preserves active run events when history refreshes during a run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { message: { role: 'assistant', reasoning: 'Working' } },
+    });
+
+    loadHistory(sessionState, [
+      { id: 'message-one', role: 'user', content: 'Hi' },
+    ]);
+
+    expect(sessionState.messages).toEqual([
+      { id: 'message-one', role: 'user', content: 'Hi' },
+    ]);
+    expect(sessionState.runEvents).toEqual([
+      {
+        type: 'reasoning',
+        run_id: 'run-one',
+        sequence: 1,
+        payload: { message: { role: 'assistant', reasoning: 'Working' } },
+        agent_id: undefined,
+        session_id: undefined,
+        timestamp: undefined,
+      },
+    ]);
+  });
+
+  it('clears run events when history refreshes after a run finishes', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { message: { role: 'assistant', content: 'Done' } },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    loadHistory(sessionState, [
+      { id: 'message-one', role: 'assistant', content: 'Done' },
+    ]);
+
+    expect(sessionState.runEvents).toEqual([]);
+  });
+
   it('keeps queued messages visible, FIFO, and removable before send', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -65,6 +135,21 @@ describe('chat state helpers', () => {
     expect(removed).toBe(true);
     expect(nextMessage).toEqual(secondMessage);
     expect(sessionState.queue).toEqual([]);
+  });
+
+  it('restores a dequeued message to the front when queued send fails', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const firstMessage = enqueueMessage(sessionState, 'first');
+    const secondMessage = enqueueMessage(sessionState, 'second');
+
+    const nextMessage = dequeueMessage(sessionState);
+    restoreDequeuedMessage(sessionState, nextMessage);
+
+    expect(sessionState.queue).toEqual([firstMessage, secondMessage]);
   });
 
   it('blocks new session creation only while the current session has a run', () => {

@@ -80,8 +80,11 @@ export function currentSessionState(state) {
 }
 
 export function loadHistory(sessionState, messages) {
+  const activeRunEvents = isRunActive(sessionState)
+    ? sessionState.runEvents
+    : [];
   sessionState.messages = Array.isArray(messages) ? messages : [];
-  sessionState.runEvents = [];
+  sessionState.runEvents = activeRunEvents;
   sessionState.error = null;
   if (!isRunActive(sessionState)) {
     sessionState.status = CHAT_STATUS_IDLE;
@@ -170,6 +173,14 @@ export function dequeueMessage(sessionState) {
   const [nextMessage, ...remainingMessages] = sessionState.queue;
   sessionState.queue = remainingMessages;
   return nextMessage ?? null;
+}
+
+export function restoreDequeuedMessage(sessionState, queuedMessage) {
+  if (!queuedMessage) {
+    return sessionState.queue;
+  }
+  sessionState.queue = [queuedMessage, ...sessionState.queue];
+  return sessionState.queue;
 }
 
 export function removeQueuedMessage(sessionState, queuedMessageId) {

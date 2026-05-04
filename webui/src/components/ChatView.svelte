@@ -16,6 +16,7 @@
     loadHistory,
     markSessionError,
     removeQueuedMessage,
+    restoreDequeuedMessage,
     selectAgent,
     selectedAgent,
     setAgents,
@@ -187,9 +188,11 @@
       });
       startRun(sessionState, run);
       subscribeToRun(sessionState, run.sse_url);
+      return true;
     } catch (error) {
       actionError = `${t('chat.sendError', 'Message could not be sent.')} ${error.message}`;
       markSessionError(sessionState, error);
+      return false;
     }
   };
 
@@ -231,7 +234,16 @@
       (candidate) => candidate.id === sessionState.agentId,
     );
     if (agent) {
-      await sendStream(agent, sessionState, queuedMessage.content);
+      const streamStarted = await sendStream(
+        agent,
+        sessionState,
+        queuedMessage.content,
+      );
+      if (!streamStarted) {
+        restoreDequeuedMessage(sessionState, queuedMessage);
+      }
+    } else {
+      restoreDequeuedMessage(sessionState, queuedMessage);
     }
   };
 

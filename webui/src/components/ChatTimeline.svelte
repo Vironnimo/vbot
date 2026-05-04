@@ -58,6 +58,12 @@
     return message.content ?? '';
   };
 
+  const hasReadableReasoning = (message) =>
+    message.role === 'assistant' && Boolean(message.reasoning);
+
+  const hasAssistantContent = (message) =>
+    message.role === 'assistant' && Boolean(message.content);
+
   const textFromEvent = (event) => {
     const message = event.payload?.message;
     if (message) {
@@ -85,6 +91,14 @@
   {:else}
     {#each timelineItems as item (item.id)}
       {#if item.type === 'message'}
+        {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
+          <article class="chat-timeline__item chat-timeline__item--thinking">
+            <p class="chat-timeline__label">
+              {t('chat.event.thinking', 'Thinking')}
+            </p>
+            <p class="chat-timeline__content">{item.message.reasoning}</p>
+          </article>
+        {/if}
         <article
           class:chat-timeline__item--user={item.message.role === 'user'}
           class:chat-timeline__item--assistant={item.message.role ===
@@ -149,6 +163,17 @@
   .chat-timeline__item--assistant {
     align-self: flex-start;
     background: rgba(45, 39, 31, 0.88);
+  }
+
+  .chat-timeline__item--thinking {
+    align-self: flex-start;
+    border-style: dashed;
+    border-color: rgba(240, 164, 58, 0.24);
+    background: rgba(21, 19, 15, 0.58);
+  }
+
+  .chat-timeline__item--thinking .chat-timeline__content {
+    color: var(--color-muted);
   }
 
   .chat-timeline__item--terminal {

@@ -54,10 +54,6 @@ export function normalizeAgentForm(values, options = {}) {
     allowed_skills: textToList(normalized.allowed_skills),
   };
 
-  if (normalized.workspace) {
-    payload.workspace = normalized.workspace;
-  }
-
   if (mode === AGENT_FORM_MODE_CREATE) {
     payload.id = normalized.id;
   } else if (hasValue(values?.id)) {
