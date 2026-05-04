@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -43,12 +44,26 @@ def resolve_port(config: Config, explicit_port: int | None = None) -> int:
     if environment_port:
         return _coerce_port(environment_port, source="VBOT_SERVER_PORT")
 
+    settings = _load_settings_for_port(config)
     for key in PORT_SETTING_KEYS:
-        value = config.get(key)
+        value = settings.get(key)
         if value is not None:
             return _coerce_port(value, source=f"settings.{key}")
 
     return DEFAULT_PORT
+
+
+def _load_settings_for_port(config: Config) -> dict[str, Any]:
+    """Load settings.json directly so ambient environment cannot affect ports."""
+
+    settings_path = config.data_dir / "settings.json"
+    if not settings_path.exists():
+        return {}
+
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected a JSON object at {settings_path}")
+    return data
 
 
 def main(argv: list[str] | None = None) -> None:

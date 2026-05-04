@@ -32,6 +32,9 @@ foreground entrypoint.
 
 - `server start` is data-dir-scoped for instance selection.
 - Port resolution follows `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`.
+- Ambient `PORT` and `SERVER_PORT` process environment variables are ignored for
+  port resolution; only `VBOT_SERVER_PORT` can override `settings.json` from the
+  environment.
 - A target counts as vBot only when `/health` matches the vBot health contract.
   The current health contract is HTTP `200` with JSON `{ "status": "ok" }`.
 - If a vBot server is already running at the target address/port, `start`
@@ -42,6 +45,9 @@ foreground entrypoint.
   that another service is using the target address/port.
 - Logs for the managed instance belong under `<data_dir>/logs/`.
 - The CLI never opens a browser.
+- Process termination is allowed only after `/health` confirms the target is a
+  vBot server, and local process lookup must match the resolved host/address and
+  port rather than port alone.
 
 ## Constraints & Gotchas
 

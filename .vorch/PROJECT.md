@@ -85,7 +85,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependency: `httpx`. The `dev` group includes server transport dependencies so backend quality gates exercise FastAPI/SSE/WebSocket tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependency: `httpx`. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -279,6 +279,23 @@ args/env/settings, and missing `webui/dist` should be reported as "server up,
 WebUI unavailable" rather than treated as startup failure. vBot detection for
 CLI lifecycle commands is based on the `/health` contract, and `server status`
 should report running state, URL, WebUI availability, and resolved `data_dir`.
+
+**2026-05-04 — Phase 5 CLI implemented:** `cli/main.py` now exposes
+non-interactive `server start`, `server stop`, `server restart`, and
+`server status` commands. `cli/server_management.py` resolves instances using
+the shared server port priority, detects vBot targets through the exact
+`/health` contract, redirects CLI-started server logs to `<data_dir>/logs/`,
+reports WebUI availability separately from API health, and uses `psutil` only
+after vBot identity is confirmed for graceful-then-forced local process stop.
+Full backend gate passes with 471 tests. New CLI/dev dependency: `psutil`.
+
+**2026-05-04 — Phase 5 CLI review hardening:** `server.main.resolve_port()` now
+ignores ambient `PORT` and `SERVER_PORT` process environment variables; only
+`VBOT_SERVER_PORT` can override `settings.json`. CLI process lookup now matches
+the resolved host/address and port, with explicit wildcard listener handling, so
+same-port listeners on other addresses are not selected for termination. Failed
+startup attempts clean up the just-spawned child process before returning an
+error. Full backend gate passes with 479 tests. No new dependencies.
 
 ## Specs
 
