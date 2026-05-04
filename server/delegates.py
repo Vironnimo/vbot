@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from core.chat import (
+    ASSISTANT_OUTPUT_EVENT,
+    REASONING_EVENT,
+    RUN_CANCELLED_EVENT,
+    RUN_COMPLETED_EVENT,
+    RUN_FAILED_EVENT,
+    RUN_STARTED_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    TOOL_CALL_STARTED_EVENT,
+    USER_MESSAGE_EVENT,
     ActiveRunError,
     ChatError,
     ChatMessage,
@@ -12,6 +22,7 @@ from core.chat import (
     Run,
     RunCancelledError,
     RunError,
+    RunEvent,
     RunNotFoundError,
 )
 from core.utils.errors import ConfigError, VBotError
@@ -80,6 +91,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _required_string(params, "content")
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+        _bridge_run_to_event_bus(state, run)
         assistant_message = await run.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -92,6 +104,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _required_string(params, "content")
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+        _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
@@ -172,3 +185,65 @@ def _visible_message(message: ChatMessage) -> JsonObject:
     payload = message.to_dict()
     payload.pop("reasoning_meta", None)
     return payload
+
+
+def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
+    event_bus = getattr(state, "event_bus", None)
+    if event_bus is None:
+        return
+    asyncio.create_task(_publish_run_events(event_bus, run))
+
+
+async def _publish_run_events(event_bus: Any, run: Run) -> None:
+    async for event in run.subscribe():
+        summary = _server_event_from_run_event(event)
+        event_bus.publish(summary["type"], summary["payload"])
+
+
+def _server_event_from_run_event(event: RunEvent) -> JsonObject:
+    payload: JsonObject = {
+        "run_id": event.run_id,
+        "agent_id": event.agent_id,
+        "session_id": event.session_id,
+        "run_event_type": event.type,
+        "run_event_sequence": event.sequence,
+        "run_event_timestamp": event.timestamp,
+    }
+    if event.type in RUN_OUTPUT_EVENT_TYPES:
+        payload["output"] = _remove_opaque_provider_metadata(event.payload)
+    if event.type in RUN_TERMINAL_EVENT_TYPES:
+        payload["status"] = event.payload.get("status")
+    return {"type": SERVER_EVENT_TYPES.get(event.type, "run_output"), "payload": payload}
+
+
+def _remove_opaque_provider_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _remove_opaque_provider_metadata(item)
+            for key, item in value.items()
+            if key != "reasoning_meta"
+        }
+    if isinstance(value, list):
+        return [_remove_opaque_provider_metadata(item) for item in value]
+    return value
+
+
+RUN_OUTPUT_EVENT_TYPES = {
+    USER_MESSAGE_EVENT,
+    REASONING_EVENT,
+    TOOL_CALL_STARTED_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    ASSISTANT_OUTPUT_EVENT,
+}
+RUN_TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_CANCELLED_EVENT, RUN_FAILED_EVENT}
+SERVER_EVENT_TYPES = {
+    RUN_STARTED_EVENT: "run_started",
+    USER_MESSAGE_EVENT: "run_output",
+    REASONING_EVENT: "run_output",
+    TOOL_CALL_STARTED_EVENT: "run_output",
+    TOOL_CALL_RESULT_EVENT: "run_output",
+    ASSISTANT_OUTPUT_EVENT: "run_output",
+    RUN_COMPLETED_EVENT: "run_completed",
+    RUN_CANCELLED_EVENT: "run_cancelled",
+    RUN_FAILED_EVENT: "run_failed",
+}
