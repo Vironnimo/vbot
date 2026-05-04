@@ -335,6 +335,7 @@ def get_status(instance: ServerInstance) -> CommandResult:
             message="port occupied by non-vBot process",
             instance=instance,
             health=health,
+            webui=WebUIProbeResult(available=False),
             log_path=instance.log_path,
         )
     return CommandResult(
@@ -342,5 +343,6 @@ def get_status(instance: ServerInstance) -> CommandResult:
         message="not running",
         instance=instance,
         health=health,
+        webui=WebUIProbeResult(available=False),
         log_path=instance.log_path,
     )

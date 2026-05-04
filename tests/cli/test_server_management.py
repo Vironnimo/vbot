@@ -221,6 +221,37 @@ def test_start_server_does_not_spawn_when_non_vbot_occupies_port(
     assert result.message == "port occupied by non-vBot process"
 
 
+def test_start_server_reports_already_running_without_spawning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+    )
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda instance: WebUIProbeResult(False, 404)
+    )
+
+    def fail_start(unused_instance: ServerInstance) -> None:
+        raise AssertionError("already-running vBot must not spawn")
+
+    monkeypatch.setattr(server_management, "start_server_process", fail_start)
+
+    result = start_server(instance)
+
+    assert result == CommandResult(
+        ok=True,
+        message="already running",
+        instance=instance,
+        health=HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+        webui=WebUIProbeResult(False, 404),
+        log_path=instance.log_path,
+    )
+
+
 def test_start_server_waits_for_health_and_reports_webui(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -250,6 +281,31 @@ def test_start_server_waits_for_health_and_reports_webui(
         webui=WebUIProbeResult(True, 200),
         log_path=instance.log_path,
         process_id=321,
+    )
+
+
+def test_start_server_reports_readiness_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    process = SimpleNamespace(pid=654, poll=lambda: None)
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: process)
+
+    result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
+
+    assert result == CommandResult(
+        ok=False,
+        message="server readiness timed out",
+        instance=instance,
+        health=HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+        log_path=instance.log_path,
+        process_id=654,
     )
 
 
@@ -403,3 +459,21 @@ def test_get_status_reports_non_vbot_conflict(
 
     assert result.ok is False
     assert result.message == "port occupied by non-vBot process"
+    assert result.webui == WebUIProbeResult(False)
+
+
+def test_get_status_reports_not_running_with_webui_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+
+    result = get_status(instance)
+
+    assert result.ok is True
+    assert result.message == "not running"
+    assert result.webui == WebUIProbeResult(False)

@@ -168,6 +168,40 @@ def test_restart_does_not_start_when_stop_fails(tmp_path: Path) -> None:
     assert exit_code == 1
 
 
+def test_restart_starts_when_target_is_not_running(tmp_path: Path) -> None:
+    calls: list[str] = []
+    first_instance = make_instance(tmp_path, port=8001)
+    second_instance = make_instance(tmp_path, port=8002)
+    instances = iter([first_instance, second_instance])
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(f"resolve:{host}:{port}:{data_dir}")
+        return next(instances)
+
+    def fake_stop(instance: ServerInstance) -> CommandResult:
+        calls.append(f"stop:{instance.port}")
+        return CommandResult(ok=True, message="not running", instance=instance)
+
+    def fake_start(instance: ServerInstance) -> CommandResult:
+        calls.append(f"start:{instance.port}")
+        return CommandResult(ok=True, message="started", instance=instance)
+
+    exit_code = cli_main.run(
+        ["server", "restart", "--port", "8765", "--data-dir", "data"],
+        resolve=fake_resolve,
+        start=fake_start,
+        stop=fake_stop,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        "resolve:127.0.0.1:8765:data",
+        "stop:8001",
+        "resolve:127.0.0.1:8765:data",
+        "start:8002",
+    ]
+
+
 def test_output_contains_deterministic_status_fields(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -213,6 +247,34 @@ def test_output_reports_process_id_forced_and_conflict(
     assert "process_id: 123" in output
     assert "forced: true" in output
     assert "conflict: port occupied by non-vBot process" in output
+
+
+def test_status_conflict_output_reports_not_running_with_note(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    result = CommandResult(
+        ok=False,
+        message="port occupied by non-vBot process",
+        instance=instance,
+        health=HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+        webui=WebUIProbeResult(available=False),
+        log_path=instance.log_path,
+    )
+
+    cli_main.print_command_result("status", result)
+
+    assert capsys.readouterr().out.splitlines() == [
+        "command: server status",
+        "result: port occupied by non-vBot process",
+        "running: no",
+        "url: http://127.0.0.1:8420",
+        "webui: unavailable",
+        f"data_dir: {tmp_path / 'data'}",
+        f"log_path: {tmp_path / 'data' / 'logs' / 'server.log'}",
+        "conflict: port occupied by non-vBot process",
+    ]
 
 
 @pytest.mark.parametrize(
