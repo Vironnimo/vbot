@@ -272,6 +272,15 @@ class TestModelRegistryRealResources:
     def test_load_openrouter(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
 
+        haiku = registry.get("openrouter", "anthropic/claude-haiku-4.5")
+        assert haiku.name == "Claude Haiku 4.5"
+        assert haiku.context_window == 200000
+        assert haiku.max_output_tokens == 64000
+        assert haiku.capabilities.vision is True
+        assert haiku.capabilities.tools is True
+        assert haiku.capabilities.json_mode is True
+        assert haiku.capabilities.reasoning.supported is True
+
         claude = registry.get("openrouter", "anthropic/claude-sonnet-4")
         assert claude.name == "Claude Sonnet 4"
         assert claude.context_window == 128000
@@ -301,7 +310,7 @@ class TestModelRegistryRealResources:
         assert len(openai_models) == 1
 
         openrouter_models = registry.list_for_provider("openrouter")
-        assert len(openrouter_models) == 2
+        assert len(openrouter_models) == 3
 
         anthropic_models = registry.list_for_provider("anthropic")
         assert len(anthropic_models) == 2
