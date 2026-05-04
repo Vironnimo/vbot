@@ -98,7 +98,7 @@ OpenAICompatibleAdapter an Mock, Antwort kommt zurück. ✅
 
 ---
 
-## Phase 2 — Minimaler Chat (Backend)
+## Phase 2 — Minimaler Chat (Backend) ✅
 
 Ziel: Ein Agent sendet eine User-Nachricht, das Modell antwortet. Kein Streaming, kein UI.
 
@@ -226,16 +226,19 @@ Model-Daten enthalten nur `reasoning.supported: true/false` — die Effort-Über
 
 ### Aufgaben
 
-- [ ] `core/chat/` — Session-Manager (erstellen, laden, löschen — JSONL append-only)
-- [ ] `core/chat/` — Einfacher Agentic-Loop (Tool-Call-Support, aber ohne Tools brauchbar)
-- [ ] `core/chat/` — Reasoning-Konfiguration: `thinking_effort`-Wert im Agent-Schema, Adapter übersetzt ins Wire-Format
-- [ ] `core/chat/` — ChatMessage-Typen (JSONL-Schema mit role-spezifischen Feldern, `reasoning`/`reasoning_meta` für CoT, `model` pro Nachricht, `tool_calls`/`tool_call_id` — siehe GOALS.md Abschnitt 4)
-- [ ] `core/agents/` — Agent-Store (CRUD mit Persistenz in `data_dir/agents/<id>/agent.json`)
-- [ ] `core/agents/` — System-Message-Manager (Template-Assembly mit `{app_version}`, `{runtime}`, `{tools}`, `{skills}`, `{include:*}` inkl. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`)
-- [ ] `core/tools/` — Tool-Registry (leer, nur `register()`/`dispatch()`) + Allowlist-Filterung für Prompt und Provider-Request
-- [ ] `core/storage/` — Settings-Manager, Prompt-Fragmente
+- [x] `core/chat/` — Session-Manager (erstellen, laden, löschen — JSONL append-only)
+- [x] `core/chat/` — Einfacher Agentic-Loop (Tool-Call-Support, aber ohne Tools brauchbar)
+- [x] `core/chat/` — Reasoning-Konfiguration: `thinking_effort`-Wert im Agent-Schema, Adapter übersetzt ins Wire-Format
+- [x] `core/chat/` — ChatMessage-Typen (JSONL-Schema mit role-spezifischen Feldern, `reasoning`/`reasoning_meta` für CoT, `model` pro Nachricht, `tool_calls`/`tool_call_id` — siehe GOALS.md Abschnitt 4)
+- [x] `core/agents/` — Agent-Store (CRUD mit Persistenz in `data_dir/agents/<id>/agent.json`)
+- [x] `core/agents/` — System-Message-Manager (Template-Assembly mit `{app_version}`, `{runtime}`, `{tools}`, `{skills}`, `{include:*}` inkl. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`)
+- [x] `core/tools/` — Tool-Registry (leer, nur `register()`/`dispatch()`) + Allowlist-Filterung für Prompt und Provider-Request
+- [x] `core/storage/` — Settings-Manager, Prompt-Fragmente
+- [x] `core/skills/` — Skill-Metadaten-Registry + Allowlist-Filterung für den `{skills}`-Prompt-Block
 
 ### Noch offen in Phase 2
+
+Diese Punkte bleiben offen, blockieren den Phase-2-Abschluss aber nicht:
 
 - **Fallback-Verhalten**: exaktes automatisches Verhalten für `fallback_model`
 - **Provider-spezifisches `reasoning_meta`-Resend nach abgeschlossenen Turns**
@@ -288,6 +291,12 @@ class ProviderConfig:
 ```
 
 Adapter-Map (in Runtime): `"openai_compatible"` → OpenAICompatibleAdapter, `"anthropic"` → AnthropicAdapter.
+
+**Exit:** Persistierte Agents können jetzt einen nicht-streamenden Backend-Chat-Turn
+über den konfigurierten Provider/Adapter ausführen, optionale Tool-Calls in der
+agentischen Schleife abarbeiten, Sessions als kanonisches JSONL persistieren und
+System-Prompts mit Tool-/Skill-Filterung zusammensetzen. Phase 2 ist damit im
+Backend abgeschlossen. ✅
 
 ---
 
