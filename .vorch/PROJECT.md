@@ -85,7 +85,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependency: `httpx`. The `dev` group includes server transport dependencies so backend quality gates exercise FastAPI/SSE/WebSocket tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependency: `httpx`. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
