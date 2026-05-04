@@ -301,7 +301,7 @@ Backend abgeschlossen. ✅
 
 ---
 
-## Phase 3 — Server-Schicht
+## Phase 3 — Server-Schicht ✅
 
 Ziel: HTTP/SSE/WS-Wrapper um den Kernel.
 
@@ -324,17 +324,17 @@ Ziel: HTTP/SSE/WS-Wrapper um den Kernel.
   schnell gestoppt werden; nicht mehr abbrechbare Restarbeit wird danach
   ignoriert und der Run endet als abgebrochen.
 
-- [ ] `server/app.py` — FastAPI + `/ws` WebSocket
-- [ ] `server/delegates.py` — `POST /api/rpc` Dispatcher
-- [ ] Server-Delegate für explizite Session-Erstellung
-- [ ] UIApi-Delegate für Chat (send, stream, cancel)
-- [ ] SSE-Endpoint für inkrementelles Chat-Streaming eines Runs
-- [ ] WebSocket pusht Events aus dem internen Event-Bus an Clients
+- [x] `server/app.py` — FastAPI + `/ws` WebSocket
+- [x] `server/delegates.py` — `POST /api/rpc` Dispatcher
+- [x] Server-Delegate für explizite Session-Erstellung
+- [x] UIApi-Delegate für Chat (send, stream, cancel)
+- [x] SSE-Endpoint für inkrementelles Chat-Streaming eines Runs
+- [x] WebSocket pusht Events aus dem internen Event-Bus an Clients
 
 **Exit:** `python server/main.py` → Session kann explizit angelegt werden,
 `POST /api/rpc`-Chat funktioniert, ein Run kann gestreamt werden, Thinking /
 Tool-Schritte / Assistant-Ausgaben werden sichtbar, und `cancel` stoppt einen
-laufenden Run best effort.
+laufenden Run best effort. ✅
 
 ---
 

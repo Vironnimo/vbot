@@ -1,4 +1,4 @@
-"""Chat message and JSONL session primitives."""
+"""Chat message, JSONL session primitives, and chat loop execution."""
 
 from __future__ import annotations
 
@@ -11,6 +11,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.chat.runs import (
+    ASSISTANT_OUTPUT_EVENT,
+    REASONING_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    TOOL_CALL_STARTED_EVENT,
+    USER_MESSAGE_EVENT,
+    ChatRunManager,
+    Run,
+)
 from core.utils.errors import VBotError
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -324,28 +333,87 @@ class ChatLoop:
         session_id: str | None = None,
     ) -> ChatMessage:
         """Run one persisted non-streaming chat turn and return the final assistant message."""
+        run = await self._start_run(agent_id, content, session_id=session_id, create_missing=True)
+        return cast(ChatMessage, await run.wait())
+
+    async def start_run(
+        self,
+        agent_id: str,
+        content: str,
+        *,
+        session_id: str,
+    ) -> Run:
+        """Start one chat run against an existing session for server-facing callers."""
+        return await self._start_run(agent_id, content, session_id=session_id, create_missing=False)
+
+    async def _start_run(
+        self,
+        agent_id: str,
+        content: str,
+        *,
+        session_id: str | None,
+        create_missing: bool,
+    ) -> Run:
         agent = self._runtime.agents.get(agent_id)
+        provider_id, _model_id = _split_agent_model(agent.model)
+        _ensure_provider_exists(self._runtime.providers, provider_id)
+        session = self._get_session(agent_id, session_id, create_missing=create_missing)
+        manager = _runtime_run_manager(self._runtime)
+        return await manager.start(
+            agent_id=agent_id,
+            session_id=session.id,
+            executor=lambda run: self._execute_run(run, content),
+        )
+
+    async def _execute_run(self, run: Run, content: str) -> ChatMessage:
+        agent = self._runtime.agents.get(run.agent_id)
         provider_id, model_id = _split_agent_model(agent.model)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         adapter = self._runtime.get_adapter(provider_id)
-        session = self._get_or_create_session(agent_id, session_id)
+        run.add_cancel_callback(lambda: _close_adapter(adapter))
+        session = cast(ChatSessionManager, self._runtime.chat_sessions).get(
+            run.agent_id,
+            run.session_id,
+        )
 
         try:
-            session.append(ChatMessage.user(content))
+            run.raise_if_cancelled()
+            user_message = ChatMessage.user(content)
+            session.append(user_message)
+            _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+            run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
-            return await self._send_until_final(agent, adapter, model_id, session, messages, tools)
+            return await self._send_until_final(
+                agent,
+                adapter,
+                model_id,
+                session,
+                messages,
+                tools,
+                run,
+            )
         finally:
             await _close_adapter(adapter)
 
-    def _get_or_create_session(self, agent_id: str, session_id: str | None) -> ChatSession:
+    def _get_session(
+        self,
+        agent_id: str,
+        session_id: str | None,
+        *,
+        create_missing: bool,
+    ) -> ChatSession:
         session_manager = cast(ChatSessionManager, self._runtime.chat_sessions)
         if session_id is None:
+            if not create_missing:
+                raise ChatSessionError("session id is required")
             return session_manager.create(agent_id)
         try:
             return session_manager.get(agent_id, session_id)
         except ChatSessionError:
+            if not create_missing:
+                raise
             return session_manager.create(agent_id, session_id=session_id)
 
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
@@ -362,8 +430,10 @@ class ChatLoop:
         session: ChatSession,
         messages: list[JsonObject],
         tools: list[JsonObject],
+        run: Run,
     ) -> ChatMessage:
         for _ in range(self._max_tool_iterations + 1):
+            run.raise_if_cancelled()
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -371,7 +441,9 @@ class ChatLoop:
                 messages,
                 tools,
             )
+            run.raise_if_cancelled()
             session.append(assistant_message)
+            _emit_assistant_events(run, assistant_message)
             messages.append(assistant_message.to_dict())
 
             if not assistant_message.tool_calls:
@@ -380,9 +452,13 @@ class ChatLoop:
             if self._tool_iterations_exhausted(messages):
                 raise ChatError("maximum tool iterations exceeded")
 
-            tool_messages = await self._dispatch_tool_calls(agent, assistant_message.tool_calls)
+            tool_messages = await self._dispatch_tool_calls(
+                agent, assistant_message.tool_calls, run
+            )
             for tool_message in tool_messages:
+                run.raise_if_cancelled()
                 session.append(tool_message)
+                _emit_message_event(run, TOOL_CALL_RESULT_EVENT, tool_message)
                 messages.append(tool_message.to_dict())
 
         raise ChatError("maximum tool iterations exceeded")
@@ -409,14 +485,17 @@ class ChatLoop:
         self,
         agent: Any,
         tool_calls: list[ToolCall],
+        run: Run,
     ) -> list[ChatMessage]:
         tool_messages: list[ChatMessage] = []
         for tool_call in tool_calls:
+            run.raise_if_cancelled()
             result = await self._runtime.tools.dispatch(
                 tool_call.name,
                 tool_call.arguments,
                 agent.allowed_tools,
             )
+            run.raise_if_cancelled()
             tool_messages.append(
                 ChatMessage.tool(
                     tool_call_id=tool_call.id,
@@ -433,6 +512,35 @@ class ChatLoop:
             if message.get("role") == "assistant" and message.get("tool_calls")
         ]
         return len(assistant_tool_messages) > self._max_tool_iterations
+
+
+def _runtime_run_manager(runtime: Any) -> ChatRunManager:
+    run_manager = getattr(runtime, "chat_runs", None)
+    if isinstance(run_manager, ChatRunManager):
+        return run_manager
+    run_manager = ChatRunManager()
+    runtime.chat_runs = run_manager
+    return run_manager
+
+
+def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
+    if message.reasoning:
+        run.emit(REASONING_EVENT, {"message": _visible_message_payload(message)})
+    if message.tool_calls:
+        for tool_call in message.tool_calls:
+            run.emit(TOOL_CALL_STARTED_EVENT, {"tool_call": tool_call.to_dict()})
+    if message.content:
+        _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
+
+
+def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None:
+    run.emit(event_type, {"message": _visible_message_payload(message)})
+
+
+def _visible_message_payload(message: ChatMessage) -> JsonObject:
+    data = message.to_dict()
+    data.pop("reasoning_meta", None)
+    return data
 
 
 def _new_message_id() -> str:

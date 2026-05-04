@@ -1,0 +1,384 @@
+"""End-to-end hardening tests for the Phase 3 server layer."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+
+from core.chat import ChatLoop, ChatRunManager, ChatSessionManager
+from core.tools import ToolRegistry
+from server.app import create_app
+from server.delegates import dispatch_rpc
+
+JsonObject = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class IntegrationAgent:
+    id: str
+    model: str = "openai/gpt-5.2"
+    temperature: float = 0.2
+    thinking_effort: str = "medium"
+    allowed_tools: list[str] | None = None
+
+
+class IntegrationAgents:
+    def __init__(self, agent: IntegrationAgent) -> None:
+        self._agent = agent
+
+    def get(self, agent_id: str) -> IntegrationAgent:
+        if agent_id != self._agent.id:
+            raise KeyError(agent_id)
+        return self._agent
+
+
+class IntegrationProviders:
+    def get(self, provider_id: str) -> object:
+        if provider_id != "openai":
+            raise KeyError(provider_id)
+        return object()
+
+
+class IntegrationPrompts:
+    def __init__(self, tools: ToolRegistry) -> None:
+        self._tools = tools
+
+    def build_system_prompt(self, agent: IntegrationAgent) -> str:
+        return f"System prompt for {agent.id}"
+
+    def provider_tool_definitions(self, agent: IntegrationAgent) -> list[JsonObject]:
+        return self._tools.provider_definitions(agent.allowed_tools)
+
+
+class SequencedAdapter:
+    def __init__(
+        self,
+        responses: list[JsonObject] | None = None,
+        *,
+        block: bool = False,
+    ) -> None:
+        self._responses = responses or []
+        self._block = block
+        self.request_started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.closed = False
+        self.requests: list[JsonObject] = []
+
+    async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
+        self.requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        self.request_started.set()
+        if self._block:
+            await self.release.wait()
+        if not self._responses:
+            return {"content": "OK", "tool_calls": None}
+        return self._responses.pop(0)
+
+    def normalize_response(self, response: JsonObject) -> JsonObject:
+        return response
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class AdapterPool:
+    def __init__(self, adapters: list[SequencedAdapter]) -> None:
+        self._adapters = adapters
+        self._index = 0
+
+    def next(self) -> SequencedAdapter:
+        if self._index >= len(self._adapters):
+            raise AssertionError("unexpected adapter request")
+        adapter = self._adapters[self._index]
+        self._index += 1
+        return adapter
+
+
+class IntegrationRuntime:
+    def __init__(
+        self,
+        tmp_path: Path,
+        adapters: SequencedAdapter | list[SequencedAdapter],
+    ) -> None:
+        self.tools = ToolRegistry()
+        self.agents = IntegrationAgents(
+            IntegrationAgent(id="coder", allowed_tools=["lookup", "slow_tool"])
+        )
+        self.chat_sessions = ChatSessionManager(tmp_path)
+        self.system_prompts = IntegrationPrompts(self.tools)
+        self.providers = IntegrationProviders()
+        adapter_list = adapters if isinstance(adapters, list) else [adapters]
+        self._adapter_pool = AdapterPool(adapter_list)
+        self.chat_runs: ChatRunManager | None = None
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def get_adapter(self, _provider_id: str) -> SequencedAdapter:
+        return self._adapter_pool.next()
+
+
+def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> None:
+    adapter = SequencedAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Need the lookup tool.",
+                "reasoning_meta": {"encrypted_content": "opaque"},
+                "tool_calls": [
+                    {"id": "call_lookup", "name": "lookup", "arguments": {"query": "vBot"}}
+                ],
+            },
+            {"content": "Lookup complete.", "tool_calls": None},
+        ]
+    )
+    runtime = IntegrationRuntime(tmp_path, adapter)
+    runtime.tools.register(
+        "lookup",
+        "Look up a value.",
+        {"type": "object"},
+        lambda arguments: {"result": f"found {arguments['query']}"},
+    )
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        )
+        send_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.send",
+                "params": {"agent_id": "coder", "session_id": "session-one", "content": "Go"},
+            },
+        )
+        send_result = send_response.json()["result"]
+        sse_response = client.get(f"/api/runs/{send_result['run_id']}/events")
+
+    assert create_response.json() == {
+        "ok": True,
+        "result": {"agent_id": "coder", "session_id": "session-one"},
+    }
+    assert send_response.json()["ok"] is True
+    assert send_result["status"] == "completed"
+    assert send_result["message"]["content"] == "Lookup complete."
+    assert [event["type"] for event in send_result["events"]] == [
+        "run_started",
+        "user_message_persisted",
+        "reasoning",
+        "tool_call_started",
+        "tool_call_result",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert "reasoning_meta" not in json.dumps(send_result)
+    assert "reasoning_meta" not in sse_response.text
+    assert [event["event"] for event in _parse_sse(sse_response.text)] == [
+        "run_started",
+        "user_message_persisted",
+        "reasoning",
+        "tool_call_started",
+        "tool_call_result",
+        "assistant_output",
+        "run_completed",
+    ]
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+    assert messages[1].reasoning_meta == {"encrypted_content": "opaque"}
+    assert messages[2].content == '{"result":"found vBot"}'
+    assert adapter.closed is True
+
+
+def test_http_stream_sse_replays_visible_running_timeline(tmp_path: Path) -> None:
+    adapter = SequencedAdapter(
+        [
+            {
+                "content": "Streamed final.",
+                "reasoning": "Readable thinking.",
+                "reasoning_meta": {"secret": "hidden"},
+                "tool_calls": None,
+            }
+        ]
+    )
+    runtime = IntegrationRuntime(tmp_path, adapter)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        )
+        stream_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.stream",
+                "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+            },
+        )
+        stream_result = stream_response.json()["result"]
+        sse_response = client.get(stream_result["sse_url"])
+
+    assert stream_response.json()["ok"] is True
+    assert stream_result["status"] == "running"
+    events = _parse_sse(sse_response.text)
+    assert [event["event"] for event in events] == [
+        "run_started",
+        "user_message_persisted",
+        "reasoning",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert events[2]["data"]["payload"]["message"]["reasoning"] == "Readable thinking."
+    assert events[3]["data"]["payload"]["message"]["content"] == "Streamed final."
+    assert "reasoning_meta" not in sse_response.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_path: Path) -> None:
+    adapter = SequencedAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Need slow work.",
+                "tool_calls": [
+                    {"id": "call_slow", "name": "slow_tool", "arguments": {"value": "late"}}
+                ],
+            },
+            {"content": "Should not be requested", "tool_calls": None},
+        ]
+    )
+    runtime = IntegrationRuntime(tmp_path, adapter)
+    state = _make_state(runtime)
+    slow_tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+    tool_results: list[JsonObject] = []
+
+    async def slow_tool(arguments: JsonObject) -> JsonObject:
+        slow_tool_started.set()
+        await release_tool.wait()
+        result = {"value": arguments["value"]}
+        tool_results.append(result)
+        return result
+
+    runtime.tools.register("slow_tool", "Slow tool.", {"type": "object"}, slow_tool)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    stream_response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Start"},
+        },
+    )
+    await slow_tool_started.wait()
+
+    cancel_response = await dispatch_rpc(
+        state,
+        {"method": "chat.cancel", "params": {"run_id": stream_response["result"]["run_id"]}},
+    )
+    release_tool.set()
+    await asyncio.sleep(0)
+
+    run = state.chat_runs.get(stream_response["result"]["run_id"])
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+
+    assert cancel_response["ok"] is True
+    assert cancel_response["result"]["status"] == "cancelled"
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        "reasoning",
+        "tool_call_started",
+        "run_cancelled",
+    ]
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert tool_results == []
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_session_rejected_while_different_sessions_run_in_parallel(
+    tmp_path: Path,
+) -> None:
+    first_adapter = SequencedAdapter(block=True)
+    second_adapter = SequencedAdapter([{"content": "Second done", "tool_calls": None}])
+    runtime = IntegrationRuntime(tmp_path, [first_adapter, second_adapter])
+    state = _make_state(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    runtime.chat_sessions.create("coder", session_id="session-two")
+
+    first_response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "First"},
+        },
+    )
+    await first_adapter.request_started.wait()
+    same_session_response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Again"},
+        },
+    )
+    parallel_response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.send",
+            "params": {"agent_id": "coder", "session_id": "session-two", "content": "Parallel"},
+        },
+    )
+
+    assert first_response["ok"] is True
+    assert same_session_response["ok"] is False
+    assert same_session_response["error"]["code"] == "active_run"
+    assert parallel_response["ok"] is True
+    assert parallel_response["result"]["message"]["content"] == "Second done"
+
+    await state.chat_runs.cancel(first_response["result"]["run_id"])
+    first_adapter.release.set()
+
+
+def _make_state(runtime: IntegrationRuntime) -> Any:
+    chat_runs = ChatRunManager()
+    runtime.chat_runs = chat_runs
+    return type(
+        "IntegrationState",
+        (),
+        {
+            "runtime": runtime,
+            "chat_runs": chat_runs,
+            "chat_loop": ChatLoop(runtime),
+        },
+    )()
+
+
+def _parse_sse(body: str) -> list[JsonObject]:
+    events: list[JsonObject] = []
+    for block in body.strip().split("\n\n"):
+        lines = block.splitlines()
+        event_name = lines[0].removeprefix("event: ")
+        data = json.loads(lines[1].removeprefix("data: "))
+        events.append({"event": event_name, "data": data})
+    return events

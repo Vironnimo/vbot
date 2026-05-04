@@ -1,1 +1,1 @@
-# server
+"""vBot server package."""
