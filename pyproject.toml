@@ -18,7 +18,7 @@ dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdis
 packages = ["core", "server", "cli", "desktop"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto --timeout=30"
+addopts = "-n auto --timeout=30 --import-mode=importlib"
 testpaths = ["tests"]
 
 [tool.ruff]

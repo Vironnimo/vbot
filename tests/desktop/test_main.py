@@ -433,3 +433,87 @@ def test_launch_window_rejects_empty_window_content(tmp_path: Path) -> None:
             webview_module=FakeWebview(),
             app_icon_path=tmp_path / "missing-icon.png",
         )
+
+
+def test_phase_6_contract_keeps_desktop_out_of_server_lifecycle_management() -> None:
+    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
+
+    assert "cli.server_management" not in source
+    assert "from cli" not in source
+    assert "import cli" not in source
+    assert "from server" not in source
+    assert "import server" not in source
+    assert "server start" not in source.lower()
+    assert "server stop" not in source.lower()
+    assert "server restart" not in source.lower()
+
+
+def test_phase_6_contract_formats_local_and_lan_targets_as_plain_http() -> None:
+    assert desktop_main.build_target_url("127.0.0.1", 8420) == "http://127.0.0.1:8420/"
+    assert desktop_main.build_target_url("192.168.1.44", 9000) == "http://192.168.1.44:9000/"
+    assert desktop_main.build_target_url("vbot.lan", 8500) == "http://vbot.lan:8500/"
+
+
+def test_phase_6_contract_uses_no_python_javascript_bridge(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_window(
+        desktop_main.DesktopWindowContent(
+            status=desktop_main.PROBE_WEBUI_AVAILABLE,
+            url="http://127.0.0.1:8420/",
+        ),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert len(fake_webview.created_windows) == 1
+    assert "js_api" not in fake_webview.created_windows[0][1]
+
+
+def test_phase_6_contract_probe_has_no_retry_loop() -> None:
+    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+    requested_urls: list[str] = []
+
+    def record_get(url: str, *, timeout: float) -> FakeResponse:
+        requested_urls.append(url)
+        if url.endswith("/health"):
+            return FakeResponse(200, {"status": "ok"})
+        return FakeResponse(404)
+
+    result = desktop_main.probe_target(target, get=record_get)
+
+    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
+    assert requested_urls == ["http://127.0.0.1:8420/health", "http://127.0.0.1:8420/"]
+
+
+def test_phase_6_contract_settings_stay_beside_desktop_main() -> None:
+    assert desktop_main.settings_path().parent == Path(desktop_main.__file__).resolve().parent
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_text"),
+    [
+        (desktop_main.PROBE_SERVER_UNREACHABLE, "Server unreachable"),
+        (desktop_main.PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
+    ],
+)
+def test_phase_6_contract_failure_states_remain_in_window(
+    tmp_path: Path,
+    status: str,
+    expected_text: str,
+) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        ["--host", "vbot.lan", "--port", "8420"],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda checked_target: desktop_main.DesktopProbeResult(status, checked_target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert len(fake_webview.created_windows) == 1
+    _, window_kwargs = fake_webview.created_windows[0]
+    assert "url" not in window_kwargs
+    assert expected_text in window_kwargs["html"]
+    assert "http://vbot.lan:8420/" in window_kwargs["html"]
