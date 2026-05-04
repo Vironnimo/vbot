@@ -48,8 +48,11 @@ but never fewer.
 ## Agent Lifecycle
 
 - **Create**: New agent → `data_dir/agents/<id>/agent.json` + workspace seeded from `resources/workspace-templates/` (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`). `workspace` field in agent.json defaults to `<data_dir>/workspace-<id>/`.
-- **Delete**: Agent deleted → all files (agent.json, sessions, workspace) moved to `archive/<agent-id>/`. Not permanently destroyed — can be inspected or restored.
+- **Bootstrap / first start**: When a new instance creates its data directory for the first time, the system also creates a default agent with `id: "main"` and `name: "Main"`.
+- **Delete**: Agent deleted → all files (agent.json, sessions, workspace) moved to `archive/<agent-id>/`. Not permanently destroyed — can be inspected or restored. Deletion is only allowed when at least one other agent will remain afterwards.
 - **Update**: Any field except `id` can be changed. `id` is immutable (it's the directory name).
+
+The product must always have at least one agent. Zero-agent state is invalid.
 
 ## 2. Data Directory Structure
 
@@ -337,3 +340,46 @@ user-facing contract.
 - The session JSONL file remains the canonical persisted chat history.
 - Additional runtime-only coordination state for an active run may live in
   memory.
+
+## 6. Phase 4 WebUI Product Decisions
+
+These are product-level decisions for the first real WebUI. They define how the
+UI presents existing server/kernel concepts; they do not replace the Phase 3
+server contract.
+
+### App Shell Layout
+
+- The WebUI uses a two-pane layout: navigation on the left, content on the
+  right.
+- The left navigation contains at least these entries:
+  - `Chat`
+  - `Agents`
+  - `System Prompt`
+  - `Settings`
+- Additional menu entries may be added later.
+
+### Agents in the Product/UI
+
+- The app always requires at least one agent to exist.
+- On first start, the default bootstrap agent is `main` / `Main`.
+- The Agents screen allows users to create, edit, and delete agents.
+- Deleting an agent is rejected if it would leave the app with zero agents.
+
+### Chat Surface Model
+
+- In the UI, the primary selection is the **Agent**, not the Session.
+- In the product model, each agent has one current/active session — this is the
+  chat shown in the Chat view.
+- `New Session` creates a fresh session for the selected agent and makes that
+  new session the active one shown in the UI.
+- Starting a new session does **not** delete or overwrite the old session file;
+  previous sessions remain persisted as JSONL.
+- The WebUI does **not** present a list of old chats/sessions.
+- The UI exposes agent selection plus a `New Session` action; session history
+  browsing stays out of scope for this product surface.
+
+### Relation to the Server Contract
+
+- Sessions remain explicit and persisted at the system/server level.
+- The WebUI may create sessions explicitly under the hood, but session IDs are
+  not the main user-facing concept in the chat experience.
