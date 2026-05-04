@@ -24,6 +24,19 @@ class FakeResponse:
         return self.payload
 
 
+class FakeWebview:
+    def __init__(self) -> None:
+        self.created_windows: list[tuple[str, dict[str, Any]]] = []
+        self.start_calls: list[dict[str, Any]] = []
+
+    def create_window(self, title: str, **kwargs: Any) -> object:
+        self.created_windows.append((title, kwargs))
+        return object()
+
+    def start(self, **kwargs: Any) -> None:
+        self.start_calls.append(kwargs)
+
+
 def fake_get_for(
     responses: dict[str, FakeResponse | httpx.RequestError],
 ) -> desktop_main.HttpGet:
@@ -139,6 +152,14 @@ def test_desktop_main_does_not_import_server_or_core_business_logic() -> None:
     assert "import server" not in source
     assert "from core" not in source
     assert "import core" not in source
+
+
+def test_desktop_main_does_not_import_cli_server_management() -> None:
+    source = Path(desktop_main.__file__).read_text(encoding="utf-8")
+
+    assert "cli.server_management" not in source
+    assert "from cli" not in source
+    assert "import cli" not in source
 
 
 def test_probe_target_classifies_available_webui() -> None:
@@ -295,3 +316,120 @@ def test_fallback_html_escapes_target_context() -> None:
 
     assert '<script>alert("x")</script>' not in fallback_html
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in fallback_html
+
+
+def test_launch_window_creates_url_window_without_js_bridge(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    missing_icon = tmp_path / "missing-icon.png"
+
+    desktop_main.launch_window(
+        desktop_main.DesktopWindowContent(
+            status=desktop_main.PROBE_WEBUI_AVAILABLE,
+            url="http://127.0.0.1:8420/",
+        ),
+        webview_module=fake_webview,
+        app_icon_path=missing_icon,
+    )
+
+    assert fake_webview.created_windows == [
+        (desktop_main.WINDOW_TITLE, {"url": "http://127.0.0.1:8420/"})
+    ]
+    assert "js_api" not in fake_webview.created_windows[0][1]
+    assert fake_webview.start_calls == [{}]
+
+
+def test_launch_window_creates_html_window_without_js_bridge(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_window(
+        desktop_main.DesktopWindowContent(
+            status=desktop_main.PROBE_SERVER_UNREACHABLE,
+            html="<p>Server unreachable</p>",
+        ),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert fake_webview.created_windows == [
+        (desktop_main.WINDOW_TITLE, {"html": "<p>Server unreachable</p>"})
+    ]
+    assert "js_api" not in fake_webview.created_windows[0][1]
+    assert fake_webview.start_calls == [{}]
+
+
+def test_launch_window_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    icon_file = tmp_path / "icon.png"
+    icon_file.write_bytes(b"fake-icon")
+
+    desktop_main.launch_window(
+        desktop_main.DesktopWindowContent(
+            status=desktop_main.PROBE_WEBUI_AVAILABLE,
+            url="http://vbot.lan:9000/",
+        ),
+        webview_module=fake_webview,
+        app_icon_path=icon_file,
+    )
+
+    assert fake_webview.start_calls == [{"icon": str(icon_file)}]
+
+
+def test_launch_desktop_resolves_probes_and_creates_one_window(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+    checked_targets: list[desktop_main.DesktopTarget] = []
+
+    def record_available_probe(
+        checked_target: desktop_main.DesktopTarget,
+    ) -> desktop_main.DesktopProbeResult:
+        checked_targets.append(checked_target)
+        return desktop_main.DesktopProbeResult(
+            desktop_main.PROBE_WEBUI_AVAILABLE,
+            checked_target,
+        )
+
+    target = desktop_main.launch_desktop(
+        ["--host", "10.0.0.10", "--port", "8500"],
+        settings_file=settings_file,
+        probe=record_available_probe,
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert target.url == "http://10.0.0.10:8500/"
+    assert checked_targets == [target]
+    assert fake_webview.created_windows == [
+        (desktop_main.WINDOW_TITLE, {"url": "http://10.0.0.10:8500/"})
+    ]
+    assert fake_webview.start_calls == [{}]
+
+
+def test_launch_desktop_uses_inline_html_for_expected_failures(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda checked_target: desktop_main.DesktopProbeResult(
+            desktop_main.PROBE_WEBUI_UNAVAILABLE,
+            checked_target,
+        ),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert len(fake_webview.created_windows) == 1
+    title, window_kwargs = fake_webview.created_windows[0]
+    assert title == desktop_main.WINDOW_TITLE
+    assert "url" not in window_kwargs
+    assert "html" in window_kwargs
+    assert "WebUI unavailable" in window_kwargs["html"]
+
+
+def test_launch_window_rejects_empty_window_content(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="requires either url or html"):
+        desktop_main.launch_window(
+            desktop_main.DesktopWindowContent(status=desktop_main.PROBE_WEBUI_AVAILABLE),
+            webview_module=FakeWebview(),
+            app_icon_path=tmp_path / "missing-icon.png",
+        )

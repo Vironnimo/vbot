@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import importlib
 import json
 import tempfile
 from collections.abc import Callable
@@ -16,6 +17,8 @@ import httpx
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 SETTINGS_FILE_NAME = "settings.json"
+WINDOW_TITLE = "vBot"
+ICON_FILE_NAME = "icon.png"
 PROBE_TIMEOUT_SECONDS = 2.0
 PROBE_WEBUI_AVAILABLE = "webui_available"
 PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
@@ -37,6 +40,16 @@ class HttpGet(Protocol):
 
     def __call__(self, url: str, *, timeout: float) -> HttpResponse:
         """Fetch a URL with a bounded timeout."""
+
+
+class WebviewModule(Protocol):
+    """Subset of pywebview used by the Desktop shell."""
+
+    def create_window(self, title: str, **kwargs: Any) -> Any:
+        """Create a window before the GUI loop starts."""
+
+    def start(self, **kwargs: Any) -> Any:
+        """Start the native GUI loop."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,12 @@ def settings_path(base_dir: Path | None = None) -> Path:
     """Return the Desktop-local settings path beside this entrypoint."""
 
     return (base_dir if base_dir is not None else desktop_dir()) / SETTINGS_FILE_NAME
+
+
+def icon_path(base_dir: Path | None = None) -> Path:
+    """Return the optional source-run Desktop icon path."""
+
+    return (base_dir if base_dir is not None else desktop_dir()) / ICON_FILE_NAME
 
 
 def read_settings(path: Path | None = None) -> dict[str, Any]:
@@ -186,6 +205,59 @@ def choose_window_content(
         status=probe_result.status,
         html=build_fallback_html(probe_result),
     )
+
+
+def load_webview() -> WebviewModule:
+    """Import pywebview lazily so non-desktop test gates do not require it."""
+
+    try:
+        return importlib.import_module("webview")
+    except ImportError as exc:
+        raise RuntimeError(
+            "pywebview is required to run vBot Desktop. "
+            "Install the desktop optional dependency group, for example: "
+            'pip install -e ".[desktop]"'
+        ) from exc
+
+
+def launch_window(
+    content: DesktopWindowContent,
+    *,
+    webview_module: WebviewModule | None = None,
+    app_icon_path: Path | None = None,
+) -> None:
+    """Create the pywebview window and run the GUI loop."""
+
+    webview = webview_module if webview_module is not None else load_webview()
+    if content.url is not None:
+        webview.create_window(WINDOW_TITLE, url=content.url)
+    elif content.html is not None:
+        webview.create_window(WINDOW_TITLE, html=content.html)
+    else:
+        raise ValueError("Desktop window content requires either url or html")
+
+    resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
+    if resolved_icon_path.exists():
+        # pywebview icon support varies by backend/platform, so custom icons are optional.
+        webview.start(icon=str(resolved_icon_path))
+        return
+    webview.start()
+
+
+def launch_desktop(
+    argv: list[str] | None = None,
+    *,
+    settings_file: Path | None = None,
+    probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
+    webview_module: WebviewModule | None = None,
+    app_icon_path: Path | None = None,
+) -> DesktopTarget:
+    """Resolve, probe, and launch the thin pywebview Desktop shell."""
+
+    target = resolve_target(argv, settings_file=settings_file)
+    content = choose_window_content(target, probe=probe)
+    launch_window(content, webview_module=webview_module, app_icon_path=app_icon_path)
+    return target
 
 
 def build_fallback_html(probe_result: DesktopProbeResult) -> str:
@@ -324,12 +396,9 @@ def _fallback_copy(status: str) -> tuple[str, str, str]:
 
 
 def main(argv: list[str] | None = None) -> DesktopTarget:
-    """Resolve and persist the Desktop target.
+    """Open the vBot Desktop shell for the resolved server target."""
 
-    Later Phase 6 work wires this target into probing and pywebview window creation.
-    """
-
-    return resolve_target(argv)
+    return launch_desktop(argv)
 
 
 def _parse_port(value: str) -> int:
