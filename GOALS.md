@@ -410,3 +410,76 @@ server contract.
 - Sessions remain explicit and persisted at the system/server level.
 - The WebUI may create sessions explicitly under the hood, but session IDs are
   not the main user-facing concept in the chat experience.
+
+## 7. Phase 5 CLI Server Management Decisions
+
+These are product-level decisions for the local CLI that manages vBot server
+processes. They define the user-visible lifecycle contract, not the internal
+implementation details.
+
+### Scope
+
+- Phase 5 adds `server start`, `server stop`, `server restart`, and
+  `server status`.
+- The CLI is used by both human users and agents, so these commands must remain
+  non-interactive and automation-safe.
+- The CLI never opens a browser. It prints the resolved server URL instead.
+
+### Local Instance Identity
+
+- For `server start`, the local server instance is identified by its `data_dir`.
+- The server port for that instance resolves as `--port` > `VBOT_SERVER_PORT` >
+  `settings.json` > `8420`.
+- Logs for that instance belong under `<data_dir>/logs/`.
+
+### Start Contract
+
+- `server start` is successful only when the target server is actually reachable
+  and `/health` responds.
+- A reachable server counts as a **vBot server** only when `GET /health`
+  returns the expected vBot health response. In the current contract, that is
+  HTTP `200` with JSON body `{ "status": "ok" }`.
+- If a vBot server is already running on the target address/port,
+  `server start` reports that cleanly instead of starting a second server.
+- Phase 5 does not require separate stale PID or launch-metadata recovery
+  rules. Live reachability and vBot-server detection are authoritative.
+
+### Stop, Restart, and Status Targeting
+
+- `server stop`, `server restart`, and `server status` are not limited to
+  servers that were started by the same CLI invocation.
+- These commands may target any already-running local **vBot server** for the
+  chosen address/port.
+- A non-vBot process occupying the target address/port must not be stopped or
+  treated as a restart target.
+- If the target address/port is occupied by a non-vBot process,
+  `server start`, `server stop`, and `server restart` fail with a clear
+  "port occupied by non-vBot process" style error instead of taking action.
+- `restart` re-resolves the current start configuration for the chosen
+  `data_dir` instead of relying on cached launch arguments.
+
+### Status Contract
+
+- `server status` reports whether a vBot server is reachable at the target
+  address/port.
+- `server status` output includes at least: running / not running, the resolved
+  URL, WebUI available / unavailable, and the resolved `data_dir`.
+- If the target address/port is occupied by a non-vBot process,
+  `server status` still reports "not running" for vBot but adds a conflict note
+  that another service is using the target address/port.
+- When reachable, it reports the resolved URL and whether the WebUI is
+  available from that server.
+
+### Shutdown Semantics
+
+- Shutdown is best effort: try graceful stop first, wait a bounded timeout,
+  then force-stop if the process does not exit.
+- On Windows, forced termination may be abrupt. In-flight Runs may be
+  interrupted and late work may be ignored.
+
+### WebUI Availability
+
+- Built WebUI assets remain optional at runtime.
+- If `webui/dist` is missing, the API server may still start successfully.
+- In that case, CLI output must say that the server is running but the WebUI is
+  not available.
