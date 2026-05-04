@@ -289,6 +289,14 @@ reports WebUI availability separately from API health, and uses `psutil` only
 after vBot identity is confirmed for graceful-then-forced local process stop.
 Full backend gate passes with 471 tests. New CLI/dev dependency: `psutil`.
 
+**2026-05-04 — Phase 5 CLI review hardening:** `server.main.resolve_port()` now
+ignores ambient `PORT` and `SERVER_PORT` process environment variables; only
+`VBOT_SERVER_PORT` can override `settings.json`. CLI process lookup now matches
+the resolved host/address and port, with explicit wildcard listener handling, so
+same-port listeners on other addresses are not selected for termination. Failed
+startup attempts clean up the just-spawned child process before returning an
+error. Full backend gate passes with 479 tests. No new dependencies.
+
 ## Specs
 
 Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any module or subsystem that has its own folder or clear boundary in the codebase — a chunk of code that has a distinct responsibility and that agents need context about before touching it. This includes technical modules (`hooks`, `tools`, `storage`), infrastructure modules (`server`, `channel`), and business modules (`auth`, `payments`). Size doesn't matter — what matters is that working on it without context risks misunderstanding its interfaces or conventions.

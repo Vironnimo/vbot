@@ -289,7 +289,20 @@ def test_start_server_reports_readiness_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     instance = make_instance(tmp_path)
-    process = SimpleNamespace(pid=654, poll=lambda: None)
+
+    class FakeProcess:
+        pid = 654
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, *, timeout: float) -> None:
+            return None
+
+    process = FakeProcess()
     monkeypatch.setattr(
         server_management,
         "probe_health",
@@ -307,6 +320,112 @@ def test_start_server_reports_readiness_timeout(
         log_path=instance.log_path,
         process_id=654,
     )
+
+
+def test_start_server_cleans_up_spawned_process_after_readiness_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[str] = []
+
+    class FakeProcess:
+        pid = 654
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(f"wait:{timeout}")
+
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: FakeProcess())
+
+    result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
+
+    assert result.message == "server readiness timed out"
+    assert calls == ["terminate", "wait:0.5"]
+
+
+def test_start_server_kills_spawned_process_when_cleanup_terminate_times_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[str] = []
+
+    class FakeProcess:
+        pid = 654
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(f"wait:{timeout}")
+            if len(calls) == 2:
+                raise subprocess.TimeoutExpired("server", timeout)
+
+    monkeypatch.setattr(
+        server_management,
+        "probe_health",
+        lambda instance: HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: FakeProcess())
+
+    result = start_server(instance, startup_timeout_seconds=0.0, probe_interval_seconds=0.0)
+
+    assert result.message == "server readiness timed out"
+    assert calls == ["terminate", "wait:0.5", "kill", "wait:0.5"]
+
+
+def test_start_server_cleans_up_spawned_process_when_non_vbot_appears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    health_results = iter(
+        [
+            HealthProbeResult(reachable=False, is_vbot=False),
+            HealthProbeResult(reachable=True, is_vbot=False, status_code=200),
+        ]
+    )
+    calls: list[str] = []
+
+    class FakeProcess:
+        pid = 654
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(f"wait:{timeout}")
+
+    monkeypatch.setattr(server_management, "probe_health", lambda instance: next(health_results))
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: FakeProcess())
+
+    result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
+
+    assert result.message == "port occupied by non-vBot process"
+    assert calls == ["terminate", "wait:0.5"]
 
 
 def test_find_listening_process_returns_port_listener(
@@ -332,6 +451,69 @@ def test_find_listening_process_returns_port_listener(
     )
 
     assert find_listening_process(instance) is matching_process
+
+
+def test_find_listening_process_matches_requested_address_on_same_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    wrong_address_process = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip="127.0.0.2", port=9001),
+            )
+        ]
+    )
+    matching_process = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip="127.0.0.1", port=9001),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        server_management.psutil,
+        "process_iter",
+        lambda: [wrong_address_process, matching_process],
+    )
+
+    assert find_listening_process(instance) is matching_process
+
+
+def test_find_listening_process_matches_ipv4_wildcard_for_ipv4_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    wildcard_process = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip="0.0.0.0", port=9001),
+            )
+        ]
+    )
+    monkeypatch.setattr(server_management.psutil, "process_iter", lambda: [wildcard_process])
+
+    assert find_listening_process(instance) is wildcard_process
+
+
+def test_find_listening_process_does_not_match_ipv6_wildcard_for_ipv4_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path, port=9001)
+    ipv6_wildcard_process = SimpleNamespace(
+        net_connections=lambda kind: [
+            SimpleNamespace(
+                status=server_management.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(ip="::", port=9001),
+            )
+        ]
+    )
+    monkeypatch.setattr(server_management.psutil, "process_iter", lambda: [ipv6_wildcard_process])
+
+    assert find_listening_process(instance) is None
 
 
 def test_stop_server_does_not_terminate_non_vbot_conflict(

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -21,6 +22,7 @@ DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 HEALTH_PATH = "/health"
 SERVER_LOG_NAME = "server.log"
 WEBUI_PATH = "/"
+WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 
 
 @dataclass(frozen=True)
@@ -210,6 +212,7 @@ def start_server(
     process = start_server_process(instance)
     deadline = time.monotonic() + startup_timeout_seconds
     health = initial_health
+    result: CommandResult | None = None
     while time.monotonic() < deadline:
         health = probe_health(instance)
         if health.is_vbot:
@@ -223,7 +226,7 @@ def start_server(
                 process_id=process.pid,
             )
         if health.reachable:
-            return CommandResult(
+            result = CommandResult(
                 ok=False,
                 message="port occupied by non-vBot process",
                 instance=instance,
@@ -231,6 +234,7 @@ def start_server(
                 log_path=instance.log_path,
                 process_id=process.pid,
             )
+            break
         if process.poll() is not None:
             return CommandResult(
                 ok=False,
@@ -242,18 +246,41 @@ def start_server(
             )
         time.sleep(probe_interval_seconds)
 
-    return CommandResult(
-        ok=False,
-        message="server readiness timed out",
-        instance=instance,
-        health=health,
-        log_path=instance.log_path,
-        process_id=process.pid,
-    )
+    if result is None:
+        result = CommandResult(
+            ok=False,
+            message="server readiness timed out",
+            instance=instance,
+            health=health,
+            log_path=instance.log_path,
+            process_id=process.pid,
+        )
+    _cleanup_spawned_process(process, timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS)
+    return result
+
+
+def _cleanup_spawned_process(
+    process: subprocess.Popen[bytes] | Any,
+    *,
+    timeout_seconds: float,
+) -> bool:
+    """Terminate a just-spawned child with bounded kill fallback."""
+
+    if process.poll() is not None:
+        return False
+
+    process.terminate()
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=timeout_seconds)
+        return True
+    return False
 
 
 def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
-    """Find the local process listening on the resolved TCP port."""
+    """Find the local process listening on the resolved TCP host and port."""
 
     for process in psutil.process_iter():
         try:
@@ -263,9 +290,62 @@ def find_listening_process(instance: ServerInstance) -> psutil.Process | None:
         for connection in connections:
             if connection.status != psutil.CONN_LISTEN:
                 continue
-            if connection.laddr.port == instance.port:
+            if _connection_matches_instance(connection, instance):
                 return process
     return None
+
+
+def _connection_matches_instance(connection: object, instance: ServerInstance) -> bool:
+    """Return whether a listening socket can receive the probed target traffic."""
+
+    local_address = getattr(connection, "laddr", None)
+    if local_address is None or getattr(local_address, "port", None) != instance.port:
+        return False
+
+    local_ip = _connection_local_ip(local_address)
+    if local_ip in WILDCARD_HOSTS:
+        return _wildcard_can_receive_target(local_ip, instance.host)
+
+    return local_ip in _host_addresses(instance.host)
+
+
+def _wildcard_can_receive_target(local_ip: str, host: str) -> bool:
+    """Return whether a wildcard listener covers the resolved target host."""
+
+    if local_ip in {"", "*"}:
+        return True
+    target_addresses = _host_addresses(host)
+    if local_ip == "0.0.0.0":
+        return any("." in address for address in target_addresses)
+    if local_ip == "::":
+        return any(":" in address for address in target_addresses)
+    return False
+
+
+def _host_addresses(host: str) -> set[str]:
+    """Resolve a host to concrete addresses for psutil listener matching."""
+
+    if host in WILDCARD_HOSTS:
+        return {host}
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return {host}
+    addresses = {str(info[4][0]) for info in infos}
+    addresses.add(host)
+    return addresses
+
+
+def _connection_local_ip(local_address: object) -> str:
+    """Extract the local IP from psutil address tuple or namedtuple values."""
+
+    ip = getattr(local_address, "ip", None)
+    if ip is not None:
+        return str(ip)
+    try:
+        return str(local_address[0])  # type: ignore[index]
+    except (IndexError, TypeError):
+        return ""
 
 
 def stop_server(
