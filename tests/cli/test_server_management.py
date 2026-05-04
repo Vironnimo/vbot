@@ -477,3 +477,61 @@ def test_get_status_reports_not_running_with_webui_unavailable(
     assert result.ok is True
     assert result.message == "not running"
     assert result.webui == WebUIProbeResult(False)
+
+
+def test_cli_lifecycle_smoke_with_faked_process_network_and_webui(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validate start/status/stop composition without real processes or sockets."""
+
+    instance = make_instance(tmp_path, port=8765)
+    health_checks = {"ready": False}
+    calls: list[str] = []
+
+    class FakeProcess:
+        pid = 987
+
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def wait(self, *, timeout: float) -> None:
+            calls.append(f"wait:{timeout}")
+
+    process = FakeProcess()
+
+    def fake_probe_health(unused_instance: ServerInstance) -> HealthProbeResult:
+        calls.append("health")
+        if health_checks["ready"]:
+            return HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+        return HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError")
+
+    def fake_start_process(unused_instance: ServerInstance) -> FakeProcess:
+        calls.append("spawn")
+        health_checks["ready"] = True
+        return process
+
+    monkeypatch.setattr(server_management, "probe_health", fake_probe_health)
+    monkeypatch.setattr(server_management, "start_server_process", fake_start_process)
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda unused_instance: WebUIProbeResult(False, 404)
+    )
+    monkeypatch.setattr(
+        server_management, "find_listening_process", lambda unused_instance: process
+    )
+
+    start_result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
+    status_result = get_status(instance)
+    stop_result = stop_server(instance, shutdown_timeout_seconds=2.0)
+
+    assert start_result.message == "started"
+    assert start_result.process_id == 987
+    assert start_result.webui == WebUIProbeResult(False, 404)
+    assert status_result.message == "running"
+    assert status_result.webui == WebUIProbeResult(False, 404)
+    assert stop_result.message == "stopped"
+    assert stop_result.forced is False
+    assert calls == ["health", "spawn", "health", "health", "health", "terminate", "wait:2.0"]
