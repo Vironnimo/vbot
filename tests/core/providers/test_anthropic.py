@@ -95,7 +95,15 @@ CANONICAL_MESSAGES_WITH_TOOL_LOOP = [
         "model": "anthropic/claude-sonnet-4-20250219",
         "content": None,
         "reasoning": "Need weather.",
-        "reasoning_meta": {"signature": "opaque-current-turn"},
+        "reasoning_meta": {
+            "content_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Need weather.",
+                    "signature": "opaque-current-turn",
+                }
+            ]
+        },
         "tool_calls": [
             {
                 "id": "toolu_abc",
@@ -523,6 +531,33 @@ class TestSendRequestFormat:
 
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["messages"][1]["content"][:2] == [thinking_block, redacted_block]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_does_not_convert_readable_reasoning_to_thinking_block(
+        self,
+        anthropic_adapter,
+    ):
+        """Readable reasoning without opaque metadata is not provider thinking."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {"role": "user", "content": "Previous question"},
+            {
+                "role": "assistant",
+                "content": "Previous answer",
+                "reasoning": "Old readable reasoning",
+            },
+            {"role": "user", "content": "Fresh follow-up"},
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assistant_content = request_body["messages"][1]["content"]
+        assert assistant_content == [{"type": "text", "text": "Previous answer"}]
+        assert all(block["type"] != "thinking" for block in assistant_content)
 
     @respx.mock
     @pytest.mark.asyncio

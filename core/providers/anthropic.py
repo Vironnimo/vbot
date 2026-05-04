@@ -394,13 +394,10 @@ def _to_anthropic_text_content(content: Any) -> list[dict[str, Any]]:
 
 def _to_anthropic_assistant_content(message: dict[str, Any]) -> list[dict[str, Any]]:
     content_blocks: list[dict[str, Any]] = []
-    reasoning = message.get("reasoning")
     reasoning_meta = message.get("reasoning_meta")
     reasoning_blocks = _reasoning_blocks_from_meta(reasoning_meta)
     if reasoning_blocks:
         content_blocks.extend(reasoning_blocks)
-    elif isinstance(reasoning, str) and reasoning:
-        content_blocks.append(_legacy_thinking_block(reasoning, reasoning_meta))
 
     content = message.get("content")
     if isinstance(content, str) and content:
@@ -433,16 +430,6 @@ def _is_supported_reasoning_block(block: Any) -> bool:
     if not isinstance(block, dict):
         return False
     return block.get("type") in (THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE)
-
-
-def _legacy_thinking_block(reasoning: str, reasoning_meta: Any) -> dict[str, Any]:
-    thinking_block: dict[str, Any] = {"type": THINKING_BLOCK_TYPE, "thinking": reasoning}
-    if not isinstance(reasoning_meta, dict):
-        return thinking_block
-    for key in ("signature",):
-        if key in reasoning_meta:
-            thinking_block[key] = reasoning_meta[key]
-    return thinking_block
 
 
 def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
