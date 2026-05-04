@@ -3,6 +3,7 @@
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -103,6 +104,49 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     assert (custom_workspace / "SOUL.md").exists()
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", "", "name must be a non-empty string"),
+        ("model", 12, "model must be a string"),
+        ("fallback_model", 12, "fallback_model must be a string"),
+        ("temperature", "0.4", "temperature must be a number"),
+        ("temperature", -0.1, "temperature must be between"),
+        ("temperature", 2.1, "temperature must be between"),
+        ("thinking_effort", "extreme", "thinking_effort must be one of"),
+        ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
+        ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
+        ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
+        ("allowed_skills", ["debugging", None], "allowed_skills must be a list of strings"),
+    ],
+)
+def test_create_rejects_invalid_mutable_fields(
+    store: AgentStore,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    name = value if field == "name" else "Coder Agent"
+    fields: dict[str, Any] = {} if field == "name" else {field: value}
+
+    with pytest.raises(AgentError, match=message):
+        store.create("coder", name, **fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "thinking_effort", ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+)
+def test_create_accepts_supported_thinking_efforts(
+    store: AgentStore,
+    thinking_effort: str,
+) -> None:
+    agent = store.create(
+        f"coder_{thinking_effort or 'default'}", "Coder", thinking_effort=thinking_effort
+    )
+
+    assert agent.thinking_effort == thinking_effort
+
+
 def test_create_rejects_duplicate_agent(store: AgentStore) -> None:
     store.create("coder", "Coder Agent")
 
@@ -148,6 +192,34 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.allowed_tools == ["read_file"]
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", 123, "name must be a string"),
+        ("name", "", "name must be a non-empty string"),
+        ("model", 123, "model must be a string"),
+        ("fallback_model", 123, "fallback_model must be a string"),
+        ("temperature", True, "temperature must be a number"),
+        ("temperature", 3.0, "temperature must be between"),
+        ("thinking_effort", "turbo", "thinking_effort must be one of"),
+        ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
+        ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
+        ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
+        ("allowed_skills", ["debugging", {}], "allowed_skills must be a list of strings"),
+    ],
+)
+def test_update_rejects_invalid_mutable_fields(
+    store: AgentStore,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    store.create("coder", "Coder Agent")
+
+    with pytest.raises(AgentError, match=message):
+        store.update("coder", **{field: value})
 
 
 def test_update_rejects_id_change(store: AgentStore) -> None:

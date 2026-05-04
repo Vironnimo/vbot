@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -36,6 +37,7 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert isinstance(app.state.chat_runs, ChatRunManager)
         assert isinstance(app.state.chat_loop, ChatLoop)
         assert isinstance(app.state.event_bus, ServerEventBus)
+        assert isinstance(app.state.agent_delete_lock, asyncio.Lock)
         assert runtime.chat_runs is app.state.chat_runs
 
     assert runtime.logger is not None

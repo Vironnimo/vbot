@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -54,22 +55,14 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
-        app.state.runtime = app_runtime
-        app.state.chat_runs = ChatRunManager()
-        app.state.chat_loop = ChatLoop(app_runtime)
-        app.state.event_bus = ServerEventBus()
-        _attach_run_manager(app_runtime, app.state.chat_runs)
+        _initialize_app_state(app, app_runtime)
         try:
             yield
         finally:
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
-    app.state.runtime = app_runtime
-    app.state.chat_runs = ChatRunManager()
-    app.state.chat_loop = ChatLoop(app_runtime)
-    app.state.event_bus = ServerEventBus()
-    _attach_run_manager(app_runtime, app.state.chat_runs)
+    _initialize_app_state(app, app_runtime)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -104,6 +97,15 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
     _mount_webui(app)
 
     return app
+
+
+def _initialize_app_state(app: FastAPIType, runtime: Runtime) -> None:
+    app.state.runtime = runtime
+    app.state.chat_runs = ChatRunManager()
+    app.state.chat_loop = ChatLoop(runtime)
+    app.state.event_bus = ServerEventBus()
+    app.state.agent_delete_lock = asyncio.Lock()
+    _attach_run_manager(runtime, app.state.chat_runs)
 
 
 def _mount_webui(app: FastAPIType) -> None:

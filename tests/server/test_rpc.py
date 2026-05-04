@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +68,30 @@ class StubAgents:
         self.get(agent_id)
         del self._agents[agent_id]
         return Path("archive") / agent_id
+
+
+class InstrumentedAgentDeleteLock:
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self.attempts = 0
+        self.active = 0
+        self.max_active = 0
+        self._second_attempt = asyncio.Event()
+
+    async def __aenter__(self) -> None:
+        self.attempts += 1
+        if self.attempts == 2:
+            self._second_attempt.set()
+        if self.attempts == 1:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._second_attempt.wait(), timeout=1)
+        await self._lock.acquire()
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        self.active -= 1
+        self._lock.release()
 
 
 class StubProviders:
@@ -135,6 +160,7 @@ def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
         runtime=runtime,
         chat_runs=chat_runs,
         chat_loop=ChatLoop(runtime),
+        agent_delete_lock=asyncio.Lock(),
     )
 
 
@@ -183,6 +209,72 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("agent.create", {"id": "writer", "name": "Writer", "allowed_tools": "read_file"}),
+        (
+            "agent.create",
+            {"id": "writer", "name": "Writer", "allowed_tools": ["read_file", 1]},
+        ),
+        ("agent.create", {"id": "writer", "name": "Writer", "allowed_skills": "debugging"}),
+        (
+            "agent.create",
+            {"id": "writer", "name": "Writer", "allowed_skills": ["debugging", None]},
+        ),
+        ("agent.create", {"id": "writer", "name": "Writer", "temperature": "0.7"}),
+        ("agent.create", {"id": "writer", "name": "Writer", "temperature": -0.1}),
+        ("agent.create", {"id": "writer", "name": "Writer", "temperature": 2.1}),
+        ("agent.create", {"id": "writer", "name": "Writer", "thinking_effort": "extreme"}),
+        ("agent.update", {"id": "coder", "allowed_tools": "read_file"}),
+        ("agent.update", {"id": "coder", "allowed_tools": ["read_file", 1]}),
+        ("agent.update", {"id": "coder", "allowed_skills": "debugging"}),
+        ("agent.update", {"id": "coder", "allowed_skills": ["debugging", None]}),
+        ("agent.update", {"id": "coder", "temperature": "0.7"}),
+        ("agent.update", {"id": "coder", "temperature": -0.1}),
+        ("agent.update", {"id": "coder", "temperature": 2.1}),
+        ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
+        ("agent.update", {"id": "coder", "name": ""}),
+        ("agent.update", {"id": "coder", "model": 5}),
+    ],
+)
+async def test_agent_rpc_rejects_malformed_mutable_payloads(
+    tmp_path: Path,
+    method: str,
+    params: JsonObject,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("agent.create", {"id": "writer", "name": "Writer", "workspace": "C:/escape"}),
+        ("agent.update", {"id": "coder", "workspace": "C:/escape"}),
+    ],
+)
+async def test_agent_rpc_rejects_workspace_mutation(
+    tmp_path: Path,
+    method: str,
+    params: JsonObject,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    original_workspace = state.runtime.agents.get("coder").workspace
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert state.runtime.agents.get("coder").workspace == original_workspace
+
+
+@pytest.mark.asyncio
 async def test_agent_delete_rejects_last_agent(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
@@ -190,6 +282,30 @@ async def test_agent_delete_rejects_last_agent(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "last_agent"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_serializes_minimum_one_check_and_delete(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    agent_delete_lock = InstrumentedAgentDeleteLock()
+    state.agent_delete_lock = agent_delete_lock
+
+    coder_delete, writer_delete = await asyncio.gather(
+        dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}}),
+        dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "writer"}}),
+    )
+
+    responses = [coder_delete, writer_delete]
+    successes = [response for response in responses if response["ok"]]
+    failures = [response for response in responses if not response["ok"]]
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert failures[0]["error"]["code"] == "last_agent"
+    assert len(state.runtime.agents.list()) == 1
+    assert len(successes[0]["result"]["remaining_agents"]) == 1
+    assert agent_delete_lock.max_active == 1
 
 
 @pytest.mark.asyncio
@@ -287,6 +403,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
         "assistant_output",
         "run_completed",
     ]
+    assert "reasoning_meta" not in str(result["events"])
 
 
 @pytest.mark.asyncio
