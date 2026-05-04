@@ -1,8 +1,9 @@
-# Phase 2 Goals — Contracts
+# Phase 2+ Goals — Contracts
 
 Items not yet decided are marked **(open)**. This document captures the stable
-Phase 2 contracts and current defaults, not how they'll be built (see ROADMAP
-for the build plan).
+cross-phase contracts and current defaults, starting with Phase 2 and extended
+where later phases already need architectural clarification. It does not define
+the implementation plan (see ROADMAP for that).
 
 ## 1. Agent Schema
 
@@ -204,10 +205,15 @@ Session files are JSONL — one message per line, append-only, crash-safe (at mo
 
 ### ChatMessage Format
 
-Every line is a ChatMessage. This is the canonical message type between the chat layer and the adapter — no separate schema needed.
+Every persisted session line is a ChatMessage. This is also the canonical
+message type between the chat layer and the adapter — no separate schema
+needed.
+
+The `system` role exists in the canonical message model, but the runtime
+normally assembles the system prompt at request time instead of appending it to
+the session JSONL history.
 
 ```jsonl
-{"id":"a1b2c3","timestamp":"2026-05-03T14:30:00Z","role":"system","model":"anthropic/claude-sonnet-4","content":"You are an agent for..."}
 {"id":"d4e5f6","timestamp":"2026-05-03T14:30:01Z","role":"user","content":"What's the weather in Berlin?"}
 {"id":"g7h8i9","timestamp":"2026-05-03T14:30:05Z","role":"assistant","model":"anthropic/claude-sonnet-4","content":null,"reasoning":"I need to call the weather tool...","reasoning_meta":{"signature":"opaque..."},"tool_calls":[{"id":"call_abc","name":"get_weather","arguments":{"city":"Berlin"}}]}
 {"id":"j0k1l2","timestamp":"2026-05-03T14:30:06Z","role":"tool","tool_call_id":"call_abc","name":"get_weather","content":"{\"temp\":22,\"condition\":\"sunny\"}"}
@@ -258,3 +264,76 @@ Every line is a ChatMessage. This is the canonical message type between the chat
 
 - **Fallback behavior**: exact automatic behavior for `fallback_model`
 - **Provider-specific `reasoning_meta` resend after completed turns**
+
+## 5. Phase 3 Server Contract Decisions
+
+These are architectural decisions for the server layer. They intentionally stop
+before exact transport payload schemas.
+
+### Client/Server vs. Provider Separation
+
+- **Client ↔ vBot server** is a stable public contract for WebUI, Desktop, CLI,
+  and later other accessors.
+- **vBot kernel ↔ provider** may differ per provider and stays hidden behind the
+  adapter layer.
+- Provider transport details do not leak into the external vBot server contract.
+
+### Session and Run
+
+- A **Session** is the persisted chat container for one agent.
+- At the product/server level, creating a new session is an explicit action; the
+  session file and history are then created and maintained by the system.
+- A **Run** is one active execution inside a session: user turn, model work,
+  visible thinking, tool calls/results, and assistant output until completion,
+  failure, or cancellation.
+- `cancel` always targets a **Run**, not a whole session.
+
+### Concurrency
+
+- At most **one active run per session**.
+- Multiple sessions may run in parallel.
+- Since a session belongs to one agent, multiple agents may work in parallel by
+  using different sessions.
+
+### Client Transport Roles
+
+- **RPC over HTTP**: commands and normal request/response actions
+- **SSE**: incremental output stream of a single run
+- **WebSocket**: general asynchronous server events
+
+The server exposes streaming to clients through SSE, regardless of how a
+provider internally implements streaming.
+
+### Visibility Contract
+
+Within the chat experience, the following should be visible to the user when
+available:
+
+- assistant thinking/reasoning blocks in readable form
+- every tool call as its own visible step
+- tool activity / tool results
+- every intermediate or final assistant response
+
+Opaque provider-specific `reasoning_meta` remains internal and is not itself a
+user-facing contract.
+
+### Shared Execution Model
+
+- `send`, `stream`, and `cancel` are different access modes for the **same** run
+  execution model.
+- vBot should not grow separate chat engines for non-streaming and streaming.
+
+### Cancel Semantics
+
+- Cancel is **best effort** and should stop ongoing work as quickly as possible.
+- It should stop forwarding new model output, prevent new tool steps, try to
+  stop the current provider/tool work, and ignore late results that arrive after
+  cancellation.
+- If a currently running tool cannot be hard-stopped, the cancellation remains
+  in effect and the run ends as cancelled as soon as control returns to vBot.
+
+### Persistence Boundary
+
+- The session JSONL file remains the canonical persisted chat history.
+- Additional runtime-only coordination state for an active run may live in
+  memory.

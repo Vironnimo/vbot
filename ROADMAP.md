@@ -30,11 +30,12 @@ Ziel: Frontend-Toolchain steht, Quality-Gate-Script läuft.
 
 ## Begriffsklärung ✅
 
-Zentrale Begriffe definiert in `stuff/glossary.md` und `stuff/GLOSSARY-new.md`.
-Klärungen: Agent, Provider, Model (provider-spezifisch, nicht kanonisch),
-Adapter, Reasoning (Adapter-verantwortlich, wire-protocol-spezifisch),
-CoT, Session, Skill, Tool, Workspace.
-Siehe `stuff/GLOSSARY-new.md` für die autoritativen Definitionen.
+Zentrale Begriffe sind in `.vorch/GLOSSARY.md` festgehalten.
+Geklärt sind u.a. Agent, Provider, Model (provider-spezifisch, nicht
+kanonisch), Adapter, Reasoning (adapter-verantwortlich,
+wire-protocol-spezifisch), CoT, Session, Run, Skill, Tool, Workspace,
+Streaming und Cancel.
+`.vorch/GLOSSARY.md` ist die autoritative Quelle.
 
 ---
 
@@ -302,14 +303,38 @@ Backend abgeschlossen. ✅
 
 ## Phase 3 — Server-Schicht
 
-Ziel: HTTP/WS-Wrapper um den Kernel.
+Ziel: HTTP/SSE/WS-Wrapper um den Kernel.
+
+**Architekturentscheidungen für Phase 3:**
+
+- Client ↔ vBot-Server ist ein eigener stabiler Außenvertrag; Provider-Details
+  bleiben in den Adaptern verborgen.
+- Sessions werden explizit erstellt und bleiben die persistierte JSONL-
+  Gesprächshistorie.
+- Ein **Run** ist eine einzelne aktive Ausführung innerhalb einer Session.
+- Pro Session gibt es maximal einen aktiven Run gleichzeitig; mehrere Sessions
+  und damit auch mehrere Agents dürfen parallel laufen.
+- `send`, `stream` und `cancel` sind drei Zugriffsformen auf dieselbe
+  Chat-Ausführungslogik, keine getrennten Systeme.
+- Streaming zum Client läuft über **SSE**; **WebSocket** ist für allgemeine
+  Server-Events aus dem internen Event-Bus reserviert.
+- Im Chat sollen Thinking-Blöcke, Tool-Calls, Tool-Ergebnisse und Assistant-
+  Antworten sichtbar sein.
+- `cancel` ist best effort: laufende Modell- oder Tool-Arbeit soll möglichst
+  schnell gestoppt werden; nicht mehr abbrechbare Restarbeit wird danach
+  ignoriert und der Run endet als abgebrochen.
 
 - [ ] `server/app.py` — FastAPI + `/ws` WebSocket
 - [ ] `server/delegates.py` — `POST /api/rpc` Dispatcher
+- [ ] Server-Delegate für explizite Session-Erstellung
 - [ ] UIApi-Delegate für Chat (send, stream, cancel)
+- [ ] SSE-Endpoint für inkrementelles Chat-Streaming eines Runs
 - [ ] WebSocket pusht Events aus dem internen Event-Bus an Clients
 
-**Exit:** `python server/main.py` → `curl POST /api/rpc` funktioniert.
+**Exit:** `python server/main.py` → Session kann explizit angelegt werden,
+`POST /api/rpc`-Chat funktioniert, ein Run kann gestreamt werden, Thinking /
+Tool-Schritte / Assistant-Ausgaben werden sichtbar, und `cancel` stoppt einen
+laufenden Run best effort.
 
 ---
 
@@ -317,12 +342,14 @@ Ziel: HTTP/WS-Wrapper um den Kernel.
 
 Ziel: Svelte-App mit einem Chat-Fenster. Ping → Pong.
 
-- [ ] `webui/` — `npm create vite@latest` mit Svelte + JS
-- [ ] `webui/src/lib/api.js` — RPC + WebSocket-Client
-- [ ] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen
+- [ ] `webui/` — bestehendes Vite + Svelte 5 + JS Scaffold zum ersten echten Chat-UI ausbauen
+- [ ] `webui/src/lib/api.js` — RPC + SSE + WebSocket-Client
+- [ ] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen,
+      sichtbare Thinking-Blöcke, Tool-Schritte und Assistant-Antworten
 - [ ] `npm run build` → statische Dateien, von FastAPI serviert
 
-**Exit:** `localhost:8420` → Text eingeben → Modell antwortet im Browser.
+**Exit:** `localhost:8420` → Session anlegen, Text eingeben, Run im Browser
+streamen, Thinking-/Tool-/Assistant-Schritte sichtbar sehen, Run abbrechen.
 
 ---
 
