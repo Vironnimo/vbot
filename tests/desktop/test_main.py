@@ -72,6 +72,22 @@ def test_resolve_target_uses_defaults_when_settings_are_missing(tmp_path: Path) 
     }
 
 
+@pytest.mark.parametrize("settings_text", ["not json", "[]", '"not an object"'])
+def test_resolve_target_uses_defaults_for_corrupt_or_non_object_settings(
+    tmp_path: Path,
+    settings_text: str,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(settings_text, encoding="utf-8")
+
+    target = desktop_main.resolve_target([], settings_file=settings_file)
+
+    assert target.host == desktop_main.DEFAULT_HOST
+    assert target.port == desktop_main.DEFAULT_PORT
+    assert target.url == "http://127.0.0.1:8420/"
+    assert target.configuration_error is None
+
+
 def test_cli_args_override_saved_settings_per_field(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps({"host": "10.0.0.8", "port": 8765}), encoding="utf-8")
@@ -98,6 +114,41 @@ def test_settings_can_partially_override_defaults(tmp_path: Path) -> None:
     assert target.host == "vbot.lan"
     assert target.port == desktop_main.DEFAULT_PORT
     assert target.url == "http://vbot.lan:8420/"
+
+
+@pytest.mark.parametrize("host", ["", "   ", "http://localhost", "bad host", "host/path"])
+def test_resolve_target_keeps_malformed_hosts_as_in_window_fallback(
+    tmp_path: Path,
+    host: str,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+
+    target = desktop_main.resolve_target(["--host", host], settings_file=settings_file)
+    content = desktop_main.choose_window_content(target)
+
+    assert target.url == ""
+    assert target.configuration_error is not None
+    assert content.status == desktop_main.PROBE_INVALID_TARGET
+    assert content.url is None
+    assert content.html is not None
+    assert "Invalid Desktop target" in content.html
+
+
+def test_resolve_target_handles_malformed_saved_host_without_crashing(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"host": "http://localhost", "port": 8420}), encoding="utf-8"
+    )
+
+    target = desktop_main.resolve_target([], settings_file=settings_file)
+    content = desktop_main.choose_window_content(target)
+
+    assert (
+        target.configuration_error == "settings.host must be a host name or IP address, not a URL"
+    )
+    assert content.status == desktop_main.PROBE_INVALID_TARGET
+    assert content.html is not None
+    assert "Invalid Desktop target" in content.html
 
 
 @pytest.mark.parametrize("port", ["0", "65536", "not-a-port"])
@@ -246,6 +297,8 @@ def test_probe_target_classifies_unreachable_server() -> None:
     [
         FakeResponse(503, {"status": "ok"}),
         FakeResponse(200, {"status": "starting"}),
+        FakeResponse(200, {"status": "ok", "extra": True}),
+        FakeResponse(200, {"status": "ok", "version": "dev"}),
         FakeResponse(200, ValueError("invalid json")),
         FakeResponse(200, ["ok"]),
     ],
@@ -283,6 +336,7 @@ def test_choose_window_content_returns_url_only_for_available_webui() -> None:
         (desktop_main.PROBE_SERVER_UNREACHABLE, "Server unreachable"),
         (desktop_main.PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
         (desktop_main.PROBE_NOT_VBOT_SERVER, "Not a vBot server"),
+        (desktop_main.PROBE_INVALID_TARGET, "Invalid Desktop target"),
     ],
 )
 def test_choose_window_content_returns_inline_html_for_failures(

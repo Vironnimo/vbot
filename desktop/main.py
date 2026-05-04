@@ -24,6 +24,8 @@ PROBE_WEBUI_AVAILABLE = "webui_available"
 PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
 PROBE_SERVER_UNREACHABLE = "server_unreachable"
 PROBE_NOT_VBOT_SERVER = "not_vbot_server"
+PROBE_INVALID_TARGET = "invalid_target"
+INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]")
 
 
 class HttpResponse(Protocol):
@@ -59,6 +61,7 @@ class DesktopTarget:
     host: str
     port: int
     url: str
+    configuration_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,9 +115,12 @@ def read_settings(path: Path | None = None) -> dict[str, Any]:
     if not resolved_path.exists():
         return {}
 
-    data = json.loads(resolved_path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(resolved_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
     if not isinstance(data, dict):
-        raise ValueError(f"Expected a JSON object at {resolved_path}")
+        return {}
     return data
 
 
@@ -148,9 +154,20 @@ def resolve_target(
 
     args = parse_args(argv)
     saved_settings = read_settings(settings_file)
-    host = args.host if args.host is not None else str(saved_settings.get("host", DEFAULT_HOST))
+    host_source = "--host" if args.host is not None else "settings.host"
+    host_value = args.host if args.host is not None else saved_settings.get("host", DEFAULT_HOST)
     port_value = args.port if args.port is not None else saved_settings.get("port", DEFAULT_PORT)
     port = validate_port(port_value, source="settings.port" if args.port is None else "--port")
+
+    try:
+        host = validate_host(host_value, source=host_source)
+    except ValueError as exc:
+        target = DesktopTarget(
+            host=str(host_value or ""), port=port, url="", configuration_error=str(exc)
+        )
+        if args.host is None:
+            write_settings({"host": DEFAULT_HOST, "port": port}, settings_file)
+        return target
 
     target = DesktopTarget(host=host, port=port, url=build_target_url(host, port))
     write_settings({"host": target.host, "port": target.port}, settings_file)
@@ -160,7 +177,7 @@ def resolve_target(
 def build_target_url(host: str, port: int) -> str:
     """Build the HTTP WebUI root URL for a resolved Desktop target."""
 
-    return f"http://{host}:{port}/"
+    return f"http://{validate_host(host)}:{port}/"
 
 
 def probe_target(
@@ -170,6 +187,9 @@ def probe_target(
     timeout: float = PROBE_TIMEOUT_SECONDS,
 ) -> DesktopProbeResult:
     """Classify the configured server target before Desktop window creation."""
+
+    if target.configuration_error is not None:
+        return DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
 
     health_url = f"{target.url.rstrip('/')}/health"
     try:
@@ -361,6 +381,21 @@ def validate_port(value: Any, *, source: str = "port") -> int:
     return port
 
 
+def validate_host(value: Any, *, source: str = "host") -> str:
+    """Validate a localhost or LAN host value before building an HTTP URL."""
+
+    if not isinstance(value, str):
+        raise ValueError(f"{source} must be a host name or IP address")
+    host = value.strip()
+    if not host:
+        raise ValueError(f"{source} must not be empty")
+    if any(character.isspace() for character in host):
+        raise ValueError(f"{source} must not contain whitespace")
+    if any(character in INVALID_HOST_CHARACTERS for character in host):
+        raise ValueError(f"{source} must be a host name or IP address, not a URL")
+    return host
+
+
 def _is_vbot_health_response(response: HttpResponse) -> bool:
     """Return whether /health matches the vBot server identity contract."""
 
@@ -368,7 +403,7 @@ def _is_vbot_health_response(response: HttpResponse) -> bool:
         payload = response.json()
     except ValueError:
         return False
-    return isinstance(payload, dict) and payload.get("status") == "ok"
+    return bool(payload == {"status": "ok"})
 
 
 def _fallback_copy(status: str) -> tuple[str, str, str]:
@@ -391,6 +426,12 @@ def _fallback_copy(status: str) -> tuple[str, str, str]:
             "Not a vBot server",
             "Something responded at the configured target, but /health did not match vBot.",
             "Use a host and port for a running vBot server.",
+        )
+    if status == PROBE_INVALID_TARGET:
+        return (
+            "Invalid Desktop target",
+            "vBot Desktop could not build a valid server URL from the configured host.",
+            "Choose a localhost or LAN host name without a scheme, path, or whitespace.",
         )
     raise ValueError(f"Unsupported Desktop probe status: {status}")
 

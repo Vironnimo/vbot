@@ -19,13 +19,16 @@ that a browser would load from `/`, but inside a pywebview window.
     the vBot identity contract
   - probes `/` after health succeeds and opens a pywebview window pointed at
     `http://<host>:<port>/` only when the WebUI root returns 2xx/3xx
-  - if the server is unreachable, is not a vBot server, or is reachable but has
-    no WebUI, shows an escaped in-window message instead of crashing
+  - if the configured host is invalid, the server is unreachable, the target is
+    not a vBot server, or a reachable vBot server has no WebUI, shows an escaped
+    in-window message instead of crashing
 - Desktop-local settings file
   - stores at least the last-used host and port
   - lives alongside `desktop/main.py`
   - belongs to the Desktop app itself, not the shared server `data_dir`
   - current source-run filename: `desktop/settings.json` (gitignored)
+  - malformed or non-object JSON is treated as empty settings and overwritten
+    with the next resolved target
 
 ## Conventions
 
@@ -40,6 +43,8 @@ that a browser would load from `/`, but inside a pywebview window.
 - No Python↔JavaScript bridge is part of the Phase 6 contract.
 - If the server is unreachable or has no WebUI, Desktop stays open and shows an
   in-window message instead of crashing.
+- Hosts are plain host names or IP addresses only; schemes, paths, whitespace,
+  and URL punctuation are rejected into an in-window invalid-target message.
 
 ## External Dependencies
 

@@ -321,7 +321,9 @@ only for a reachable vBot server with WebUI assets, otherwise it shows escaped
 in-window fallback HTML for unreachable, missing-WebUI, or non-vBot targets. The
 Desktop accessor still never imports server/CLI lifecycle code, does not create
 a Python↔JavaScript bridge, and closing the window only exits the Desktop client.
-Full backend gate passes with 527 tests. No new dependencies.
+Malformed local settings fall back safely, invalid host targets stay in-window,
+and `/health` identity matching requires the exact `{"status":"ok"}` body. Full
+backend gate passes with 539 tests. No new dependencies.
 
 ## Specs
 
