@@ -17,6 +17,7 @@ but never fewer.
   "model": "openrouter/deepseek/deepseek-v4-pro",
   "fallback_model": "",
   "workspace": "",
+  "current_session_id": "",
   "temperature": 0.1,
   "thinking_effort": "",
   "allowed_tools": ["*"],
@@ -34,6 +35,9 @@ but never fewer.
   is still **(open)**.
 - `workspace`: absolute path to the agent's workspace directory. Default on creation is
   `<data_dir>/workspace-<id>/`. User can override to a custom path.
+- `current_session_id`: session identifier of the agent's current/active chat.
+  This is stored with the agent so the current chat is explicit rather than
+  inferred from filesystem ordering.
 - `thinking_effort`: `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` —
   reasoning effort level. Empty string = provider default. Each adapter translates this
   into its provider's wire format.
@@ -47,7 +51,7 @@ but never fewer.
 
 ## Agent Lifecycle
 
-- **Create**: New agent → `data_dir/agents/<id>/agent.json` + workspace seeded from `resources/workspace-templates/` (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`). `workspace` field in agent.json defaults to `<data_dir>/workspace-<id>/`.
+- **Create**: New agent → `data_dir/agents/<id>/agent.json` + workspace seeded from `resources/workspace-templates/` (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `USER.md`). `workspace` field in agent.json defaults to `<data_dir>/workspace-<id>/`. Each new agent also gets an initial Session immediately, and `current_session_id` points to it.
 - **Bootstrap / first start**: When a new instance creates its data directory for the first time, the system also creates a default agent with `id: "main"` and `name: "Main"`.
 - **Delete**: Agent deleted → all files (agent.json, sessions, workspace) moved to `archive/<agent-id>/`. Not permanently destroyed — can be inspected or restored. Deletion is only allowed when at least one other agent will remain afterwards.
 - **Update**: Any field except `id` can be changed. `id` is immutable (it's the directory name).
@@ -370,6 +374,8 @@ server contract.
 - In the UI, the primary selection is the **Agent**, not the Session.
 - In the product model, each agent has one current/active session — this is the
   chat shown in the Chat view.
+- The identity of that current/active session is persisted with the agent in
+  `current_session_id`.
 - `New Session` creates a fresh session for the selected agent and makes that
   new session the active one shown in the UI.
 - Starting a new session does **not** delete or overwrite the old session file;
@@ -377,6 +383,27 @@ server contract.
 - The WebUI does **not** present a list of old chats/sessions.
 - The UI exposes agent selection plus a `New Session` action; session history
   browsing stays out of scope for this product surface.
+
+### Run and Queue Behavior in the Chat UI
+
+- If the selected agent already has a running Run, a newly submitted user
+  message for that same current chat is placed into a FIFO queue.
+- The queue is scoped to the selected agent's current/active chat.
+- Queued messages must be visible in the UI.
+- Queued messages must be cancellable/removable in the UI before they are sent.
+- `New Session` is not queued. Creating a new session is blocked while the
+  current session has a running Run; the user must cancel or wait for the Run to
+  finish first.
+- Switching to another agent while a Run is active is allowed.
+
+### Accessor-local UI Restoration
+
+- Accessors may remember the last selected agent locally and restore it on the
+  next start/reload.
+- This last-selected-agent memory is not part of the shared server/domain data
+  model and should not be stored in the shared instance data directory.
+- For WebUI and Desktop, this preference is low priority and may be implemented
+  later in accessor-local storage.
 
 ### Relation to the Server Contract
 
