@@ -119,6 +119,22 @@ def test_get_model_openrouter_claude_sonnet(runtime: Runtime) -> None:
     assert model.capabilities.reasoning.supported is True
 
 
+def test_get_model_openrouter_claude_haiku(runtime: Runtime) -> None:
+    """Runtime.get_model('openrouter', 'anthropic/claude-haiku-4.5') returns correct data."""
+    # Act
+    model = runtime.get_model("openrouter", "anthropic/claude-haiku-4.5")
+
+    # Assert
+    assert model.model_id == "anthropic/claude-haiku-4.5"
+    assert model.name == "Claude Haiku 4.5"
+    assert model.context_window == 200000
+    assert model.max_output_tokens == 64000
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.json_mode is True
+    assert model.capabilities.reasoning.supported is True
+
+
 def test_get_model_anthropic_claude_sonnet(runtime: Runtime) -> None:
     """Runtime.get_model('anthropic', 'claude-sonnet-4-20250219') returns correct data."""
     # Act

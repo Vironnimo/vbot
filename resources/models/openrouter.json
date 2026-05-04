@@ -1,6 +1,19 @@
 {
   "provider_id": "openrouter",
   "models": {
+    "anthropic/claude-haiku-4.5": {
+      "name": "Claude Haiku 4.5",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        }
+      },
+      "context_window": 200000,
+      "max_output_tokens": 64000
+    },
     "anthropic/claude-sonnet-4": {
       "name": "Claude Sonnet 4",
       "capabilities": {
