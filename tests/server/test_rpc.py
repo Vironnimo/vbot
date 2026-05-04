@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatLoop, ChatRunManager, ChatSessionManager
+from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.tools import ToolRegistry
 from server.delegates import dispatch_rpc
 
@@ -21,20 +21,52 @@ JsonObject = dict[str, Any]
 @dataclass(frozen=True)
 class StubAgent:
     id: str
+    name: str = "Coder Agent"
     model: str = "openai/gpt-5.2"
+    fallback_model: str = ""
+    workspace: str = "C:/workspace"
     temperature: float = 0.1
     thinking_effort: str = ""
     allowed_tools: list[str] | None = None
+    allowed_skills: list[str] | None = None
+    current_session_id: str = ""
+    created_at: str = "2026-05-04T00:00:00Z"
+    updated_at: str = "2026-05-04T00:00:00Z"
+
+    def __post_init__(self) -> None:
+        if self.allowed_tools is None:
+            object.__setattr__(self, "allowed_tools", ["*"])
+        if self.allowed_skills is None:
+            object.__setattr__(self, "allowed_skills", ["*"])
 
 
 class StubAgents:
     def __init__(self, agent: StubAgent) -> None:
-        self._agent = agent
+        self._agents: dict[str, StubAgent] = {agent.id: agent}
 
     def get(self, agent_id: str) -> StubAgent:
-        if agent_id != self._agent.id:
+        if agent_id not in self._agents:
             raise KeyError(agent_id)
-        return self._agent
+        return self._agents[agent_id]
+
+    def list(self) -> list[StubAgent]:
+        return [self._agents[agent_id] for agent_id in sorted(self._agents)]
+
+    def create(self, agent_id: str, name: str, **changes: Any) -> StubAgent:
+        agent = StubAgent(id=agent_id, name=name, **changes)
+        self._agents[agent_id] = agent
+        return agent
+
+    def update(self, agent_id: str, **changes: Any) -> StubAgent:
+        agent = self.get(agent_id)
+        updated = StubAgent(**{**agent.__dict__, **changes})
+        self._agents[agent_id] = updated
+        return updated
+
+    def delete(self, agent_id: str) -> Path:
+        self.get(agent_id)
+        del self._agents[agent_id]
+        return Path("archive") / agent_id
 
 
 class StubProviders:
@@ -120,6 +152,85 @@ async def test_session_create_creates_explicit_session(tmp_path: Path) -> None:
         "result": {"agent_id": "coder", "session_id": "session-one"},
     }
     assert state.runtime.chat_sessions.get("coder", "session-one").id == "session-one"
+
+
+@pytest.mark.asyncio
+async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="current-one")
+    state.runtime.agents.update("coder", current_session_id="current-one")
+
+    list_response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+    create_response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {"id": "writer", "name": "Writer", "model": "openai/gpt-5.2"},
+        },
+    )
+    update_response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "writer", "name": "Updated Writer"}},
+    )
+    delete_response = await dispatch_rpc(
+        state, {"method": "agent.delete", "params": {"id": "writer"}}
+    )
+
+    assert list_response["result"]["agents"][0]["current_session_id"] == "current-one"
+    assert create_response["result"]["id"] == "writer"
+    assert update_response["result"]["name"] == "Updated Writer"
+    assert delete_response["result"]["agent_id"] == "writer"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_rejects_last_agent(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "last_agent"
+
+
+@pytest.mark.asyncio
+async def test_session_create_make_current_updates_agent(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "session.create",
+            "params": {"agent_id": "coder", "session_id": "current-two", "make_current": True},
+        },
+    )
+
+    assert response["ok"] is True
+    assert state.runtime.agents.get("coder").current_session_id == "current-two"
+
+
+@pytest.mark.asyncio
+async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="current-one")
+    state.runtime.agents.update("coder", current_session_id="current-one")
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+            reasoning="visible",
+            reasoning_meta={"secret": "opaque"},
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["session_id"] == "current-one"
+    assert response["result"]["messages"][0]["reasoning"] == "visible"
+    assert "reasoning_meta" not in response["result"]["messages"][0]
 
 
 @pytest.mark.asyncio

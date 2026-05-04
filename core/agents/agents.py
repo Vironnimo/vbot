@@ -15,6 +15,8 @@ from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.chat.chat import ChatSession, ChatSessionError, ChatSessionManager
+
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE = 0.1
@@ -103,6 +105,7 @@ class Agent:
     allowed_skills: list[str]
     created_at: str
     updated_at: str
+    current_session_id: str = ""
 
 
 class AgentStore:
@@ -146,6 +149,9 @@ class AgentStore:
         workspace_path = (
             Path(workspace) if workspace is not None else self._default_workspace(agent_id)
         )
+
+        agent_dir.mkdir(parents=True)
+        session = ChatSession.create(self._sessions_dir(agent_id))
         agent = Agent(
             id=agent_id,
             name=name,
@@ -156,12 +162,11 @@ class AgentStore:
             thinking_effort=thinking_effort,
             allowed_tools=_copy_allowed_items(allowed_tools),
             allowed_skills=_copy_allowed_items(allowed_skills),
+            current_session_id=session.id,
             created_at=now,
             updated_at=now,
         )
 
-        agent_dir.mkdir(parents=True)
-        self._sessions_dir(agent_id).mkdir()
         self._seed_workspace(Path(agent.workspace))
         self._write_agent(agent)
         return agent
@@ -173,8 +178,7 @@ class AgentStore:
         if not agent_path.exists():
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        data = json.loads(agent_path.read_text(encoding="utf-8"))
-        return _agent_from_dict(data)
+        return self._load_agent(agent_path)
 
     def list(self) -> list[Agent]:
         """Return all persisted agents sorted by ID."""
@@ -184,7 +188,7 @@ class AgentStore:
 
         agents: list[Agent] = []
         for agent_path in sorted(agents_dir.glob("*/agent.json")):
-            agents.append(_agent_from_dict(json.loads(agent_path.read_text(encoding="utf-8"))))
+            agents.append(self._load_agent(agent_path))
         return agents
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
@@ -208,6 +212,8 @@ class AgentStore:
             changes["allowed_tools"] = list(changes["allowed_tools"])
         if "allowed_skills" in changes:
             changes["allowed_skills"] = list(changes["allowed_skills"])
+        if "current_session_id" in changes:
+            self._validate_current_session(agent_id, changes["current_session_id"])
 
         updated_agent = replace(agent, **changes, updated_at=_utc_now())
         self._write_agent(updated_agent)
@@ -253,6 +259,33 @@ class AgentStore:
             encoding="utf-8",
         )
         os.replace(temp_path, agent_path)
+
+    def _load_agent(self, agent_path: Path) -> Agent:
+        data = json.loads(agent_path.read_text(encoding="utf-8"))
+        agent = _agent_from_dict(data)
+        return self._ensure_current_session(agent)
+
+    def _ensure_current_session(self, agent: Agent) -> Agent:
+        if agent.current_session_id and self._session_exists(agent.id, agent.current_session_id):
+            return agent
+
+        session = ChatSession.create(self._sessions_dir(agent.id))
+        updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
+        self._write_agent(updated_agent)
+        return updated_agent
+
+    def _validate_current_session(self, agent_id: str, session_id: Any) -> None:
+        if not isinstance(session_id, str) or not session_id:
+            raise AgentError("current_session_id must be a non-empty string")
+        if not self._session_exists(agent_id, session_id):
+            raise AgentError(f"current session does not exist: {session_id}")
+
+    def _session_exists(self, agent_id: str, session_id: str) -> bool:
+        try:
+            ChatSessionManager(self._data_dir).get(agent_id, session_id)
+        except ChatSessionError:
+            return False
+        return True
 
     def _seed_workspace(self, workspace_path: Path) -> None:
         workspace_path.mkdir(parents=True, exist_ok=True)
@@ -413,6 +446,7 @@ def _agent_from_dict(data: dict[str, Any]) -> Agent:
         thinking_effort=data["thinking_effort"],
         allowed_tools=list(data["allowed_tools"]),
         allowed_skills=list(data["allowed_skills"]),
+        current_session_id=data.get("current_session_id", ""),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )

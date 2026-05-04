@@ -267,6 +267,22 @@ def test_runtime_start_idempotent_with_registries(config: Config) -> None:
     assert runtime.agents is agents_first
 
 
+def test_runtime_start_preserves_existing_agents(config: Config) -> None:
+    """Runtime.start() does not add main when persisted agents already exist."""
+    runtime = Runtime(config)
+    runtime.start()
+    runtime.agents.create("coder", "Coder Agent")
+    runtime.agents.delete("main")
+    runtime.stop()
+
+    runtime.start()
+
+    agents = runtime.agents.list()
+    assert [agent.id for agent in agents] == ["coder"]
+    assert agents[0].current_session_id
+    assert runtime.chat_sessions.get("coder", agents[0].current_session_id).load() == []
+
+
 def test_runtime_stop_then_start_reloads_registries(config: Config) -> None:
     """After stop() and start(), registries are available again."""
     # Arrange

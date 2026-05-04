@@ -43,6 +43,7 @@ def test_agent_dataclass_is_frozen() -> None:
         thinking_effort="",
         allowed_tools=["*"],
         allowed_skills=["*"],
+        current_session_id="session-one",
         created_at="2026-05-03T12:00:00Z",
         updated_at="2026-05-03T12:00:00Z",
     )
@@ -66,9 +67,19 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["thinking_effort"] == ""
     assert data["allowed_tools"] == ["*"]
     assert data["allowed_skills"] == ["*"]
+    assert isinstance(data["current_session_id"], str)
+    assert data["current_session_id"]
     assert data["created_at"].endswith("Z")
     assert data["updated_at"] == data["created_at"]
     assert (store.data_dir / "agents" / "coder" / "sessions").is_dir()
+    assert (
+        store.data_dir
+        / "agents"
+        / "coder"
+        / "sessions"
+        / f"{data['current_session_id']}.jsonl"
+    ).is_file()
+    assert agent.current_session_id == data["current_session_id"]
     assert agent == store.get("coder")
 
     workspace_path = Path(agent.workspace)
@@ -125,6 +136,7 @@ def test_list_returns_agents_sorted_by_id(store: AgentStore) -> None:
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:
     original = store.create("coder", "Coder Agent")
+    current_session_id = original.current_session_id
     updated = store.update(
         "coder",
         name="Updated Coder",
@@ -138,6 +150,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
     assert updated.allowed_tools == ["read_file"]
+    assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
 
 
@@ -153,6 +166,48 @@ def test_update_rejects_unknown_fields(store: AgentStore) -> None:
 
     with pytest.raises(AgentError, match="Unknown agent fields"):
         store.update("coder", unknown=True)
+
+
+def test_update_can_set_current_session_id_to_existing_session(store: AgentStore) -> None:
+    original = store.create("coder", "Coder Agent")
+    new_session = store.data_dir / "agents" / "coder" / "sessions" / "session-two.jsonl"
+    new_session.touch()
+
+    updated = store.update("coder", current_session_id="session-two")
+
+    assert updated.current_session_id == "session-two"
+    assert updated.current_session_id != original.current_session_id
+
+
+def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
+    store.create("coder", "Coder Agent")
+
+    with pytest.raises(AgentError, match="current session does not exist"):
+        store.update("coder", current_session_id="missing")
+
+
+def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore) -> None:
+    agent = store.create("legacy", "Legacy Agent")
+    agent_path = store.data_dir / "agents" / "legacy" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    data.pop("current_session_id")
+    for session_file in (store.data_dir / "agents" / "legacy" / "sessions").glob("*.jsonl"):
+        session_file.unlink()
+    agent_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = store.get("legacy")
+
+    assert loaded.current_session_id
+    assert loaded.current_session_id != agent.current_session_id
+    assert (
+        store.data_dir
+        / "agents"
+        / "legacy"
+        / "sessions"
+        / f"{loaded.current_session_id}.jsonl"
+    ).is_file()
+    normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert normalized_data["current_session_id"] == loaded.current_session_id
 
 
 def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:

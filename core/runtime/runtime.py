@@ -112,6 +112,7 @@ class Runtime:
         self._tools = ToolRegistry()
         self._skills = SkillRegistry.load(self._storage.data_dir / "skills")
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(
             self._storage,
             self._tools,
@@ -146,6 +147,12 @@ class Runtime:
         if resources_path_raw is not None:
             return Path(resources_path_raw)
         return _DEFAULT_RESOURCES_DIR
+
+    def _ensure_bootstrap_agent(self) -> None:
+        if self._agents is None:
+            raise RuntimeError("Agent service not available")
+        if not self._agents.list():
+            self._agents.create("main", "Main")
 
     # ------------------------------------------------------------------
     # Read-only registry access

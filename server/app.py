@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
@@ -18,13 +19,16 @@ _FASTAPI_IMPORT_ERROR: ModuleNotFoundError | None
 
 try:
     from fastapi import FastAPI, HTTPException, Request, WebSocket  # type: ignore[import-not-found]
-    from fastapi.responses import StreamingResponse  # type: ignore[import-not-found]
+    from fastapi.responses import FileResponse, StreamingResponse  # type: ignore[import-not-found]
+    from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
     from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server extra is absent.
     _FASTAPI_IMPORT_ERROR = exc
     FastAPI = None  # type: ignore[assignment,misc]
+    FileResponse = Any  # type: ignore[misc,assignment]
     HTTPException = Any  # type: ignore[misc,assignment]
     Request = Any  # type: ignore[misc,assignment]
+    StaticFiles = Any  # type: ignore[misc,assignment]
     StreamingResponse = Any  # type: ignore[misc,assignment]
     WebSocket = Any  # type: ignore[misc,assignment]
     WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
@@ -35,6 +39,8 @@ if TYPE_CHECKING:
     from fastapi import FastAPI as FastAPIType  # type: ignore[import-not-found]
 else:
     FastAPIType = Any
+
+WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
 
 
 def create_app(*, runtime: Runtime | None = None, config: Config | None = None) -> FastAPIType:
@@ -95,11 +101,55 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
         except WebSocketDisconnect:
             return
 
+    _mount_webui(app)
+
     return app
+
+
+def _mount_webui(app: FastAPIType) -> None:
+    webui_dist_dir = WEBUI_DIST_DIR
+    webui_index_file = webui_dist_dir / "index.html"
+    if not webui_dist_dir.is_dir() or not webui_index_file.is_file():
+        return
+
+    webui_assets_dir = webui_dist_dir / "assets"
+    if webui_assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=webui_assets_dir), name="webui-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def webui_index() -> FileResponse:
+        return FileResponse(webui_index_file)
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def webui_fallback(path: str) -> FileResponse:
+        if _is_reserved_server_path(path):
+            raise HTTPException(status_code=404, detail="Not Found")
+        requested_file = _safe_webui_file_path(webui_dist_dir, path)
+        if requested_file is not None:
+            return FileResponse(requested_file)
+        return FileResponse(webui_index_file)
 
 
 def _attach_run_manager(runtime: Any, run_manager: ChatRunManager) -> None:
     runtime.chat_runs = run_manager
+
+
+def _is_reserved_server_path(path: str) -> bool:
+    return path == "health" or path == "ws" or path.startswith("api/")
+
+
+def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:
+    file_path = webui_dist_dir / requested_path
+    try:
+        resolved_file_path = file_path.resolve()
+        resolved_dist_dir = webui_dist_dir.resolve()
+        resolved_file_path.relative_to(resolved_dist_dir)
+    except ValueError:
+        return None
+
+    if resolved_file_path.is_file():
+        return resolved_file_path
+    return None
 
 
 async def _sse_run_events(run: Any) -> AsyncIterator[str]:
