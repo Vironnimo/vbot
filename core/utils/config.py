@@ -7,10 +7,69 @@ environment variables take highest priority and are always available.
 
 import json
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from core.utils.errors import ConfigError
+
+
+def parse_env_lines(lines: Iterable[str]) -> dict[str, str]:
+    """Parse conservative ``KEY=VALUE`` pairs from dotenv-style lines.
+
+    Blank lines, comments, and lines without ``=`` are ignored. Values may
+    contain additional ``=`` characters and may be wrapped in matching single
+    or double quotes. The parser intentionally does not perform expansion or
+    command substitution.
+    """
+
+    values: dict[str, str] = {}
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        if "=" not in stripped:
+            continue
+
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        value = value.strip()
+
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+
+        if key:
+            values[key] = value
+    return values
+
+
+def read_env_file(env_path: str | Path) -> dict[str, str]:
+    """Read and parse a dotenv-style file, returning raw string values."""
+
+    path = Path(env_path)
+    if not path.exists():
+        return {}
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Cannot read {path}: {exc}") from exc
+
+    return parse_env_lines(raw.splitlines())
+
+
+def load_env_file_into_environment(env_path: str | Path, *, override: bool = False) -> None:
+    """Load a dotenv-style file into ``os.environ``.
+
+    Existing process environment values are preserved unless ``override`` is
+    explicitly enabled. Secret values are never logged or returned.
+    """
+
+    for key, value in read_env_file(env_path).items():
+        if override or key not in os.environ:
+            os.environ[key] = value
 
 
 class Config:
@@ -115,35 +174,8 @@ class Config:
 
     def _load_env_file(self) -> None:
         """Parse ``KEY=VALUE`` pairs from a ``.env`` file."""
-        if not self._env_path.exists():
-            return
-
-        try:
-            raw = self._env_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ConfigError(f"Cannot read {self._env_path}: {exc}") from exc
-
-        for _line_no, line in enumerate(raw.splitlines(), start=1):
-            stripped = line.strip()
-
-            # Skip blank lines and comments
-            if not stripped or stripped.startswith("#"):
-                continue
-
-            # Split on *first* '=' only (values may contain '=')
-            if "=" not in stripped:
-                continue
-
-            key, _, value = stripped.partition("=")
-            key = key.strip()
-            value = value.strip()
-
-            # Strip surrounding quotes (single or double)
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-
-            if key:
-                self._data[key] = self._coerce_value(value)
+        for key, value in read_env_file(self._env_path).items():
+            self._data[key] = self._coerce_value(value)
 
     def _load_os_environ(self) -> None:
         """Overlay process environment variables (highest priority).

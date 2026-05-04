@@ -1,5 +1,6 @@
 """Tests for the storage manager."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,32 @@ def test_ensure_directories_creates_phase_two_structure(tmp_path: Path) -> None:
 
     assert tmp_path.is_dir()
     assert all((tmp_path / directory).is_dir() for directory in PHASE_TWO_DIRECTORIES)
+
+
+def test_load_environment_reads_data_dir_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
+
+    storage.load_environment()
+
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-data-dir"
+
+
+def test_load_environment_does_not_overwrite_existing_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
+
+    storage.load_environment()
+
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-process"
 
 
 def test_resolves_data_dir_from_config_attribute(tmp_path: Path) -> None:

@@ -101,6 +101,7 @@ class Runtime:
 
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
         self._storage.ensure_directories()
+        self._storage.load_environment()
         self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)

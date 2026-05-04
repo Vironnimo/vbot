@@ -99,6 +99,52 @@ def test_get_adapter_openrouter_returns_wired_adapter(
     assert "HTTP-Referer" in adapter._config.extra_headers  # type: ignore[attr-defined]
 
 
+def test_runtime_start_loads_data_dir_env_for_provider_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Runtime.start() loads API keys from the active data-directory .env."""
+    # Arrange
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.joinpath(".env").write_text(
+        "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
+        encoding="utf-8",
+    )
+    runtime = Runtime(Config(data_dir=data_dir))
+    runtime.start()
+
+    # Act
+    adapter = runtime.get_adapter("openrouter")
+
+    # Assert
+    assert adapter._api_key == "sk-or-from-data-dir"  # type: ignore[attr-defined]
+
+
+def test_runtime_start_does_not_overwrite_existing_provider_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Process env vars remain authoritative over data-directory .env values."""
+    # Arrange
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.joinpath(".env").write_text(
+        "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
+        encoding="utf-8",
+    )
+    runtime = Runtime(Config(data_dir=data_dir))
+    runtime.start()
+
+    # Act
+    adapter = runtime.get_adapter("openrouter")
+
+    # Assert
+    assert adapter._api_key == "sk-or-from-process"  # type: ignore[attr-defined]
+
+
 # ------------------------------------------------------------------
 # Model lookup: happy paths
 # ------------------------------------------------------------------
