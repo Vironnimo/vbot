@@ -3,11 +3,39 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 
 from desktop import main as desktop_main
+
+
+@dataclass
+class FakeResponse:
+    status_code: int
+    payload: Any = None
+
+    def json(self) -> Any:
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def fake_get_for(
+    responses: dict[str, FakeResponse | httpx.RequestError],
+) -> desktop_main.HttpGet:
+    class FakeGet:
+        def __call__(self, url: str, *, timeout: float) -> desktop_main.HttpResponse:
+            assert timeout == desktop_main.PROBE_TIMEOUT_SECONDS
+            response = responses[url]
+            if isinstance(response, httpx.RequestError):
+                raise response
+            return response
+
+    return FakeGet()
 
 
 def test_parse_args_accepts_host_and_port() -> None:
@@ -111,3 +139,159 @@ def test_desktop_main_does_not_import_server_or_core_business_logic() -> None:
     assert "import server" not in source
     assert "from core" not in source
     assert "import core" not in source
+
+
+def test_probe_target_classifies_available_webui() -> None:
+    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for(
+            {
+                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
+                "http://127.0.0.1:8420/": FakeResponse(200),
+            }
+        ),
+    )
+
+    assert result.status == desktop_main.PROBE_WEBUI_AVAILABLE
+
+
+@pytest.mark.parametrize("status_code", [200, 204, 301, 302, 399])
+def test_probe_target_accepts_2xx_and_3xx_webui_responses(status_code: int) -> None:
+    target = desktop_main.DesktopTarget("vbot.lan", 9000, "http://vbot.lan:9000/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for(
+            {
+                "http://vbot.lan:9000/health": FakeResponse(200, {"status": "ok"}),
+                "http://vbot.lan:9000/": FakeResponse(status_code),
+            }
+        ),
+    )
+
+    assert result.status == desktop_main.PROBE_WEBUI_AVAILABLE
+
+
+@pytest.mark.parametrize("status_code", [400, 404, 500])
+def test_probe_target_classifies_missing_webui(status_code: int) -> None:
+    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for(
+            {
+                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
+                "http://127.0.0.1:8420/": FakeResponse(status_code),
+            }
+        ),
+    )
+
+    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
+
+
+def test_probe_target_classifies_root_request_error_as_missing_webui() -> None:
+    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for(
+            {
+                "http://127.0.0.1:8420/health": FakeResponse(200, {"status": "ok"}),
+                "http://127.0.0.1:8420/": httpx.ConnectError("connection closed"),
+            }
+        ),
+    )
+
+    assert result.status == desktop_main.PROBE_WEBUI_UNAVAILABLE
+
+
+def test_probe_target_classifies_unreachable_server() -> None:
+    target = desktop_main.DesktopTarget("127.0.0.1", 8420, "http://127.0.0.1:8420/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for(
+            {"http://127.0.0.1:8420/health": httpx.ConnectError("connection refused")}
+        ),
+    )
+
+    assert result.status == desktop_main.PROBE_SERVER_UNREACHABLE
+
+
+@pytest.mark.parametrize(
+    ("health_response"),
+    [
+        FakeResponse(503, {"status": "ok"}),
+        FakeResponse(200, {"status": "starting"}),
+        FakeResponse(200, ValueError("invalid json")),
+        FakeResponse(200, ["ok"]),
+    ],
+)
+def test_probe_target_classifies_non_vbot_server(health_response: FakeResponse) -> None:
+    target = desktop_main.DesktopTarget("example.test", 8080, "http://example.test:8080/")
+
+    result = desktop_main.probe_target(
+        target,
+        get=fake_get_for({"http://example.test:8080/health": health_response}),
+    )
+
+    assert result.status == desktop_main.PROBE_NOT_VBOT_SERVER
+
+
+def test_choose_window_content_returns_url_only_for_available_webui() -> None:
+    target = desktop_main.DesktopTarget("10.0.0.5", 9000, "http://10.0.0.5:9000/")
+
+    content = desktop_main.choose_window_content(
+        target,
+        probe=lambda checked_target: desktop_main.DesktopProbeResult(
+            desktop_main.PROBE_WEBUI_AVAILABLE,
+            checked_target,
+        ),
+    )
+
+    assert content.status == desktop_main.PROBE_WEBUI_AVAILABLE
+    assert content.url == "http://10.0.0.5:9000/"
+    assert content.html is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_text"),
+    [
+        (desktop_main.PROBE_SERVER_UNREACHABLE, "Server unreachable"),
+        (desktop_main.PROBE_WEBUI_UNAVAILABLE, "WebUI unavailable"),
+        (desktop_main.PROBE_NOT_VBOT_SERVER, "Not a vBot server"),
+    ],
+)
+def test_choose_window_content_returns_inline_html_for_failures(
+    status: str,
+    expected_text: str,
+) -> None:
+    target = desktop_main.DesktopTarget("vbot.lan", 8420, "http://vbot.lan:8420/")
+
+    content = desktop_main.choose_window_content(
+        target,
+        probe=lambda checked_target: desktop_main.DesktopProbeResult(status, checked_target),
+    )
+
+    assert content.status == status
+    assert content.url is None
+    assert content.html is not None
+    assert expected_text in content.html
+    assert "http://vbot.lan:8420/" in content.html
+
+
+def test_fallback_html_escapes_target_context() -> None:
+    target = desktop_main.DesktopTarget(
+        '<script>alert("x")</script>',
+        8420,
+        'http://<script>alert("x")</script>:8420/',
+    )
+
+    fallback_html = desktop_main.build_fallback_html(
+        desktop_main.DesktopProbeResult(desktop_main.PROBE_SERVER_UNREACHABLE, target)
+    )
+
+    assert '<script>alert("x")</script>' not in fallback_html
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in fallback_html
