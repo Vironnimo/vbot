@@ -114,6 +114,7 @@ Minimal JSON für `agent.json` — kann später grown, aber nie shrinkn:
   "model": "openrouter/deepseek/deepseek-v4-pro",
   "fallback_model": "",
   "workspace": "",
+  "current_session_id": "",
   "temperature": 0.1,
   "thinking_effort": "",
   "allowed_tools": ["*"],
@@ -127,6 +128,7 @@ Minimal JSON für `agent.json` — kann später grown, aber nie shrinkn:
 - `model`: `<provider>/<model-id>` (aus Phase 1). Leer = Fehler zur Chat-Zeit ("no model set"). Provider muss existieren — sonst Fehler. Model-Existenz wird nicht vorgeprüft; der Provider-API liefert den Fehler, wenn's nicht passt.
 - `fallback_model`: leer = kein Fallback konfiguriert. Exaktes automatisches Fallback-Verhalten bleibt in Phase 2 noch offen.
 - `workspace`: absoluter Pfad zum Workspace-Verzeichnis. Default bei Erstellung: `<data_dir>/workspace-<id>/`. User kann auf eigenen Pfad setzen.
+- `current_session_id`: Session-ID der aktuell aktiven Session dieses Agenten. Wird persistiert, damit der aktuelle Chat pro Agent explizit wiederhergestellt werden kann.
 - `thinking_effort`: `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` — leer = Provider-Default. Adapter übersetzt ins Wire-Format.
 - `allowed_tools`: `["*"]` = alle, `[]` = keine, sonst explizite Liste. Nur erlaubte Tools kommen in den Prompt-Toolblock und — wenn vom Provider unterstützt — in den offiziellen Tool-Teil des API-Requests. Nicht erlaubte Tools werden vom System blockiert.
 - `allowed_skills`: `["*"]` = alle, `[]` = keine, sonst explizite Liste. Nur erlaubte Skills kommen in den Prompt-Skillblock.
@@ -134,7 +136,7 @@ Minimal JSON für `agent.json` — kann später grown, aber nie shrinkn:
 
 ### Agent-Lifecycle
 
-- **Erstellen**: Neuer Agent → `data_dir/agents/<id>/agent.json` + Workspace wird aus `resources/workspace-templates/` gesät (die vier Dateien). `workspace`-Feld defaultet auf `<data_dir>/workspace-<id>/`.
+- **Erstellen**: Neuer Agent → `data_dir/agents/<id>/agent.json` + Workspace wird aus `resources/workspace-templates/` gesät (die vier Dateien). `workspace`-Feld defaultet auf `<data_dir>/workspace-<id>/`. Zusätzlich wird sofort eine erste Session angelegt und als `current_session_id` eingetragen.
 - **Bootstrap / Erststart**: Beim erstmaligen Erstellen des data-dir wird automatisch ein Agent `main` mit dem Namen `Main` angelegt.
 - **Löschen**: Agent gelöscht → alle Dateien (agent.json, sessions, workspace) werden nach `archive/<agent-id>/` verschoben. Nicht permanent gelöscht — kann inspiziert oder wiederhergestellt werden. Löschen ist nur erlaubt, wenn danach mindestens ein anderer Agent verbleibt.
 - **Updaten**: Jedes Feld außer `id` kann geändert werden. `id` ist immutable (Verzeichnisname).
@@ -345,10 +347,13 @@ Ziel: Svelte-App mit linker Navigation, rechter Inhaltsfläche und erstem echten
 
 - [ ] `webui/` — App-Shell mit linkem Menü (`Chat`, `Agents`, `System Prompt`, `Settings`) + rechter Inhaltsfläche
 - [ ] `webui/src/lib/api.js` — RPC + SSE + WebSocket-Client
-- [ ] Chat-Ansicht: Agent wählen statt Session; `New Session` startet für den gewählten Agenten eine neue aktive Session, ohne alte JSONL-Sessions zu löschen oder als Liste anzuzeigen
+- [ ] Chat-Ansicht: Agent wählen statt Session; aktueller Chat kommt aus `current_session_id`; `New Session` startet für den gewählten Agenten eine neue aktive Session, ohne alte JSONL-Sessions zu löschen oder als Liste anzuzeigen
 - [ ] Chat-Komponente: Eingabefeld, Nachrichtenliste, Senden/Empfangen,
       sichtbare Thinking-Blöcke, Tool-Schritte und Assistant-Antworten
+- [ ] Queue-Verhalten in der Chat-Ansicht: weitere Nachrichten während laufendem Run FIFO-queuen, sichtbar anzeigen und vor dem Absenden abbrechbar machen
 - [ ] Agents-Ansicht: Agenten erstellen, bearbeiten und löschen; es muss immer mindestens ein Agent existieren
+- [ ] `System Prompt`-Ansicht vorerst als `Coming soon`; später editierbare Prompt-Bausteine aus `resources/prompts/` plus agentbezogene Vorschau des resultierenden System Prompts
+- [ ] Optional später: zuletzt gewählten Agenten accessor-lokal merken (nicht im data dir, nicht Phase-4-blockierend)
 - [ ] `npm run build` → statische Dateien, von FastAPI serviert
 
 **Exit:** `localhost:8420` → App-Shell mit linker Navigation sichtbar,
