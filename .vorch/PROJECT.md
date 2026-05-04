@@ -104,7 +104,9 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 ## Testing
 
-**Framework:** pytest (backend), Vitest (frontend).
+**Framework:** pytest (backend), Vitest (frontend). Backend pytest uses
+`--import-mode=importlib` so mirrored test modules may share basenames without
+collection collisions.
 
 **Structure:** Tests mirror source. Backend: `tests/<package>/<module>/test_<file>.py`.
 Frontend: `webui/src/<module>/__tests__/` mirroring source (e.g. `src/lib/__tests__/` for library tests, `src/components/__tests__/` for component tests).
@@ -310,6 +312,18 @@ settings should live next to `desktop/main.py`, because Phase 6 assumes a source
 run desktop shell rather than a separate packaged app layout. If the target
 server is unreachable, Desktop should stay open and show an in-window message;
 it should not auto-retry, auto-start a server, or fail with an unhandled error.
+
+**2026-05-04 — Phase 6 desktop shell implemented:** `desktop/main.py` now
+resolves `--host`/`--port` from CLI args, Desktop-local settings, then defaults;
+persists `desktop/settings.json`; probes `/health` and `/` over plain HTTP; and
+launches a single pywebview window titled `vBot`. It loads the normal WebUI root
+only for a reachable vBot server with WebUI assets, otherwise it shows escaped
+in-window fallback HTML for unreachable, missing-WebUI, or non-vBot targets. The
+Desktop accessor still never imports server/CLI lifecycle code, does not create
+a Python↔JavaScript bridge, and closing the window only exits the Desktop client.
+Malformed local settings fall back safely, invalid host targets stay in-window,
+and `/health` identity matching requires the exact `{"status":"ok"}` body. Full
+backend gate passes with 539 tests. No new dependencies.
 
 ## Specs
 
