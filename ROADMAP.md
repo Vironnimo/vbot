@@ -391,7 +391,9 @@ Ziel: Thin-Client im pywebview-Fenster.
 - [ ] `desktop/main.py` — pywebview lädt die normale WebUI unter `/` des konfigurierten Servers; kein separates Desktop-Frontend
 - [ ] `--host` / `--port` CLI-Argumente; Desktop verbindet sich zu lokalen oder LAN-vBot-Servern über normales HTTP und startet/stoppt nie selbst einen Server
 - [ ] Accessor-lokale Desktop-Settings für zuletzt verwendeten Host/Port; nicht im gemeinsamen Server-`data_dir`
+- [ ] Desktop-Settings-Datei liegt neben `desktop/main.py` (keine separate Build-/Install-Artifact-Logik in Phase 6)
 - [ ] Bei fehlender WebUI im Zielserver zeigt die Desktop-App im Fenster eine klare Nachricht statt Exception/Crash (z.B. „server <ip>:<port> does not have a web ui“)
+- [ ] Ist der Zielserver gar nicht erreichbar, zeigt die Desktop-App ebenfalls eine In-App-Nachricht statt Abbruch/Auto-Retry/Auto-Start
 - [ ] Fenster-Titel, Icon, Schließen-Verhalten; Schließen beendet nur den Desktop-Prozess, nicht den Server
 - [ ] Keine Python↔JavaScript-Bridge in Phase 6
 

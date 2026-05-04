@@ -18,6 +18,7 @@ that a browser would load from `/`, but inside a pywebview window.
     message instead of crashing
 - Desktop-local settings file
   - stores at least the last-used host and port
+  - lives alongside `desktop/main.py`
   - belongs to the Desktop app itself, not the shared server `data_dir`
 
 ## Conventions
@@ -28,6 +29,8 @@ that a browser would load from `/`, but inside a pywebview window.
   frontend build or route is part of Phase 6.
 - Closing the window ends only the Desktop process, never the target server.
 - No Python↔JavaScript bridge is part of the Phase 6 contract.
+- If the server is unreachable or has no WebUI, Desktop stays open and shows an
+  in-window message instead of crashing.
 
 ## External Dependencies
 
@@ -39,3 +42,5 @@ that a browser would load from `/`, but inside a pywebview window.
   must show a user-facing in-window message that the target server has no WebUI.
 - Desktop-local preferences must not be written into the shared server
   `data_dir`, because that directory belongs to the selected vBot instance.
+- Phase 6 assumes a source-run Desktop shell, so settings live beside
+  `desktop/main.py` rather than in a later packaging-specific app directory.

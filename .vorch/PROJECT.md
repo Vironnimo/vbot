@@ -305,6 +305,12 @@ window ends only the Desktop process. Desktop connection preferences such as the
 last-used host/port may be stored accessor-locally, never in the shared server
 `data_dir`. No Python↔JavaScript bridge is part of the Phase 6 contract.
 
+**2026-05-04 — Phase 6 desktop error/settings behavior clarified:** Desktop-local
+settings should live next to `desktop/main.py`, because Phase 6 assumes a source-
+run desktop shell rather than a separate packaged app layout. If the target
+server is unreachable, Desktop should stay open and show an in-window message;
+it should not auto-retry, auto-start a server, or fail with an unhandled error.
+
 ## Specs
 
 Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any module or subsystem that has its own folder or clear boundary in the codebase — a chunk of code that has a distinct responsibility and that agents need context about before touching it. This includes technical modules (`hooks`, `tools`, `storage`), infrastructure modules (`server`, `channel`), and business modules (`auth`, `payments`). Size doesn't matter — what matters is that working on it without context risks misunderstanding its interfaces or conventions.

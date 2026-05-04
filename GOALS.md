@@ -522,6 +522,13 @@ growing server-management or native-bridge responsibilities by accident.
 - Instead, it shows a clear in-window message that the target server does not
   provide a WebUI, including the host/port context when practical.
 
+### Unreachable Server Behavior
+
+- If the configured Desktop target server is not reachable at all, the Desktop
+  app also stays alive and shows a clear in-window message.
+- Phase 6 does not add automatic retry loops, automatic local server startup, or
+  a hard process-level failure as the primary user-facing behavior.
+
 ### Window Lifecycle
 
 - Closing the Desktop window ends the Desktop client process only.
@@ -533,8 +540,8 @@ growing server-management or native-bridge responsibilities by accident.
 
 - The Desktop app may persist its last-used connection target (at minimum host
   and port) in an accessor-local settings file.
-- This settings file belongs to the Desktop app itself and is **not** part of
-  the shared server `data_dir`.
+- This settings file belongs to the Desktop app itself, lives alongside
+  `desktop/main.py`, and is **not** part of the shared server `data_dir`.
 - Desktop-local preferences remain separate from shared agent/server state,
   consistent with the accessor-local restoration rule already chosen for WebUI
   and Desktop.
