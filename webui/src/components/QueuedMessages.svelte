@@ -4,20 +4,18 @@
   let { queuedMessages = [], onRemoveQueuedMessage } = $props();
 </script>
 
-{#if queuedMessages.length > 0}
-  <aside
-    class="queued-messages"
-    aria-label={t('queue.title', 'Queued messages')}
-  >
-    <div class="queued-messages__header">
-      <span class="queued-messages__dot" aria-hidden="true"></span>
-      <h3>{t('queue.title', 'Queued messages')}</h3>
-      <span class="queued-messages__count">
-        {t('queue.count', '{count} queued', {
-          count: queuedMessages.length,
-        })}
-      </span>
-    </div>
+<aside class="queued-messages" aria-label={t('queue.title', 'Queued messages')}>
+  <div class="queued-messages__header">
+    <h3>{t('queue.title', 'Queued messages')}</h3>
+    <span
+      >{t('queue.count', '{count} queued', {
+        count: queuedMessages.length,
+      })}</span
+    >
+  </div>
+  {#if queuedMessages.length === 0}
+    <p>{t('queue.empty', 'No queued messages.')}</p>
+  {:else}
     <p>{t('queue.pending', 'Waiting for the active run to finish.')}</p>
     <ol>
       {#each queuedMessages as message (message.id)}
@@ -25,7 +23,6 @@
           <span>{message.content}</span>
           <button
             type="button"
-            aria-label={t('queue.removeMessage', 'Remove queued message')}
             onclick={() => onRemoveQueuedMessage?.(message.id)}
           >
             {t('common.remove', 'Remove')}
@@ -33,32 +30,23 @@
         </li>
       {/each}
     </ol>
-  </aside>
-{/if}
+  {/if}
+</aside>
 
 <style>
   .queued-messages {
     display: grid;
-    flex-shrink: 0;
     gap: var(--space-sm);
-    padding: 10px var(--space-lg);
-    border-top: 1px solid var(--border);
-    background: var(--bg);
+    padding: var(--space-md);
+    border-top: 1px solid var(--color-border);
+    background: rgba(21, 19, 15, 0.52);
   }
 
   .queued-messages__header {
     display: flex;
     align-items: center;
-    gap: var(--space-sm);
-  }
-
-  .queued-messages__dot {
-    width: 6px;
-    height: 6px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    animation: queue-blink 1.2s ease-in-out infinite;
-    background: var(--amber);
+    justify-content: space-between;
+    gap: var(--space-md);
   }
 
   .queued-messages h3,
@@ -67,75 +55,39 @@
   }
 
   .queued-messages h3 {
-    color: var(--text-med);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    color: var(--color-text);
+    font-size: 1rem;
   }
 
-  .queued-messages__count,
-  .queued-messages p,
-  .queued-messages li span {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
+  .queued-messages span,
+  .queued-messages p {
+    color: var(--color-muted);
+    font-family: 'Trebuchet MS', Verdana, sans-serif;
+    font-size: 0.9rem;
   }
 
   .queued-messages ol {
-    display: flex;
+    display: grid;
     gap: var(--space-sm);
     margin: 0;
     padding: 0;
-    overflow-x: auto;
     list-style: none;
   }
 
   .queued-messages li {
     display: flex;
-    min-width: 15rem;
-    max-width: 22rem;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-sm);
-    padding: 6px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    background: var(--surface);
-  }
-
-  .queued-messages li span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    padding: var(--space-sm);
+    border: 1px solid rgba(240, 164, 58, 0.14);
+    border-radius: var(--radius-md);
   }
 
   .queued-messages button {
-    flex-shrink: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: 2px 8px;
+    border: 0;
+    color: var(--color-accent-strong);
     background: transparent;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    transition:
-      border-color 120ms ease,
-      color 120ms ease;
-  }
-
-  .queued-messages button:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  @keyframes queue-blink {
-    0%,
-    100% {
-      opacity: 1;
-    }
-
-    50% {
-      opacity: 0.35;
-    }
+    cursor: pointer;
   }
 </style>
