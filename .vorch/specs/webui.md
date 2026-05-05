@@ -6,19 +6,21 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 
 `webui/` owns the browser interface. It does not import Python/core code and it
 does not talk to providers directly. The minimal Phase 4 product presents an
-Agent-first chat surface, Agent management, and placeholders for System Prompt
-and Settings.
+Agent-first chat surface, Agent management, placeholders for System Prompt and
+Settings, and a frontend-only Components showcase for the Toasted design system.
 
 ## Layout
 
-- The WebUI uses a two-pane app shell: navigation on the left and content on
-  the right.
+- The WebUI uses the Toasted two-pane app shell: fixed 210px navigation on the
+  left and content on the right.
 - The left navigation contains at least these entries:
   - `Chat`
   - `Agents`
   - `System Prompt`
   - `Settings`
-- Additional navigation entries may be added later.
+  - `Components`
+- `Components` is a frontend-only design showcase. It must not imply backend
+  persistence or real provider/tool/skill catalog data.
 
 ## Interfaces
 
@@ -62,5 +64,7 @@ and Settings.
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` and `Settings` are placeholders in Phase 4.
+- `System Prompt` and `Settings` are placeholders in Phase 4. Toasted controls
+  that imply persistence or backend-sourced catalogs should remain disabled or
+  visibly placeholder-only until backend support exists.
 - The production build emits `webui/dist`, which FastAPI serves when present.
