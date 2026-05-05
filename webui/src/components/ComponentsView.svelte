@@ -1,7 +1,28 @@
 <script>
   import { t } from '$lib/i18n.js';
 
-  const simpleOptions = ['Option A', 'Option B', 'Option C', 'Option D'];
+  const simpleOptions = [
+    {
+      id: 'option-a',
+      labelKey: 'components.dropdowns.optionA',
+      labelFallback: 'Option A',
+    },
+    {
+      id: 'option-b',
+      labelKey: 'components.dropdowns.optionB',
+      labelFallback: 'Option B',
+    },
+    {
+      id: 'option-c',
+      labelKey: 'components.dropdowns.optionC',
+      labelFallback: 'Option C',
+    },
+    {
+      id: 'option-d',
+      labelKey: 'components.dropdowns.optionD',
+      labelFallback: 'Option D',
+    },
+  ];
   const modelOptions = [
     'anthropic/claude-sonnet-4',
     'openai/gpt-4o',
@@ -14,7 +35,7 @@
   let inlineConfirmOpen = $state(false);
   let simpleDropdownOpen = $state(false);
   let searchableDropdownOpen = $state(false);
-  let selectedSimpleOption = $state(simpleOptions[0]);
+  let selectedSimpleOptionId = $state(simpleOptions[0].id);
   let selectedModel = $state(modelOptions[1]);
   let modelFilter = $state('');
   let largeToggleOn = $state(true);
@@ -28,6 +49,13 @@
     modelOptions.filter((option) =>
       option.toLowerCase().includes(modelFilter.trim().toLowerCase()),
     ),
+  );
+  let selectedSimpleOption = $derived(
+    simpleOptions.find((option) => option.id === selectedSimpleOptionId) ??
+      simpleOptions[0],
+  );
+  let selectedSimpleOptionLabel = $derived(
+    t(selectedSimpleOption.labelKey, selectedSimpleOption.labelFallback),
   );
 
   function showToast(type) {
@@ -77,7 +105,7 @@
   }
 
   function selectSimpleOption(option) {
-    selectedSimpleOption = option;
+    selectedSimpleOptionId = option.id;
     simpleDropdownOpen = false;
   }
 
@@ -345,7 +373,7 @@ print(fibonacci(10))  # 55</code
               aria-expanded={simpleDropdownOpen}
               onclick={() => (simpleDropdownOpen = !simpleDropdownOpen)}
             >
-              <span>{selectedSimpleOption}</span>
+              <span>{selectedSimpleOptionLabel}</span>
               <svg
                 class="dropdown-chevron"
                 viewBox="0 0 12 12"
@@ -355,14 +383,14 @@ print(fibonacci(10))  # 55</code
               </svg>
             </button>
             <div class="dropdown-list">
-              {#each simpleOptions as option (option)}
+              {#each simpleOptions as option (option.id)}
                 <button
-                  class:selected={option === selectedSimpleOption}
+                  class:selected={option.id === selectedSimpleOptionId}
                   class="dropdown-option"
                   type="button"
                   onclick={() => selectSimpleOption(option)}
                 >
-                  {option}
+                  {t(option.labelKey, option.labelFallback)}
                 </button>
               {/each}
             </div>
@@ -440,6 +468,7 @@ print(fibonacci(10))  # 55</code
             type="button"
             role="switch"
             aria-checked={largeToggleOn}
+            aria-label={t('components.toggles.largeOn', 'Large toggle on')}
             onclick={() => (largeToggleOn = !largeToggleOn)}
           >
             <span class="t-knob"></span>
@@ -450,6 +479,7 @@ print(fibonacci(10))  # 55</code
             type="button"
             role="switch"
             aria-checked={largeToggleOff}
+            aria-label={t('components.toggles.largeOff', 'Large toggle off')}
             onclick={() => (largeToggleOff = !largeToggleOff)}
           >
             <span class="t-knob"></span>
@@ -465,6 +495,7 @@ print(fibonacci(10))  # 55</code
             type="button"
             role="switch"
             aria-checked={smallToggleOn}
+            aria-label={t('components.toggles.smallOn', 'Small toggle on')}
             onclick={() => (smallToggleOn = !smallToggleOn)}
           >
             <span class="t-knob"></span>
@@ -475,6 +506,7 @@ print(fibonacci(10))  # 55</code
             type="button"
             role="switch"
             aria-checked={smallToggleOff}
+            aria-label={t('components.toggles.smallOff', 'Small toggle off')}
             onclick={() => (smallToggleOff = !smallToggleOff)}
           >
             <span class="t-knob"></span>
@@ -547,22 +579,89 @@ print(fibonacci(10))  # 55</code
       </h3>
       <div class="type-stack">
         <div class="field-stack">
-          <span class="micro-label">IBM Plex Sans — UI text</span>
-          <span class="type-display">Agent heading — 22px / 600</span>
-          <span class="type-heading">Settings panel — 20px / 600</span>
-          <span class="type-modal">Modal title — 15px / 600</span>
-          <span class="type-message">Message body — 14px / 400</span>
-          <span class="type-body">Body default — 13.5px / 400</span>
-          <span class="type-nav">Nav item — 13px / 500</span>
-          <span class="type-desc">Description text — 12.5px / 400</span>
+          <span class="micro-label"
+            >{t(
+              'components.typography.uiText',
+              'IBM Plex Sans — UI text',
+            )}</span
+          >
+          <span class="type-display"
+            >{t(
+              'components.typography.agentHeading',
+              'Agent heading — 22px / 600',
+            )}</span
+          >
+          <span class="type-heading"
+            >{t(
+              'components.typography.settingsPanel',
+              'Settings panel — 20px / 600',
+            )}</span
+          >
+          <span class="type-modal"
+            >{t(
+              'components.typography.modalTitle',
+              'Modal title — 15px / 600',
+            )}</span
+          >
+          <span class="type-message"
+            >{t(
+              'components.typography.messageBody',
+              'Message body — 14px / 400',
+            )}</span
+          >
+          <span class="type-body"
+            >{t(
+              'components.typography.bodyDefault',
+              'Body default — 13.5px / 400',
+            )}</span
+          >
+          <span class="type-nav"
+            >{t('components.typography.navItem', 'Nav item — 13px / 500')}</span
+          >
+          <span class="type-desc"
+            >{t(
+              'components.typography.descriptionText',
+              'Description text — 12.5px / 400',
+            )}</span
+          >
         </div>
         <div class="field-stack">
-          <span class="micro-label">IBM Plex Mono — technical / code</span>
-          <span class="mono-13">Model name — 13px / 400</span>
-          <span class="mono-12-5">Settings input value — 12.5px / 400</span>
-          <span class="mono-12">Tool fn name &amp; args — 12px / 500</span>
-          <span class="mono-11-5">Toast &amp; chip text — 11.5px</span>
-          <span class="mono-10-5">SECTION LABEL — 10.5px / 500 uppercase</span>
+          <span class="micro-label"
+            >{t(
+              'components.typography.technicalText',
+              'IBM Plex Mono — technical / code',
+            )}</span
+          >
+          <span class="mono-13"
+            >{t(
+              'components.typography.modelName',
+              'Model name — 13px / 400',
+            )}</span
+          >
+          <span class="mono-12-5"
+            >{t(
+              'components.typography.settingsInputValue',
+              'Settings input value — 12.5px / 400',
+            )}</span
+          >
+          <span class="mono-12"
+            >{t(
+              'components.typography.toolNameArgs',
+              'Tool fn name & args — 12px / 500',
+            )}</span
+          >
+          <span class="mono-11-5"
+            >{t(
+              'components.typography.toastChipText',
+              'Toast & chip text — 11.5px',
+            )}</span
+          >
+          <span class="mono-10-5"
+            >{t(
+              'components.typography.sectionLabel',
+              'SECTION LABEL — 10.5px / 500 uppercase',
+            )}</span
+          >
         </div>
       </div>
     </section>
@@ -577,7 +676,7 @@ print(fibonacci(10))  # 55</code
         <span class="chip chip-amber"
           >{t('status.activeRun', 'active run')}</span
         >
-        <span class="chip chip-orange">medium</span>
+        <span class="chip chip-orange">{t('status.medium', 'medium')}</span>
         <span class="chip chip-red"
           >{t('status.notReachable', 'Not reachable')}</span
         >
@@ -592,7 +691,9 @@ print(fibonacci(10))  # 55</code
         {t('components.sections.chatMessages', 'Chat — messages')}
       </h3>
       <div class="chat-showcase">
-        <div class="date-sep showcase-date">April 20, 2026</div>
+        <div class="date-sep showcase-date">
+          {t('components.chatShowcase.date', 'April 20, 2026')}
+        </div>
         <div class="msg user showcase-msg">
           <div class="msg-header">
             <div class="msg-avatar">Y</div>
@@ -601,7 +702,10 @@ print(fibonacci(10))  # 55</code
           </div>
           <div class="msg-content">
             <div class="msg-body-text">
-              Hey, can you check if the server is running?
+              {t(
+                'components.chatShowcase.userMessage',
+                'Hey, can you check if the server is running?',
+              )}
             </div>
           </div>
         </div>
@@ -610,7 +714,12 @@ print(fibonacci(10))  # 55</code
             <div class="msg-avatar">A</div>
             <span class="msg-author">ASSISTANT</span>
             <span class="msg-timestamp">12:36 PM</span>
-            <span class="msg-meta-extra">· 2 iterations · 8.3s</span>
+            <span class="msg-meta-extra"
+              >{t(
+                'components.chatShowcase.assistantMeta',
+                '· 2 iterations · 8.3s',
+              )}</span
+            >
           </div>
           <div class="msg-content">
             <div class:open={thinkingOpen} class="reasoning-block">
@@ -624,14 +733,16 @@ print(fibonacci(10))  # 55</code
                     d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
                   /><path d="M6 13h4" /></svg
                 >
-                THINKING
+                {t('chat.event.thinking', 'Thinking').toUpperCase()}
                 <svg class="r-chevron" viewBox="0 0 16 16" aria-hidden="true"
                   ><path d="M4 6l4 4 4-4" /></svg
                 >
               </button>
               <div class="reasoning-body">
-                I should call check_process with the name ‘vbot’ to see if the
-                server process is alive.
+                {t(
+                  'components.chatShowcase.thinking',
+                  'I should call check_process with the name ‘vbot’ to see if the server process is alive.',
+                )}
               </div>
             </div>
             <div class:open={toolEventOpen} class="tool-event">
@@ -647,19 +758,23 @@ print(fibonacci(10))  # 55</code
               </button>
               <div class="tool-event-body">
                 <div class="teb-row">
-                  <span class="teb-label">args</span><span class="teb-code"
-                    >{'{"name": "vbot"}'}</span
-                  >
+                  <span class="teb-label">{t('chat.toolArgs', 'Args')}</span
+                  ><span class="teb-code">{'{"name": "vbot"}'}</span>
                 </div>
                 <div class="teb-row">
-                  <span class="teb-label">result</span><span class="teb-code"
+                  <span class="teb-label"
+                    >{t('chat.toolResultLabel', 'Result')}</span
+                  ><span class="teb-code"
                     >{'{"running": true, "pid": 18234, "uptime_seconds": 3621}'}</span
                   >
                 </div>
               </div>
             </div>
             <div class="msg-body-text">
-              The server is running and the recent process status looks healthy.
+              {t(
+                'components.chatShowcase.assistantMessage',
+                'The server is running and the recent process status looks healthy.',
+              )}
             </div>
           </div>
         </div>

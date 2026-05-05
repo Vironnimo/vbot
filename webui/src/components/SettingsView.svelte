@@ -4,6 +4,8 @@
   const panels = [
     {
       id: 'general',
+      labelKey: 'settings.general.title',
+      labelFallback: 'General',
       label: () => t('settings.general.title', 'General'),
       subtitle: () =>
         t(
@@ -13,6 +15,8 @@
     },
     {
       id: 'providers',
+      labelKey: 'settings.providers.title',
+      labelFallback: 'Providers',
       label: () => t('settings.providers.title', 'Providers'),
       subtitle: () =>
         t(
@@ -22,6 +26,8 @@
     },
     {
       id: 'appearance',
+      labelKey: 'settings.appearance.title',
+      labelFallback: 'Appearance',
       label: () => t('settings.appearance.title', 'Appearance'),
       subtitle: () =>
         t('settings.appearance.subtitle', 'Display and language preferences.'),
@@ -32,21 +38,28 @@
   let autoScrollEnabled = $state(true);
   let tokenCountsEnabled = $state(true);
   let languageDropdownOpen = $state(false);
-  let selectedLanguage = $state('English');
+  let selectedLanguageId = $state('en');
 
   const languageOptions = [
-    'English',
-    'Deutsch',
-    'Français',
-    'Español',
-    'Português',
-    '日本語',
-    '中文',
-    '한국어',
+    { id: 'en', labelKey: 'settings.language.en', labelFallback: 'English' },
+    { id: 'de', labelKey: 'settings.language.de', labelFallback: 'Deutsch' },
+    { id: 'fr', labelKey: 'settings.language.fr', labelFallback: 'Français' },
+    { id: 'es', labelKey: 'settings.language.es', labelFallback: 'Español' },
+    { id: 'pt', labelKey: 'settings.language.pt', labelFallback: 'Português' },
+    { id: 'ja', labelKey: 'settings.language.ja', labelFallback: '日本語' },
+    { id: 'zh', labelKey: 'settings.language.zh', labelFallback: '中文' },
+    { id: 'ko', labelKey: 'settings.language.ko', labelFallback: '한국어' },
   ];
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
+  );
+  let selectedLanguage = $derived(
+    languageOptions.find((language) => language.id === selectedLanguageId) ??
+      languageOptions[0],
+  );
+  let selectedLanguageLabel = $derived(
+    t(selectedLanguage.labelKey, selectedLanguage.labelFallback),
   );
 
   function selectPanel(panelId) {
@@ -63,7 +76,7 @@
   }
 
   function selectLanguage(language) {
-    selectedLanguage = language;
+    selectedLanguageId = language.id;
     languageDropdownOpen = false;
   }
 </script>
@@ -80,6 +93,7 @@
         class="snav-item"
         type="button"
         aria-current={panel.id === activePanelId ? 'page' : undefined}
+        aria-label={t(panel.labelKey, panel.labelFallback)}
         onclick={() => selectPanel(panel.id)}
       >
         {panel.label()}
@@ -225,7 +239,7 @@
               aria-expanded={languageDropdownOpen}
               onclick={() => (languageDropdownOpen = !languageDropdownOpen)}
             >
-              <span>{selectedLanguage}</span>
+              <span>{selectedLanguageLabel}</span>
               <svg
                 class="dropdown-chevron"
                 viewBox="0 0 12 12"
@@ -235,14 +249,14 @@
               </svg>
             </button>
             <div class="dropdown-list">
-              {#each languageOptions as language (language)}
+              {#each languageOptions as language (language.id)}
                 <button
-                  class:selected={language === selectedLanguage}
+                  class:selected={language.id === selectedLanguageId}
                   class="dropdown-option"
                   type="button"
                   onclick={() => selectLanguage(language)}
                 >
-                  {language}
+                  {t(language.labelKey, language.labelFallback)}
                 </button>
               {/each}
             </div>
