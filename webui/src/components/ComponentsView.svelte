@@ -24,11 +24,31 @@
     },
   ];
   const modelOptions = [
-    'anthropic/claude-sonnet-4',
-    'openai/gpt-4o',
-    'openai/gpt-4o-mini',
-    'openrouter/google/gemini-2.5-pro',
-    'ollama/llama3.3',
+    {
+      id: 'model-anthropic-sonnet',
+      labelKey: 'components.models.anthropicSonnet',
+      labelFallback: 'showcase/anthropic-sonnet',
+    },
+    {
+      id: 'model-openai-primary',
+      labelKey: 'components.models.openAiPrimary',
+      labelFallback: 'showcase/openai-primary',
+    },
+    {
+      id: 'model-openai-compact',
+      labelKey: 'components.models.openAiCompact',
+      labelFallback: 'showcase/openai-compact',
+    },
+    {
+      id: 'model-openrouter-gemini',
+      labelKey: 'components.models.openRouterGemini',
+      labelFallback: 'showcase/openrouter-gemini',
+    },
+    {
+      id: 'model-local-llama',
+      labelKey: 'components.models.localLlama',
+      labelFallback: 'showcase/local-llama',
+    },
   ];
 
   let toasts = $state([]);
@@ -36,7 +56,7 @@
   let simpleDropdownOpen = $state(false);
   let searchableDropdownOpen = $state(false);
   let selectedSimpleOptionId = $state(simpleOptions[0].id);
-  let selectedModel = $state(modelOptions[1]);
+  let selectedModelId = $state(modelOptions[1].id);
   let modelFilter = $state('');
   let largeToggleOn = $state(true);
   let largeToggleOff = $state(false);
@@ -45,17 +65,28 @@
   let thinkingOpen = $state(false);
   let toolEventOpen = $state(true);
 
-  let filteredModelOptions = $derived(
-    modelOptions.filter((option) =>
-      option.toLowerCase().includes(modelFilter.trim().toLowerCase()),
-    ),
-  );
+  let filteredModelOptions = $derived.by(() => {
+    const normalizedFilter = modelFilter.trim().toLowerCase();
+
+    return modelOptions.filter((option) =>
+      t(option.labelKey, option.labelFallback)
+        .toLowerCase()
+        .includes(normalizedFilter),
+    );
+  });
   let selectedSimpleOption = $derived(
     simpleOptions.find((option) => option.id === selectedSimpleOptionId) ??
       simpleOptions[0],
   );
   let selectedSimpleOptionLabel = $derived(
     t(selectedSimpleOption.labelKey, selectedSimpleOption.labelFallback),
+  );
+  let selectedModel = $derived(
+    modelOptions.find((option) => option.id === selectedModelId) ??
+      modelOptions[0],
+  );
+  let selectedModelLabel = $derived(
+    t(selectedModel.labelKey, selectedModel.labelFallback),
   );
 
   function showToast(type) {
@@ -71,7 +102,7 @@
         title: t('components.toast.errorTitle', 'Connection failed.'),
         message: t(
           'components.toast.errorMessage',
-          'Could not reach server at 127.0.0.1:8017.',
+          'Showcase-only connection warning; no runtime health check was made.',
         ),
       },
       warn: {
@@ -110,7 +141,7 @@
   }
 
   function selectModel(option) {
-    selectedModel = option;
+    selectedModelId = option.id;
     searchableDropdownOpen = false;
     modelFilter = '';
   }
@@ -216,7 +247,9 @@
       </h3>
       <div class="msg-code showcase-code">
         <div class="msg-code-header">
-          <span class="msg-code-lang">python</span>
+          <span class="msg-code-lang">
+            {t('components.code.languagePython', 'python')}
+          </span>
           <button
             class="icon-btn icon-btn--small"
             type="button"
@@ -232,12 +265,15 @@
           </button>
         </div>
         <pre><code
-            >def fibonacci(n: int) -&gt; int:
-    if n &lt;= 1:
-        return n
-    return fibonacci(n - 1) + fibonacci(n - 2)
+            >{t(
+              'components.code.pythonSample',
+              `def toasted_sample(count: int) -> int:
+    if count <= 1:
+        return count
+    return toasted_sample(count - 1) + toasted_sample(count - 2)
 
-print(fibonacci(10))  # 55</code
+print(toasted_sample(10))  # 55`,
+            )}</code
           ></pre>
       </div>
     </section>
@@ -410,7 +446,7 @@ print(fibonacci(10))  # 55</code
               aria-expanded={searchableDropdownOpen}
               onclick={() => (searchableDropdownOpen = !searchableDropdownOpen)}
             >
-              <span>{selectedModel}</span>
+              <span>{selectedModelLabel}</span>
               <svg
                 class="dropdown-chevron"
                 viewBox="0 0 12 12"
@@ -432,14 +468,14 @@ print(fibonacci(10))  # 55</code
                 />
               </label>
               <div class="s-dropdown-options">
-                {#each filteredModelOptions as option (option)}
+                {#each filteredModelOptions as option (option.id)}
                   <button
-                    class:selected={option === selectedModel}
+                    class:selected={option.id === selectedModelId}
                     class="s-dropdown-opt"
                     type="button"
                     onclick={() => selectModel(option)}
                   >
-                    {option}
+                    {t(option.labelKey, option.labelFallback)}
                   </button>
                 {:else}
                   <div class="s-dropdown-empty">
@@ -696,9 +732,13 @@ print(fibonacci(10))  # 55</code
         </div>
         <div class="msg user showcase-msg">
           <div class="msg-header">
-            <div class="msg-avatar">Y</div>
-            <span class="msg-author">YOU</span>
-            <span class="msg-timestamp">12:36 PM</span>
+            <div class="msg-avatar">{t('chat.role.userAvatar', 'Y')}</div>
+            <span class="msg-author"
+              >{t('chat.role.user', 'You').toUpperCase()}</span
+            >
+            <span class="msg-timestamp">
+              {t('components.chatShowcase.timestamp', '12:36 PM')}
+            </span>
           </div>
           <div class="msg-content">
             <div class="msg-body-text">
@@ -711,9 +751,13 @@ print(fibonacci(10))  # 55</code
         </div>
         <div class="msg assistant showcase-msg">
           <div class="msg-header">
-            <div class="msg-avatar">A</div>
-            <span class="msg-author">ASSISTANT</span>
-            <span class="msg-timestamp">12:36 PM</span>
+            <div class="msg-avatar">{t('chat.role.assistantAvatar', 'A')}</div>
+            <span class="msg-author">
+              {t('chat.role.assistant', 'Assistant').toUpperCase()}
+            </span>
+            <span class="msg-timestamp">
+              {t('components.chatShowcase.timestamp', '12:36 PM')}
+            </span>
             <span class="msg-meta-extra"
               >{t(
                 'components.chatShowcase.assistantMeta',
@@ -741,7 +785,7 @@ print(fibonacci(10))  # 55</code
               <div class="reasoning-body">
                 {t(
                   'components.chatShowcase.thinking',
-                  'I should call check_process with the name ‘vbot’ to see if the server process is alive.',
+                  'I should call a placeholder tool to demonstrate how reasoning appears in the timeline.',
                 )}
               </div>
             </div>
@@ -752,28 +796,42 @@ print(fibonacci(10))  # 55</code
                 onclick={() => (toolEventOpen = !toolEventOpen)}
               >
                 <span class="te-dot done">●</span>
-                <span class="te-fn">check_process</span>
-                <span class="te-arg">(vbot)</span>
-                <span class="te-time">✓ 3ms</span>
+                <span class="te-fn">
+                  {t('components.chatShowcase.toolName', 'showcase_tool')}
+                </span>
+                <span class="te-arg">
+                  {t('components.chatShowcase.toolArg', '(sample)')}
+                </span>
+                <span class="te-time">
+                  {t('components.chatShowcase.toolTime', '✓ 3ms')}
+                </span>
               </button>
               <div class="tool-event-body">
                 <div class="teb-row">
                   <span class="teb-label">{t('chat.toolArgs', 'Args')}</span
-                  ><span class="teb-code">{'{"name": "vbot"}'}</span>
+                  ><span class="teb-code">
+                    {t(
+                      'components.chatShowcase.toolArgsJson',
+                      '{"name":"sample"}',
+                    )}
+                  </span>
                 </div>
                 <div class="teb-row">
                   <span class="teb-label"
                     >{t('chat.toolResultLabel', 'Result')}</span
-                  ><span class="teb-code"
-                    >{'{"running": true, "pid": 18234, "uptime_seconds": 3621}'}</span
-                  >
+                  ><span class="teb-code">
+                    {t(
+                      'components.chatShowcase.toolResultJson',
+                      '{"status":"sample","duration_ms":3}',
+                    )}
+                  </span>
                 </div>
               </div>
             </div>
             <div class="msg-body-text">
               {t(
                 'components.chatShowcase.assistantMessage',
-                'The server is running and the recent process status looks healthy.',
+                'This is placeholder timeline content for the Toasted component showcase.',
               )}
             </div>
           </div>

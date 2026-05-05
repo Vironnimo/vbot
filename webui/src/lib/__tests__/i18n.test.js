@@ -59,10 +59,18 @@ describe('i18n t()', () => {
     }
   });
 
+  function expectCatalogKeys(requiredKeys) {
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+  }
+
   it('contains Toasted design labels for navigation and status polish', () => {
     const requiredKeys = [
       'navigation.components',
       'app.serverStatus',
+      'app.statusPlaceholder',
       'chat.tokenBadge',
       'chat.attachPlaceholder',
       'chat.toolArgs',
@@ -72,10 +80,9 @@ describe('i18n t()', () => {
       'status.notReachable',
     ];
 
-    for (const key of requiredKeys) {
-      expect(englishCatalog[key], key).toBeTruthy();
-      expect(t(key), key).toBe(englishCatalog[key]);
-    }
+    expectCatalogKeys(requiredKeys);
+    expect(t('app.statusPlaceholder')).toContain('placeholder');
+    expect(t('app.serverStatus')).not.toMatch(/server:\d+/u);
   });
 
   it('contains Toasted design labels for Agents placeholders', () => {
@@ -92,21 +99,26 @@ describe('i18n t()', () => {
       'agents.access.toggleSkill',
     ];
 
-    for (const key of requiredKeys) {
-      expect(englishCatalog[key], key).toBeTruthy();
-      expect(t(key), key).toBe(englishCatalog[key]);
-    }
+    expectCatalogKeys(requiredKeys);
   });
 
   it('contains Toasted design labels for Settings sections', () => {
     const requiredKeys = [
       'settings.sections',
       'settings.placeholder',
+      'settings.placeholderNote',
       'settings.general.title',
       'settings.general.serverHost',
+      'settings.general.serverHostPlaceholder',
       'settings.general.dataDirectory',
+      'settings.general.dataDirectoryPlaceholder',
       'settings.general.autoScroll',
       'settings.providers.title',
+      'settings.providers.openRouter',
+      'settings.providers.envPath',
+      'settings.providers.anthropic',
+      'settings.providers.ollama',
+      'settings.providers.ollamaDescription',
       'settings.providers.customEndpoint',
       'settings.appearance.title',
       'settings.appearance.language',
@@ -114,10 +126,12 @@ describe('i18n t()', () => {
       'settings.language.en',
     ];
 
-    for (const key of requiredKeys) {
-      expect(englishCatalog[key], key).toBeTruthy();
-      expect(t(key), key).toBe(englishCatalog[key]);
-    }
+    expectCatalogKeys(requiredKeys);
+    expect(
+      t('settings.providers.ollamaDescription', undefined, {
+        host: 'localhost:11434',
+      }),
+    ).toBe('Local model server placeholder: localhost:11434');
   });
 
   it('contains Toasted design labels for the Components showcase', () => {
@@ -133,14 +147,33 @@ describe('i18n t()', () => {
       'components.toggles.smallOff',
       'components.toast.successTitle',
       'components.toast.errorTitle',
+      'components.toast.errorMessage',
       'components.dropdowns.optionA',
+      'components.models.anthropicSonnet',
+      'components.models.openAiPrimary',
+      'components.models.openAiCompact',
+      'components.models.openRouterGemini',
+      'components.models.localLlama',
+      'components.code.languagePython',
+      'components.code.pythonSample',
       'components.typography.uiText',
+      'components.chatShowcase.date',
+      'components.chatShowcase.timestamp',
       'components.chatShowcase.userMessage',
+      'components.chatShowcase.assistantMeta',
+      'components.chatShowcase.thinking',
+      'components.chatShowcase.toolName',
+      'components.chatShowcase.toolArg',
+      'components.chatShowcase.toolTime',
+      'components.chatShowcase.toolArgsJson',
+      'components.chatShowcase.toolResultJson',
+      'components.chatShowcase.assistantMessage',
     ];
 
-    for (const key of requiredKeys) {
-      expect(englishCatalog[key], key).toBeTruthy();
-      expect(t(key), key).toBe(englishCatalog[key]);
-    }
+    expectCatalogKeys(requiredKeys);
+    expect(t('components.toast.errorMessage')).toContain('Showcase-only');
+    expect(t('components.chatShowcase.assistantMessage')).toContain(
+      'placeholder',
+    );
   });
 });

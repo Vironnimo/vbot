@@ -570,6 +570,8 @@
                     class="tl-toggle"
                     class:on={item.isAllowed}
                     type="button"
+                    role="switch"
+                    aria-checked={item.isAllowed}
                     aria-label={t(
                       'agents.access.toggleTool',
                       'Toggle tool {name}',
@@ -642,6 +644,8 @@
                     class="tl-toggle"
                     class:on={item.isAllowed}
                     type="button"
+                    role="switch"
+                    aria-checked={item.isAllowed}
                     aria-label={t(
                       'agents.access.toggleSkill',
                       'Toggle skill {name}',
@@ -791,7 +795,11 @@
   .agent-item:hover,
   .agent-item:focus-visible {
     background: var(--surface-2);
-    outline: none;
+  }
+
+  .agent-item:focus-visible {
+    outline: 1px solid rgba(232, 135, 10, 0.4);
+    outline-offset: -1px;
   }
 
   .agent-item.active {
