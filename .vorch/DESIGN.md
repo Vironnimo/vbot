@@ -180,6 +180,11 @@ components:
 > exact markup, CSS, and interaction behaviour. Read it when you need details this
 > file cannot express — specific DOM structure, component markup patterns, live
 > spacing values, or anything visual that token names alone don't fully describe.
+>
+> The Svelte WebUI implementation lives in `webui/src/` and mirrors this
+> prototype with backend-backed data where it already exists. Prototype content is
+> illustrative only; controls without backend support remain placeholder-only or
+> disabled.
 
 ## Overview
 
