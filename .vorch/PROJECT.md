@@ -133,6 +133,9 @@ Frontend script works the same way.
 Use this section only for important strategic decisions, unusual global
 constraints, or things an agent would otherwise likely assume incorrectly.
 
+- The Toasted `Components` showcase is a design/reference artifact only. It must
+  not ship as a live WebUI tab.
+
 ## Specs
 
 Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any module or subsystem that has its own folder or clear boundary in the codebase — a chunk of code that has a distinct responsibility and that agents need context about before touching it. This includes technical modules (`hooks`, `tools`, `storage`), infrastructure modules (`server`, `channel`), and business modules (`auth`, `payments`). Size doesn't matter — what matters is that working on it without context risks misunderstanding its interfaces or conventions.

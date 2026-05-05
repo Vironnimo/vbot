@@ -403,19 +403,23 @@
           {/if}
         </div>
       {/if}
-      <ChatTimeline
-        sessionState={activeSessionState}
-        agentName={activeAgent.name}
-      />
-      <QueuedMessages
-        queuedMessages={activeSessionState?.queue ?? []}
-        onRemoveQueuedMessage={handleRemoveQueuedMessage}
-      />
-      <ChatComposer
-        disabled={composerDisabled}
-        isRunning={isRunActive(activeSessionState)}
-        onSendMessage={handleSendMessage}
-      />
+      <div class="chat-view__timeline-shell">
+        <ChatTimeline
+          sessionState={activeSessionState}
+          agentName={activeAgent.name}
+        />
+      </div>
+      <div class="chat-view__footer-stack">
+        <QueuedMessages
+          queuedMessages={activeSessionState?.queue ?? []}
+          onRemoveQueuedMessage={handleRemoveQueuedMessage}
+        />
+        <ChatComposer
+          disabled={composerDisabled}
+          isRunning={isRunActive(activeSessionState)}
+          onSendMessage={handleSendMessage}
+        />
+      </div>
     </div>
   {/if}
 </section>
@@ -522,7 +526,23 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
+    overflow: hidden;
     background: var(--bg);
+  }
+
+  .chat-view__timeline-shell {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .chat-view__footer-stack {
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--surface);
   }
 
   .chat-view__state {
@@ -578,6 +598,10 @@
     .chat-refresh,
     .token-badge {
       display: none;
+    }
+
+    .chat-view__notice-stack {
+      padding: 10px 14px;
     }
   }
 </style>

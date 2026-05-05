@@ -6,8 +6,8 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 
 `webui/` owns the browser interface. It does not import Python/core code and it
 does not talk to providers directly. The minimal Phase 4 product presents an
-Agent-first chat surface, Agent management, placeholders for System Prompt and
-Settings, and a frontend-only Components showcase for the Toasted design system.
+Agent-first chat surface, Agent management, and placeholders for System Prompt
+and Settings.
 
 ## Layout
 
@@ -18,9 +18,6 @@ Settings, and a frontend-only Components showcase for the Toasted design system.
   - `Agents`
   - `System Prompt`
   - `Settings`
-  - `Components`
-- `Components` is a frontend-only design showcase. It must not imply backend
-  persistence or real provider/tool/skill catalog data.
 
 ## Interfaces
 
@@ -57,6 +54,8 @@ Settings, and a frontend-only Components showcase for the Toasted design system.
   `current_session_id`; old Sessions are not listed in Phase 4.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
+- In Chat, only the message timeline should scroll. The agent bar, notices,
+  queued-message region, and composer stay visible inside the bounded view.
 
 ## Constraints & Gotchas
 

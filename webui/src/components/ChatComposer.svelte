@@ -95,10 +95,17 @@
 <style>
   .input-area {
     width: 100%;
+    min-width: 0;
   }
 
   .msg-input {
     height: 22px;
+  }
+
+  @media (max-width: 760px) {
+    .input-area {
+      padding: 12px 14px;
+    }
   }
 
   .icon-btn svg {

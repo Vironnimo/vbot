@@ -68,7 +68,6 @@ describe('i18n t()', () => {
 
   it('contains Toasted design labels for navigation and status polish', () => {
     const requiredKeys = [
-      'navigation.components',
       'app.serverStatus',
       'app.statusPlaceholder',
       'chat.tokenBadge',
@@ -83,6 +82,7 @@ describe('i18n t()', () => {
     expectCatalogKeys(requiredKeys);
     expect(t('app.statusPlaceholder')).toContain('placeholder');
     expect(t('app.serverStatus')).not.toMatch(/server:\d+/u);
+    expect(englishCatalog['navigation.components']).toBeUndefined();
   });
 
   it('contains Toasted design labels for Agents placeholders', () => {
@@ -91,6 +91,7 @@ describe('i18n t()', () => {
       'agents.detail.model',
       'agents.detail.access',
       'agents.detail.session',
+      'agents.detail.idValue',
       'agents.form.modelPlaceholder',
       'agents.form.modelManualHelp',
       'agents.access.noTools',
@@ -100,6 +101,9 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
+    expect(t('agents.detail.idValue', undefined, { id: 'alpha' })).toBe(
+      'id: alpha',
+    );
   });
 
   it('contains Toasted design labels for Settings sections', () => {
@@ -134,51 +138,9 @@ describe('i18n t()', () => {
     ).toBe('Local model server placeholder: localhost:11434');
   });
 
-  it('contains Toasted design labels for the Components showcase', () => {
-    const requiredKeys = [
-      'components.title',
-      'components.subtitle',
-      'components.sections.buttons',
-      'components.sections.toasts',
-      'components.sections.dropdowns',
-      'components.sections.toggles',
-      'components.sections.statusChips',
-      'components.toggles.largeOn',
-      'components.toggles.smallOff',
-      'components.toast.successTitle',
-      'components.toast.successMessage',
-      'components.toast.errorTitle',
-      'components.toast.errorMessage',
-      'components.toast.warnTitle',
-      'components.toast.warnMessage',
-      'components.toast.infoTitle',
-      'components.toast.infoMessage',
-      'components.dropdowns.optionA',
-      'components.models.anthropicSonnet',
-      'components.models.openAiPrimary',
-      'components.models.openAiCompact',
-      'components.models.openRouterGemini',
-      'components.models.localLlama',
-      'components.code.languagePython',
-      'components.code.pythonSample',
-      'components.typography.uiText',
-      'components.chatShowcase.date',
-      'components.chatShowcase.timestamp',
-      'components.chatShowcase.userMessage',
-      'components.chatShowcase.assistantMeta',
-      'components.chatShowcase.thinking',
-      'components.chatShowcase.toolName',
-      'components.chatShowcase.toolArg',
-      'components.chatShowcase.toolTime',
-      'components.chatShowcase.toolArgsJson',
-      'components.chatShowcase.toolResultJson',
-      'components.chatShowcase.assistantMessage',
-    ];
-
-    expectCatalogKeys(requiredKeys);
-    expect(t('components.toast.errorMessage')).toContain('Showcase-only');
-    expect(t('components.chatShowcase.assistantMessage')).toContain(
-      'placeholder',
-    );
+  it('does not expose Components showcase labels in the live catalog', () => {
+    expect(englishCatalog['components.title']).toBeUndefined();
+    expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();
+    expect(t('components.title')).toBe('components.title');
   });
 });
