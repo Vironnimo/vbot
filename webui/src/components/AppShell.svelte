@@ -69,9 +69,14 @@
       {/each}
     </nav>
 
-    <div class="sidebar-footer app-shell__footer">
-      <div class="pulse-dot" aria-hidden="true"></div>
-      <span class="footer-text">{t('app.serverStatus', 'server:8017')}</span>
+    <div
+      class="sidebar-footer app-shell__footer"
+      aria-label={t('app.statusPlaceholder', 'Local UI status placeholder')}
+    >
+      <div class="pulse-dot pulse-dot--placeholder" aria-hidden="true"></div>
+      <span class="footer-text">
+        {t('app.statusPlaceholder', 'Local UI status placeholder')}
+      </span>
     </div>
   </aside>
 

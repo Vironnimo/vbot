@@ -210,24 +210,34 @@ export const englishCatalog = Object.freeze({
   'settings.preferences': 'Preferences',
   'settings.sections': 'Settings sections',
   'settings.placeholder': 'Placeholder',
+  'settings.placeholderNote':
+    'Placeholder-only controls are disabled until settings persistence is available.',
   'settings.general.title': 'General',
   'settings.general.subtitle': 'Server connection and workspace path settings.',
   'settings.general.serverHost': 'Server host',
   'settings.general.serverHostDescription':
     'Address and port the vBot server listens on.',
+  'settings.general.serverHostPlaceholder':
+    'Server host placeholder, not a detected runtime value',
   'settings.general.dataDirectory': 'Data directory',
   'settings.general.dataDirectoryDescription':
     'Root path for agents, sessions, and workspace files.',
+  'settings.general.dataDirectoryPlaceholder':
+    'Data directory placeholder, not a detected runtime value',
   'settings.general.autoScroll': 'Auto-scroll chat',
   'settings.general.autoScrollDescription':
     'Scroll to bottom as new tokens arrive.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'API keys and connection status for LLM providers.',
+  'settings.providers.openRouter': 'OpenRouter',
   'settings.providers.openRouterDescription': 'API key via',
+  'settings.providers.envPath': '~/.vbot/.env',
+  'settings.providers.anthropic': 'Anthropic',
   'settings.providers.anthropicDescription': 'Direct Anthropic Messages API.',
+  'settings.providers.ollama': 'Ollama',
   'settings.providers.ollamaDescription':
-    'Local model server at localhost:11434',
+    'Local model server placeholder: {host}',
   'settings.providers.customEndpoint': 'Custom endpoint',
   'settings.providers.customEndpointDescription':
     'Add an OpenAI-compatible API endpoint.',
@@ -248,7 +258,8 @@ export const englishCatalog = Object.freeze({
   'settings.language.zh': '中文',
   'settings.language.ko': '한국어',
 
-  'app.serverStatus': 'server:8017',
+  'app.serverStatus': 'Local UI placeholder',
+  'app.statusPlaceholder': 'Local UI placeholder',
 
   'status.connected': 'Connected',
   'status.activeRun': 'active run',
@@ -286,7 +297,8 @@ export const englishCatalog = Object.freeze({
   'components.toast.successTitle': 'Agent saved.',
   'components.toast.successMessage': 'Changes have been applied.',
   'components.toast.errorTitle': 'Connection failed.',
-  'components.toast.errorMessage': 'Could not reach server at 127.0.0.1:8017.',
+  'components.toast.errorMessage':
+    'Showcase-only connection warning; no runtime health check was made.',
   'components.toast.warnTitle': 'Rate limit approaching.',
   'components.toast.warnMessage': 'Slowing requests to avoid HTTP 429.',
   'components.toast.infoTitle': 'Session resumed.',
@@ -304,6 +316,14 @@ export const englishCatalog = Object.freeze({
   'components.dropdowns.optionB': 'Option B',
   'components.dropdowns.optionC': 'Option C',
   'components.dropdowns.optionD': 'Option D',
+  'components.models.anthropicSonnet': 'showcase/anthropic-sonnet',
+  'components.models.openAiPrimary': 'showcase/openai-primary',
+  'components.models.openAiCompact': 'showcase/openai-compact',
+  'components.models.openRouterGemini': 'showcase/openrouter-gemini',
+  'components.models.localLlama': 'showcase/local-llama',
+  'components.code.languagePython': 'python',
+  'components.code.pythonSample':
+    'def toasted_sample(count: int) -> int:\n    if count <= 1:\n        return count\n    return toasted_sample(count - 1) + toasted_sample(count - 2)\n\nprint(toasted_sample(10))  # 55',
   'components.toggles.large': 'Large',
   'components.toggles.small': 'Small',
   'components.toggles.largeOn': 'Large toggle on',
@@ -327,13 +347,20 @@ export const englishCatalog = Object.freeze({
   'components.typography.sectionLabel':
     'SECTION LABEL — 10.5px / 500 uppercase',
   'components.chatShowcase.date': 'April 20, 2026',
+  'components.chatShowcase.timestamp': '12:36 PM',
   'components.chatShowcase.userMessage':
     'Hey, can you check if the server is running?',
   'components.chatShowcase.assistantMeta': '· 2 iterations · 8.3s',
   'components.chatShowcase.thinking':
-    'I should call check_process with the name ‘vbot’ to see if the server process is alive.',
+    'I should call a placeholder tool to demonstrate how reasoning appears in the timeline.',
+  'components.chatShowcase.toolName': 'showcase_tool',
+  'components.chatShowcase.toolArg': '(sample)',
+  'components.chatShowcase.toolTime': '✓ 3ms',
+  'components.chatShowcase.toolArgsJson': '{"name":"sample"}',
+  'components.chatShowcase.toolResultJson':
+    '{"status":"sample","duration_ms":3}',
   'components.chatShowcase.assistantMessage':
-    'The server is running and the recent process status looks healthy.',
+    'This is placeholder timeline content for the Toasted component showcase.',
 });
 
 const catalogs = Object.freeze({

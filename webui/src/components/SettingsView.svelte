@@ -35,6 +35,12 @@
   ];
 
   let activePanelId = $state('general');
+  const placeholderValues = {
+    serverHost: '—',
+    dataDirectory: '—',
+    ollamaHost: 'localhost:11434',
+  };
+
   let autoScrollEnabled = $state(true);
   let tokenCountsEnabled = $state(true);
   let languageDropdownOpen = $state(false);
@@ -67,14 +73,6 @@
     languageDropdownOpen = false;
   }
 
-  function toggleAutoScroll() {
-    autoScrollEnabled = !autoScrollEnabled;
-  }
-
-  function toggleTokenCounts() {
-    tokenCountsEnabled = !tokenCountsEnabled;
-  }
-
   function selectLanguage(language) {
     selectedLanguageId = language.id;
     languageDropdownOpen = false;
@@ -105,6 +103,12 @@
     <div class="s-panel">
       <h2 id="settings-title" class="s-panel-title">{activePanel.label()}</h2>
       <p class="s-panel-sub">{activePanel.subtitle()}</p>
+      <p class="settings-placeholder-note" role="note">
+        {t(
+          'settings.placeholderNote',
+          'Placeholder-only controls are disabled until settings persistence is available.',
+        )}
+      </p>
 
       {#if activePanelId === 'general'}
         <div class="s-row">
@@ -119,7 +123,16 @@
               )}
             </div>
           </div>
-          <input class="s-input" type="text" value="127.0.0.1:8017" disabled />
+          <input
+            class="s-input"
+            type="text"
+            value={placeholderValues.serverHost}
+            aria-label={t(
+              'settings.general.serverHostPlaceholder',
+              'Server host placeholder, not a detected runtime value',
+            )}
+            disabled
+          />
         </div>
         <div class="s-row">
           <div class="s-row-info">
@@ -133,7 +146,16 @@
               )}
             </div>
           </div>
-          <input class="s-input" type="text" value="~/.vbot" disabled />
+          <input
+            class="s-input"
+            type="text"
+            value={placeholderValues.dataDirectory}
+            aria-label={t(
+              'settings.general.dataDirectoryPlaceholder',
+              'Data directory placeholder, not a detected runtime value',
+            )}
+            disabled
+          />
         </div>
         <div class="s-row">
           <div class="s-row-info">
@@ -154,7 +176,7 @@
             role="switch"
             aria-checked={autoScrollEnabled}
             aria-label={t('settings.general.autoScroll', 'Auto-scroll chat')}
-            onclick={toggleAutoScroll}
+            disabled
           >
             <span class="t-knob"></span>
           </button>
@@ -162,10 +184,12 @@
       {:else if activePanelId === 'providers'}
         <div class="s-row">
           <div class="s-row-info">
-            <div class="s-row-label">OpenRouter</div>
+            <div class="s-row-label">
+              {t('settings.providers.openRouter', 'OpenRouter')}
+            </div>
             <div class="s-row-desc">
               {t('settings.providers.openRouterDescription', 'API key via')}
-              <code>~/.vbot/.env</code>
+              <code>{t('settings.providers.envPath', '~/.vbot/.env')}</code>
             </div>
           </div>
           <span class="chip chip-amber"
@@ -174,7 +198,9 @@
         </div>
         <div class="s-row">
           <div class="s-row-info">
-            <div class="s-row-label">Anthropic</div>
+            <div class="s-row-label">
+              {t('settings.providers.anthropic', 'Anthropic')}
+            </div>
             <div class="s-row-desc">
               {t(
                 'settings.providers.anthropicDescription',
@@ -188,11 +214,14 @@
         </div>
         <div class="s-row">
           <div class="s-row-info">
-            <div class="s-row-label">Ollama</div>
+            <div class="s-row-label">
+              {t('settings.providers.ollama', 'Ollama')}
+            </div>
             <div class="s-row-desc">
               {t(
                 'settings.providers.ollamaDescription',
-                'Local model server at localhost:11434',
+                'Local model server placeholder: {host}',
+                { host: placeholderValues.ollamaHost },
               )}
             </div>
           </div>
@@ -237,6 +266,7 @@
               class="dropdown-trigger"
               type="button"
               aria-expanded={languageDropdownOpen}
+              disabled
               onclick={() => (languageDropdownOpen = !languageDropdownOpen)}
             >
               <span>{selectedLanguageLabel}</span>
@@ -284,7 +314,7 @@
               'settings.appearance.showTokenCounts',
               'Show token counts',
             )}
-            onclick={toggleTokenCounts}
+            disabled
           >
             <span class="t-knob"></span>
           </button>
@@ -345,6 +375,10 @@
     outline: none;
   }
 
+  .snav-item:focus-visible {
+    box-shadow: inset 0 0 0 1px rgba(232, 135, 10, 0.4);
+  }
+
   .snav-item--active {
     color: var(--accent);
     background: var(--accent-dim);
@@ -370,6 +404,18 @@
     margin-bottom: 24px;
     color: var(--text-lo);
     font-size: 12.5px;
+  }
+
+  .settings-placeholder-note {
+    margin: -12px 0 14px;
+    padding: 9px 11px;
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    border-left: 2px solid var(--amber);
+    border-radius: var(--r-md);
+    color: var(--amber);
+    background: rgba(245, 158, 11, 0.06);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .s-row {

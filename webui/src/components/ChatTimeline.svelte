@@ -187,6 +187,9 @@
 
   const isRunningToolEvent = (event) => event.type === 'tool_call_started';
 
+  const isFailedToolEvent = (event) =>
+    event.type === 'tool_call_result' && Boolean(event.payload?.error);
+
   const isTerminalEvent = (event) => event.type.startsWith('run_');
 </script>
 
@@ -269,9 +272,10 @@
               >
                 <summary class="tool-event-line">
                   <span
-                    class:error={item.event.type === 'run_failed'}
+                    class:error={isFailedToolEvent(item.event)}
                     class:running={isRunningToolEvent(item.event)}
-                    class:done={!isRunningToolEvent(item.event)}
+                    class:done={!isRunningToolEvent(item.event) &&
+                      !isFailedToolEvent(item.event)}
                     class="te-dot">●</span
                   >
                   <span class="te-fn">{toolNameForEvent(item.event)}</span>
@@ -280,10 +284,15 @@
                       >{toolArgumentForEvent(item.event)}</span
                     >
                   {/if}
-                  <span class="te-time">
-                    {isRunningToolEvent(item.event)
-                      ? t('chat.runStatus.running', 'Running')
-                      : t('chat.toolDone', 'done')}
+                  <span
+                    class:error={isFailedToolEvent(item.event)}
+                    class="te-time"
+                  >
+                    {isFailedToolEvent(item.event)
+                      ? t('chat.runStatus.failed', 'Failed')
+                      : isRunningToolEvent(item.event)
+                        ? t('chat.runStatus.running', 'Running')
+                        : t('chat.toolDone', 'done')}
                   </span>
                 </summary>
                 <div class="tool-event-body">
@@ -301,7 +310,9 @@
                       <span class="teb-label"
                         >{t('chat.toolResultLabel', 'Result')}</span
                       >
-                      <span class="teb-code result"
+                      <span
+                        class:error={isFailedToolEvent(item.event)}
+                        class="teb-code result"
                         >{toolResultForEvent(item.event)}</span
                       >
                     </div>

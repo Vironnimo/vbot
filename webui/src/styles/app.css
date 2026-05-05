@@ -231,6 +231,13 @@ svg {
   outline: none;
 }
 
+.app-shell__nav-item:focus-visible,
+.nav-item:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 135, 10, 0.4),
+    0 0 0 3px rgba(232, 135, 10, 0.06);
+}
+
 .app-shell__nav-item--active,
 .nav-item.active {
   color: var(--accent);
@@ -273,6 +280,11 @@ svg {
   background: var(--green);
   content: '';
   opacity: 0.25;
+}
+
+.pulse-dot--placeholder,
+.pulse-dot--placeholder::after {
+  background: var(--amber);
 }
 
 @keyframes ripple {
@@ -349,6 +361,29 @@ svg {
   background: rgba(232, 135, 10, 0.18);
 }
 
+.btn-new:focus-visible,
+.btn-primary:focus-visible,
+.send-btn:focus-visible,
+.modal-btn-confirm:focus-visible,
+.btn-outline:focus-visible,
+.btn-secondary:focus-visible,
+.modal-btn-cancel:focus-visible,
+.pane-action:focus-visible,
+.tl-btn:focus-visible,
+.icon-btn:focus-visible,
+.toggle:focus-visible,
+.tl-toggle:focus-visible,
+.dropdown-trigger:focus-visible,
+.s-dropdown-trigger:focus-visible,
+.dropdown-option:focus-visible,
+.s-dropdown-opt:focus-visible,
+.toast-close:focus-visible,
+.reasoning-header:focus-visible,
+.tool-event-line:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.16);
+}
+
 .btn-outline,
 .btn-secondary,
 .modal-btn-cancel {
@@ -408,6 +443,16 @@ svg {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-dim);
+}
+
+.tl-btn:disabled:hover,
+.icon-btn:disabled:hover,
+.btn-outline:disabled:hover,
+.btn-secondary:disabled:hover,
+.modal-btn-cancel:disabled:hover {
+  border-color: var(--border-2);
+  color: var(--text-med);
+  background: transparent;
 }
 
 .s-input,
@@ -1188,6 +1233,11 @@ textarea::placeholder {
   margin-left: 6px;
   color: var(--text-lo);
   font-size: 10.5px;
+}
+
+.te-time.error,
+.teb-code.error {
+  color: var(--red);
 }
 
 .tool-event-body {
