@@ -1,13 +1,5 @@
-<script>
-  import AppShell from './components/AppShell.svelte';
-  import AgentsView from './components/AgentsView.svelte';
-  import ChatView from './components/ChatView.svelte';
-  import ComponentsView from './components/ComponentsView.svelte';
-  import SettingsView from './components/SettingsView.svelte';
-  import SystemPromptView from './components/SystemPromptView.svelte';
-  import './styles/app.css';
-
-  const navigationItems = [
+<script module>
+  export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
       labelKey: 'navigation.chat',
@@ -40,15 +32,18 @@
       descriptionFallback:
         'Runtime and WebUI settings placeholders live here for now.',
     },
-    {
-      id: 'components',
-      labelKey: 'navigation.components',
-      labelFallback: 'Components',
-      descriptionKey: 'components.description',
-      descriptionFallback:
-        'All defined UI primitives. Click, hover, and interact with each element.',
-    },
-  ];
+  ]);
+</script>
+
+<script>
+  import AppShell from './components/AppShell.svelte';
+  import AgentsView from './components/AgentsView.svelte';
+  import ChatView from './components/ChatView.svelte';
+  import SettingsView from './components/SettingsView.svelte';
+  import SystemPromptView from './components/SystemPromptView.svelte';
+  import './styles/app.css';
+
+  const navigationItems = NAVIGATION_ITEMS;
 
   let activeViewId = $state(navigationItems[0].id);
   let agents = $state([]);
@@ -103,7 +98,5 @@
     <SystemPromptView />
   {:else if activeViewId === 'settings'}
     <SettingsView />
-  {:else if activeViewId === 'components'}
-    <ComponentsView />
   {/if}
 </AppShell>
