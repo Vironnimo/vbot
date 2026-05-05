@@ -224,157 +224,47 @@
 </script>
 
 <section class="messages" aria-live="polite">
-  {#if timelineItems.length === 0}
-    <div class="empty-state chat-empty-state">
-      <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
-        <path d="M5 7h22v14H16l-6 5v-5H5z" />
-      </svg>
-      <p class="empty-state-title">
-        {t('chat.historyEmptyTitle', 'No messages yet')}
-      </p>
-      <p class="empty-state-sub">
-        {t(
-          'chat.historyEmpty',
-          'No messages yet. Send the first message to this agent.',
-        )}
-      </p>
-    </div>
-  {:else}
-    <div class="date-sep">{formatDate(timestampForItem(timelineItems[0]))}</div>
-    {#each timelineItems as item (item.id)}
-      {#if item.type === 'message' && shouldRenderMessage(item.message)}
-        <article
-          class:assistant={item.message.role === 'assistant'}
-          class:user={item.message.role === 'user'}
-          class="msg"
-        >
-          <div class="msg-header">
-            <div class="msg-avatar">{avatarForItem(item)}</div>
-            <span class="msg-author">{labelForMessage(item.message)}</span>
-            {#if formatTime(item.message.timestamp)}
-              <span class="msg-timestamp"
-                >{formatTime(item.message.timestamp)}</span
-              >
-            {/if}
-            {#if item.message.role === 'assistant' && agentName}
-              <span class="msg-meta-extra">· {agentName}</span>
-            {/if}
-          </div>
-          <div class="msg-content">
-            {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
-              <details class="reasoning-block">
-                <summary class="reasoning-header">
-                  <svg viewBox="0 0 16 16" aria-hidden="true">
-                    <path
-                      d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-                    />
-                    <path d="M6 13h4" />
-                  </svg>
-                  {t('chat.event.thinking', 'Thinking').toUpperCase()}
-                  <svg class="r-chevron" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M4 6l4 4 4-4" />
-                  </svg>
-                </summary>
-                <div class="reasoning-body">{item.message.reasoning}</div>
-              </details>
-            {/if}
-            {#if textFromMessage(item.message)}
-              <p class="msg-body-text">{textFromMessage(item.message)}</p>
-            {/if}
-          </div>
-        </article>
-      {:else if item.type === 'event'}
-        {#if isToolEvent(item.event)}
-          <article class="msg assistant">
-            <div class="msg-header">
-              <div class="msg-avatar">{avatarForItem(item)}</div>
-              <span class="msg-author">{labelForEvent(item.event)}</span>
-              {#if formatTime(item.event.timestamp)}
-                <span class="msg-timestamp"
-                  >{formatTime(item.event.timestamp)}</span
-                >
-              {/if}
-            </div>
-            <div class="msg-content">
-              <details
-                class="tool-event"
-                open={!isRunningToolEvent(item.event)}
-              >
-                <summary class="tool-event-line">
-                  <span
-                    class:error={isFailedToolEvent(item.event)}
-                    class:running={isRunningToolEvent(item.event)}
-                    class:done={!isRunningToolEvent(item.event) &&
-                      !isFailedToolEvent(item.event)}
-                    class="te-dot">●</span
-                  >
-                  <span class="te-fn">{toolNameForEvent(item.event)}</span>
-                  {#if toolArgumentForEvent(item.event)}
-                    <span class="te-arg"
-                      >{toolArgumentForEvent(item.event)}</span
-                    >
-                  {/if}
-                  <span
-                    class:error={isFailedToolEvent(item.event)}
-                    class="te-time"
-                  >
-                    {isFailedToolEvent(item.event)
-                      ? t('chat.runStatus.failed', 'Failed')
-                      : isRunningToolEvent(item.event)
-                        ? t('chat.runStatus.running', 'Running')
-                        : t('chat.toolDone', 'done')}
-                  </span>
-                </summary>
-                <div class="tool-event-body">
-                  {#if toolArgumentForEvent(item.event)}
-                    <div class="teb-row">
-                      <span class="teb-label">{t('chat.toolArgs', 'Args')}</span
-                      >
-                      <span class="teb-code"
-                        >{toolArgumentForEvent(item.event)}</span
-                      >
-                    </div>
-                  {/if}
-                  {#if toolResultForEvent(item.event)}
-                    <div class="teb-row">
-                      <span class="teb-label"
-                        >{t('chat.toolResultLabel', 'Result')}</span
-                      >
-                      <span
-                        class:error={isFailedToolEvent(item.event)}
-                        class="teb-code result"
-                        >{toolResultForEvent(item.event)}</span
-                      >
-                    </div>
-                  {/if}
-                </div>
-              </details>
-            </div>
-          </article>
-        {:else if isTerminalEvent(item.event)}
-          <p class="chat-terminal-event">
-            <span>{labelForEvent(item.event)}</span>
-            {#if metaForEvent(item.event)}
-              <span>· {metaForEvent(item.event)}</span>
-            {/if}
-          </p>
-        {:else if textFromEvent(item.event)}
+  <div class="messages__content">
+    {#if timelineItems.length === 0}
+      <div class="empty-state chat-empty-state">
+        <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M5 7h22v14H16l-6 5v-5H5z" />
+        </svg>
+        <p class="empty-state-title">
+          {t('chat.historyEmptyTitle', 'No messages yet')}
+        </p>
+        <p class="empty-state-sub">
+          {t(
+            'chat.historyEmpty',
+            'No messages yet. Send the first message to this agent.',
+          )}
+        </p>
+      </div>
+    {:else}
+      <div class="date-sep">
+        {formatDate(timestampForItem(timelineItems[0]))}
+      </div>
+      {#each timelineItems as item (item.id)}
+        {#if item.type === 'message' && shouldRenderMessage(item.message)}
           <article
-            class:assistant={isAssistantItem(item)}
-            class:user={isUserItem(item)}
+            class:assistant={item.message.role === 'assistant'}
+            class:user={item.message.role === 'user'}
             class="msg"
           >
             <div class="msg-header">
               <div class="msg-avatar">{avatarForItem(item)}</div>
-              <span class="msg-author">{labelForEvent(item.event)}</span>
-              {#if formatTime(item.event.timestamp)}
+              <span class="msg-author">{labelForMessage(item.message)}</span>
+              {#if formatTime(item.message.timestamp)}
                 <span class="msg-timestamp"
-                  >{formatTime(item.event.timestamp)}</span
+                  >{formatTime(item.message.timestamp)}</span
                 >
+              {/if}
+              {#if item.message.role === 'assistant' && agentName}
+                <span class="msg-meta-extra">· {agentName}</span>
               {/if}
             </div>
             <div class="msg-content">
-              {#if item.event.type === 'reasoning'}
+              {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
                 <details class="reasoning-block">
                   <summary class="reasoning-header">
                     <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -392,27 +282,161 @@
                       <path d="M4 6l4 4 4-4" />
                     </svg>
                   </summary>
-                  <div class="reasoning-body">{textFromEvent(item.event)}</div>
+                  <div class="reasoning-body">{item.message.reasoning}</div>
                 </details>
-              {:else}
-                <p class="msg-body-text">{textFromEvent(item.event)}</p>
+              {/if}
+              {#if textFromMessage(item.message)}
+                <p class="msg-body-text">{textFromMessage(item.message)}</p>
               {/if}
             </div>
           </article>
+        {:else if item.type === 'event'}
+          {#if isToolEvent(item.event)}
+            <article class="msg assistant">
+              <div class="msg-header">
+                <div class="msg-avatar">{avatarForItem(item)}</div>
+                <span class="msg-author">{labelForEvent(item.event)}</span>
+                {#if formatTime(item.event.timestamp)}
+                  <span class="msg-timestamp"
+                    >{formatTime(item.event.timestamp)}</span
+                  >
+                {/if}
+              </div>
+              <div class="msg-content">
+                <details
+                  class="tool-event"
+                  open={!isRunningToolEvent(item.event)}
+                >
+                  <summary class="tool-event-line">
+                    <span
+                      class:error={isFailedToolEvent(item.event)}
+                      class:running={isRunningToolEvent(item.event)}
+                      class:done={!isRunningToolEvent(item.event) &&
+                        !isFailedToolEvent(item.event)}
+                      class="te-dot">●</span
+                    >
+                    <span class="te-fn">{toolNameForEvent(item.event)}</span>
+                    {#if toolArgumentForEvent(item.event)}
+                      <span class="te-arg"
+                        >{toolArgumentForEvent(item.event)}</span
+                      >
+                    {/if}
+                    <span
+                      class:error={isFailedToolEvent(item.event)}
+                      class="te-time"
+                    >
+                      {isFailedToolEvent(item.event)
+                        ? t('chat.runStatus.failed', 'Failed')
+                        : isRunningToolEvent(item.event)
+                          ? t('chat.runStatus.running', 'Running')
+                          : t('chat.toolDone', 'done')}
+                    </span>
+                  </summary>
+                  <div class="tool-event-body">
+                    {#if toolArgumentForEvent(item.event)}
+                      <div class="teb-row">
+                        <span class="teb-label"
+                          >{t('chat.toolArgs', 'Args')}</span
+                        >
+                        <span class="teb-code"
+                          >{toolArgumentForEvent(item.event)}</span
+                        >
+                      </div>
+                    {/if}
+                    {#if toolResultForEvent(item.event)}
+                      <div class="teb-row">
+                        <span class="teb-label"
+                          >{t('chat.toolResultLabel', 'Result')}</span
+                        >
+                        <span
+                          class:error={isFailedToolEvent(item.event)}
+                          class="teb-code result"
+                          >{toolResultForEvent(item.event)}</span
+                        >
+                      </div>
+                    {/if}
+                  </div>
+                </details>
+              </div>
+            </article>
+          {:else if isTerminalEvent(item.event)}
+            <p class="chat-terminal-event">
+              <span>{labelForEvent(item.event)}</span>
+              {#if metaForEvent(item.event)}
+                <span>· {metaForEvent(item.event)}</span>
+              {/if}
+            </p>
+          {:else if textFromEvent(item.event)}
+            <article
+              class:assistant={isAssistantItem(item)}
+              class:user={isUserItem(item)}
+              class="msg"
+            >
+              <div class="msg-header">
+                <div class="msg-avatar">{avatarForItem(item)}</div>
+                <span class="msg-author">{labelForEvent(item.event)}</span>
+                {#if formatTime(item.event.timestamp)}
+                  <span class="msg-timestamp"
+                    >{formatTime(item.event.timestamp)}</span
+                  >
+                {/if}
+              </div>
+              <div class="msg-content">
+                {#if item.event.type === 'reasoning'}
+                  <details class="reasoning-block">
+                    <summary class="reasoning-header">
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path
+                          d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+                        />
+                        <path d="M6 13h4" />
+                      </svg>
+                      {t('chat.event.thinking', 'Thinking').toUpperCase()}
+                      <svg
+                        class="r-chevron"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
+                    </summary>
+                    <div class="reasoning-body">
+                      {textFromEvent(item.event)}
+                    </div>
+                  </details>
+                {:else}
+                  <p class="msg-body-text">{textFromEvent(item.event)}</p>
+                {/if}
+              </div>
+            </article>
+          {/if}
         {/if}
-      {/if}
-    {/each}
-  {/if}
+      {/each}
+    {/if}
+  </div>
 </section>
 
 <style>
   .messages {
+    display: flex;
+    min-width: 0;
     min-height: 0;
+    flex: 1;
+    overflow-y: auto;
     background: var(--bg);
+  }
+
+  .messages__content {
+    display: flex;
+    min-width: 0;
+    min-height: 100%;
+    flex: 1;
+    flex-direction: column;
   }
 
   .chat-empty-state {
     min-height: 100%;
+    flex: 1;
   }
 
   .empty-state-icon {
@@ -478,5 +502,11 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     text-align: center;
+  }
+
+  @media (max-width: 760px) {
+    .tool-event-body {
+      max-width: 100%;
+    }
   }
 </style>
