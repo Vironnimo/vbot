@@ -7,6 +7,8 @@ export const englishCatalog = Object.freeze({
   'app.loading': 'Loading vBot…',
   'app.ready': 'Ready',
   'app.offline': 'Server connection unavailable',
+  'app.serverStatus': 'Server status',
+  'app.serverReady': 'server: ready',
 
   'navigation.primary': 'Primary navigation',
   'navigation.sections': 'Sections',

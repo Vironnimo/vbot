@@ -39,6 +39,8 @@ describe('i18n t()', () => {
   it('contains Phase 4 labels for required WebUI areas', () => {
     const requiredKeys = [
       'app.title',
+      'app.serverStatus',
+      'app.serverReady',
       'navigation.chat',
       'navigation.agents',
       'navigation.systemPrompt',
