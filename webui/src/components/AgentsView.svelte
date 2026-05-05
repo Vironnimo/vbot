@@ -315,421 +315,444 @@
     </aside>
 
     <form class="agent-detail-pane" onsubmit={saveAgent}>
-      <div class="detail-top">
-        <div>
-          <div class="detail-heading">
-            {formMode === AGENT_FORM_MODE_CREATE
-              ? t('agents.create', 'Create Agent')
-              : selectedAgent?.name || formValues.name || selectedAgent?.id}
+      <div class="agent-detail-scroll">
+        <div class="detail-top">
+          <div>
+            <div class="detail-heading">
+              {formMode === AGENT_FORM_MODE_CREATE
+                ? t('agents.create', 'Create Agent')
+                : selectedAgent?.name || formValues.name || selectedAgent?.id}
+            </div>
+            <div class="detail-sub">{detailSubtitle}</div>
           </div>
-          <div class="detail-sub">{detailSubtitle}</div>
-        </div>
 
-        <div class="detail-btns">
-          <button class="btn-outline" type="submit" disabled={isSaving}>
-            {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-          </button>
-          {#if formMode === AGENT_FORM_MODE_EDIT}
-            <button
-              class="btn-outline btn-dang"
-              type="button"
-              disabled={isDeleting || !canDeleteSelectedAgent}
-              title={!canDeleteSelectedAgent
-                ? t(
-                    'agents.deleteDisabledMinimum',
-                    'The last remaining agent cannot be deleted.',
-                  )
-                : t('agents.delete', 'Delete Agent')}
-              onclick={deleteSelectedAgent}
-            >
-              {isDeleting
-                ? t('common.loading', 'Loading…')
-                : t('agents.delete', 'Delete Agent')}
+          <div class="detail-btns">
+            <button class="btn-outline" type="submit" disabled={isSaving}>
+              {isSaving ? t('common.saving', 'Saving…') : submitLabel}
             </button>
-          {/if}
-        </div>
-      </div>
-
-      {#if errorMessage}
-        <p class="agents-view__notice agents-view__notice--error" role="alert">
-          {errorMessage}
-        </p>
-      {/if}
-
-      {#if statusMessage}
-        <p class="agents-view__notice" role="status">{statusMessage}</p>
-      {/if}
-
-      <div class="detail-group">
-        <div class="detail-group-title">
-          {t('agents.detail.identity', 'Identity')}
-        </div>
-        <div class="detail-fields">
-          <label class="f">
-            <span class="f-label">{t('agents.form.id', 'Agent ID')}</span>
-            <input
-              class:agents-view__invalid={formErrors.id}
-              class="s-input"
-              type="text"
-              bind:value={formValues.id}
-              disabled={formMode === AGENT_FORM_MODE_EDIT}
-              aria-describedby="agent-id-help agent-id-error"
-            />
-            <small id="agent-id-help" class="agents-view__field-help">
-              {t(
-                'agents.form.idHelp',
-                'Agent IDs are immutable after creation.',
-              )}
-            </small>
-            {#if formErrors.id}
-              <small id="agent-id-error" class="agents-view__field-error">
-                {fieldError('id')}
-              </small>
-            {/if}
-          </label>
-
-          <label class="f">
-            <span class="f-label">{t('agents.form.name', 'Name')}</span>
-            <input
-              class:agents-view__invalid={formErrors.name}
-              class="s-input"
-              type="text"
-              bind:value={formValues.name}
-            />
-            {#if formErrors.name}
-              <small class="agents-view__field-error"
-                >{fieldError('name')}</small
+            {#if formMode === AGENT_FORM_MODE_EDIT}
+              <button
+                class="btn-outline btn-dang"
+                type="button"
+                disabled={isDeleting || !canDeleteSelectedAgent}
+                title={!canDeleteSelectedAgent
+                  ? t(
+                      'agents.deleteDisabledMinimum',
+                      'The last remaining agent cannot be deleted.',
+                    )
+                  : t('agents.delete', 'Delete Agent')}
+                onclick={deleteSelectedAgent}
               >
+                {isDeleting
+                  ? t('common.loading', 'Loading…')
+                  : t('agents.delete', 'Delete Agent')}
+              </button>
             {/if}
-          </label>
+          </div>
+        </div>
 
-          <div class="f wide">
-            <div class="f-label">{t('agents.form.workspace', 'Workspace')}</div>
-            {#if formValues.workspace}
-              <div class="f-value mono agents-view__wrap-value">
-                {formValues.workspace}
-              </div>
-            {:else}
-              <div class="f-value agents-view__muted-value">
+        {#if errorMessage}
+          <p
+            class="agents-view__notice agents-view__notice--error"
+            role="alert"
+          >
+            {errorMessage}
+          </p>
+        {/if}
+
+        {#if statusMessage}
+          <p class="agents-view__notice" role="status">{statusMessage}</p>
+        {/if}
+
+        <div class="detail-group">
+          <div class="detail-group-title">
+            {t('agents.detail.identity', 'Identity')}
+          </div>
+          <div class="detail-fields">
+            <label class="f">
+              <span class="f-label">{t('agents.form.id', 'Agent ID')}</span>
+              <input
+                class:agents-view__invalid={formErrors.id}
+                class="s-input"
+                type="text"
+                bind:value={formValues.id}
+                disabled={formMode === AGENT_FORM_MODE_EDIT}
+                aria-describedby="agent-id-help agent-id-error"
+              />
+              <small id="agent-id-help" class="agents-view__field-help">
                 {t(
-                  'agents.form.workspaceAssignedByServer',
-                  'Workspace is assigned by the server when the agent is created.',
+                  'agents.form.idHelp',
+                  'Agent IDs are immutable after creation.',
                 )}
-              </div>
-            {/if}
-            <small class="agents-view__field-help">
-              {t(
-                'agents.form.workspaceReadOnly',
-                'Workspace is read-only in this WebUI.',
-              )}
-            </small>
-          </div>
-        </div>
-      </div>
-
-      <div class="detail-group">
-        <div class="detail-group-title">
-          {t('agents.detail.model', 'Model')}
-        </div>
-        <div class="detail-fields">
-          <label class="f wide">
-            <span class="f-label">{t('agents.form.model', 'Model')}</span>
-            <div class="s-dropdown agents-view__disabled-dropdown">
-              <div class="s-dropdown-trigger" aria-disabled="true">
-                <span>{modelPlaceholderLabel}</span>
-                <svg
-                  class="dropdown-chevron"
-                  viewBox="0 0 12 12"
-                  aria-hidden="true"
-                >
-                  <path d="M2 4l4 4 4-4" />
-                </svg>
-              </div>
-            </div>
-            <input
-              class="s-input agents-view__model-input"
-              type="text"
-              bind:value={formValues.model}
-            />
-            <small class="agents-view__field-help">
-              {t(
-                'agents.form.modelManualHelp',
-                'Model discovery is not available yet; enter the existing model ID manually.',
-              )}
-            </small>
-          </label>
-
-          <label class="f">
-            <span class="f-label"
-              >{t('agents.form.fallbackModel', 'Fallback model')}</span
-            >
-            <input
-              class="s-input"
-              type="text"
-              bind:value={formValues.fallback_model}
-              placeholder={t('common.optional', 'Optional')}
-            />
-          </label>
-
-          <label class="f">
-            <span class="f-label"
-              >{t('agents.form.thinkingEffort', 'Thinking effort')}</span
-            >
-            <input
-              class="s-input"
-              type="text"
-              bind:value={formValues.thinking_effort}
-              placeholder={t('common.optional', 'Optional')}
-            />
-          </label>
-
-          <label class="f">
-            <span class="f-label"
-              >{t('agents.form.temperature', 'Temperature')}</span
-            >
-            <input
-              class:agents-view__invalid={formErrors.temperature}
-              class="s-input"
-              type="number"
-              step="0.01"
-              bind:value={formValues.temperature}
-            />
-            {#if formErrors.temperature}
-              <small class="agents-view__field-error">
-                {fieldError('temperature')}
               </small>
-            {/if}
-          </label>
+              {#if formErrors.id}
+                <small id="agent-id-error" class="agents-view__field-error">
+                  {fieldError('id')}
+                </small>
+              {/if}
+            </label>
 
-          <div class="f">
-            <div class="f-label">
-              {t('agents.detail.fallbackStatus', 'Fallback')}
-            </div>
-            <div
-              class:f-value={formValues.fallback_model}
-              class:agents-view__muted-value={!formValues.fallback_model}
-            >
-              {displayValue(formValues.fallback_model)}
+            <label class="f">
+              <span class="f-label">{t('agents.form.name', 'Name')}</span>
+              <input
+                class:agents-view__invalid={formErrors.name}
+                class="s-input"
+                type="text"
+                bind:value={formValues.name}
+              />
+              {#if formErrors.name}
+                <small class="agents-view__field-error"
+                  >{fieldError('name')}</small
+                >
+              {/if}
+            </label>
+
+            <div class="f wide">
+              <div class="f-label">
+                {t('agents.form.workspace', 'Workspace')}
+              </div>
+              {#if formValues.workspace}
+                <div class="f-value mono agents-view__wrap-value">
+                  {formValues.workspace}
+                </div>
+              {:else}
+                <div class="f-value agents-view__muted-value">
+                  {t(
+                    'agents.form.workspaceAssignedByServer',
+                    'Workspace is assigned by the server when the agent is created.',
+                  )}
+                </div>
+              {/if}
+              <small class="agents-view__field-help">
+                {t(
+                  'agents.form.workspaceReadOnly',
+                  'Workspace is read-only in this WebUI.',
+                )}
+              </small>
             </div>
           </div>
+        </div>
 
-          <div class="f">
-            <div class="f-label">
-              {t('agents.detail.thinkingStatus', 'Thinking')}
-            </div>
-            {#if formValues.thinking_effort}
-              <div class="f-value">
-                <span class="chip chip-orange"
-                  >{formValues.thinking_effort}</span
+        <div class="detail-group">
+          <div class="detail-group-title">
+            {t('agents.detail.model', 'Model')}
+          </div>
+          <div class="detail-fields">
+            <label class="f wide">
+              <span class="f-label">{t('agents.form.model', 'Model')}</span>
+              <div class="s-dropdown agents-view__disabled-dropdown">
+                <button
+                  class="s-dropdown-trigger agents-view__disabled-dropdown-trigger"
+                  type="button"
+                  disabled
                 >
+                  <span class="agents-view__disabled-dropdown-label">
+                    {modelPlaceholderLabel}
+                  </span>
+                  <span
+                    class="agents-view__disabled-dropdown-icon"
+                    aria-hidden="true"
+                  >
+                    <svg
+                      class="dropdown-chevron agents-view__disabled-chevron"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 12 12"
+                      aria-hidden="true"
+                    >
+                      <path d="M2 4l4 4 4-4" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+              <input
+                class="s-input agents-view__model-input"
+                type="text"
+                bind:value={formValues.model}
+              />
+              <small class="agents-view__field-help">
+                {t(
+                  'agents.form.modelManualHelp',
+                  'Model discovery is not available yet; enter the existing model ID manually.',
+                )}
+              </small>
+            </label>
+
+            <label class="f">
+              <span class="f-label"
+                >{t('agents.form.fallbackModel', 'Fallback model')}</span
+              >
+              <input
+                class="s-input"
+                type="text"
+                bind:value={formValues.fallback_model}
+                placeholder={t('common.optional', 'Optional')}
+              />
+            </label>
+
+            <label class="f">
+              <span class="f-label"
+                >{t('agents.form.thinkingEffort', 'Thinking effort')}</span
+              >
+              <input
+                class="s-input"
+                type="text"
+                bind:value={formValues.thinking_effort}
+                placeholder={t('common.optional', 'Optional')}
+              />
+            </label>
+
+            <label class="f">
+              <span class="f-label"
+                >{t('agents.form.temperature', 'Temperature')}</span
+              >
+              <input
+                class:agents-view__invalid={formErrors.temperature}
+                class="s-input"
+                type="number"
+                step="0.01"
+                bind:value={formValues.temperature}
+              />
+              {#if formErrors.temperature}
+                <small class="agents-view__field-error">
+                  {fieldError('temperature')}
+                </small>
+              {/if}
+            </label>
+
+            <div class="f">
+              <div class="f-label">
+                {t('agents.detail.fallbackStatus', 'Fallback')}
+              </div>
+              <div
+                class:f-value={formValues.fallback_model}
+                class:agents-view__muted-value={!formValues.fallback_model}
+              >
+                {displayValue(formValues.fallback_model)}
+              </div>
+            </div>
+
+            <div class="f">
+              <div class="f-label">
+                {t('agents.detail.thinkingStatus', 'Thinking')}
+              </div>
+              {#if formValues.thinking_effort}
+                <div class="f-value">
+                  <span class="chip chip-orange"
+                    >{formValues.thinking_effort}</span
+                  >
+                </div>
+              {:else}
+                <div class="agents-view__muted-value">{EMPTY_VALUE}</div>
+              {/if}
+            </div>
+          </div>
+        </div>
+
+        <div class="detail-group">
+          <div class="detail-group-title">
+            {t('agents.detail.access', 'Access')}
+          </div>
+
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">
+                {t('agents.form.allowedTools', 'Allowed tools')}
+              </span>
+              <div class="tl-actions">
+                <button
+                  class="tl-btn"
+                  type="button"
+                  disabled={visibleToolItems.length === 0}
+                  onclick={() =>
+                    setAccessItems('allowed_tools', visibleToolItems, true)}
+                >
+                  {t('agents.access.allOn', 'all on')}
+                </button>
+                <button
+                  class="tl-btn"
+                  type="button"
+                  disabled={visibleToolItems.length === 0}
+                  onclick={() =>
+                    setAccessItems('allowed_tools', visibleToolItems, false)}
+                >
+                  {t('agents.access.allOff', 'all off')}
+                </button>
+              </div>
+            </div>
+            {#if visibleToolItems.length > 0}
+              <div class="tl-items">
+                {#each visibleToolItems as item (item.name)}
+                  <div class="tl-item">
+                    <span class="tl-item-name">{item.name}</span>
+                    <button
+                      class="tl-toggle"
+                      class:on={item.isAllowed}
+                      type="button"
+                      role="switch"
+                      aria-checked={item.isAllowed}
+                      aria-label={t(
+                        'agents.access.toggleTool',
+                        'Toggle tool {name}',
+                        {
+                          name: item.name,
+                        },
+                      )}
+                      disabled={item.isWildcard}
+                      onclick={() =>
+                        updateAccessItem(
+                          'allowed_tools',
+                          item.name,
+                          !item.isAllowed,
+                        )}
+                    >
+                      <span class="t-knob"></span>
+                    </button>
+                  </div>
+                {/each}
               </div>
             {:else}
-              <div class="agents-view__muted-value">{EMPTY_VALUE}</div>
+              <p class="agents-view__placeholder-row">
+                {t(
+                  'agents.access.noTools',
+                  'No backend tool catalog is available; add tool names below.',
+                )}
+              </p>
             {/if}
+            <label class="agents-view__access-editor">
+              <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
+              <textarea rows="4" bind:value={formValues.allowed_tools}
+              ></textarea>
+              <small
+                >{t('agents.form.listHelp', 'Enter one item per line.')}</small
+              >
+            </label>
           </div>
-        </div>
-      </div>
 
-      <div class="detail-group">
-        <div class="detail-group-title">
-          {t('agents.detail.access', 'Access')}
-        </div>
-
-        <div class="tl-section">
-          <div class="tl-section-header">
-            <span class="tl-section-label">
-              {t('agents.form.allowedTools', 'Allowed tools')}
-            </span>
-            <div class="tl-actions">
-              <button
-                class="tl-btn"
-                type="button"
-                disabled={visibleToolItems.length === 0}
-                onclick={() =>
-                  setAccessItems('allowed_tools', visibleToolItems, true)}
-              >
-                {t('agents.access.allOn', 'all on')}
-              </button>
-              <button
-                class="tl-btn"
-                type="button"
-                disabled={visibleToolItems.length === 0}
-                onclick={() =>
-                  setAccessItems('allowed_tools', visibleToolItems, false)}
-              >
-                {t('agents.access.allOff', 'all off')}
-              </button>
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">
+                {t('agents.form.allowedSkills', 'Allowed skills')}
+              </span>
+              <div class="tl-actions">
+                <button
+                  class="tl-btn"
+                  type="button"
+                  disabled={visibleSkillItems.length === 0}
+                  onclick={() =>
+                    setAccessItems('allowed_skills', visibleSkillItems, true)}
+                >
+                  {t('agents.access.allOn', 'all on')}
+                </button>
+                <button
+                  class="tl-btn"
+                  type="button"
+                  disabled={visibleSkillItems.length === 0}
+                  onclick={() =>
+                    setAccessItems('allowed_skills', visibleSkillItems, false)}
+                >
+                  {t('agents.access.allOff', 'all off')}
+                </button>
+              </div>
             </div>
-          </div>
-          {#if visibleToolItems.length > 0}
-            <div class="tl-items">
-              {#each visibleToolItems as item (item.name)}
-                <div class="tl-item">
-                  <span class="tl-item-name">{item.name}</span>
-                  <button
-                    class="tl-toggle"
-                    class:on={item.isAllowed}
-                    type="button"
-                    role="switch"
-                    aria-checked={item.isAllowed}
-                    aria-label={t(
-                      'agents.access.toggleTool',
-                      'Toggle tool {name}',
-                      {
-                        name: item.name,
-                      },
-                    )}
-                    disabled={item.isWildcard}
-                    onclick={() =>
-                      updateAccessItem(
-                        'allowed_tools',
-                        item.name,
-                        !item.isAllowed,
+            {#if visibleSkillItems.length > 0}
+              <div class="tl-items">
+                {#each visibleSkillItems as item (item.name)}
+                  <div class="tl-item">
+                    <span class="tl-item-name">{item.name}</span>
+                    <button
+                      class="tl-toggle"
+                      class:on={item.isAllowed}
+                      type="button"
+                      role="switch"
+                      aria-checked={item.isAllowed}
+                      aria-label={t(
+                        'agents.access.toggleSkill',
+                        'Toggle skill {name}',
+                        {
+                          name: item.name,
+                        },
                       )}
-                  >
-                    <span class="t-knob"></span>
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="agents-view__placeholder-row">
-              {t(
-                'agents.access.noTools',
-                'No backend tool catalog is available; add tool names below.',
-              )}
-            </p>
-          {/if}
-          <label class="agents-view__access-editor">
-            <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
-            <textarea rows="4" bind:value={formValues.allowed_tools}></textarea>
-            <small
-              >{t('agents.form.listHelp', 'Enter one item per line.')}</small
-            >
-          </label>
-        </div>
-
-        <div class="tl-section">
-          <div class="tl-section-header">
-            <span class="tl-section-label">
-              {t('agents.form.allowedSkills', 'Allowed skills')}
-            </span>
-            <div class="tl-actions">
-              <button
-                class="tl-btn"
-                type="button"
-                disabled={visibleSkillItems.length === 0}
-                onclick={() =>
-                  setAccessItems('allowed_skills', visibleSkillItems, true)}
+                      disabled={item.isWildcard}
+                      onclick={() =>
+                        updateAccessItem(
+                          'allowed_skills',
+                          item.name,
+                          !item.isAllowed,
+                        )}
+                    >
+                      <span class="t-knob"></span>
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="agents-view__placeholder-row">
+                {t(
+                  'agents.access.noSkills',
+                  'No backend skill catalog is available; add skill names below.',
+                )}
+              </p>
+            {/if}
+            <label class="agents-view__access-editor">
+              <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
+              <textarea rows="4" bind:value={formValues.allowed_skills}
+              ></textarea>
+              <small
+                >{t('agents.form.listHelp', 'Enter one item per line.')}</small
               >
-                {t('agents.access.allOn', 'all on')}
-              </button>
-              <button
-                class="tl-btn"
-                type="button"
-                disabled={visibleSkillItems.length === 0}
-                onclick={() =>
-                  setAccessItems('allowed_skills', visibleSkillItems, false)}
-              >
-                {t('agents.access.allOff', 'all off')}
-              </button>
+            </label>
+          </div>
+
+          <div class="detail-fields agents-view__access-meta">
+            <div class="f wide">
+              <div class="f-label">
+                {t('agents.form.workspace', 'Workspace')}
+              </div>
+              <div class="f-value mono agents-view__wrap-value">
+                {displayValue(formValues.workspace)}
+              </div>
             </div>
           </div>
-          {#if visibleSkillItems.length > 0}
-            <div class="tl-items">
-              {#each visibleSkillItems as item (item.name)}
-                <div class="tl-item">
-                  <span class="tl-item-name">{item.name}</span>
-                  <button
-                    class="tl-toggle"
-                    class:on={item.isAllowed}
-                    type="button"
-                    role="switch"
-                    aria-checked={item.isAllowed}
-                    aria-label={t(
-                      'agents.access.toggleSkill',
-                      'Toggle skill {name}',
-                      {
-                        name: item.name,
-                      },
-                    )}
-                    disabled={item.isWildcard}
-                    onclick={() =>
-                      updateAccessItem(
-                        'allowed_skills',
-                        item.name,
-                        !item.isAllowed,
-                      )}
-                  >
-                    <span class="t-knob"></span>
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <p class="agents-view__placeholder-row">
-              {t(
-                'agents.access.noSkills',
-                'No backend skill catalog is available; add skill names below.',
-              )}
-            </p>
-          {/if}
-          <label class="agents-view__access-editor">
-            <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
-            <textarea rows="4" bind:value={formValues.allowed_skills}
-            ></textarea>
-            <small
-              >{t('agents.form.listHelp', 'Enter one item per line.')}</small
-            >
-          </label>
         </div>
 
-        <div class="detail-fields agents-view__access-meta">
-          <div class="f wide">
-            <div class="f-label">{t('agents.form.workspace', 'Workspace')}</div>
-            <div class="f-value mono agents-view__wrap-value">
-              {displayValue(formValues.workspace)}
+        <div class="detail-group">
+          <div class="detail-group-title">
+            {t('agents.detail.session', 'Session')}
+          </div>
+          <div class="detail-fields">
+            <div class="f wide">
+              <div class="f-label">
+                {t('agents.detail.sessionId', 'Session ID')}
+              </div>
+              <div class="f-value mono agents-view__wrap-value">
+                {displayValue(selectedAgent?.current_session_id)}
+              </div>
+            </div>
+            <div class="f">
+              <div class="f-label">{t('agents.detail.created', 'Created')}</div>
+              <div class="f-value mono agents-view__wrap-value">
+                {displayValue(selectedAgent?.created_at)}
+              </div>
+            </div>
+            <div class="f">
+              <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
+              <div class="f-value mono agents-view__wrap-value">
+                {displayValue(selectedAgent?.updated_at)}
+              </div>
             </div>
           </div>
         </div>
+
+        {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
+          <p class="agents-view__placeholder-row">
+            {t(
+              'agents.deleteDisabledMinimum',
+              'The last remaining agent cannot be deleted.',
+            )}
+          </p>
+        {/if}
       </div>
-
-      <div class="detail-group">
-        <div class="detail-group-title">
-          {t('agents.detail.session', 'Session')}
-        </div>
-        <div class="detail-fields">
-          <div class="f wide">
-            <div class="f-label">
-              {t('agents.detail.sessionId', 'Session ID')}
-            </div>
-            <div class="f-value mono agents-view__wrap-value">
-              {displayValue(selectedAgent?.current_session_id)}
-            </div>
-          </div>
-          <div class="f">
-            <div class="f-label">{t('agents.detail.created', 'Created')}</div>
-            <div class="f-value mono agents-view__wrap-value">
-              {displayValue(selectedAgent?.created_at)}
-            </div>
-          </div>
-          <div class="f">
-            <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
-            <div class="f-value mono agents-view__wrap-value">
-              {displayValue(selectedAgent?.updated_at)}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
-        <p class="agents-view__placeholder-row">
-          {t(
-            'agents.deleteDisabledMinimum',
-            'The last remaining agent cannot be deleted.',
-          )}
-        </p>
-      {/if}
     </form>
   </div>
 </section>
@@ -747,12 +770,15 @@
   .agents-layout {
     display: flex;
     min-height: 0;
+    min-width: 0;
     flex: 1;
+    height: 100%;
     overflow: hidden;
   }
 
   .agent-list-pane {
     display: flex;
+    min-height: 0;
     width: 240px;
     min-width: 240px;
     flex-direction: column;
@@ -776,9 +802,12 @@
   }
 
   .agent-list-scroll {
+    min-height: 0;
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 4px 0;
+    scrollbar-gutter: stable;
   }
 
   .agent-item {
@@ -848,11 +877,23 @@
   .agent-detail-pane {
     display: flex;
     min-height: 0;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .agent-detail-scroll {
+    display: flex;
+    min-height: 0;
+    min-width: 0;
     flex: 1;
     flex-direction: column;
     gap: 22px;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 26px 30px;
+    scrollbar-gutter: stable;
   }
 
   .detail-top {
@@ -1005,9 +1046,40 @@
     border-top: 1px solid var(--border);
   }
 
-  .agents-view__disabled-dropdown .s-dropdown-trigger {
+  .agents-view__disabled-dropdown {
+    width: 100%;
+  }
+
+  .agents-view__disabled-dropdown-trigger {
+    width: 100%;
+    padding-right: 10px;
     cursor: not-allowed;
-    opacity: 0.68;
+    opacity: 0.78;
+  }
+
+  .agents-view__disabled-dropdown-label {
+    min-width: 0;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agents-view__disabled-dropdown-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-lo);
+  }
+
+  .agents-view__disabled-chevron {
+    width: 12px;
+    height: 12px;
+    opacity: 0.72;
+    stroke-width: 1.7;
   }
 
   .agents-view__model-input {
@@ -1086,9 +1158,13 @@
     .agent-list-pane {
       width: 100%;
       min-width: 0;
-      max-height: 240px;
+      max-height: min(240px, 35vh);
       border-right: 0;
       border-bottom: 1px solid var(--border);
+    }
+
+    .agent-detail-scroll {
+      padding: 22px 18px;
     }
 
     .detail-fields {

@@ -41,6 +41,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+    flex-shrink: 0;
     padding: 12px 20px;
     border-top: 1px solid var(--border);
     background: var(--surface);
@@ -101,5 +102,26 @@
 
   .tl-btn {
     flex-shrink: 0;
+  }
+
+  @media (max-width: 760px) {
+    .queued-messages {
+      padding: 12px 14px;
+    }
+
+    .queued-messages__header,
+    .queued-messages li {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .queued-messages li {
+      gap: 10px;
+    }
+
+    .queued-messages__content {
+      width: 100%;
+      white-space: normal;
+    }
   }
 </style>
