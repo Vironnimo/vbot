@@ -91,6 +91,7 @@ describe('i18n t()', () => {
       'agents.detail.model',
       'agents.detail.access',
       'agents.detail.session',
+      'agents.detail.idValue',
       'agents.form.modelPlaceholder',
       'agents.form.modelManualHelp',
       'agents.access.noTools',
@@ -100,6 +101,9 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
+    expect(t('agents.detail.idValue', undefined, { id: 'alpha' })).toBe(
+      'id: alpha',
+    );
   });
 
   it('contains Toasted design labels for Settings sections', () => {

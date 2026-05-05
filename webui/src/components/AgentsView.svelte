@@ -45,13 +45,18 @@
   let detailSubtitle = $derived(
     formMode === AGENT_FORM_MODE_CREATE
       ? t('agents.detail.newSubtitle', 'id assigned at creation')
-      : `id: ${selectedAgent?.id ?? formValues.id}`,
+      : t('agents.detail.idValue', 'id: {id}', {
+          id: selectedAgent?.id ?? formValues.id,
+        }),
   );
   let visibleToolItems = $derived(accessItems(formValues.allowed_tools));
   let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
   let modelPlaceholderLabel = $derived(
     formValues.model || t('agents.form.modelPlaceholder', 'No model selected'),
   );
+
+  const modelInputId = 'agent-model-input';
+  const modelHelpId = 'agent-model-help';
 
   $effect(() => {
     if (
@@ -438,13 +443,16 @@
             {t('agents.detail.model', 'Model')}
           </div>
           <div class="detail-fields">
-            <label class="f wide">
-              <span class="f-label">{t('agents.form.model', 'Model')}</span>
-              <div class="s-dropdown agents-view__disabled-dropdown">
-                <button
+            <div class="f wide">
+              <label class="f-label" for={modelInputId}
+                >{t('agents.form.model', 'Model')}</label
+              >
+              <div
+                class="s-dropdown agents-view__disabled-dropdown"
+                aria-hidden="true"
+              >
+                <div
                   class="s-dropdown-trigger agents-view__disabled-dropdown-trigger"
-                  type="button"
-                  disabled
                 >
                   <span class="agents-view__disabled-dropdown-label">
                     {modelPlaceholderLabel}
@@ -463,20 +471,22 @@
                       <path d="M2 4l4 4 4-4" />
                     </svg>
                   </span>
-                </button>
+                </div>
               </div>
               <input
+                id={modelInputId}
                 class="s-input agents-view__model-input"
                 type="text"
                 bind:value={formValues.model}
+                aria-describedby={modelHelpId}
               />
-              <small class="agents-view__field-help">
+              <small id={modelHelpId} class="agents-view__field-help">
                 {t(
                   'agents.form.modelManualHelp',
                   'Model discovery is not available yet; enter the existing model ID manually.',
                 )}
               </small>
-            </label>
+            </div>
 
             <label class="f">
               <span class="f-label"

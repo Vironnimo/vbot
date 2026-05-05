@@ -1,12 +1,5 @@
-<script>
-  import AppShell from './components/AppShell.svelte';
-  import AgentsView from './components/AgentsView.svelte';
-  import ChatView from './components/ChatView.svelte';
-  import SettingsView from './components/SettingsView.svelte';
-  import SystemPromptView from './components/SystemPromptView.svelte';
-  import './styles/app.css';
-
-  const navigationItems = [
+<script module>
+  export const NAVIGATION_ITEMS = Object.freeze([
     {
       id: 'chat',
       labelKey: 'navigation.chat',
@@ -39,7 +32,18 @@
       descriptionFallback:
         'Runtime and WebUI settings placeholders live here for now.',
     },
-  ];
+  ]);
+</script>
+
+<script>
+  import AppShell from './components/AppShell.svelte';
+  import AgentsView from './components/AgentsView.svelte';
+  import ChatView from './components/ChatView.svelte';
+  import SettingsView from './components/SettingsView.svelte';
+  import SystemPromptView from './components/SystemPromptView.svelte';
+  import './styles/app.css';
+
+  const navigationItems = NAVIGATION_ITEMS;
 
   let activeViewId = $state(navigationItems[0].id);
   let agents = $state([]);
