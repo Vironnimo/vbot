@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vBot — Ember 2 / v5: Toasted</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #221A12;
+  --surface:     #2B2217;
+  --surface-2:   #33291D;
+  --surface-3:   #3D3124;
+  --border:      #4A3928;
+  --border-2:    #5D4A35;
+  --text-hi:     #EEE7DC;
+  --text-med:    #9A8C7E;
+  --text-lo:     #5E4C38;
+  --accent:      #E8870A;
+  --accent-pale: rgba(232,135,10,0.12);
+  --accent-dim:  rgba(232,135,10,0.08);
+  --green:       #4ADE80;
+  --green-dim:   #0E2419;
+  --amber:       #F59E0B;
+  --red:         #FC8181;
+  --font-ui:     'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono:   'IBM Plex Mono', 'Fira Code', monospace;
+  --r-sm: 3px; --r-md: 6px; --r-lg: 10px;
+}
+
+body { background: var(--bg); color: var(--text-hi); font-family: var(--font-ui); font-size: 13.5px; height: 100vh; display: flex; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar { width: 210px; min-width: 210px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
+.logo-mark { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.logo-mark svg { width: 14px; height: 14px; stroke: #fff; }
+.logo-text { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; color: var(--text-hi); }
+.nav { flex: 1; padding: 10px; display: flex; flex-direction: column; gap: 1px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r-md); color: var(--text-lo); cursor: pointer; transition: all 0.15s; font-size: 13.5px; font-weight: 500; border: none; background: none; width: 100%; text-align: left; }
+.nav-item:hover { background: var(--surface-2); color: var(--text-med); }
+.nav-item.active { background: var(--accent-pale); color: var(--accent); }
+.nav-item svg { width: 15px; height: 15px; flex-shrink: 0; }
+.sidebar-footer { padding: 14px 18px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); position: relative; }
+.pulse-dot::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; background: var(--green); opacity: 0.25; animation: ripple 2s ease-out infinite; }
+@keyframes ripple { 0% { transform: scale(1); opacity: 0.25; } 100% { transform: scale(2.5); opacity: 0; } }
+.footer-text { font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); }
+
+/* ── Main ── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.view { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+.view.active { display: flex; }
+
+/* ── Chat Header ── */
+.chat-header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; height: 50px; gap: 8px; flex-shrink: 0; }
+.agent-tabs { display: flex; align-items: stretch; gap: 2px; flex: 1; height: 100%; }
+.agent-tab { display: flex; align-items: center; gap: 7px; padding: 0 14px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-lo); font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.agent-tab:hover { color: var(--text-med); }
+.agent-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-indicator { width: 5px; height: 5px; border-radius: 50%; background: var(--text-lo); transition: background 0.15s; }
+.agent-tab.active .tab-indicator { background: var(--green); }
+.header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.token-badge { font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 3px 8px; }
+.btn-new { display: flex; align-items: center; gap: 6px; padding: 6px 14px; background: rgba(232,135,10,0.1); border: 1px solid rgba(232,135,10,0.22); border-radius: var(--r-md); color: var(--accent); font-family: var(--font-ui); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+.btn-new:hover { background: rgba(232,135,10,0.18); border-color: rgba(232,135,10,0.38); }
+
+/* ── Messages ── */
+.messages { flex: 1; overflow-y: auto; padding: 28px 0; scroll-behavior: smooth; }
+.messages::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+.date-sep { display: flex; align-items: center; gap: 14px; padding: 0 28px 28px; font-size: 11px; font-family: var(--font-mono); color: var(--text-lo); letter-spacing: 0.06em; }
+.date-sep::before, .date-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.msg { padding: 6px 28px; display: flex; flex-direction: column; gap: 10px; }
+.msg-header { display: flex; align-items: center; gap: 8px; }
+.msg-avatar { width: 26px; height: 26px; border-radius: var(--r-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; font-family: var(--font-mono); }
+.msg.user .msg-avatar { background: var(--accent-pale); color: var(--accent); }
+.msg.assistant .msg-avatar { background: var(--surface-3); color: var(--text-med); }
+.msg-author { font-size: 12px; font-weight: 600; letter-spacing: 0.02em; }
+.msg.user .msg-author { color: var(--accent); }
+.msg.assistant .msg-author { color: var(--text-med); }
+.msg-timestamp { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-lo); }
+.msg-meta-extra { font-size: 11px; color: var(--text-lo); font-family: var(--font-mono); }
+.msg-content { padding-left: 34px; display: flex; flex-direction: column; gap: 7px; }
+
+/* User messages: right-aligned card */
+.msg.user { align-items: flex-end; }
+.msg.user .msg-header { flex-direction: row-reverse; }
+.msg.user .msg-content { padding-left: 0; padding-right: 34px; align-items: flex-end; width: 100%; }
+.msg.user .msg-body-text { background: var(--surface-2); border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 0 var(--r-md) var(--r-md) 0; padding: 10px 16px; color: var(--text-hi); line-height: 1.55; font-size: 14px; max-width: 75%; }
+/* Assistant prose flows free — no box */
+.msg.assistant .msg-body-text { padding: 2px 0; color: var(--text-hi); line-height: 1.65; font-size: 14px; }
+
+/* ── Reasoning — compact line ── */
+.reasoning-block { align-self: flex-start; }
+.reasoning-header { display: flex; align-items: center; gap: 7px; cursor: pointer; font-family: var(--font-ui); font-size: 12px; color: var(--text-med); user-select: none; padding: 2px 0; }
+.reasoning-header:hover { color: var(--text-hi); }
+.r-chevron { opacity: 0.4; transition: transform 0.2s; margin-left: 4px; }
+.reasoning-block.open .r-chevron { transform: rotate(180deg); }
+.reasoning-body { display: none; padding: 6px 0 2px 16px; font-size: 13px; font-style: italic; color: var(--text-med); line-height: 1.6; border-left: 2px solid var(--border-2); margin-top: 4px; }
+.reasoning-block.open .reasoning-body { display: block; }
+
+/* ── Tool call — V5: Dot + text event lines, no box ── */
+.tool-event { display: flex; flex-direction: column; align-self: flex-start; }
+.tool-event-line { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; }
+.te-dot { font-size: 10px; flex-shrink: 0; }
+.te-dot.done { color: var(--green); }
+.te-dot.running { color: var(--amber); animation: blink 1.2s ease-in-out infinite; }
+.te-dot.error { color: var(--red); }
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+.te-fn { font-family: var(--font-mono); font-size: 12px; color: var(--text-med); font-weight: 500; }
+.te-arg { font-family: var(--font-mono); font-size: 12px; color: var(--text-lo); }
+.te-time { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-lo); margin-left: 6px; }
+.tool-event-body { display: none; padding: 5px 0 3px 18px; border-left: 1px solid var(--border-2); margin-top: 3px; }
+.tool-event.open .tool-event-body { display: flex; flex-direction: column; gap: 4px; }
+.teb-row { display: flex; gap: 8px; align-items: flex-start; }
+.teb-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-lo); padding-top: 1px; min-width: 46px; flex-shrink: 0; }
+.teb-code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-med); line-height: 1.5; }
+.teb-code.result { color: var(--text-med); }
+
+/* ── Input ── */
+.input-area { flex-shrink: 0; padding: 14px 20px; background: var(--surface); border-top: 1px solid var(--border); }
+.input-wrap { display: flex; align-items: flex-end; gap: 8px; background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--r-lg); padding: 11px 14px; transition: border-color 0.15s, box-shadow 0.15s; }
+.input-wrap:focus-within { border-color: rgba(232,135,10,0.4); box-shadow: 0 0 0 3px rgba(232,135,10,0.06); }
+.msg-input { flex: 1; background: none; border: none; outline: none; color: var(--text-hi); font-family: var(--font-ui); font-size: 14px; line-height: 1.5; resize: none; min-height: 22px; max-height: 182px; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.msg-input::-webkit-scrollbar { display: none; }
+.msg-input::placeholder { color: var(--text-lo); }
+.input-btns { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.icon-btn { width: 30px; height: 30px; border-radius: var(--r-sm); background: none; border: none; color: var(--text-lo); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.12s; }
+.icon-btn:hover { background: var(--surface-2); color: var(--text-med); }
+.send-btn { width: 32px; height: 32px; border-radius: var(--r-md); background: rgba(232,135,10,0.1); border: 1px solid rgba(232,135,10,0.22); color: var(--accent); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.12s; }
+.send-btn:hover { background: rgba(232,135,10,0.2); border-color: rgba(232,135,10,0.4); }
+
+/* ── Agents — V5: Ultra-compact monospace rows ── */
+.agents-layout { display: flex; flex: 1; overflow: hidden; }
+.agent-list-pane { width: 240px; min-width: 240px; border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
+.pane-header { padding: 12px 14px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.pane-title { font-size: 11px; font-weight: 600; font-family: var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-lo); }
+.pane-action { display: flex; align-items: center; gap: 5px; padding: 4px 8px; background: none; border: 1px solid var(--border-2); border-radius: var(--r-sm); color: var(--text-med); font-family: var(--font-ui); font-size: 11.5px; font-weight: 500; cursor: pointer; transition: all 0.12s; }
+.pane-action:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.agent-list-scroll { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+/* Ultra-compact monospace rows */
+.agent-item { display: flex; align-items: stretch; cursor: pointer; transition: background 0.1s; border: none; }
+.agent-item:hover { background: var(--surface-2); }
+.agent-item.active { background: var(--accent-dim); }
+.agent-bar { width: 2px; background: transparent; flex-shrink: 0; }
+.agent-item.active .agent-bar { background: var(--accent); }
+.agent-item-inner { flex: 1; padding: 7px 12px 7px 10px; min-width: 0; }
+.agent-item-name { font-family: var(--font-ui); font-size: 13px; font-weight: 500; color: var(--text-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-item.active .agent-item-name { color: var(--accent); }
+.agent-item-sub { font-family: var(--font-mono); font-size: 10px; color: var(--text-lo); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+
+/* Agent detail */
+.agent-detail-pane { flex: 1; min-height: 0; overflow-y: auto; padding: 26px 30px; display: flex; flex-direction: column; gap: 22px; }
+.agent-detail-pane::-webkit-scrollbar { width: 4px; }
+.agent-detail-pane::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+.detail-top { display: flex; align-items: flex-start; justify-content: space-between; }
+.detail-heading { font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: var(--text-hi); }
+.detail-sub { font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); margin-top: 4px; }
+.detail-btns { display: flex; gap: 8px; }
+.btn-outline { display: flex; align-items: center; gap: 6px; padding: 6px 13px; background: none; border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-med); font-family: var(--font-ui); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: all 0.12s; }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.btn-dang:hover { border-color: var(--red); color: var(--red); background: rgba(252,129,129,0.07); }
+.detail-group { border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; flex-shrink: 0; }
+.detail-group-title { padding: 10px 16px; background: var(--surface); border-bottom: 1px solid var(--border); font-family: var(--font-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-lo); }
+.detail-fields { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.f { display: flex; flex-direction: column; gap: 4px; }
+.f.wide { grid-column: 1 / -1; }
+.f-label { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-lo); letter-spacing: 0.05em; text-transform: uppercase; }
+.f-value { font-size: 13.5px; color: var(--text-hi); font-weight: 500; }
+.f-value.mono { font-family: var(--font-mono); font-size: 12px; color: var(--text-med); }
+.chip { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 12px; font-size: 11.5px; font-family: var(--font-mono); font-weight: 500; }
+.chip-green { background: var(--green-dim); color: var(--green); }
+.chip-amber { background: rgba(245,158,11,0.1); color: var(--amber); }
+.chip-orange { background: var(--accent-dim); color: var(--accent); }
+
+/* ── Settings — V5: Two-panel layout with section nav ── */
+.settings-layout { display: flex; flex: 1; overflow: hidden; background: var(--surface); }
+.settings-nav { width: 168px; min-width: 168px; border-right: 1px solid var(--border); padding: 20px 0; display: flex; flex-direction: column; gap: 1px; flex-shrink: 0; }
+.settings-nav-title { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-lo); padding: 0 16px 10px; font-weight: 500; }
+.snav-item { padding: 8px 16px; font-size: 13.5px; font-weight: 500; color: var(--text-lo); cursor: pointer; transition: all 0.12s; border: none; background: none; width: 100%; text-align: left; border-radius: 0; }
+.snav-item:hover { color: var(--text-med); background: rgba(255,255,255,0.03); }
+.snav-item.active { color: var(--accent); background: var(--accent-dim); }
+.settings-content { flex: 1; overflow-y: auto; padding: 24px 32px; }
+.settings-content::-webkit-scrollbar { width: 4px; }
+.settings-content::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+.s-panel { display: none; }
+.s-panel.active { display: block; }
+.s-panel-title { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+.s-panel-sub { font-size: 12.5px; color: var(--text-lo); margin-bottom: 24px; }
+.s-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.s-row:last-child { border-bottom: none; }
+.s-row-info { flex: 1; }
+.s-row-label { font-size: 14px; font-weight: 500; color: var(--text-hi); }
+.s-row-desc { font-size: 12px; color: var(--text-lo); margin-top: 2px; line-height: 1.4; }
+.s-input { background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-mono); font-size: 12.5px; padding: 7px 11px; outline: none; min-width: 180px; transition: border-color 0.15s; }
+.s-input:focus { border-color: var(--accent); }
+.toggle { width: 38px; height: 22px; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 11px; cursor: pointer; position: relative; transition: all 0.2s; flex-shrink: 0; }
+.toggle.on { background: var(--accent); border-color: var(--accent); }
+.t-knob { position: absolute; width: 16px; height: 16px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: left 0.2s; opacity: 0.95; }
+.toggle.on .t-knob { left: 18px; }
+
+svg { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ── Toggle-list (tools & skills) ── */
+.tl-section { display: flex; flex-direction: column; }
+.tl-section + .tl-section { border-top: 1px solid var(--border); }
+.tl-section-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 8px; }
+.tl-section-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-lo); font-weight: 500; }
+.tl-actions { display: flex; gap: 6px; }
+.tl-btn { background: none; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-lo); font-family: var(--font-mono); font-size: 10px; padding: 2px 8px; cursor: pointer; transition: all 0.12s; }
+.tl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.tl-items { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.tl-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; border-bottom: 1px solid var(--border); gap: 12px; }
+.tl-item:last-child { border-bottom: none; }
+.tl-item-name { font-family: var(--font-mono); font-size: 12px; color: var(--text-med); }
+.tl-toggle { width: 30px; height: 17px; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 9px; cursor: pointer; position: relative; transition: all 0.2s; flex-shrink: 0; }
+.tl-toggle.on { background: var(--accent); border-color: var(--accent); }
+.tl-toggle .t-knob { position: absolute; width: 12px; height: 12px; background: #fff; border-radius: 50%; top: 2px; left: 2px; transition: left 0.2s; opacity: 0.95; }
+.tl-toggle.on .t-knob { left: 15px; }
+
+/* ── Dropdown ── */
+.dropdown { position: relative; display: inline-block; min-width: 140px; }
+.dropdown-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-ui); font-size: 13px; padding: 7px 11px; cursor: pointer; transition: border-color 0.15s; user-select: none; white-space: nowrap; }
+.dropdown.open .dropdown-trigger { border-color: rgba(232,135,10,0.4); }
+.dropdown-chevron { opacity: 0.4; transition: transform 0.18s; flex-shrink: 0; }
+.dropdown.open .dropdown-chevron { transform: rotate(180deg); }
+.dropdown-list { display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); z-index: 100; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+.dropdown.open .dropdown-list { display: block; }
+.dropdown-option { padding: 8px 12px; font-size: 13px; color: var(--text-med); cursor: pointer; transition: background 0.1s; }
+.dropdown-option:hover { background: var(--surface-3); color: var(--text-hi); }
+.dropdown-option.selected { color: var(--accent); }
+
+/* ── Searchable dropdown ── */
+.s-dropdown { position: relative; width: 100%; }
+.s-dropdown-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-mono); font-size: 12.5px; padding: 7px 11px; cursor: pointer; transition: border-color 0.15s; }
+.s-dropdown.open .s-dropdown-trigger { border-color: rgba(232,135,10,0.4); border-radius: var(--r-md); }
+.s-dropdown-panel { display: none; position: fixed; background: var(--surface-2); border: 1px solid rgba(232,135,10,0.3); border-radius: var(--r-md); z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+.s-dropdown.open .s-dropdown-panel { display: block; }
+.s-dropdown-search { display: flex; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--border); }
+.s-dropdown-search input { flex: 1; background: none; border: none; outline: none; color: var(--text-hi); font-family: var(--font-mono); font-size: 12px; }
+.s-dropdown-search input::placeholder { color: var(--text-lo); }
+.s-dropdown-options { max-height: 200px; overflow-y: auto; }
+.s-dropdown-options::-webkit-scrollbar { width: 3px; }
+.s-dropdown-options::-webkit-scrollbar-thumb { background: var(--border-2); }
+.s-dropdown-opt { padding: 7px 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-med); cursor: pointer; transition: background 0.1s; }
+.s-dropdown-opt:hover { background: var(--surface-3); color: var(--text-hi); }
+.s-dropdown-opt.selected { color: var(--accent); }
+.s-dropdown-opt.hidden { display: none; }
+.s-dropdown-empty { padding: 10px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); }
+
+/* ── Modal ── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 500; display: none; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-lg); width: 440px; max-width: 90vw; box-shadow: 0 24px 60px rgba(0,0,0,0.5); animation: modal-in 0.18s ease; }
+@keyframes modal-in { from { opacity:0; transform:scale(0.97) translateY(-6px); } to { opacity:1; transform:scale(1) translateY(0); } }
+.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+.modal-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--text-hi); }
+.modal-close { width: 26px; height: 26px; border-radius: var(--r-sm); background: none; border: none; color: var(--text-lo); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.12s; }
+.modal-close:hover { background: var(--surface-2); color: var(--text-med); }
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+.modal-field { display: flex; flex-direction: column; gap: 5px; }
+.modal-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-lo); }
+.modal-input { background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-hi); font-family: var(--font-mono); font-size: 13px; padding: 9px 12px; outline: none; transition: border-color 0.15s; }
+.modal-input:focus { border-color: rgba(232,135,10,0.4); box-shadow: 0 0 0 3px rgba(232,135,10,0.06); }
+.modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; border-top: 1px solid var(--border); }
+.modal-btn-cancel { padding: 7px 16px; background: none; border: 1px solid var(--border-2); border-radius: var(--r-md); color: var(--text-med); font-family: var(--font-ui); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.12s; }
+.modal-btn-cancel:hover { background: var(--surface-2); border-color: var(--border-2); }
+.modal-btn-confirm { padding: 7px 16px; background: rgba(232,135,10,0.1); border: 1px solid rgba(232,135,10,0.25); border-radius: var(--r-md); color: var(--accent); font-family: var(--font-ui); font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.12s; }
+.modal-btn-confirm:hover { background: rgba(232,135,10,0.18); border-color: rgba(232,135,10,0.4); }
+
+/* ── Toast ── */
+.toast-stack { position: fixed; bottom: 20px; right: 20px; z-index: 600; display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none; }
+.toast { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-md); box-shadow: 0 6px 24px rgba(0,0,0,0.45); pointer-events: all; min-width: 240px; max-width: 340px; animation: toast-in 0.2s ease; }
+@keyframes toast-in { from { opacity:0; transform: translateX(16px); } to { opacity:1; transform: translateX(0); } }
+.toast-icon { font-size: 14px; flex-shrink: 0; line-height: 1.2; }
+.toast-body { flex: 1; min-width: 0; }
+.toast-title { font-weight: 600; font-size: 12.5px; color: var(--text-hi); }
+.toast-msg { font-size: 12px; color: var(--text-med); margin-top: 2px; line-height: 1.4; }
+.toast-close { color: var(--text-lo); cursor: pointer; font-size: 16px; line-height: 1; flex-shrink: 0; background: none; border: none; padding: 0 0 0 4px; transition: color 0.1s; }
+.toast-close:hover { color: var(--text-med); }
+.toast.success { border-left: 2px solid var(--green); }
+.toast.error { border-left: 2px solid var(--red); }
+.toast.warn { border-left: 2px solid var(--amber); }
+.toast.info { border-left: 2px solid var(--accent); }
+
+/* ── Code block ── */
+.msg-code { background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.msg-code-header { display: flex; align-items: center; justify-content: space-between; padding: 5px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.msg-code-lang { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-lo); letter-spacing: 0.05em; }
+.msg-code pre { padding: 12px 14px; overflow-x: auto; margin: 0; }
+.msg-code pre::-webkit-scrollbar { height: 3px; }
+.msg-code pre::-webkit-scrollbar-thumb { background: var(--border-2); }
+.msg-code code { font-family: var(--font-mono); font-size: 12px; color: var(--text-med); line-height: 1.65; white-space: pre; }
+
+/* ── Empty state ── */
+.empty-state { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 10px; color: var(--text-lo); padding: 32px; }
+.empty-state-icon { opacity: 0.3; }
+.empty-state-title { font-size: 14px; font-weight: 500; color: var(--text-med); margin-top: 2px; }
+.empty-state-sub { font-size: 12.5px; color: var(--text-lo); text-align: center; max-width: 240px; line-height: 1.5; }
+
+/* ── Inline confirm ── */
+.inline-confirm { display: flex; align-items: center; gap: 8px; }
+.inline-confirm-label { font-size: 12.5px; color: var(--text-med); }
+
+/* ── kbd ── */
+kbd { font-family: var(--font-mono); font-size: 10.5px; background: var(--surface-3); border: 1px solid var(--border-2); border-bottom-width: 2px; border-radius: 3px; padding: 2px 7px; color: var(--text-med); display: inline-flex; align-items: center; line-height: 1.5; }
+
+/* ── Tooltip ── */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after { content: attr(data-tooltip); position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); white-space: nowrap; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: var(--r-sm); color: var(--text-hi); font-family: var(--font-ui); font-size: 11.5px; padding: 4px 9px; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 300; }
+[data-tooltip]:hover::after { opacity: 1; }
+
+/* ── Components showcase ── */
+.comp-layout { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.comp-layout::-webkit-scrollbar { width: 4px; }
+.comp-layout::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+.comp-head { padding: 22px 32px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.comp-head-title { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; color: var(--text-hi); }
+.comp-head-sub { font-size: 12px; color: var(--text-lo); margin-top: 3px; }
+.comp-body { padding: 28px 32px; display: flex; flex-direction: column; gap: 34px; }
+.comp-section { display: flex; flex-direction: column; gap: 14px; flex-shrink: 0; }
+.comp-section-title { font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-lo); padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.comp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-mark"><svg viewBox="0 0 14 14"><path d="M7 1L13 4v6l-6 3L1 10V4l6-3z"/></svg></div>
+    <span class="logo-text">vBot</span>
+  </div>
+  <nav class="nav">
+    <button class="nav-item active" onclick="showView('chat')"><svg viewBox="0 0 16 16"><path d="M2 3h12v8H9l-4 3v-3H2z"/></svg>Chat</button>
+    <button class="nav-item" onclick="showView('agents')"><svg viewBox="0 0 16 16"><circle cx="8" cy="5" r="2.5"/><path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>Agents</button>
+    <button class="nav-item" onclick="showView('system')"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 6h6M5 9h4"/></svg>System Prompt</button>
+    <button class="nav-item" onclick="showView('settings')"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.6-4.4-1.4 1.4M4 12l1.4-1.4M12 12l-1.4-1.4M4 4l1.4 1.4"/></svg>Settings</button>
+    <button class="nav-item" onclick="showView('components')"><svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>Components</button>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="pulse-dot"></div>
+    <span class="footer-text">server:8017</span>
+  </div>
+</aside>
+
+<main class="main">
+
+  <!-- Chat -->
+  <div class="view view-chat active" id="view-chat">
+    <div class="chat-header">
+      <div class="agent-tabs">
+        <button class="agent-tab active"><span class="tab-indicator"></span>Main Agent</button>
+        <button class="agent-tab"><span class="tab-indicator"></span>Dev Assistant</button>
+        <button class="agent-tab"><span class="tab-indicator"></span>Research Bot</button>
+      </div>
+      <div class="header-right">
+        <span class="token-badge">11 402 tok</span>
+        <button class="btn-new"><svg viewBox="0 0 14 14" style="width:12px;height:12px"><path d="M7 1v12M1 7h12"/></svg>New session</button>
+      </div>
+    </div>
+
+    <div class="messages">
+      <div class="date-sep">April 20, 2026</div>
+
+      <div class="msg user">
+        <div class="msg-header">
+          <div class="msg-avatar">Y</div><span class="msg-author">YOU</span><span class="msg-timestamp">12:36 PM</span>
+        </div>
+        <div class="msg-content">
+          <div class="msg-body-text">Hey, can you check if the server is running and tail the last few log entries? I noticed the dashboard was loading a bit slow earlier and I want to make sure there's nothing wrong — no memory leaks, no hung threads, no spike in error rate. Also check if the last deploy went through cleanly and whether there are any WARN or ERROR lines in the last 20 entries of the log.</div>
+        </div>
+      </div>
+
+      <div class="msg assistant">
+        <div class="msg-header">
+          <div class="msg-avatar">A</div><span class="msg-author">ASSISTANT</span><span class="msg-timestamp">12:36 PM</span>
+          <span class="msg-meta-extra">· 3 iterations · 21.4s</span>
+        </div>
+        <div class="msg-content">
+          <div class="reasoning-block open">
+            <div class="reasoning-header" onclick="this.closest('.reasoning-block').classList.toggle('open')">
+              <svg style="width:10px;height:10px;opacity:0.4" viewBox="0 0 16 16"><path d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"/><path d="M6 13h4"/></svg>
+              THINKING
+              <svg class="r-chevron" viewBox="0 0 16 16" style="width:10px;height:10px"><path d="M4 6l4 4 4-4"/></svg>
+            </div>
+            <div class="reasoning-body">I need to check if the vBot server process is currently running, then read the tail of the server log file to show recent entries.</div>
+          </div>
+
+          <!-- Tool events — no boxes, just text lines -->
+          <div class="tool-event open">
+            <div class="tool-event-line" onclick="this.closest('.tool-event').classList.toggle('open')">
+              <span class="te-dot done">●</span>
+              <span class="te-fn">check_process</span>
+              <span class="te-arg">(vbot)</span>
+              <span class="te-time">✓ 3ms</span>
+            </div>
+            <div class="tool-event-body">
+              <div class="teb-row"><span class="teb-label">args</span><span class="teb-code">{"name": "vbot"}</span></div>
+              <div class="teb-row"><span class="teb-label">result</span><span class="teb-code result">{"running": true, "pid": 18234, "uptime_seconds": 3621, "memory_mb": 147}</span></div>
+            </div>
+          </div>
+
+          <div class="tool-event open">
+            <div class="tool-event-line" onclick="this.closest('.tool-event').classList.toggle('open')">
+              <span class="te-dot done">●</span>
+              <span class="te-fn">read_file</span>
+              <span class="te-arg">(server.log)</span>
+              <span class="te-time">✓ 9ms</span>
+            </div>
+            <div class="tool-event-body">
+              <div class="teb-row"><span class="teb-label">args</span><span class="teb-code">{"path": "~/.vbot/logs/server.log", "tail": 8}</span></div>
+              <div class="teb-row"><span class="teb-label">result</span><span class="teb-code result">2026-04-20 12:35:41 [INFO] vbot.runtime - Runtime started (v0.4.2)
+2026-04-20 12:36:02 [INFO] vbot.chat    - Run started: turn 7
+2026-04-20 12:36:21 [INFO] vbot.chat    - Run complete (3 iters, 21.4s)</span></div>
+            </div>
+          </div>
+
+          <div class="msg-body-text">The server is running (PID 18234, up ~1 hour, using ~147 MB). The logs look clean — no warnings or errors. The runtime started at 12:35 and the current session resumed without issues.</div>
+        </div>
+      </div>
+
+      <div class="msg user">
+        <div class="msg-header">
+          <div class="msg-avatar">Y</div><span class="msg-author">YOU</span><span class="msg-timestamp">12:38 PM</span>
+        </div>
+        <div class="msg-content">
+          <div class="msg-body-text">Great. Can you also check if there are any pending schema migrations?</div>
+        </div>
+      </div>
+
+      <div class="msg assistant">
+        <div class="msg-header">
+          <div class="msg-avatar">A</div><span class="msg-author">ASSISTANT</span><span class="msg-timestamp">12:38 PM</span>
+          <span class="msg-meta-extra" style="color:var(--amber)">· running…</span>
+        </div>
+        <div class="msg-content">
+          <div class="tool-event">
+            <div class="tool-event-line">
+              <span class="te-dot running">●</span>
+              <span class="te-fn">glob</span>
+              <span class="te-arg">(migrations/*.sql)</span>
+              <span class="te-time" style="color:var(--amber)">running…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea class="msg-input" placeholder="Enter message…" rows="1"></textarea>
+        <div class="input-btns">
+          <button class="icon-btn"><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"/></svg></button>
+          <button class="send-btn"><svg viewBox="0 0 14 14" style="width:13px;height:13px"><path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agents -->
+  <div class="view" id="view-agents">
+    <div class="agents-layout">
+      <div class="agent-list-pane">
+        <div class="pane-header">
+          <span class="pane-title">Agents</span>
+          <button class="btn-new"><svg viewBox="0 0 14 14" style="width:11px;height:11px"><path d="M7 1v12M1 7h12"/></svg>New</button>
+        </div>
+        <div class="agent-list-scroll">
+          <div class="agent-item active"><div class="agent-bar"></div><div class="agent-item-inner"><div class="agent-item-name">Main Agent</div><div class="agent-item-sub">openrouter/claude-sonnet-4</div></div></div>
+          <div class="agent-item"><div class="agent-bar"></div><div class="agent-item-inner"><div class="agent-item-name">Dev Assistant</div><div class="agent-item-sub">openrouter/claude-opus-4</div></div></div>
+          <div class="agent-item"><div class="agent-bar"></div><div class="agent-item-inner"><div class="agent-item-name">Research Bot</div><div class="agent-item-sub">anthropic/claude-sonnet-4</div></div></div>
+          <div class="agent-item"><div class="agent-bar"></div><div class="agent-item-inner"><div class="agent-item-name">Web Analyst</div><div class="agent-item-sub">openai/gpt-4o</div></div></div>
+          <div class="agent-item"><div class="agent-bar"></div><div class="agent-item-inner"><div class="agent-item-name">Code Reviewer</div><div class="agent-item-sub">anthropic/claude-opus-4</div></div></div>
+        </div>
+      </div>
+
+      <div class="agent-detail-pane">
+        <div class="detail-top">
+          <div><div class="detail-heading">Main Agent</div><div class="detail-sub">id: main-agent</div></div>
+          <div class="detail-btns"><button class="btn-outline">Edit</button><button class="btn-outline btn-dang">Archive</button></div>
+        </div>
+        <div class="detail-group">
+          <div class="detail-group-title">Model</div>
+          <div class="detail-fields">
+            <div class="f wide">
+              <div class="f-label">Model</div>
+              <div class="s-dropdown" id="model-dropdown">
+                <div class="s-dropdown-trigger" onclick="toggleSDropdown('model-dropdown')">
+                  <span id="model-selected">openrouter/anthropic/claude-sonnet-4</span>
+                  <svg class="dropdown-chevron" viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M2 4l4 4 4-4"/></svg>
+                </div>
+                <div class="s-dropdown-panel">
+                  <div class="s-dropdown-search">
+                    <svg viewBox="0 0 12 12" style="width:10px;height:10px;opacity:0.4;flex-shrink:0"><circle cx="5" cy="5" r="3.5"/><path d="M8 8l2.5 2.5"/></svg>
+                    <input type="text" placeholder="Filter models…" oninput="filterSDropdown('model-dropdown', this.value)">
+                  </div>
+                  <div class="s-dropdown-options">
+                    <div class="s-dropdown-opt selected" onclick="selectSDropdown('model-dropdown', this)">openrouter/anthropic/claude-sonnet-4</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openrouter/anthropic/claude-opus-4</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openrouter/anthropic/claude-haiku-4</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">anthropic/claude-sonnet-4</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">anthropic/claude-opus-4</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openai/gpt-4o</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openai/gpt-4o-mini</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openai/o3</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openai/o4-mini</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openrouter/google/gemini-2.5-pro</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">openrouter/deepseek/deepseek-r2</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">ollama/llama3.3</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('model-dropdown', this)">ollama/qwen3:32b</div>
+                    <div class="s-dropdown-empty" style="display:none">No models match</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="f"><div class="f-label">Fallback</div><div class="f-value" style="color:var(--text-lo)">— not set</div></div>
+            <div class="f"><div class="f-label">Thinking</div><div class="f-value"><span class="chip chip-orange">medium</span></div></div>
+            <div class="f"><div class="f-label">Temperature</div><div class="f-value mono">0.7</div></div>
+          </div>
+        </div>
+        <div class="detail-group">
+          <div class="detail-group-title">Access</div>
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">Tools</span>
+              <div class="tl-actions">
+                <button class="tl-btn" onclick="tlAll(this, true)">all on</button>
+                <button class="tl-btn" onclick="tlAll(this, false)">all off</button>
+              </div>
+            </div>
+            <div class="tl-items">
+              <div class="tl-item"><span class="tl-item-name">read_file</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">write_file</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">edit</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">bash</span><div class="tl-toggle" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">web_search</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">web_fetch</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+            </div>
+          </div>
+          <div class="tl-section">
+            <div class="tl-section-header">
+              <span class="tl-section-label">Skills</span>
+              <div class="tl-actions">
+                <button class="tl-btn" onclick="tlAll(this, true)">all on</button>
+                <button class="tl-btn" onclick="tlAll(this, false)">all off</button>
+              </div>
+            </div>
+            <div class="tl-items">
+              <div class="tl-item"><span class="tl-item-name">code_review</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">web_research</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">data_analyst</span><div class="tl-toggle" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">summarizer</span><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+              <div class="tl-item"><span class="tl-item-name">planner</span><div class="tl-toggle" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+            </div>
+          </div>
+          <div class="detail-fields" style="border-top:1px solid var(--border)">
+            <div class="f wide"><div class="f-label">Workspace</div><div class="f-value mono">~/.vbot/workspace-main-agent/</div></div>
+          </div>
+        </div>
+        <div class="detail-group">
+          <div class="detail-group-title">Session</div>
+          <div class="detail-fields">
+            <div class="f wide"><div class="f-label">Session ID</div><div class="f-value mono">3a9f1d9e-4b7c-48ac-b0e1-2c8f13d6a7b4</div></div>
+            <div class="f"><div class="f-label">Status</div><div class="f-value"><span class="chip chip-amber">active run</span></div></div>
+            <div class="f"><div class="f-label">Created</div><div class="f-value mono">2026-04-18 09:14 UTC</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- System Prompt -->
+  <div class="view" id="view-system">
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;color:var(--text-lo)">
+      <svg viewBox="0 0 32 32" style="width:38px;height:38px"><rect x="4" y="4" width="24" height="24" rx="4"/><path d="M9 11h14M9 16h10M9 21h6"/></svg>
+      <div style="font-size:14px;font-weight:500;color:var(--text-med)">System Prompt</div>
+      <div style="font-size:13px">Placeholder — coming in a later phase.</div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="view" id="view-settings">
+    <div class="settings-layout">
+      <div class="settings-nav">
+        <div class="settings-nav-title">Settings</div>
+        <button class="snav-item active" onclick="showSettingsPanel('general', this)">General</button>
+        <button class="snav-item" onclick="showSettingsPanel('providers', this)">Providers</button>
+        <button class="snav-item" onclick="showSettingsPanel('appearance', this)">Appearance</button>
+      </div>
+      <div class="settings-content">
+        <div class="s-panel active" id="sp-general">
+          <div class="s-panel-title">General</div>
+          <div class="s-panel-sub">Server connection and workspace path settings.</div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Server host</div><div class="s-row-desc">Address and port the vBot server listens on.</div></div><input class="s-input" value="127.0.0.1:8017" type="text"></div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Data directory</div><div class="s-row-desc">Root path for agents, sessions, and workspace files.</div></div><input class="s-input" value="~/.vbot" type="text"></div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Auto-scroll chat</div><div class="s-row-desc">Scroll to bottom as new tokens arrive.</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+        </div>
+        <div class="s-panel" id="sp-providers">
+          <div class="s-panel-title">Providers</div>
+          <div class="s-panel-sub">API keys and connection status for LLM providers.</div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">OpenRouter</div><div class="s-row-desc">API key via <code style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-med)">~/.vbot/.env</code></div></div><span class="chip chip-green">Connected</span></div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Anthropic</div><div class="s-row-desc">Direct Anthropic Messages API.</div></div><span class="chip chip-green">Connected</span></div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Ollama</div><div class="s-row-desc">Local model server at localhost:11434</div></div><span class="chip" style="background:rgba(252,129,129,0.1);color:var(--red)">Not reachable</span></div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Custom endpoint</div><div class="s-row-desc">Add an OpenAI-compatible API endpoint.</div></div><button class="btn-outline" onclick="openModal('modal-endpoint')" style="font-size:12.5px;padding:5px 13px;white-space:nowrap">Configure…</button></div>
+        </div>
+        <div class="s-panel" id="sp-appearance">
+          <div class="s-panel-title">Appearance</div>
+          <div class="s-panel-sub">Display and language preferences.</div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Language</div><div class="s-row-desc">Interface language.</div></div>
+            <div class="dropdown" id="lang-dropdown">
+              <div class="dropdown-trigger" onclick="toggleDropdown('lang-dropdown')">
+                <span>English</span>
+                <svg class="dropdown-chevron" viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M2 4l4 4 4-4"/></svg>
+              </div>
+              <div class="dropdown-list">
+                <div class="dropdown-option selected" onclick="selectDropdown('lang-dropdown', this)">English</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">Deutsch</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">Français</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">Español</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">Português</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">日本語</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">中文</div>
+                <div class="dropdown-option" onclick="selectDropdown('lang-dropdown', this)">한국어</div>
+              </div>
+            </div>
+          </div>
+          <div class="s-row"><div class="s-row-info"><div class="s-row-label">Show token counts</div><div class="s-row-desc">Display token usage in the chat header.</div></div><div class="toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Components -->
+  <div class="view" id="view-components">
+    <div class="comp-layout">
+      <div class="comp-head">
+        <div class="comp-head-title">Components</div>
+        <div class="comp-head-sub">All defined UI primitives. Click, hover, and interact with each element.</div>
+      </div>
+      <div class="comp-body">
+
+        <div class="comp-section">
+          <div class="comp-section-title">Buttons</div>
+          <div class="comp-row">
+            <button class="btn-new"><svg viewBox="0 0 14 14" style="width:11px;height:11px"><path d="M7 1v12M1 7h12"/></svg>New session</button>
+            <button class="btn-outline">Edit</button>
+            <button class="btn-outline btn-dang">Archive</button>
+            <button class="modal-btn-confirm">Confirm</button>
+            <button class="modal-btn-cancel">Cancel</button>
+            <button class="tl-btn">all on</button>
+            <button class="tl-btn">all off</button>
+            <button class="icon-btn" data-tooltip="Attach file"><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"/></svg></button>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Toasts</div>
+          <div class="comp-row">
+            <button class="btn-outline" onclick="showToast('success','Agent saved.','Changes have been applied.')">Success</button>
+            <button class="btn-outline" onclick="showToast('error','Connection failed.','Could not reach server at 127.0.0.1:8017.')">Error</button>
+            <button class="btn-outline" onclick="showToast('warn','Rate limit approaching.','Slowing requests to avoid HTTP 429.')">Warning</button>
+            <button class="btn-outline" onclick="showToast('info','Session resumed.','Picked up from checkpoint #7.')">Info</button>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Code block</div>
+          <div class="msg-code" style="max-width:560px">
+            <div class="msg-code-header">
+              <span class="msg-code-lang">python</span>
+              <button class="icon-btn" data-tooltip="Copy" onclick="copyCode(this)" style="width:24px;height:24px"><svg viewBox="0 0 14 14" style="width:11px;height:11px"><rect x="1" y="4" width="9" height="9" rx="1.5"/><path d="M4 4V2.5A1.5 1.5 0 0 1 5.5 1H11.5A1.5 1.5 0 0 1 13 2.5v6A1.5 1.5 0 0 1 11.5 10H10"/></svg></button>
+            </div>
+            <pre><code>def fibonacci(n: int) -> int:
+    if n &lt;= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+print(fibonacci(10))  # 55</code></pre>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Empty state</div>
+          <div class="empty-state" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);min-height:160px">
+            <svg class="empty-state-icon" viewBox="0 0 32 32" style="width:32px;height:32px"><path d="M4 6h24v18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6z"/><path d="M4 6h24M10 6V4h12v2"/></svg>
+            <div class="empty-state-title">No messages yet</div>
+            <div class="empty-state-sub">Send a message to start the conversation.</div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Inline confirm</div>
+          <div id="ic-demo">
+            <div data-ic-idle>
+              <button class="btn-outline btn-dang" onclick="openInlineConfirm('ic-demo')">Archive agent</button>
+            </div>
+            <div data-ic-open style="display:none">
+              <div class="inline-confirm">
+                <span class="inline-confirm-label">Archive this agent?</span>
+                <button class="modal-btn-cancel" onclick="closeInlineConfirm('ic-demo')">Cancel</button>
+                <button class="modal-btn-confirm" onclick="closeInlineConfirm('ic-demo')">Confirm</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Inputs</div>
+          <div style="display:flex;flex-direction:column;gap:10px;max-width:360px">
+            <input class="s-input" type="text" placeholder="Settings input…" style="width:100%">
+            <input class="s-input" type="password" placeholder="Password / API key…" style="width:100%">
+            <input class="modal-input" type="text" placeholder="Modal input (larger)…" style="width:100%">
+            <div class="input-wrap">
+              <textarea class="msg-input" placeholder="Enter message…" rows="1" style="flex:1"></textarea>
+              <div class="input-btns">
+                <button class="icon-btn" data-tooltip="Attach file"><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"/></svg></button>
+                <button class="send-btn"><svg viewBox="0 0 14 14" style="width:13px;height:13px"><path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Dropdowns</div>
+          <div class="comp-row" style="align-items:flex-start;gap:24px">
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">Simple</span>
+              <div class="dropdown" id="comp-dd-simple" style="min-width:160px">
+                <div class="dropdown-trigger" onclick="toggleDropdown('comp-dd-simple')">
+                  <span>Option A</span>
+                  <svg class="dropdown-chevron" viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M2 4l4 4 4-4"/></svg>
+                </div>
+                <div class="dropdown-list">
+                  <div class="dropdown-option selected" onclick="selectDropdown('comp-dd-simple',this)">Option A</div>
+                  <div class="dropdown-option" onclick="selectDropdown('comp-dd-simple',this)">Option B</div>
+                  <div class="dropdown-option" onclick="selectDropdown('comp-dd-simple',this)">Option C</div>
+                  <div class="dropdown-option" onclick="selectDropdown('comp-dd-simple',this)">Option D</div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">Searchable</span>
+              <div class="s-dropdown" id="comp-dd-search" style="width:260px">
+                <div class="s-dropdown-trigger" onclick="toggleSDropdown('comp-dd-search')">
+                  <span>openai/gpt-4o</span>
+                  <svg class="dropdown-chevron" viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M2 4l4 4 4-4"/></svg>
+                </div>
+                <div class="s-dropdown-panel">
+                  <div class="s-dropdown-search">
+                    <svg viewBox="0 0 12 12" style="width:10px;height:10px;opacity:0.4;flex-shrink:0"><circle cx="5" cy="5" r="3.5"/><path d="M8 8l2.5 2.5"/></svg>
+                    <input type="text" placeholder="Filter…" oninput="filterSDropdown('comp-dd-search',this.value)">
+                  </div>
+                  <div class="s-dropdown-options">
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('comp-dd-search',this)">anthropic/claude-sonnet-4</div>
+                    <div class="s-dropdown-opt selected" onclick="selectSDropdown('comp-dd-search',this)">openai/gpt-4o</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('comp-dd-search',this)">openai/gpt-4o-mini</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('comp-dd-search',this)">openrouter/google/gemini-2.5-pro</div>
+                    <div class="s-dropdown-opt" onclick="selectSDropdown('comp-dd-search',this)">ollama/llama3.3</div>
+                    <div class="s-dropdown-empty" style="display:none">No matches</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Toggles</div>
+          <div class="comp-row" style="gap:28px;align-items:flex-start">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">Large</span>
+              <div style="display:flex;align-items:center;gap:10px"><div class="toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div><span style="font-size:12px;color:var(--text-lo)">on</span></div>
+              <div style="display:flex;align-items:center;gap:10px"><div class="toggle" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div><span style="font-size:12px;color:var(--text-lo)">off</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">Small</span>
+              <div style="display:flex;align-items:center;gap:10px"><div class="tl-toggle on" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div><span style="font-size:12px;color:var(--text-lo)">on</span></div>
+              <div style="display:flex;align-items:center;gap:10px"><div class="tl-toggle" onclick="this.classList.toggle('on')"><div class="t-knob"></div></div><span style="font-size:12px;color:var(--text-lo)">off</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Tooltips (hover each icon)</div>
+          <div class="comp-row">
+            <button class="icon-btn" data-tooltip="Attach file"><svg viewBox="0 0 16 16" style="width:14px;height:14px"><path d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"/></svg></button>
+            <button class="icon-btn" data-tooltip="Copy to clipboard"><svg viewBox="0 0 14 14" style="width:12px;height:12px"><rect x="1" y="4" width="9" height="9" rx="1.5"/><path d="M4 4V2.5A1.5 1.5 0 0 1 5.5 1H11.5A1.5 1.5 0 0 1 13 2.5v6A1.5 1.5 0 0 1 11.5 10H10"/></svg></button>
+            <button class="icon-btn" data-tooltip="Delete message"><svg viewBox="0 0 14 14" style="width:12px;height:12px"><path d="M2 3h10M5 3V2h4v1M4 3l.6 8h4.8L10 3"/></svg></button>
+            <button class="icon-btn" data-tooltip="Regenerate response"><svg viewBox="0 0 14 14" style="width:12px;height:12px"><path d="M12 2v4H8"/><path d="M12 6A5 5 0 1 1 9.5 2.3"/></svg></button>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Typography</div>
+          <div style="display:flex;flex-direction:column;gap:18px">
+            <!-- Sans-serif scale -->
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo);letter-spacing:0.07em;text-transform:uppercase">IBM Plex Sans &mdash; UI text</span>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <span style="font-family:var(--font-ui);font-size:22px;font-weight:600;letter-spacing:-0.03em;color:var(--text-hi)">Agent heading &mdash; 22px / 600</span>
+                <span style="font-family:var(--font-ui);font-size:20px;font-weight:600;letter-spacing:-0.02em;color:var(--text-hi)">Settings panel &mdash; 20px / 600</span>
+                <span style="font-family:var(--font-ui);font-size:15px;font-weight:600;color:var(--text-hi)">Modal title &mdash; 15px / 600</span>
+                <span style="font-family:var(--font-ui);font-size:14px;color:var(--text-hi)">Message body &mdash; 14px / 400</span>
+                <span style="font-family:var(--font-ui);font-size:13.5px;color:var(--text-hi)">Body default &mdash; 13.5px / 400</span>
+                <span style="font-family:var(--font-ui);font-size:13px;font-weight:500;color:var(--text-hi)">Nav item &mdash; 13px / 500</span>
+                <span style="font-family:var(--font-ui);font-size:12.5px;color:var(--text-med)">Description text &mdash; 12.5px / 400</span>
+                <span style="font-family:var(--font-ui);font-size:12px;color:var(--text-med)">Small label &mdash; 12px / 400</span>
+              </div>
+            </div>
+            <!-- Mono scale -->
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo);letter-spacing:0.07em;text-transform:uppercase">IBM Plex Mono &mdash; technical / code</span>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                <span style="font-family:var(--font-mono);font-size:13px;color:var(--text-hi)">Model name &mdash; 13px / 400</span>
+                <span style="font-family:var(--font-mono);font-size:12.5px;color:var(--text-hi)">Settings input value &mdash; 12.5px / 400</span>
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--text-med)">Tool fn name &amp; args &mdash; 12px / 500</span>
+                <span style="font-family:var(--font-mono);font-size:12px;color:var(--text-med)">Code block &mdash; 12px / 400</span>
+                <span style="font-family:var(--font-mono);font-size:11.5px;color:var(--text-med)">Toast &amp; chip text &mdash; 11.5px</span>
+                <span style="font-family:var(--font-mono);font-size:11px;color:var(--text-lo)">Footer server tag &mdash; 11px</span>
+                <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-lo)">SECTION LABEL &mdash; 10.5px / 500 uppercase</span>
+                <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-lo)">MICRO LABEL &mdash; 10px uppercase</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Status chips</div>
+          <div class="comp-row">
+            <span class="chip chip-green">Connected</span>
+            <span class="chip chip-amber">active run</span>
+            <span class="chip chip-orange">medium</span>
+            <span class="chip" style="background:rgba(252,129,129,0.1);color:var(--red)">Not reachable</span>
+            <span class="chip" style="background:var(--surface-3);color:var(--text-lo)">Inactive</span>
+          </div>
+        </div>
+
+        <div class="comp-section">
+          <div class="comp-section-title">Chat — messages</div>
+          <div style="display:flex;flex-direction:column;gap:4px;max-width:700px">
+
+            <!-- Date separator -->
+            <div class="date-sep" style="padding:0 0 16px">April 20, 2026</div>
+
+            <!-- User message -->
+            <div class="msg user" style="padding:4px 0">
+              <div class="msg-header">
+                <div class="msg-avatar">Y</div><span class="msg-author">YOU</span><span class="msg-timestamp">12:36 PM</span>
+              </div>
+              <div class="msg-content">
+                <div class="msg-body-text">Hey, can you check if the server is running?</div>
+              </div>
+            </div>
+
+            <!-- Assistant message with thinking, tool events, prose, code block -->
+            <div class="msg assistant" style="padding:4px 0">
+              <div class="msg-header">
+                <div class="msg-avatar">A</div><span class="msg-author">ASSISTANT</span><span class="msg-timestamp">12:36 PM</span>
+                <span class="msg-meta-extra">· 2 iterations · 8.3s</span>
+              </div>
+              <div class="msg-content">
+
+                <!-- Thinking block (collapsed) -->
+                <div class="reasoning-block">
+                  <div class="reasoning-header" onclick="this.closest('.reasoning-block').classList.toggle('open')">
+                    <svg style="width:10px;height:10px;opacity:0.4" viewBox="0 0 16 16"><path d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"/><path d="M6 13h4"/></svg>
+                    THINKING
+                    <svg class="r-chevron" viewBox="0 0 16 16" style="width:10px;height:10px"><path d="M4 6l4 4 4-4"/></svg>
+                  </div>
+                  <div class="reasoning-body">I should call check_process with the name &lsquo;vbot&rsquo; to see if the server process is alive.</div>
+                </div>
+
+                <!-- Tool event: done -->
+                <div class="tool-event open">
+                  <div class="tool-event-line" onclick="this.closest('.tool-event').classList.toggle('open')">
+                    <span class="te-dot done">●</span>
+                    <span class="te-fn">check_process</span>
+                    <span class="te-arg">(vbot)</span>
+                    <span class="te-time">✓ 3ms</span>
+                  </div>
+                  <div class="tool-event-body">
+                    <div class="teb-row"><span class="teb-label">args</span><span class="teb-code">{"name": "vbot"}</span></div>
+                    <div class="teb-row"><span class="teb-label">result</span><span class="teb-code">{"running": true, "pid": 18234, "uptime_seconds": 3621}</span></div>
+                  </div>
+                </div>
+
+                <!-- Tool event: running -->
+                <div class="tool-event">
+                  <div class="tool-event-line">
+                    <span class="te-dot running">●</span>
+                    <span class="te-fn">read_file</span>
+                    <span class="te-arg">(server.log)</span>
+                    <span class="te-time" style="color:var(--amber)">running…</span>
+                  </div>
+                </div>
+
+                <!-- Tool event: error -->
+                <div class="tool-event open">
+                  <div class="tool-event-line" onclick="this.closest('.tool-event').classList.toggle('open')">
+                    <span class="te-dot error">●</span>
+                    <span class="te-fn">bash</span>
+                    <span class="te-arg">(run_migrations.sh)</span>
+                    <span class="te-time" style="color:var(--red)">✕ exit 1</span>
+                  </div>
+                  <div class="tool-event-body">
+                    <div class="teb-row"><span class="teb-label">args</span><span class="teb-code">{"cmd": "./scripts/run_migrations.sh"}</span></div>
+                    <div class="teb-row"><span class="teb-label">result</span><span class="teb-code" style="color:var(--red)">Error: migration 0014 failed — column \"user_id\" already exists</span></div>
+                  </div>
+                </div>
+
+                <!-- Prose response -->
+                <div class="msg-body-text">The server is running (PID 18234, up ~1 hour). Here&rsquo;s the relevant startup snippet:</div>
+
+                <!-- Code block inline in assistant message -->
+                <div class="msg-code">
+                  <div class="msg-code-header">
+                    <span class="msg-code-lang">log</span>
+                    <button class="icon-btn" data-tooltip="Copy" onclick="copyCode(this)" style="width:24px;height:24px"><svg viewBox="0 0 14 14" style="width:11px;height:11px"><rect x="1" y="4" width="9" height="9" rx="1.5"/><path d="M4 4V2.5A1.5 1.5 0 0 1 5.5 1H11.5A1.5 1.5 0 0 1 13 2.5v6A1.5 1.5 0 0 1 11.5 10H10"/></svg></button>
+                  </div>
+                  <pre><code>2026-04-20 12:35:41 [INFO] vbot.runtime - Runtime started (v0.4.2)
+2026-04-20 12:36:02 [INFO] vbot.chat    - Run started: turn 7</code></pre>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Today separator -->
+            <div class="date-sep" style="padding:16px 0">Today</div>
+
+            <!-- User message -->
+            <div class="msg user" style="padding:4px 0">
+              <div class="msg-header">
+                <div class="msg-avatar">Y</div><span class="msg-author">YOU</span><span class="msg-timestamp">9:14 AM</span>
+              </div>
+              <div class="msg-content">
+                <div class="msg-body-text">Are there any pending schema migrations?</div>
+              </div>
+            </div>
+
+            <!-- Assistant message: short prose only -->
+            <div class="msg assistant" style="padding:4px 0">
+              <div class="msg-header">
+                <div class="msg-avatar">A</div><span class="msg-author">ASSISTANT</span><span class="msg-timestamp">9:14 AM</span>
+                <span class="msg-meta-extra">· 1 iteration · 2.1s</span>
+              </div>
+              <div class="msg-content">
+                <div class="tool-event open">
+                  <div class="tool-event-line" onclick="this.closest('.tool-event').classList.toggle('open')">
+                    <span class="te-dot done">●</span>
+                    <span class="te-fn">glob</span>
+                    <span class="te-arg">(migrations/*.sql)</span>
+                    <span class="te-time">✓ 4ms</span>
+                  </div>
+                  <div class="tool-event-body">
+                    <div class="teb-row"><span class="teb-label">args</span><span class="teb-code">{"pattern": "migrations/*.sql", "pending": true}</span></div>
+                    <div class="teb-row"><span class="teb-label">result</span><span class="teb-code">[] (no pending migrations)</span></div>
+                  </div>
+                </div>
+                <div class="msg-body-text">No pending migrations. The schema is up to date.</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Modal: Custom endpoint -->
+<div class="modal-overlay" id="modal-endpoint" onclick="if(event.target===this)closeModal('modal-endpoint')">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Custom Endpoint</span>
+      <button class="modal-close" onclick="closeModal('modal-endpoint')"><svg viewBox="0 0 12 12" style="width:10px;height:10px"><path d="M1 1l10 10M11 1L1 11"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label class="modal-label">Name</label>
+        <input class="modal-input" type="text" placeholder="e.g. Local LLaMA">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">Base URL</label>
+        <input class="modal-input" type="text" placeholder="http://localhost:11434/v1">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label">API Key (optional)</label>
+        <input class="modal-input" type="password" placeholder="sk-…">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-btn-cancel" onclick="closeModal('modal-endpoint')">Cancel</button>
+      <button class="modal-btn-confirm">Add endpoint</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<script>
+const VIEWS = { chat: 'view-chat', agents: 'view-agents', system: 'view-system', settings: 'view-settings', components: 'view-components' };
+const NAV_ORDER = ['chat', 'agents', 'system', 'settings', 'components'];
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const view = document.getElementById(VIEWS[name]);
+  if (view) view.classList.add('active');
+  const idx = NAV_ORDER.indexOf(name);
+  const items = document.querySelectorAll('.nav-item');
+  if (items[idx]) items[idx].classList.add('active');
+}
+function showSettingsPanel(id, el) {
+  document.querySelectorAll('.s-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.snav-item').forEach(i => i.classList.remove('active'));
+  const panel = document.getElementById('sp-' + id);
+  if (panel) panel.classList.add('active');
+  el.classList.add('active');
+}
+document.querySelectorAll('.agent-tab').forEach(tab => {
+  tab.addEventListener('click', function() { document.querySelectorAll('.agent-tab').forEach(t => t.classList.remove('active')); this.classList.add('active'); });
+});
+document.querySelectorAll('.agent-item').forEach(item => {
+  item.addEventListener('click', function() { document.querySelectorAll('.agent-item').forEach(i => i.classList.remove('active')); this.classList.add('active'); });
+});
+const ta = document.querySelector('.msg-input');
+if (ta) { ta.addEventListener('input', function() { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 140) + 'px'; }); }
+
+// Toggle-list (tools & skills)
+function tlAll(btn, state) {
+  const section = btn.closest('.tl-section');
+  section.querySelectorAll('.tl-toggle').forEach(t => { if (state) t.classList.add('on'); else t.classList.remove('on'); });
+}
+
+// Simple dropdown
+function toggleDropdown(id) {
+  const dd = document.getElementById(id);
+  const isOpen = dd.classList.contains('open');
+  document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+  if (!isOpen) dd.classList.add('open');
+}
+function selectDropdown(id, opt) {
+  const dd = document.getElementById(id);
+  dd.querySelectorAll('.dropdown-option').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  const sel = dd.querySelector('.dropdown-trigger span');
+  if (sel) sel.textContent = opt.textContent.trim();
+  dd.classList.remove('open');
+}
+
+// Searchable dropdown
+function toggleSDropdown(id) {
+  const dd = document.getElementById(id);
+  const trigger = dd.querySelector('.s-dropdown-trigger');
+  const panel = dd.querySelector('.s-dropdown-panel');
+  const isOpen = dd.classList.contains('open');
+  document.querySelectorAll('.s-dropdown.open').forEach(d => d.classList.remove('open'));
+  if (!isOpen) {
+    const rect = trigger.getBoundingClientRect();
+    panel.style.top = (rect.bottom + 4) + 'px';
+    panel.style.left = rect.left + 'px';
+    panel.style.width = rect.width + 'px';
+    dd.classList.add('open');
+    const inp = dd.querySelector('input');
+    if (inp) { inp.value = ''; filterSDropdown(id, ''); setTimeout(() => inp.focus(), 10); }
+  }
+}
+function filterSDropdown(id, query) {
+  const dd = document.getElementById(id);
+  const opts = dd.querySelectorAll('.s-dropdown-opt');
+  const empty = dd.querySelector('.s-dropdown-empty');
+  const q = query.toLowerCase().trim();
+  let visible = 0;
+  opts.forEach(o => { const match = !q || o.textContent.toLowerCase().includes(q); o.classList.toggle('hidden', !match); if (match) visible++; });
+  if (empty) empty.style.display = visible === 0 ? 'block' : 'none';
+}
+function selectSDropdown(id, opt) {
+  const dd = document.getElementById(id);
+  dd.querySelectorAll('.s-dropdown-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  const trigger = dd.querySelector('.s-dropdown-trigger span');
+  if (trigger) trigger.textContent = opt.textContent.trim();
+  dd.classList.remove('open');
+}
+
+// Modal
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
+
+// Close dropdowns on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+  if (!e.target.closest('.s-dropdown') && !e.target.closest('.s-dropdown-panel')) document.querySelectorAll('.s-dropdown.open').forEach(d => d.classList.remove('open'));
+});
+document.addEventListener('scroll', e => { if (!e.target.closest('.s-dropdown-panel')) document.querySelectorAll('.s-dropdown.open').forEach(d => d.classList.remove('open')); }, true);
+
+// Toast
+function showToast(type, title, msg) {
+  const stack = document.getElementById('toast-stack');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  const icons = { success: '✓', error: '✕', warn: '⚠', info: 'ℹ' };
+  const colors = { success: 'var(--green)', error: 'var(--red)', warn: 'var(--amber)', info: 'var(--accent)' };
+  const iconEl = document.createElement('span');
+  iconEl.className = 'toast-icon';
+  iconEl.style.color = colors[type];
+  iconEl.textContent = icons[type];
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'toast-body';
+  const titleEl = document.createElement('div');
+  titleEl.className = 'toast-title';
+  titleEl.textContent = title;
+  bodyEl.appendChild(titleEl);
+  if (msg) {
+    const msgEl = document.createElement('div');
+    msgEl.className = 'toast-msg';
+    msgEl.textContent = msg;
+    bodyEl.appendChild(msgEl);
+  }
+  const closeEl = document.createElement('button');
+  closeEl.className = 'toast-close';
+  closeEl.textContent = '×';
+  closeEl.addEventListener('click', () => toast.remove());
+  toast.appendChild(iconEl);
+  toast.appendChild(bodyEl);
+  toast.appendChild(closeEl);
+  stack.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 4000);
+}
+
+// Copy code block
+function copyCode(btn) {
+  const code = btn.closest('.msg-code').querySelector('code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.textContent).then(() => showToast('success', 'Copied to clipboard.'));
+}
+
+// Inline confirm
+function openInlineConfirm(id) {
+  const el = document.getElementById(id);
+  el.querySelector('[data-ic-idle]').style.display = 'none';
+  el.querySelector('[data-ic-open]').style.display = 'block';
+}
+function closeInlineConfirm(id) {
+  const el = document.getElementById(id);
+  el.querySelector('[data-ic-idle]').style.display = '';
+  el.querySelector('[data-ic-open]').style.display = 'none';
+}
+</script>
+</body>
+</html>
