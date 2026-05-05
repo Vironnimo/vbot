@@ -58,4 +58,89 @@ describe('i18n t()', () => {
       expect(t(key), key).toBe(englishCatalog[key]);
     }
   });
+
+  it('contains Toasted design labels for navigation and status polish', () => {
+    const requiredKeys = [
+      'navigation.components',
+      'app.serverStatus',
+      'chat.tokenBadge',
+      'chat.attachPlaceholder',
+      'chat.toolArgs',
+      'chat.toolResultLabel',
+      'status.connected',
+      'status.activeRun',
+      'status.notReachable',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+  });
+
+  it('contains Toasted design labels for Agents placeholders', () => {
+    const requiredKeys = [
+      'agents.detail.identity',
+      'agents.detail.model',
+      'agents.detail.access',
+      'agents.detail.session',
+      'agents.form.modelPlaceholder',
+      'agents.form.modelManualHelp',
+      'agents.access.noTools',
+      'agents.access.noSkills',
+      'agents.access.toggleTool',
+      'agents.access.toggleSkill',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+  });
+
+  it('contains Toasted design labels for Settings sections', () => {
+    const requiredKeys = [
+      'settings.sections',
+      'settings.placeholder',
+      'settings.general.title',
+      'settings.general.serverHost',
+      'settings.general.dataDirectory',
+      'settings.general.autoScroll',
+      'settings.providers.title',
+      'settings.providers.customEndpoint',
+      'settings.appearance.title',
+      'settings.appearance.language',
+      'settings.appearance.showTokenCounts',
+      'settings.language.en',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+  });
+
+  it('contains Toasted design labels for the Components showcase', () => {
+    const requiredKeys = [
+      'components.title',
+      'components.subtitle',
+      'components.sections.buttons',
+      'components.sections.toasts',
+      'components.sections.dropdowns',
+      'components.sections.toggles',
+      'components.sections.statusChips',
+      'components.toggles.largeOn',
+      'components.toggles.smallOff',
+      'components.toast.successTitle',
+      'components.toast.errorTitle',
+      'components.dropdowns.optionA',
+      'components.typography.uiText',
+      'components.chatShowcase.userMessage',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+  });
 });
