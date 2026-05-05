@@ -3,6 +3,7 @@
 
   let { disabled = false, isRunning = false, onSendMessage } = $props();
   let content = $state('');
+  let inputElement = $state(null);
 
   const submit = () => {
     const trimmedContent = content.trim();
@@ -11,94 +12,102 @@
     }
     onSendMessage?.(trimmedContent);
     content = '';
+    resizeInput();
+  };
+
+  const resizeInput = () => {
+    if (!inputElement) {
+      return;
+    }
+    inputElement.style.height = 'auto';
+    inputElement.style.height = `${inputElement.scrollHeight}px`;
+  };
+
+  const handleKeydown = (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    submit();
   };
 </script>
 
 <form
-  class="chat-composer"
+  class="input-area"
+  aria-label={t('chat.composerLabel', 'Message')}
   onsubmit={(event) => {
     event.preventDefault();
     submit();
   }}
 >
-  <label for="chat-composer-input">{t('chat.composerLabel', 'Message')}</label>
-  <div class="chat-composer__row">
+  <div class="input-wrap">
     <textarea
       id="chat-composer-input"
+      bind:this={inputElement}
       bind:value={content}
+      class="msg-input"
       {disabled}
+      aria-label={t('chat.composerLabel', 'Message')}
+      oninput={resizeInput}
+      onkeydown={handleKeydown}
       placeholder={t(
         'chat.composerPlaceholder',
         'Ask this agent to do something…',
       )}
-      rows="3"
+      rows="1"
     ></textarea>
-    <button type="submit" disabled={disabled || !content.trim()}>
-      {isRunning
-        ? t('chat.queueMessage', 'Queue message')
-        : t('common.send', 'Send')}
-    </button>
+    <div class="input-btns">
+      <button
+        type="button"
+        class="icon-btn"
+        disabled
+        aria-label={t(
+          'chat.attachPlaceholder',
+          'Attachments are not available yet',
+        )}
+        title={t('chat.attachPlaceholder', 'Attachments are not available yet')}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M13 7l-5 5a3.5 3.5 0 0 1-5-5l5-5a2 2 0 0 1 3 3L6 10a.5.5 0 0 1-1-1l4.5-4.5"
+          />
+        </svg>
+      </button>
+      <button
+        type="submit"
+        class="send-btn"
+        disabled={disabled || !content.trim()}
+        aria-label={isRunning
+          ? t('chat.queueMessage', 'Queue message')
+          : t('chat.sendMessage', 'Send message')}
+        title={isRunning
+          ? t('chat.queueMessage', 'Queue message')
+          : t('chat.sendMessage', 'Send message')}
+      >
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <path d="M12 7L2 2l2 5-2 5 10-5z" fill="currentColor" stroke="none" />
+        </svg>
+      </button>
+    </div>
   </div>
 </form>
 
 <style>
-  .chat-composer {
-    display: grid;
-    gap: var(--space-sm);
-    padding: var(--space-md);
-    border-top: 1px solid var(--color-border);
-    background: rgba(21, 19, 15, 0.78);
-  }
-
-  .chat-composer label {
-    color: var(--color-accent);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.76rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .chat-composer__row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: var(--space-sm);
-    align-items: end;
-  }
-
-  .chat-composer textarea {
+  .input-area {
     width: 100%;
-    resize: vertical;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: var(--space-md);
-    color: var(--color-text);
-    background: rgba(10, 11, 12, 0.62);
-    font: inherit;
-    line-height: 1.5;
   }
 
-  .chat-composer button {
-    min-height: 3.25rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: 0 var(--space-lg);
-    color: #1f1608;
-    background: var(--color-accent-strong);
-    cursor: pointer;
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-weight: 700;
+  .msg-input {
+    height: 22px;
   }
 
-  .chat-composer button:disabled,
-  .chat-composer textarea:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
+  .icon-btn svg {
+    width: 14px;
+    height: 14px;
   }
 
-  @media (max-width: 760px) {
-    .chat-composer__row {
-      grid-template-columns: 1fr;
-    }
+  .send-btn svg {
+    width: 13px;
+    height: 13px;
   }
 </style>

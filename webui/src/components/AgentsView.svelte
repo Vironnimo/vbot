@@ -7,8 +7,12 @@
     AGENT_FORM_MODE_EDIT,
     createAgentFormValues,
     normalizeAgentForm,
+    textToList,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
+
+  const EMPTY_VALUE = '—';
+  const WILDCARD_ACCESS = '*';
 
   let {
     sharedSelectedAgentId = '',
@@ -38,10 +42,15 @@
       ? t('agents.form.submitCreate', 'Create agent')
       : t('agents.form.submitUpdate', 'Save changes'),
   );
-  let formTitle = $derived(
+  let detailSubtitle = $derived(
     formMode === AGENT_FORM_MODE_CREATE
-      ? t('agents.create', 'Create Agent')
-      : t('agents.edit', 'Edit Agent'),
+      ? t('agents.detail.newSubtitle', 'id assigned at creation')
+      : `id: ${selectedAgent?.id ?? formValues.id}`,
+  );
+  let visibleToolItems = $derived(accessItems(formValues.allowed_tools));
+  let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
+  let modelPlaceholderLabel = $derived(
+    formValues.model || t('agents.form.modelPlaceholder', 'No model selected'),
   );
 
   $effect(() => {
@@ -168,6 +177,46 @@
     }
   }
 
+  function updateAccessItem(fieldName, itemName, isAllowed) {
+    const currentItems = textToList(formValues[fieldName]);
+    const nextItems = currentItems.filter((item) => item !== WILDCARD_ACCESS);
+    const existingIndex = nextItems.indexOf(itemName);
+
+    if (isAllowed && existingIndex === -1) {
+      nextItems.push(itemName);
+    }
+
+    if (!isAllowed && existingIndex !== -1) {
+      nextItems.splice(existingIndex, 1);
+    }
+
+    formValues[fieldName] = nextItems.join('\n');
+  }
+
+  function setAccessItems(fieldName, items, isAllowed) {
+    formValues[fieldName] = isAllowed
+      ? items.map((item) => item.name).join('\n')
+      : '';
+  }
+
+  function accessItems(text) {
+    const items = textToList(text);
+
+    if (items.length === 0) {
+      return [];
+    }
+
+    if (items.includes(WILDCARD_ACCESS)) {
+      return [{ name: WILDCARD_ACCESS, isAllowed: true, isWildcard: true }];
+    }
+
+    return items.map((item) => ({
+      name: item,
+      isAllowed: true,
+      isWildcard: false,
+    }));
+  }
+
   function notifyAgentsChanged() {
     onAgentsChanged?.(agents);
   }
@@ -187,6 +236,10 @@
     );
   }
 
+  function displayValue(value) {
+    return value || EMPTY_VALUE;
+  }
+
   function viewErrorMessage(error, fallback) {
     if (error?.code === 'last_agent') {
       return t('errors.minimumAgents', 'At least one agent must remain.');
@@ -200,213 +253,477 @@
   }
 </script>
 
-<section class="agents-view" aria-labelledby="agents-view-title">
-  <div class="agents-view__header">
-    <p class="agents-view__status">{t('app.ready', 'Ready')}</p>
-    <div>
-      <h2 id="agents-view-title">{t('agents.title', 'Agents')}</h2>
-      <p>
-        {t(
-          'agents.subtitle',
-          'Create and maintain the agent configurations used by chat.',
-        )}
-      </p>
-    </div>
-    <button
-      class="agents-view__ghost-button"
-      type="button"
-      onclick={loadAgents}
-    >
-      {t('common.refresh', 'Refresh')}
-    </button>
-  </div>
-
-  {#if errorMessage}
-    <p class="agents-view__notice agents-view__notice--error" role="alert">
-      {errorMessage}
-    </p>
-  {/if}
-
-  {#if statusMessage}
-    <p class="agents-view__notice" role="status">{statusMessage}</p>
-  {/if}
-
-  <div class="agents-view__grid">
-    <aside class="agents-view__panel" aria-labelledby="agents-list-title">
-      <div class="agents-view__panel-header">
-        <h3 id="agents-list-title">
-          {t('agents.listTitle', 'Available agents')}
-        </h3>
-        <button type="button" onclick={startCreate}
-          >{t('common.new', 'New')}</button
-        >
+<section class="agents-view view active" aria-labelledby="agents-list-title">
+  <div class="agents-layout">
+    <aside class="agent-list-pane" aria-labelledby="agents-list-title">
+      <div class="pane-header">
+        <span id="agents-list-title" class="pane-title">
+          {t('agents.title', 'Agents')}
+        </span>
+        <button class="btn-new" type="button" onclick={startCreate}>
+          <svg viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M7 1v12M1 7h12" />
+          </svg>
+          {t('common.new', 'New')}
+        </button>
       </div>
 
-      {#if isLoading}
-        <p class="agents-view__muted">
-          {t('agents.loading', 'Loading agents…')}
-        </p>
-      {:else if agents.length === 0}
-        <p class="agents-view__muted">
-          {t('agents.empty', 'No agents found.')}
-        </p>
-      {:else}
-        <div class="agents-view__list">
+      <div class="agent-list-scroll">
+        {#if isLoading}
+          <p class="agents-view__list-state">
+            {t('agents.loading', 'Loading agents…')}
+          </p>
+        {:else if agents.length === 0}
+          <div class="empty-state agents-view__empty-list">
+            <svg
+              class="empty-state-icon"
+              viewBox="0 0 32 32"
+              aria-hidden="true"
+            >
+              <circle cx="16" cy="10" r="5" />
+              <path d="M6 28c0-5.5 4.5-10 10-10s10 4.5 10 10" />
+            </svg>
+            <div class="empty-state-title">
+              {t('agents.empty', 'No agents found.')}
+            </div>
+            <div class="empty-state-sub">
+              {t(
+                'agents.emptyCreateHint',
+                'Create an agent to begin configuring chat access.',
+              )}
+            </div>
+          </div>
+        {:else}
           {#each agents as agent (agent.id)}
             <button
-              class:agents-view__agent-card--active={agent.id ===
-                selectedAgentId}
-              class="agents-view__agent-card"
+              class:active={agent.id === selectedAgentId}
+              class="agent-item"
               type="button"
               onclick={() => selectAgent(agent.id)}
             >
-              <span>{agent.name || agent.id}</span>
-              <small>{agent.id}</small>
+              <div class="agent-bar"></div>
+              <div class="agent-item-inner">
+                <div class="agent-item-name">{agent.name || agent.id}</div>
+                <div class="agent-item-sub">
+                  {agent.model || agent.id || t('common.unknown', 'Unknown')}
+                </div>
+              </div>
             </button>
           {/each}
-        </div>
-      {/if}
+        {/if}
+      </div>
     </aside>
 
-    <form class="agents-view__panel agents-view__form" onsubmit={saveAgent}>
-      <div class="agents-view__panel-header">
-        <h3>{formTitle}</h3>
-        {#if formMode === AGENT_FORM_MODE_EDIT}
-          <button type="button" onclick={startCreate}
-            >{t('agents.create', 'Create Agent')}</button
-          >
-        {/if}
-      </div>
+    <form class="agent-detail-pane" onsubmit={saveAgent}>
+      <div class="detail-top">
+        <div>
+          <div class="detail-heading">
+            {formMode === AGENT_FORM_MODE_CREATE
+              ? t('agents.create', 'Create Agent')
+              : selectedAgent?.name || formValues.name || selectedAgent?.id}
+          </div>
+          <div class="detail-sub">{detailSubtitle}</div>
+        </div>
 
-      <label>
-        <span>{t('agents.form.id', 'Agent ID')}</span>
-        <input
-          class:agents-view__invalid={formErrors.id}
-          type="text"
-          bind:value={formValues.id}
-          disabled={formMode === AGENT_FORM_MODE_EDIT}
-          aria-describedby="agent-id-help agent-id-error"
-        />
-        <small id="agent-id-help"
-          >{t(
-            'agents.form.idHelp',
-            'Agent IDs are immutable after creation.',
-          )}</small
-        >
-        {#if formErrors.id}
-          <small id="agent-id-error" class="agents-view__field-error"
-            >{fieldError('id')}</small
-          >
-        {/if}
-      </label>
-
-      <label>
-        <span>{t('agents.form.name', 'Name')}</span>
-        <input
-          class:agents-view__invalid={formErrors.name}
-          type="text"
-          bind:value={formValues.name}
-        />
-        {#if formErrors.name}
-          <small class="agents-view__field-error">{fieldError('name')}</small>
-        {/if}
-      </label>
-
-      <div class="agents-view__two-column">
-        <label>
-          <span>{t('agents.form.model', 'Model')}</span>
-          <input type="text" bind:value={formValues.model} />
-        </label>
-
-        <label>
-          <span>{t('agents.form.fallbackModel', 'Fallback model')}</span>
-          <input type="text" bind:value={formValues.fallback_model} />
-        </label>
-      </div>
-
-      <div class="agents-view__readonly-field">
-        <span>{t('agents.form.workspace', 'Workspace')}</span>
-        {#if formValues.workspace}
-          <code>{formValues.workspace}</code>
-        {:else}
-          <p class="agents-view__muted">
-            {t(
-              'agents.form.workspaceAssignedByServer',
-              'Workspace is assigned by the server when the agent is created.',
-            )}
-          </p>
-        {/if}
-        <small>
-          {t(
-            'agents.form.workspaceReadOnly',
-            'Workspace is read-only in this WebUI.',
-          )}
-        </small>
-      </div>
-
-      <div class="agents-view__two-column">
-        <label>
-          <span>{t('agents.form.temperature', 'Temperature')}</span>
-          <input
-            class:agents-view__invalid={formErrors.temperature}
-            type="number"
-            step="0.01"
-            bind:value={formValues.temperature}
-          />
-          {#if formErrors.temperature}
-            <small class="agents-view__field-error"
-              >{fieldError('temperature')}</small
-            >
-          {/if}
-        </label>
-
-        <label>
-          <span>{t('agents.form.thinkingEffort', 'Thinking effort')}</span>
-          <input type="text" bind:value={formValues.thinking_effort} />
-        </label>
-      </div>
-
-      <div class="agents-view__two-column">
-        <label>
-          <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
-          <textarea rows="5" bind:value={formValues.allowed_tools}></textarea>
-          <small>{t('agents.form.listHelp', 'Enter one item per line.')}</small>
-        </label>
-
-        <label>
-          <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
-          <textarea rows="5" bind:value={formValues.allowed_skills}></textarea>
-          <small>{t('agents.form.listHelp', 'Enter one item per line.')}</small>
-        </label>
-      </div>
-
-      <div class="agents-view__actions">
-        <button type="submit" disabled={isSaving}>
-          {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-        </button>
-
-        {#if formMode === AGENT_FORM_MODE_EDIT}
-          <button
-            class="agents-view__danger-button"
-            type="button"
-            disabled={isDeleting || !canDeleteSelectedAgent}
-            title={!canDeleteSelectedAgent
-              ? t(
-                  'agents.deleteDisabledMinimum',
-                  'The last remaining agent cannot be deleted.',
-                )
-              : t('agents.delete', 'Delete Agent')}
-            onclick={deleteSelectedAgent}
-          >
-            {isDeleting
-              ? t('common.loading', 'Loading…')
-              : t('agents.delete', 'Delete Agent')}
+        <div class="detail-btns">
+          <button class="btn-outline" type="submit" disabled={isSaving}>
+            {isSaving ? t('common.saving', 'Saving…') : submitLabel}
           </button>
-        {/if}
+          {#if formMode === AGENT_FORM_MODE_EDIT}
+            <button
+              class="btn-outline btn-dang"
+              type="button"
+              disabled={isDeleting || !canDeleteSelectedAgent}
+              title={!canDeleteSelectedAgent
+                ? t(
+                    'agents.deleteDisabledMinimum',
+                    'The last remaining agent cannot be deleted.',
+                  )
+                : t('agents.delete', 'Delete Agent')}
+              onclick={deleteSelectedAgent}
+            >
+              {isDeleting
+                ? t('common.loading', 'Loading…')
+                : t('agents.delete', 'Delete Agent')}
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      {#if errorMessage}
+        <p class="agents-view__notice agents-view__notice--error" role="alert">
+          {errorMessage}
+        </p>
+      {/if}
+
+      {#if statusMessage}
+        <p class="agents-view__notice" role="status">{statusMessage}</p>
+      {/if}
+
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.identity', 'Identity')}
+        </div>
+        <div class="detail-fields">
+          <label class="f">
+            <span class="f-label">{t('agents.form.id', 'Agent ID')}</span>
+            <input
+              class:agents-view__invalid={formErrors.id}
+              class="s-input"
+              type="text"
+              bind:value={formValues.id}
+              disabled={formMode === AGENT_FORM_MODE_EDIT}
+              aria-describedby="agent-id-help agent-id-error"
+            />
+            <small id="agent-id-help" class="agents-view__field-help">
+              {t(
+                'agents.form.idHelp',
+                'Agent IDs are immutable after creation.',
+              )}
+            </small>
+            {#if formErrors.id}
+              <small id="agent-id-error" class="agents-view__field-error">
+                {fieldError('id')}
+              </small>
+            {/if}
+          </label>
+
+          <label class="f">
+            <span class="f-label">{t('agents.form.name', 'Name')}</span>
+            <input
+              class:agents-view__invalid={formErrors.name}
+              class="s-input"
+              type="text"
+              bind:value={formValues.name}
+            />
+            {#if formErrors.name}
+              <small class="agents-view__field-error"
+                >{fieldError('name')}</small
+              >
+            {/if}
+          </label>
+
+          <div class="f wide">
+            <div class="f-label">{t('agents.form.workspace', 'Workspace')}</div>
+            {#if formValues.workspace}
+              <div class="f-value mono agents-view__wrap-value">
+                {formValues.workspace}
+              </div>
+            {:else}
+              <div class="f-value agents-view__muted-value">
+                {t(
+                  'agents.form.workspaceAssignedByServer',
+                  'Workspace is assigned by the server when the agent is created.',
+                )}
+              </div>
+            {/if}
+            <small class="agents-view__field-help">
+              {t(
+                'agents.form.workspaceReadOnly',
+                'Workspace is read-only in this WebUI.',
+              )}
+            </small>
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.model', 'Model')}
+        </div>
+        <div class="detail-fields">
+          <label class="f wide">
+            <span class="f-label">{t('agents.form.model', 'Model')}</span>
+            <div class="s-dropdown agents-view__disabled-dropdown">
+              <div class="s-dropdown-trigger" aria-disabled="true">
+                <span>{modelPlaceholderLabel}</span>
+                <svg
+                  class="dropdown-chevron"
+                  viewBox="0 0 12 12"
+                  aria-hidden="true"
+                >
+                  <path d="M2 4l4 4 4-4" />
+                </svg>
+              </div>
+            </div>
+            <input
+              class="s-input agents-view__model-input"
+              type="text"
+              bind:value={formValues.model}
+            />
+            <small class="agents-view__field-help">
+              {t(
+                'agents.form.modelManualHelp',
+                'Model discovery is not available yet; enter the existing model ID manually.',
+              )}
+            </small>
+          </label>
+
+          <label class="f">
+            <span class="f-label"
+              >{t('agents.form.fallbackModel', 'Fallback model')}</span
+            >
+            <input
+              class="s-input"
+              type="text"
+              bind:value={formValues.fallback_model}
+              placeholder={t('common.optional', 'Optional')}
+            />
+          </label>
+
+          <label class="f">
+            <span class="f-label"
+              >{t('agents.form.thinkingEffort', 'Thinking effort')}</span
+            >
+            <input
+              class="s-input"
+              type="text"
+              bind:value={formValues.thinking_effort}
+              placeholder={t('common.optional', 'Optional')}
+            />
+          </label>
+
+          <label class="f">
+            <span class="f-label"
+              >{t('agents.form.temperature', 'Temperature')}</span
+            >
+            <input
+              class:agents-view__invalid={formErrors.temperature}
+              class="s-input"
+              type="number"
+              step="0.01"
+              bind:value={formValues.temperature}
+            />
+            {#if formErrors.temperature}
+              <small class="agents-view__field-error">
+                {fieldError('temperature')}
+              </small>
+            {/if}
+          </label>
+
+          <div class="f">
+            <div class="f-label">
+              {t('agents.detail.fallbackStatus', 'Fallback')}
+            </div>
+            <div
+              class:f-value={formValues.fallback_model}
+              class:agents-view__muted-value={!formValues.fallback_model}
+            >
+              {displayValue(formValues.fallback_model)}
+            </div>
+          </div>
+
+          <div class="f">
+            <div class="f-label">
+              {t('agents.detail.thinkingStatus', 'Thinking')}
+            </div>
+            {#if formValues.thinking_effort}
+              <div class="f-value">
+                <span class="chip chip-orange"
+                  >{formValues.thinking_effort}</span
+                >
+              </div>
+            {:else}
+              <div class="agents-view__muted-value">{EMPTY_VALUE}</div>
+            {/if}
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.access', 'Access')}
+        </div>
+
+        <div class="tl-section">
+          <div class="tl-section-header">
+            <span class="tl-section-label">
+              {t('agents.form.allowedTools', 'Allowed tools')}
+            </span>
+            <div class="tl-actions">
+              <button
+                class="tl-btn"
+                type="button"
+                disabled={visibleToolItems.length === 0}
+                onclick={() =>
+                  setAccessItems('allowed_tools', visibleToolItems, true)}
+              >
+                {t('agents.access.allOn', 'all on')}
+              </button>
+              <button
+                class="tl-btn"
+                type="button"
+                disabled={visibleToolItems.length === 0}
+                onclick={() =>
+                  setAccessItems('allowed_tools', visibleToolItems, false)}
+              >
+                {t('agents.access.allOff', 'all off')}
+              </button>
+            </div>
+          </div>
+          {#if visibleToolItems.length > 0}
+            <div class="tl-items">
+              {#each visibleToolItems as item (item.name)}
+                <div class="tl-item">
+                  <span class="tl-item-name">{item.name}</span>
+                  <button
+                    class="tl-toggle"
+                    class:on={item.isAllowed}
+                    type="button"
+                    role="switch"
+                    aria-checked={item.isAllowed}
+                    aria-label={t(
+                      'agents.access.toggleTool',
+                      'Toggle tool {name}',
+                      {
+                        name: item.name,
+                      },
+                    )}
+                    disabled={item.isWildcard}
+                    onclick={() =>
+                      updateAccessItem(
+                        'allowed_tools',
+                        item.name,
+                        !item.isAllowed,
+                      )}
+                  >
+                    <span class="t-knob"></span>
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="agents-view__placeholder-row">
+              {t(
+                'agents.access.noTools',
+                'No backend tool catalog is available; add tool names below.',
+              )}
+            </p>
+          {/if}
+          <label class="agents-view__access-editor">
+            <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
+            <textarea rows="4" bind:value={formValues.allowed_tools}></textarea>
+            <small
+              >{t('agents.form.listHelp', 'Enter one item per line.')}</small
+            >
+          </label>
+        </div>
+
+        <div class="tl-section">
+          <div class="tl-section-header">
+            <span class="tl-section-label">
+              {t('agents.form.allowedSkills', 'Allowed skills')}
+            </span>
+            <div class="tl-actions">
+              <button
+                class="tl-btn"
+                type="button"
+                disabled={visibleSkillItems.length === 0}
+                onclick={() =>
+                  setAccessItems('allowed_skills', visibleSkillItems, true)}
+              >
+                {t('agents.access.allOn', 'all on')}
+              </button>
+              <button
+                class="tl-btn"
+                type="button"
+                disabled={visibleSkillItems.length === 0}
+                onclick={() =>
+                  setAccessItems('allowed_skills', visibleSkillItems, false)}
+              >
+                {t('agents.access.allOff', 'all off')}
+              </button>
+            </div>
+          </div>
+          {#if visibleSkillItems.length > 0}
+            <div class="tl-items">
+              {#each visibleSkillItems as item (item.name)}
+                <div class="tl-item">
+                  <span class="tl-item-name">{item.name}</span>
+                  <button
+                    class="tl-toggle"
+                    class:on={item.isAllowed}
+                    type="button"
+                    role="switch"
+                    aria-checked={item.isAllowed}
+                    aria-label={t(
+                      'agents.access.toggleSkill',
+                      'Toggle skill {name}',
+                      {
+                        name: item.name,
+                      },
+                    )}
+                    disabled={item.isWildcard}
+                    onclick={() =>
+                      updateAccessItem(
+                        'allowed_skills',
+                        item.name,
+                        !item.isAllowed,
+                      )}
+                  >
+                    <span class="t-knob"></span>
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="agents-view__placeholder-row">
+              {t(
+                'agents.access.noSkills',
+                'No backend skill catalog is available; add skill names below.',
+              )}
+            </p>
+          {/if}
+          <label class="agents-view__access-editor">
+            <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
+            <textarea rows="4" bind:value={formValues.allowed_skills}
+            ></textarea>
+            <small
+              >{t('agents.form.listHelp', 'Enter one item per line.')}</small
+            >
+          </label>
+        </div>
+
+        <div class="detail-fields agents-view__access-meta">
+          <div class="f wide">
+            <div class="f-label">{t('agents.form.workspace', 'Workspace')}</div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayValue(formValues.workspace)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="detail-group">
+        <div class="detail-group-title">
+          {t('agents.detail.session', 'Session')}
+        </div>
+        <div class="detail-fields">
+          <div class="f wide">
+            <div class="f-label">
+              {t('agents.detail.sessionId', 'Session ID')}
+            </div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayValue(selectedAgent?.current_session_id)}
+            </div>
+          </div>
+          <div class="f">
+            <div class="f-label">{t('agents.detail.created', 'Created')}</div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayValue(selectedAgent?.created_at)}
+            </div>
+          </div>
+          <div class="f">
+            <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
+            <div class="f-value mono agents-view__wrap-value">
+              {displayValue(selectedAgent?.updated_at)}
+            </div>
+          </div>
+        </div>
       </div>
 
       {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
-        <p class="agents-view__muted">
+        <p class="agents-view__placeholder-row">
           {t(
             'agents.deleteDisabledMinimum',
             'The last remaining agent cannot be deleted.',
@@ -419,214 +736,367 @@
 
 <style>
   .agents-view {
-    width: min(100%, 72rem);
-    color: var(--color-text);
-  }
-
-  .agents-view__header,
-  .agents-view__panel,
-  .agents-view__notice {
-    border: 1px solid var(--color-border);
-    background:
-      linear-gradient(135deg, rgba(33, 29, 23, 0.96), rgba(20, 23, 27, 0.9)),
-      var(--color-panel);
-    box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.3);
-  }
-
-  .agents-view__header {
     display: flex;
-    align-items: end;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--text-hi);
+    background: var(--bg);
+  }
+
+  .agents-layout {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .agent-list-pane {
+    display: flex;
+    width: 240px;
+    min-width: 240px;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .pane-header {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .btn-new svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  .agent-list-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .agent-item {
+    display: flex;
+    width: 100%;
+    align-items: stretch;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    text-align: left;
+    transition: background 100ms ease;
+  }
+
+  .agent-item:hover,
+  .agent-item:focus-visible {
+    background: var(--surface-2);
+  }
+
+  .agent-item:focus-visible {
+    outline: 1px solid rgba(232, 135, 10, 0.4);
+    outline-offset: -1px;
+  }
+
+  .agent-item.active {
+    background: var(--accent-dim);
+  }
+
+  .agent-bar {
+    width: 2px;
+    flex-shrink: 0;
+    background: transparent;
+  }
+
+  .agent-item.active .agent-bar {
+    background: var(--accent);
+  }
+
+  .agent-item-inner {
+    min-width: 0;
+    flex: 1;
+    padding: 7px 12px 7px 10px;
+  }
+
+  .agent-item-name {
+    overflow: hidden;
+    color: var(--text-hi);
+    font-size: 13px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-item.active .agent-item-name {
+    color: var(--accent);
+  }
+
+  .agent-item-sub {
+    overflow: hidden;
+    margin-top: 1px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-detail-pane {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 22px;
+    overflow-y: auto;
+    padding: 26px 30px;
+  }
+
+  .detail-top {
+    display: flex;
+    align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-lg);
-    margin-bottom: var(--space-lg);
-    padding: var(--space-xl);
-    border-radius: var(--radius-lg);
   }
 
-  .agents-view__status {
-    margin: 0;
-    color: var(--color-accent);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.16em;
+  .detail-heading {
+    color: var(--text-hi);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+
+  .detail-sub {
+    margin-top: 4px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .detail-btns {
+    display: flex;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .detail-group {
+    flex-shrink: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+  }
+
+  .detail-group-title {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .detail-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .f {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .f.wide {
+    grid-column: 1 / -1;
+  }
+
+  .f-label,
+  .agents-view__access-editor span {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    line-height: 1;
     text-transform: uppercase;
   }
 
-  .agents-view h2,
-  .agents-view h3,
-  .agents-view p {
-    margin: 0;
+  .f-value {
+    color: var(--text-hi);
+    font-size: 13.5px;
+    font-weight: 500;
   }
 
-  .agents-view h2 {
-    font-size: clamp(3rem, 9vw, 6rem);
-    line-height: 0.95;
+  .f-value.mono {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
-  .agents-view h3 {
-    font-size: 1.35rem;
+  .tl-section {
+    display: flex;
+    flex-direction: column;
   }
 
-  .agents-view__header p:last-child,
-  .agents-view__muted,
-  .agents-view small {
-    color: var(--color-muted);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    line-height: 1.5;
+  .tl-section + .tl-section {
+    border-top: 1px solid var(--border);
   }
 
-  .agents-view__grid {
-    display: grid;
-    grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr);
-    gap: var(--space-lg);
-    align-items: start;
-  }
-
-  .agents-view__panel {
-    padding: var(--space-lg);
-    border-radius: var(--radius-lg);
-  }
-
-  .agents-view__panel-header,
-  .agents-view__actions {
+  .tl-section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-md);
+    padding: 10px 16px 8px;
   }
 
-  .agents-view__list,
-  .agents-view__form {
-    display: grid;
-    gap: var(--space-md);
+  .tl-actions {
+    display: flex;
+    gap: 6px;
   }
 
-  .agents-view__list {
-    margin-top: var(--space-md);
+  .tl-btn {
+    padding: 2px 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
   }
 
-  .agents-view__agent-card,
-  .agents-view button,
-  .agents-view input,
-  .agents-view textarea {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
+  .tl-items {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--border);
   }
 
-  .agents-view__agent-card,
-  .agents-view button {
-    color: var(--color-text);
-    background: rgba(240, 164, 58, 0.08);
-    cursor: pointer;
+  .tl-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
   }
 
-  .agents-view button {
-    padding: 0.7rem 0.95rem;
+  .tl-item:last-child {
+    border-bottom: 0;
   }
 
-  .agents-view button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
+  .tl-item-name {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
-  .agents-view__agent-card {
-    display: grid;
-    width: 100%;
-    gap: var(--space-xs);
-    padding: var(--space-md);
-    text-align: left;
+  .agents-view__access-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--border);
   }
 
-  .agents-view__agent-card--active {
-    border-color: var(--color-accent-strong);
-    background: var(--color-panel-strong);
-  }
-
-  .agents-view__form label,
-  .agents-view__readonly-field {
-    display: grid;
-    gap: var(--space-xs);
-  }
-
-  .agents-view__form label span,
-  .agents-view__readonly-field > span {
-    color: var(--color-accent-strong);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .agents-view__readonly-field code {
-    display: block;
-    overflow-wrap: anywhere;
-    padding: 0.75rem 0.85rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-muted);
-    background: rgba(21, 19, 15, 0.5);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-  }
-
-  .agents-view input,
-  .agents-view textarea {
-    width: 100%;
-    padding: 0.75rem 0.85rem;
-    color: var(--color-text);
-    background: rgba(21, 19, 15, 0.82);
-    font: inherit;
-  }
-
-  .agents-view textarea {
+  .agents-view__access-editor textarea {
+    min-height: 82px;
     resize: vertical;
   }
 
-  .agents-view input:disabled {
-    color: var(--color-subtle);
+  .agents-view__access-meta {
+    border-top: 1px solid var(--border);
   }
 
-  .agents-view__two-column {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-md);
+  .agents-view__disabled-dropdown .s-dropdown-trigger {
+    cursor: not-allowed;
+    opacity: 0.68;
+  }
+
+  .agents-view__model-input {
+    margin-top: 4px;
+  }
+
+  .agents-view__notice,
+  .agents-view__placeholder-row,
+  .agents-view__list-state {
+    margin: 0;
+    color: var(--text-med);
+    font-size: 12.5px;
+    line-height: 1.4;
   }
 
   .agents-view__notice {
-    margin-bottom: var(--space-md);
-    padding: var(--space-md);
-    border-radius: var(--radius-md);
-    color: var(--color-accent-strong);
+    padding: 11px 14px;
+    border: 1px solid var(--border-2);
+    border-left: 2px solid var(--green);
+    border-radius: var(--r-md);
+    background: var(--surface);
   }
 
-  .agents-view__notice--error,
+  .agents-view__notice--error {
+    border-left-color: var(--red);
+    color: var(--red);
+  }
+
+  .agents-view__placeholder-row,
+  .agents-view__list-state {
+    padding: 12px 16px;
+    color: var(--text-lo);
+  }
+
+  .agents-view__empty-list {
+    min-height: 220px;
+  }
+
+  .empty-state-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .agents-view__field-help,
+  .agents-view__access-editor small {
+    color: var(--text-lo);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .agents-view__field-error {
-    color: #ffb199;
+    color: var(--red);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .agents-view__invalid {
-    border-color: #ffb199 !important;
+    border-color: var(--red) !important;
   }
 
-  .agents-view__danger-button {
-    border-color: rgba(255, 177, 153, 0.5) !important;
-    color: #ffd8cc !important;
+  .agents-view__muted-value {
+    color: var(--text-lo);
+    font-size: 13px;
   }
 
-  .agents-view__ghost-button {
-    background: transparent !important;
+  .agents-view__wrap-value {
+    overflow-wrap: anywhere;
   }
 
-  @media (max-width: 980px) {
-    .agents-view__grid,
-    .agents-view__two-column {
+  @media (max-width: 860px) {
+    .agents-layout,
+    .detail-top {
+      flex-direction: column;
+    }
+
+    .agent-list-pane {
+      width: 100%;
+      min-width: 0;
+      max-height: 240px;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-fields {
       grid-template-columns: 1fr;
     }
 
-    .agents-view__header {
-      align-items: start;
-      flex-direction: column;
+    .detail-btns {
+      flex-wrap: wrap;
     }
   }
 </style>
