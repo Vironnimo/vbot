@@ -66,7 +66,9 @@
       const result = await rpc('agent.list');
       agents = Array.isArray(result?.agents) ? result.agents : [];
       const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
-      selectAgent(resolveSelectedAgentId(agents, preferredAgentId));
+      selectAgent(resolveSelectedAgentId(agents, preferredAgentId), {
+        clearNotices: false,
+      });
       notifyAgentsChanged();
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.loadError'));
@@ -83,7 +85,8 @@
     return nextAgents[0]?.id ?? '';
   }
 
-  function selectAgent(agentId) {
+  function selectAgent(agentId, options = {}) {
+    const shouldClearNotices = options.clearNotices ?? true;
     selectedAgentId = agentId;
     const agent = agents.find((item) => item.id === agentId) ?? null;
 
@@ -96,6 +99,9 @@
     }
 
     formErrors = {};
+    if (shouldClearNotices) {
+      clearNotices();
+    }
   }
 
   function startCreate() {
@@ -103,6 +109,11 @@
     formMode = AGENT_FORM_MODE_CREATE;
     formValues = createAgentFormValues();
     formErrors = {};
+    clearNotices();
+  }
+
+  function clearNotices() {
+    errorMessage = '';
     statusMessage = '';
   }
 
@@ -201,432 +212,571 @@
 </script>
 
 <section class="agents-view" aria-labelledby="agents-view-title">
-  <div class="agents-view__header">
-    <p class="agents-view__status">{t('app.ready', 'Ready')}</p>
-    <div>
-      <h2 id="agents-view-title">{t('agents.title', 'Agents')}</h2>
-      <p>
-        {t(
-          'agents.subtitle',
-          'Create and maintain the agent configurations used by chat.',
-        )}
-      </p>
-    </div>
-    <button
-      class="agents-view__ghost-button"
-      type="button"
-      onclick={loadAgents}
-    >
-      {t('common.refresh', 'Refresh')}
-    </button>
-  </div>
-
-  {#if errorMessage}
-    <p class="agents-view__notice agents-view__notice--error" role="alert">
-      {errorMessage}
-    </p>
-  {/if}
-
-  {#if statusMessage}
-    <p class="agents-view__notice" role="status">{statusMessage}</p>
-  {/if}
-
-  <div class="agents-view__grid">
-    <aside class="agents-view__panel" aria-labelledby="agents-list-title">
-      <div class="agents-view__panel-header">
-        <h3 id="agents-list-title">
+  <aside class="agents-view__list-pane" aria-labelledby="agents-list-title">
+    <div class="agents-view__pane-header">
+      <div>
+        <p class="agents-view__pane-title" id="agents-list-title">
+          {t('agents.title', 'Agents')}
+        </p>
+        <p class="agents-view__pane-subtitle">
           {t('agents.listTitle', 'Available agents')}
-        </h3>
-        <button type="button" onclick={startCreate}
-          >{t('common.new', 'New')}</button
-        >
+        </p>
       </div>
+      <button
+        class="btn-new agents-view__new-button"
+        type="button"
+        onclick={startCreate}
+      >
+        <svg aria-hidden="true" viewBox="0 0 14 14">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {t('common.new', 'New')}
+      </button>
+    </div>
 
+    <div class="agents-view__list-scroll">
       {#if isLoading}
-        <p class="agents-view__muted">
+        <p class="agents-view__empty-list">
           {t('agents.loading', 'Loading agents…')}
         </p>
       {:else if agents.length === 0}
-        <p class="agents-view__muted">
+        <p class="agents-view__empty-list">
           {t('agents.empty', 'No agents found.')}
         </p>
       {:else}
         <div class="agents-view__list">
           {#each agents as agent (agent.id)}
             <button
-              class:agents-view__agent-card--active={agent.id ===
+              class:agents-view__agent-row--active={agent.id ===
                 selectedAgentId}
-              class="agents-view__agent-card"
+              class="agents-view__agent-row"
               type="button"
               onclick={() => selectAgent(agent.id)}
             >
-              <span>{agent.name || agent.id}</span>
-              <small>{agent.id}</small>
+              <span class="agents-view__agent-bar" aria-hidden="true"></span>
+              <span class="agents-view__agent-row-inner">
+                <span class="agents-view__agent-name"
+                  >{agent.name || agent.id}</span
+                >
+                <span class="agents-view__agent-sub">
+                  {agent.model || t('agents.noModel', 'No model')}
+                </span>
+              </span>
             </button>
           {/each}
         </div>
       {/if}
-    </aside>
+    </div>
+  </aside>
 
-    <form class="agents-view__panel agents-view__form" onsubmit={saveAgent}>
-      <div class="agents-view__panel-header">
-        <h3>{formTitle}</h3>
+  <form class="agents-view__detail-pane" onsubmit={saveAgent}>
+    <div class="agents-view__detail-top">
+      <div>
+        <p class="agents-view__status">{t('app.ready', 'Ready')}</p>
+        <h2 id="agents-view-title" class="agents-view__heading">
+          {formMode === AGENT_FORM_MODE_CREATE
+            ? t('agents.create', 'Create Agent')
+            : selectedAgent?.name || formTitle}
+        </h2>
+        <p class="agents-view__detail-sub">
+          {formMode === AGENT_FORM_MODE_CREATE
+            ? t(
+                'agents.createDescription',
+                'Define a file-backed agent configuration for chat.',
+              )
+            : `${t('agents.idLabel', 'id')}: ${selectedAgent?.id ?? ''}`}
+        </p>
+      </div>
+      <div class="agents-view__detail-buttons">
+        <button class="btn-outline" type="button" onclick={loadAgents}>
+          {t('common.refresh', 'Refresh')}
+        </button>
         {#if formMode === AGENT_FORM_MODE_EDIT}
-          <button type="button" onclick={startCreate}
-            >{t('agents.create', 'Create Agent')}</button
-          >
+          <button class="btn-outline" type="button" onclick={startCreate}>
+            {t('agents.create', 'Create Agent')}
+          </button>
         {/if}
       </div>
+    </div>
 
-      <label>
-        <span>{t('agents.form.id', 'Agent ID')}</span>
-        <input
-          class:agents-view__invalid={formErrors.id}
-          type="text"
-          bind:value={formValues.id}
-          disabled={formMode === AGENT_FORM_MODE_EDIT}
-          aria-describedby="agent-id-help agent-id-error"
-        />
-        <small id="agent-id-help"
-          >{t(
-            'agents.form.idHelp',
-            'Agent IDs are immutable after creation.',
-          )}</small
-        >
-        {#if formErrors.id}
-          <small id="agent-id-error" class="agents-view__field-error"
-            >{fieldError('id')}</small
-          >
-        {/if}
-      </label>
+    {#if errorMessage}
+      <p class="agents-view__notice agents-view__notice--error" role="alert">
+        {errorMessage}
+      </p>
+    {/if}
 
-      <label>
-        <span>{t('agents.form.name', 'Name')}</span>
-        <input
-          class:agents-view__invalid={formErrors.name}
-          type="text"
-          bind:value={formValues.name}
-        />
-        {#if formErrors.name}
-          <small class="agents-view__field-error">{fieldError('name')}</small>
-        {/if}
-      </label>
+    {#if statusMessage}
+      <p class="agents-view__notice" role="status">{statusMessage}</p>
+    {/if}
 
-      <div class="agents-view__two-column">
-        <label>
+    <div class="agents-view__detail-group">
+      <div class="agents-view__group-title">
+        {t('agents.group.identity', 'Identity')}
+      </div>
+      <div class="agents-view__fields">
+        <label class="agents-view__field">
+          <span>{t('agents.form.id', 'Agent ID')}</span>
+          <input
+            class:agents-view__invalid={formErrors.id}
+            type="text"
+            bind:value={formValues.id}
+            disabled={formMode === AGENT_FORM_MODE_EDIT}
+            placeholder={t('agents.form.idPlaceholder', 'main-agent')}
+            aria-invalid={Boolean(formErrors.id)}
+            aria-describedby="agent-id-help agent-id-error"
+          />
+          <small id="agent-id-help">
+            {t('agents.form.idHelp', 'Agent IDs are immutable after creation.')}
+          </small>
+          {#if formErrors.id}
+            <small id="agent-id-error" class="agents-view__field-error">
+              {fieldError('id')}
+            </small>
+          {/if}
+        </label>
+
+        <label class="agents-view__field">
+          <span>{t('agents.form.name', 'Name')}</span>
+          <input
+            class:agents-view__invalid={formErrors.name}
+            type="text"
+            bind:value={formValues.name}
+            placeholder={t('agents.form.namePlaceholder', 'Main Agent')}
+            aria-invalid={Boolean(formErrors.name)}
+          />
+          {#if formErrors.name}
+            <small class="agents-view__field-error">{fieldError('name')}</small>
+          {/if}
+        </label>
+      </div>
+    </div>
+
+    <div class="agents-view__detail-group">
+      <div class="agents-view__group-title">
+        {t('agents.group.model', 'Model')}
+      </div>
+      <div class="agents-view__fields">
+        <label class="agents-view__field agents-view__field--wide">
           <span>{t('agents.form.model', 'Model')}</span>
-          <input type="text" bind:value={formValues.model} />
+          <input
+            type="text"
+            bind:value={formValues.model}
+            placeholder={t('agents.form.modelPlaceholder', 'provider/model-id')}
+          />
         </label>
 
-        <label>
+        <label class="agents-view__field">
           <span>{t('agents.form.fallbackModel', 'Fallback model')}</span>
-          <input type="text" bind:value={formValues.fallback_model} />
+          <input
+            type="text"
+            bind:value={formValues.fallback_model}
+            placeholder={t('common.optional', 'Optional')}
+          />
         </label>
-      </div>
 
-      <div class="agents-view__readonly-field">
-        <span>{t('agents.form.workspace', 'Workspace')}</span>
-        {#if formValues.workspace}
-          <code>{formValues.workspace}</code>
-        {:else}
-          <p class="agents-view__muted">
-            {t(
-              'agents.form.workspaceAssignedByServer',
-              'Workspace is assigned by the server when the agent is created.',
-            )}
-          </p>
-        {/if}
-        <small>
-          {t(
-            'agents.form.workspaceReadOnly',
-            'Workspace is read-only in this WebUI.',
-          )}
-        </small>
-      </div>
+        <label class="agents-view__field">
+          <span>{t('agents.form.thinkingEffort', 'Thinking effort')}</span>
+          <input
+            type="text"
+            bind:value={formValues.thinking_effort}
+            placeholder={t('agents.form.thinkingPlaceholder', 'medium')}
+          />
+        </label>
 
-      <div class="agents-view__two-column">
-        <label>
+        <label class="agents-view__field">
           <span>{t('agents.form.temperature', 'Temperature')}</span>
           <input
             class:agents-view__invalid={formErrors.temperature}
             type="number"
             step="0.01"
             bind:value={formValues.temperature}
+            aria-invalid={Boolean(formErrors.temperature)}
           />
           {#if formErrors.temperature}
-            <small class="agents-view__field-error"
-              >{fieldError('temperature')}</small
-            >
+            <small class="agents-view__field-error">
+              {fieldError('temperature')}
+            </small>
           {/if}
         </label>
-
-        <label>
-          <span>{t('agents.form.thinkingEffort', 'Thinking effort')}</span>
-          <input type="text" bind:value={formValues.thinking_effort} />
-        </label>
       </div>
+    </div>
 
-      <div class="agents-view__two-column">
-        <label>
+    <div class="agents-view__detail-group">
+      <div class="agents-view__group-title">
+        {t('agents.group.access', 'Access')}
+      </div>
+      <div class="agents-view__fields">
+        <label class="agents-view__field agents-view__field--wide">
           <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
           <textarea rows="5" bind:value={formValues.allowed_tools}></textarea>
           <small>{t('agents.form.listHelp', 'Enter one item per line.')}</small>
         </label>
 
-        <label>
+        <label class="agents-view__field agents-view__field--wide">
           <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
           <textarea rows="5" bind:value={formValues.allowed_skills}></textarea>
           <small>{t('agents.form.listHelp', 'Enter one item per line.')}</small>
         </label>
       </div>
+    </div>
 
-      <div class="agents-view__actions">
-        <button type="submit" disabled={isSaving}>
-          {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-        </button>
-
-        {#if formMode === AGENT_FORM_MODE_EDIT}
-          <button
-            class="agents-view__danger-button"
-            type="button"
-            disabled={isDeleting || !canDeleteSelectedAgent}
-            title={!canDeleteSelectedAgent
-              ? t(
-                  'agents.deleteDisabledMinimum',
-                  'The last remaining agent cannot be deleted.',
-                )
-              : t('agents.delete', 'Delete Agent')}
-            onclick={deleteSelectedAgent}
-          >
-            {isDeleting
-              ? t('common.loading', 'Loading…')
-              : t('agents.delete', 'Delete Agent')}
-          </button>
-        {/if}
+    <div class="agents-view__detail-group">
+      <div class="agents-view__group-title">
+        {t('agents.group.workspace', 'Workspace')}
       </div>
+      <div class="agents-view__fields">
+        <div class="agents-view__readonly-field agents-view__field--wide">
+          <span>{t('agents.form.workspace', 'Workspace')}</span>
+          {#if formValues.workspace}
+            <code>{formValues.workspace}</code>
+          {:else}
+            <p class="agents-view__muted">
+              {t(
+                'agents.form.workspaceAssignedByServer',
+                'Workspace is assigned by the server when the agent is created.',
+              )}
+            </p>
+          {/if}
+          <small>
+            {t(
+              'agents.form.workspaceReadOnly',
+              'Workspace is read-only in this WebUI.',
+            )}
+          </small>
+        </div>
+      </div>
+    </div>
 
-      {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
-        <p class="agents-view__muted">
-          {t(
-            'agents.deleteDisabledMinimum',
-            'The last remaining agent cannot be deleted.',
-          )}
-        </p>
+    <div class="agents-view__actions">
+      <button class="btn-new" type="submit" disabled={isSaving}>
+        {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+      </button>
+
+      {#if formMode === AGENT_FORM_MODE_EDIT}
+        <button
+          class="btn-outline btn-danger"
+          type="button"
+          disabled={isDeleting || !canDeleteSelectedAgent}
+          title={!canDeleteSelectedAgent
+            ? t(
+                'agents.deleteDisabledMinimum',
+                'The last remaining agent cannot be deleted.',
+              )
+            : t('agents.delete', 'Delete Agent')}
+          onclick={deleteSelectedAgent}
+        >
+          {isDeleting
+            ? t('common.loading', 'Loading…')
+            : t('agents.delete', 'Delete Agent')}
+        </button>
       {/if}
-    </form>
-  </div>
+    </div>
+
+    {#if formMode === AGENT_FORM_MODE_EDIT && !canDeleteSelectedAgent}
+      <p class="agents-view__muted">
+        {t(
+          'agents.deleteDisabledMinimum',
+          'The last remaining agent cannot be deleted.',
+        )}
+      </p>
+    {/if}
+  </form>
 </section>
 
 <style>
   .agents-view {
-    width: min(100%, 72rem);
-    color: var(--color-text);
-  }
-
-  .agents-view__header,
-  .agents-view__panel,
-  .agents-view__notice {
-    border: 1px solid var(--color-border);
-    background:
-      linear-gradient(135deg, rgba(33, 29, 23, 0.96), rgba(20, 23, 27, 0.9)),
-      var(--color-panel);
-    box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.3);
-  }
-
-  .agents-view__header {
     display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: var(--space-lg);
-    margin-bottom: var(--space-lg);
-    padding: var(--space-xl);
-    border-radius: var(--radius-lg);
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    color: var(--text-hi);
   }
 
-  .agents-view__status {
+  .agents-view p,
+  .agents-view h2 {
     margin: 0;
-    color: var(--color-accent);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.16em;
+  }
+
+  .agents-view__list-pane {
+    display: flex;
+    width: 240px;
+    min-width: 240px;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .agents-view__pane-header {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agents-view__pane-title,
+  .agents-view__status,
+  .agents-view__group-title,
+  .agents-view__field > span,
+  .agents-view__readonly-field > span {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    line-height: 1;
     text-transform: uppercase;
   }
 
-  .agents-view h2,
-  .agents-view h3,
-  .agents-view p {
-    margin: 0;
+  .agents-view__pane-subtitle {
+    margin-top: 4px;
+    color: var(--text-lo);
+    font-size: 12px;
   }
 
-  .agents-view h2 {
-    font-size: clamp(3rem, 9vw, 6rem);
-    line-height: 0.95;
+  .agents-view__new-button svg {
+    width: 11px;
+    height: 11px;
   }
 
-  .agents-view h3 {
-    font-size: 1.35rem;
+  .agents-view__list-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
   }
 
-  .agents-view__header p:last-child,
-  .agents-view__muted,
-  .agents-view small {
-    color: var(--color-muted);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    line-height: 1.5;
-  }
-
-  .agents-view__grid {
-    display: grid;
-    grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr);
-    gap: var(--space-lg);
-    align-items: start;
-  }
-
-  .agents-view__panel {
-    padding: var(--space-lg);
-    border-radius: var(--radius-lg);
-  }
-
-  .agents-view__panel-header,
-  .agents-view__actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-md);
-  }
-
-  .agents-view__list,
-  .agents-view__form {
-    display: grid;
-    gap: var(--space-md);
+  .agents-view__empty-list {
+    padding: var(--space-md);
+    color: var(--text-lo);
+    font-size: 12.5px;
   }
 
   .agents-view__list {
-    margin-top: var(--space-md);
+    display: flex;
+    flex-direction: column;
   }
 
-  .agents-view__agent-card,
-  .agents-view button,
-  .agents-view input,
-  .agents-view textarea {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-  }
-
-  .agents-view__agent-card,
-  .agents-view button {
-    color: var(--color-text);
-    background: rgba(240, 164, 58, 0.08);
-    cursor: pointer;
-  }
-
-  .agents-view button {
-    padding: 0.7rem 0.95rem;
-  }
-
-  .agents-view button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .agents-view__agent-card {
-    display: grid;
-    width: 100%;
-    gap: var(--space-xs);
-    padding: var(--space-md);
+  .agents-view__agent-row {
+    display: flex;
+    align-items: stretch;
+    border: 0;
+    background: transparent;
+    color: var(--text-hi);
     text-align: left;
+    transition: background 100ms ease;
   }
 
-  .agents-view__agent-card--active {
-    border-color: var(--color-accent-strong);
-    background: var(--color-panel-strong);
+  .agents-view__agent-row:hover {
+    background: var(--surface-2);
   }
 
-  .agents-view__form label,
-  .agents-view__readonly-field {
+  .agents-view__agent-row--active {
+    background: var(--accent-dim);
+  }
+
+  .agents-view__agent-bar {
+    width: 2px;
+    flex-shrink: 0;
+    background: transparent;
+  }
+
+  .agents-view__agent-row--active .agents-view__agent-bar {
+    background: var(--accent);
+  }
+
+  .agents-view__agent-row-inner {
+    min-width: 0;
+    flex: 1;
+    padding: 7px 12px 7px 10px;
+  }
+
+  .agents-view__agent-name,
+  .agents-view__agent-sub {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agents-view__agent-name {
+    color: var(--text-hi);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .agents-view__agent-row--active .agents-view__agent-name {
+    color: var(--accent);
+  }
+
+  .agents-view__agent-sub {
+    margin-top: 1px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  .agents-view__detail-pane {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 22px;
+    overflow-y: auto;
+    padding: 26px 30px;
+  }
+
+  .agents-view__detail-top,
+  .agents-view__actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-md);
+  }
+
+  .agents-view__detail-buttons,
+  .agents-view__actions {
+    flex-wrap: wrap;
+  }
+
+  .agents-view__detail-buttons {
+    display: flex;
+    gap: var(--space-sm);
+  }
+
+  .agents-view__status {
+    margin-bottom: var(--space-sm);
+    color: var(--accent);
+  }
+
+  .agents-view__heading {
+    color: var(--text-hi);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+
+  .agents-view__detail-sub,
+  .agents-view__muted,
+  .agents-view small {
+    color: var(--text-lo);
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .agents-view__detail-sub {
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .agents-view__notice {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--green);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--text-med);
+  }
+
+  .agents-view__notice--error {
+    border-left-color: var(--red);
+    color: var(--red);
+  }
+
+  .agents-view__detail-group {
+    flex-shrink: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+  }
+
+  .agents-view__group-title {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .agents-view__fields {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-md);
+    padding: 16px;
+  }
+
+  .agents-view__field,
+  .agents-view__readonly-field {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
     gap: var(--space-xs);
   }
 
-  .agents-view__form label span,
-  .agents-view__readonly-field > span {
-    color: var(--color-accent-strong);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .agents-view__field--wide {
+    grid-column: 1 / -1;
+  }
+
+  .agents-view input,
+  .agents-view textarea,
+  .agents-view__readonly-field code {
+    width: 100%;
+    padding: 7px 11px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .agents-view textarea {
+    min-height: 112px;
+    resize: vertical;
+  }
+
+  .agents-view input:disabled {
+    color: var(--text-lo);
   }
 
   .agents-view__readonly-field code {
     display: block;
     overflow-wrap: anywhere;
-    padding: 0.75rem 0.85rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    color: var(--color-muted);
-    background: rgba(21, 19, 15, 0.5);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
+    color: var(--text-med);
   }
 
-  .agents-view input,
-  .agents-view textarea {
-    width: 100%;
-    padding: 0.75rem 0.85rem;
-    color: var(--color-text);
-    background: rgba(21, 19, 15, 0.82);
-    font: inherit;
-  }
-
-  .agents-view textarea {
-    resize: vertical;
-  }
-
-  .agents-view input:disabled {
-    color: var(--color-subtle);
-  }
-
-  .agents-view__two-column {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-md);
-  }
-
-  .agents-view__notice {
-    margin-bottom: var(--space-md);
-    padding: var(--space-md);
-    border-radius: var(--radius-md);
-    color: var(--color-accent-strong);
-  }
-
-  .agents-view__notice--error,
   .agents-view__field-error {
-    color: #ffb199;
+    color: var(--red) !important;
   }
 
   .agents-view__invalid {
-    border-color: #ffb199 !important;
+    border-color: var(--red) !important;
   }
 
-  .agents-view__danger-button {
-    border-color: rgba(255, 177, 153, 0.5) !important;
-    color: #ffd8cc !important;
-  }
-
-  .agents-view__ghost-button {
-    background: transparent !important;
-  }
-
-  @media (max-width: 980px) {
-    .agents-view__grid,
-    .agents-view__two-column {
-      grid-template-columns: 1fr;
+  @media (max-width: 900px) {
+    .agents-view {
+      flex-direction: column;
+      overflow: visible;
     }
 
-    .agents-view__header {
-      align-items: start;
-      flex-direction: column;
+    .agents-view__list-pane {
+      width: 100%;
+      min-width: 0;
+      max-height: 260px;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .agents-view__detail-pane {
+      overflow: visible;
+    }
+
+    .agents-view__fields {
+      grid-template-columns: 1fr;
     }
   }
 </style>
