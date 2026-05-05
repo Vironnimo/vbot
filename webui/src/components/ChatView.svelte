@@ -47,7 +47,10 @@
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
   let lastSharedSelectedAgentId = $state('');
-  let lastAgentsRefreshToken = $state(agentsRefreshToken);
+  let lastAgentsRefreshToken = $state(null);
+  let currentTokenEstimate = $derived(
+    estimateTokens(activeSessionState?.messages ?? []),
+  );
 
   $effect(() => {
     if (sharedAgents.length > 0) {
@@ -68,6 +71,10 @@
   });
 
   $effect(() => {
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = agentsRefreshToken;
+      return;
+    }
     if (agentsRefreshToken !== lastAgentsRefreshToken) {
       lastAgentsRefreshToken = agentsRefreshToken;
       loadAgents({ preferredAgentId: sharedSelectedAgentId });
@@ -269,92 +276,137 @@
       removeQueuedMessage(activeSessionState, queuedMessageId);
     }
   };
+
+  const estimateTokens = (messages) => {
+    const characterCount = messages.reduce(
+      (total, message) =>
+        total +
+        String(message.content ?? '').length +
+        String(message.reasoning ?? '').length,
+      0,
+    );
+    return Math.ceil(characterCount / 4);
+  };
+
+  const formatTokenEstimate = (tokenCount) =>
+    t('chat.tokenBadge', '{count} tok', {
+      count: new Intl.NumberFormat(undefined).format(tokenCount),
+    });
 </script>
 
-<section class="chat-view" aria-labelledby="chat-title">
-  <header class="chat-view__header">
-    <div>
-      <p class="chat-view__eyebrow">{t('app.ready', 'Ready')}</p>
-      <h2 id="chat-title">{t('chat.title', 'Chat')}</h2>
-      <p>
-        {t('chat.subtitle', 'Select an agent and continue its active session.')}
-      </p>
+<section class="view view-chat active chat-view" aria-labelledby="chat-title">
+  <header class="chat-header">
+    <h2 id="chat-title" class="chat-title">{t('chat.title', 'Chat')}</h2>
+    <div class="agent-tabs" aria-label={t('chat.selectAgent', 'Select agent')}>
+      {#if chatState.agents.length > 0}
+        {#each chatState.agents as agent (agent.id)}
+          <button
+            type="button"
+            class:active={agent.id === chatState.selectedAgentId}
+            class="agent-tab"
+            disabled={chatState.loadingAgents}
+            onclick={() => handleSelectAgent(agent.id)}
+          >
+            <span class="tab-indicator"></span>
+            <span>{agent.name}</span>
+          </button>
+        {/each}
+      {:else}
+        <span class="agent-tab agent-tab--empty">
+          <span class="tab-indicator"></span>
+          {t('chat.noAgents', 'No agents are available yet.')}
+        </span>
+      {/if}
     </div>
-    <button
-      type="button"
-      disabled={!activeAgent || newSessionBlocked || creatingSession}
-      title={newSessionBlocked
-        ? t(
-            'chat.newSessionBlocked',
-            'A new session can be started after the current run finishes.',
-          )
-        : undefined}
-      onclick={handleNewSession}
-    >
-      {creatingSession
-        ? t('common.loading', 'Loading…')
-        : t('chat.newSession', 'New Session')}
-    </button>
+    <div class="header-right">
+      <span class="token-badge"
+        >{formatTokenEstimate(currentTokenEstimate)}</span
+      >
+      <button
+        type="button"
+        class="btn-outline chat-refresh"
+        onclick={loadAgents}
+        disabled={chatState.loadingAgents}
+      >
+        {t('common.refresh', 'Refresh')}
+      </button>
+      {#if activeSessionState && isRunActive(activeSessionState)}
+        <button
+          type="button"
+          class="btn-outline btn-dang"
+          disabled={cancellingRun}
+          onclick={handleCancelRun}
+        >
+          {cancellingRun
+            ? t('cancel.cancelling', 'Cancelling run…')
+            : t('chat.cancelRun', 'Cancel run')}
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="btn-new"
+        disabled={!activeAgent || newSessionBlocked || creatingSession}
+        title={newSessionBlocked
+          ? t(
+              'chat.newSessionBlocked',
+              'A new session can be started after the current run finishes.',
+            )
+          : undefined}
+        onclick={handleNewSession}
+      >
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {creatingSession
+          ? t('common.loading', 'Loading…')
+          : t('chat.newSession', 'New Session')}
+      </button>
+    </div>
   </header>
 
-  <div class="chat-view__agent-bar">
-    <label for="chat-agent-select"
-      >{t('chat.selectAgent', 'Select agent')}</label
-    >
-    <select
-      id="chat-agent-select"
-      disabled={chatState.loadingAgents || chatState.agents.length === 0}
-      value={chatState.selectedAgentId}
-      onchange={(event) => handleSelectAgent(event.currentTarget.value)}
-    >
-      {#each chatState.agents as agent (agent.id)}
-        <option value={agent.id}>{agent.name}</option>
-      {/each}
-    </select>
-    <button
-      type="button"
-      onclick={loadAgents}
-      disabled={chatState.loadingAgents}
-    >
-      {t('common.refresh', 'Refresh')}
-    </button>
-    {#if activeSessionState && isRunActive(activeSessionState)}
-      <button type="button" disabled={cancellingRun} onclick={handleCancelRun}>
-        {cancellingRun
-          ? t('cancel.cancelling', 'Cancelling run…')
-          : t('chat.cancelRun', 'Cancel run')}
-      </button>
-    {/if}
-  </div>
-
   {#if chatState.loadingAgents}
-    <p class="chat-view__notice">{t('loading.agents', 'Loading agents…')}</p>
+    <div class="empty-state chat-view__state">
+      <p class="empty-state-title">{t('loading.agents', 'Loading agents…')}</p>
+    </div>
   {:else if chatState.agents.length === 0}
-    <p class="chat-view__notice">
-      {t('chat.noAgents', 'No agents are available yet.')}
-    </p>
+    <div class="empty-state chat-view__state">
+      <p class="empty-state-title">
+        {t('chat.noAgents', 'No agents are available yet.')}
+      </p>
+      {#if chatState.agentsError}
+        <p class="empty-state-sub">{chatState.agentsError}</p>
+      {/if}
+    </div>
   {:else if !activeAgent}
-    <p class="chat-view__notice">
-      {t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
-    </p>
+    <div class="empty-state chat-view__state">
+      <p class="empty-state-title">
+        {t('chat.noAgentSelected', 'Choose an agent to start chatting.')}
+      </p>
+    </div>
   {:else}
-    {#if loadingHistory}
-      <p class="chat-view__notice">
-        {t('loading.history', 'Loading chat history…')}
-      </p>
-    {/if}
-    {#if historyError}
-      <p class="chat-view__error">
-        {t('chat.historyLoadError', 'Chat history could not be loaded.')}
-        {historyError}
-      </p>
-    {/if}
-    {#if actionError}
-      <p class="chat-view__error">{actionError}</p>
-    {/if}
-
     <div class="chat-view__surface">
-      <ChatTimeline sessionState={activeSessionState} />
+      {#if loadingHistory || historyError || actionError}
+        <div class="chat-view__notice-stack" aria-live="polite">
+          {#if loadingHistory}
+            <p class="chat-view__notice">
+              {t('loading.history', 'Loading chat history…')}
+            </p>
+          {/if}
+          {#if historyError}
+            <p class="chat-view__error">
+              {t('chat.historyLoadError', 'Chat history could not be loaded.')}
+              {historyError}
+            </p>
+          {/if}
+          {#if actionError}
+            <p class="chat-view__error">{actionError}</p>
+          {/if}
+        </div>
+      {/if}
+      <ChatTimeline
+        sessionState={activeSessionState}
+        agentName={activeAgent.name}
+      />
       <QueuedMessages
         queuedMessages={activeSessionState?.queue ?? []}
         onRemoveQueuedMessage={handleRemoveQueuedMessage}
@@ -370,112 +422,162 @@
 
 <style>
   .chat-view {
-    display: grid;
-    width: min(100%, 68rem);
-    max-height: calc(100vh - 4rem);
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    background:
-      linear-gradient(135deg, rgba(33, 29, 23, 0.96), rgba(20, 23, 27, 0.9)),
-      var(--color-panel);
-    box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.38);
+    background: var(--bg);
   }
 
-  .chat-view__header,
-  .chat-view__agent-bar {
+  .chat-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-md);
-    padding: var(--space-lg);
+    gap: 8px;
+    height: 50px;
+    flex-shrink: 0;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
 
-  .chat-view__header {
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  .chat-view__agent-bar {
-    justify-content: flex-start;
-    border-bottom: 1px solid rgba(240, 164, 58, 0.14);
-    background: rgba(21, 19, 15, 0.36);
-  }
-
-  .chat-view__eyebrow {
-    margin: 0 0 var(--space-xs);
-    color: var(--color-accent);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-  }
-
-  .chat-view h2,
-  .chat-view p {
+  .chat-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
     margin: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
 
-  .chat-view h2 {
-    color: var(--color-text);
-    font-size: clamp(2.4rem, 8vw, 5rem);
-    line-height: 0.95;
+  .agent-tabs {
+    display: flex;
+    min-width: 0;
+    height: 100%;
+    flex: 1;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
   }
 
-  .chat-view p,
-  .chat-view label,
-  .chat-view select,
-  .chat-view button {
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
+  .agent-tab {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 7px;
+    padding: 0 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--text-lo);
+    background: transparent;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      border-color 150ms ease,
+      color 150ms ease;
   }
 
-  .chat-view p,
-  .chat-view label {
-    color: var(--color-muted);
+  .agent-tab:hover,
+  .agent-tab:focus-visible {
+    color: var(--text-med);
+    outline: none;
   }
 
-  .chat-view select,
-  .chat-view button {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: 0.75rem 0.9rem;
-    color: var(--color-text);
-    background: rgba(21, 19, 15, 0.82);
+  .agent-tab.active {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
   }
 
-  .chat-view button {
-    cursor: pointer;
+  .agent-tab--empty {
+    cursor: default;
   }
 
-  .chat-view button:disabled,
-  .chat-view select:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
+  .tab-indicator {
+    width: 5px;
+    height: 5px;
+  }
+
+  .header-right {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .token-badge {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-lo);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .chat-view__surface {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  .chat-view__state {
+    flex: 1;
+  }
+
+  .chat-view__notice-stack {
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
 
   .chat-view__notice,
   .chat-view__error {
-    padding: var(--space-md) var(--space-lg);
+    margin: 0;
+    color: var(--text-med);
+    font-size: 12.5px;
   }
 
   .chat-view__error {
-    color: var(--color-accent-strong) !important;
+    color: var(--red);
   }
 
-  .chat-view__surface {
-    display: grid;
-    min-height: 0;
+  .btn-new svg {
+    width: 12px;
+    height: 12px;
   }
 
   @media (max-width: 760px) {
-    .chat-view {
-      max-height: none;
+    .chat-header {
+      height: auto;
+      flex-wrap: wrap;
+      padding: 10px 14px;
     }
 
-    .chat-view__header,
-    .chat-view__agent-bar {
-      align-items: stretch;
-      flex-direction: column;
+    .agent-tabs {
+      order: 2;
+      width: 100%;
+      height: 38px;
+      flex-basis: 100%;
+    }
+
+    .header-right {
+      margin-left: auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chat-refresh,
+    .token-badge {
+      display: none;
     }
   }
 </style>

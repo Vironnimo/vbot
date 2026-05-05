@@ -4,25 +4,28 @@
   let { queuedMessages = [], onRemoveQueuedMessage } = $props();
 </script>
 
-<aside class="queued-messages" aria-label={t('queue.title', 'Queued messages')}>
-  <div class="queued-messages__header">
-    <h3>{t('queue.title', 'Queued messages')}</h3>
-    <span
-      >{t('queue.count', '{count} queued', {
-        count: queuedMessages.length,
-      })}</span
-    >
-  </div>
-  {#if queuedMessages.length === 0}
-    <p>{t('queue.empty', 'No queued messages.')}</p>
-  {:else}
-    <p>{t('queue.pending', 'Waiting for the active run to finish.')}</p>
+{#if queuedMessages.length > 0}
+  <aside
+    class="queued-messages"
+    aria-label={t('queue.title', 'Queued messages')}
+  >
+    <div class="queued-messages__header">
+      <div>
+        <h3>{t('queue.title', 'Queued messages')}</h3>
+        <p>{t('queue.pending', 'Waiting for the active run to finish.')}</p>
+      </div>
+      <span class="chip chip-amber">
+        {t('queue.count', '{count} queued', { count: queuedMessages.length })}
+      </span>
+    </div>
     <ol>
       {#each queuedMessages as message (message.id)}
         <li>
-          <span>{message.content}</span>
+          <span class="queued-messages__content">{message.content}</span>
           <button
             type="button"
+            class="tl-btn"
+            aria-label={t('queue.removeMessage', 'Remove queued message')}
             onclick={() => onRemoveQueuedMessage?.(message.id)}
           >
             {t('common.remove', 'Remove')}
@@ -30,23 +33,25 @@
         </li>
       {/each}
     </ol>
-  {/if}
-</aside>
+  </aside>
+{/if}
 
 <style>
   .queued-messages {
-    display: grid;
-    gap: var(--space-sm);
-    padding: var(--space-md);
-    border-top: 1px solid var(--color-border);
-    background: rgba(21, 19, 15, 0.52);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
   }
 
-  .queued-messages__header {
+  .queued-messages__header,
+  .queued-messages li {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-md);
+    gap: 14px;
   }
 
   .queued-messages h3,
@@ -55,39 +60,46 @@
   }
 
   .queued-messages h3 {
-    color: var(--color-text);
-    font-size: 1rem;
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
   }
 
-  .queued-messages span,
   .queued-messages p {
-    color: var(--color-muted);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.9rem;
+    margin-top: 3px;
+    color: var(--text-lo);
+    font-size: 12px;
   }
 
   .queued-messages ol {
-    display: grid;
-    gap: var(--space-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     margin: 0;
     padding: 0;
     list-style: none;
   }
 
   .queued-messages li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-sm);
-    padding: var(--space-sm);
-    border: 1px solid rgba(240, 164, 58, 0.14);
-    border-radius: var(--radius-md);
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--bg);
   }
 
-  .queued-messages button {
-    border: 0;
-    color: var(--color-accent-strong);
-    background: transparent;
-    cursor: pointer;
+  .queued-messages__content {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-med);
+    font-size: 12.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tl-btn {
+    flex-shrink: 0;
   }
 </style>
