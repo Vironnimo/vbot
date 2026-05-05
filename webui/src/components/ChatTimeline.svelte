@@ -187,8 +187,38 @@
 
   const isRunningToolEvent = (event) => event.type === 'tool_call_started';
 
+  const hasErrorResult = (result) => {
+    if (!result || typeof result !== 'object') {
+      return false;
+    }
+
+    return Boolean(
+      result.error ||
+      result.ok === false ||
+      result.success === false ||
+      ['error', 'failed'].includes(result.status),
+    );
+  };
+
+  const hasToolResultError = (event) => {
+    if (event.payload?.error) {
+      return true;
+    }
+
+    const content = messageFromEvent(event)?.content;
+    if (!content) {
+      return false;
+    }
+
+    try {
+      return hasErrorResult(JSON.parse(content));
+    } catch {
+      return false;
+    }
+  };
+
   const isFailedToolEvent = (event) =>
-    event.type === 'tool_call_result' && Boolean(event.payload?.error);
+    event.type === 'tool_call_result' && hasToolResultError(event);
 
   const isTerminalEvent = (event) => event.type.startsWith('run_');
 </script>
