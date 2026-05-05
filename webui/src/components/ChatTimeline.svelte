@@ -78,6 +78,9 @@
   const hasAssistantContent = (message) =>
     message.role === 'assistant' && Boolean(message.content);
 
+  const isReasoningOnlyAssistantMessage = (message) =>
+    hasReadableReasoning(message) && !hasAssistantContent(message);
+
   const textFromEvent = (event) => {
     const message = event.payload?.message;
     if (message) {
@@ -144,10 +147,25 @@
     }
     if (event.type === 'tool_call_result') {
       return event.payload?.error
-        ? t('chat.event.failed', 'Run failed')
+        ? t('chat.event.toolFailed', 'Tool failed')
         : t('chat.event.done', 'done');
     }
     return textFromEvent(event);
+  };
+
+  const terminalRunDetailText = (event) => {
+    const detail = textFromEvent(event);
+    if (!detail) {
+      return '';
+    }
+
+    const label = labelForEvent(event).toLocaleLowerCase();
+    const normalizedDetail = detail.toLocaleLowerCase();
+    if (label.endsWith(normalizedDetail) || label.includes(normalizedDetail)) {
+      return '';
+    }
+
+    return detail;
   };
 </script>
 
@@ -170,26 +188,35 @@
             <p class="reasoning-body">{item.message.reasoning}</p>
           </details>
         {/if}
-        <article
-          class:msg--user={item.message.role === 'user'}
-          class:msg--assistant={item.message.role === 'assistant'}
-          class="msg"
-        >
-          <div class="msg-header">
-            <div class="msg-avatar">
-              {labelForMessage(item.message).slice(0, 1)}
+        {#if isReasoningOnlyAssistantMessage(item.message)}
+          <details class="reasoning-block">
+            <summary class="reasoning-header">
+              {t('chat.event.thinking', 'Thinking')}
+            </summary>
+            <p class="reasoning-body">{item.message.reasoning}</p>
+          </details>
+        {:else}
+          <article
+            class:msg--user={item.message.role === 'user'}
+            class:msg--assistant={item.message.role === 'assistant'}
+            class="msg"
+          >
+            <div class="msg-header">
+              <div class="msg-avatar">
+                {labelForMessage(item.message).slice(0, 1)}
+              </div>
+              <span class="msg-author">{labelForMessage(item.message)}</span>
+              {#if item.message.timestamp}
+                <span class="msg-timestamp"
+                  >{timeLabel(item.message.timestamp)}</span
+                >
+              {/if}
             </div>
-            <span class="msg-author">{labelForMessage(item.message)}</span>
-            {#if item.message.timestamp}
-              <span class="msg-timestamp"
-                >{timeLabel(item.message.timestamp)}</span
-              >
-            {/if}
-          </div>
-          <div class="msg-content">
-            <p class="msg-body-text">{textFromMessage(item.message)}</p>
-          </div>
-        </article>
+            <div class="msg-content">
+              <p class="msg-body-text">{textFromMessage(item.message)}</p>
+            </div>
+          </article>
+        {/if}
       {:else if item.event.type === 'reasoning'}
         <details class="reasoning-block">
           <summary class="reasoning-header">
@@ -228,8 +255,8 @@
       {:else if item.event.type.startsWith('run_')}
         <p class="run-status-line">
           <span>{labelForEvent(item.event)}</span>
-          {#if textFromEvent(item.event)}
-            <span>{textFromEvent(item.event)}</span>
+          {#if terminalRunDetailText(item.event)}
+            <span>{terminalRunDetailText(item.event)}</span>
           {/if}
         </p>
       {:else}

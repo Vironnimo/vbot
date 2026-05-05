@@ -51,6 +51,7 @@ describe('i18n t()', () => {
       'chat.event.result',
       'chat.event.running',
       'chat.event.done',
+      'chat.event.toolFailed',
       'queue.title',
       'cancel.confirm',
       'agents.create',
