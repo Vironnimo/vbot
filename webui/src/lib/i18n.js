@@ -173,6 +173,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
   'agents.detail.newSubtitle': 'id assigned at creation',
+  'agents.detail.idValue': 'id: {id}',
   'agents.detail.identity': 'Identity',
   'agents.detail.model': 'Model',
   'agents.detail.fallbackStatus': 'Fallback',
