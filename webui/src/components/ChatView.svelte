@@ -46,6 +46,11 @@
   let activeSessionState = $derived(currentSessionState(chatState));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
+  let activeRunStatus = $derived(
+    activeSessionState && isRunActive(activeSessionState)
+      ? t('chat.runStatus.running', 'Running')
+      : t('chat.runStatus.idle', 'Idle'),
+  );
   let lastSharedSelectedAgentId = $state('');
   let lastAgentsRefreshToken = $state(agentsRefreshToken);
 
@@ -273,59 +278,91 @@
 
 <section class="chat-view" aria-labelledby="chat-title">
   <header class="chat-view__header">
-    <div>
-      <p class="chat-view__eyebrow">{t('app.ready', 'Ready')}</p>
-      <h2 id="chat-title">{t('chat.title', 'Chat')}</h2>
-      <p>
-        {t('chat.subtitle', 'Select an agent and continue its active session.')}
-      </p>
+    <div
+      class="chat-view__agent-tabs"
+      aria-label={t('chat.selectAgent', 'Select agent')}
+    >
+      {#if chatState.loadingAgents}
+        <span class="chat-view__status-line"
+          >{t('loading.agents', 'Loading agents…')}</span
+        >
+      {:else if chatState.agents.length === 0}
+        <span class="chat-view__status-line"
+          >{t('chat.noAgents', 'No agents are available yet.')}</span
+        >
+      {:else}
+        {#each chatState.agents as agent (agent.id)}
+          <button
+            type="button"
+            class:chat-view__agent-tab--active={agent.id ===
+              chatState.selectedAgentId}
+            class="chat-view__agent-tab"
+            aria-current={agent.id === chatState.selectedAgentId
+              ? 'true'
+              : undefined}
+            onclick={() => handleSelectAgent(agent.id)}
+          >
+            <span class="chat-view__tab-indicator" aria-hidden="true"></span>
+            <span>{agent.name}</span>
+          </button>
+        {/each}
+      {/if}
     </div>
-    <button
-      type="button"
-      disabled={!activeAgent || newSessionBlocked || creatingSession}
-      title={newSessionBlocked
-        ? t(
-            'chat.newSessionBlocked',
-            'A new session can be started after the current run finishes.',
-          )
-        : undefined}
-      onclick={handleNewSession}
-    >
-      {creatingSession
-        ? t('common.loading', 'Loading…')
-        : t('chat.newSession', 'New Session')}
-    </button>
-  </header>
 
-  <div class="chat-view__agent-bar">
-    <label for="chat-agent-select"
-      >{t('chat.selectAgent', 'Select agent')}</label
-    >
-    <select
-      id="chat-agent-select"
-      disabled={chatState.loadingAgents || chatState.agents.length === 0}
-      value={chatState.selectedAgentId}
-      onchange={(event) => handleSelectAgent(event.currentTarget.value)}
-    >
-      {#each chatState.agents as agent (agent.id)}
-        <option value={agent.id}>{agent.name}</option>
-      {/each}
-    </select>
-    <button
-      type="button"
-      onclick={loadAgents}
-      disabled={chatState.loadingAgents}
-    >
-      {t('common.refresh', 'Refresh')}
-    </button>
-    {#if activeSessionState && isRunActive(activeSessionState)}
-      <button type="button" disabled={cancellingRun} onclick={handleCancelRun}>
-        {cancellingRun
-          ? t('cancel.cancelling', 'Cancelling run…')
-          : t('chat.cancelRun', 'Cancel run')}
+    <h2 id="chat-title" class="chat-view__title">{t('chat.title', 'Chat')}</h2>
+
+    <div class="chat-view__header-actions">
+      {#if activeAgent?.model}
+        <span class="chat-view__model-badge">{activeAgent.model}</span>
+      {/if}
+      <span
+        class:chat-view__run-badge--running={activeSessionState &&
+          isRunActive(activeSessionState)}
+        class="chat-view__run-badge"
+      >
+        {activeRunStatus}
+      </span>
+      <button
+        class="btn-secondary chat-view__refresh-button"
+        type="button"
+        onclick={loadAgents}
+        disabled={chatState.loadingAgents}
+      >
+        {t('common.refresh', 'Refresh')}
       </button>
-    {/if}
-  </div>
+      {#if activeSessionState && isRunActive(activeSessionState)}
+        <button
+          class="btn-secondary btn-danger"
+          type="button"
+          disabled={cancellingRun}
+          onclick={handleCancelRun}
+        >
+          {cancellingRun
+            ? t('cancel.cancelling', 'Cancelling run…')
+            : t('chat.cancelRun', 'Cancel run')}
+        </button>
+      {/if}
+      <button
+        class="btn-new"
+        type="button"
+        disabled={!activeAgent || newSessionBlocked || creatingSession}
+        title={newSessionBlocked
+          ? t(
+              'chat.newSessionBlocked',
+              'A new session can be started after the current run finishes.',
+            )
+          : undefined}
+        onclick={handleNewSession}
+      >
+        <svg viewBox="0 0 14 14" aria-hidden="true">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {creatingSession
+          ? t('common.loading', 'Loading…')
+          : t('chat.newSession', 'New Session')}
+      </button>
+    </div>
+  </header>
 
   {#if chatState.loadingAgents}
     <p class="chat-view__notice">{t('loading.agents', 'Loading agents…')}</p>
@@ -353,6 +390,15 @@
       <p class="chat-view__error">{actionError}</p>
     {/if}
 
+    <div class="chat-view__session-strip">
+      <span class="chat-view__session-label"
+        >{t('chat.session', 'Session')}</span
+      >
+      <span class="chat-view__session-value">
+        {activeAgent.current_session_id ?? t('common.unknown', 'Unknown')}
+      </span>
+    </div>
+
     <div class="chat-view__surface">
       <ChatTimeline sessionState={activeSessionState} />
       <QueuedMessages
@@ -370,112 +416,179 @@
 
 <style>
   .chat-view {
-    display: grid;
-    width: min(100%, 68rem);
-    max-height: calc(100vh - 4rem);
-    overflow: hidden;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    background:
-      linear-gradient(135deg, rgba(33, 29, 23, 0.96), rgba(20, 23, 27, 0.9)),
-      var(--color-panel);
-    box-shadow: 0 2rem 5rem rgba(0, 0, 0, 0.38);
-  }
-
-  .chat-view__header,
-  .chat-view__agent-bar {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-md);
-    padding: var(--space-lg);
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
   }
 
   .chat-view__header {
-    border-bottom: 1px solid var(--color-border);
+    display: flex;
+    height: 50px;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 0 var(--space-lg);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
   }
 
-  .chat-view__agent-bar {
-    justify-content: flex-start;
-    border-bottom: 1px solid rgba(240, 164, 58, 0.14);
-    background: rgba(21, 19, 15, 0.36);
+  .chat-view__agent-tabs {
+    display: flex;
+    height: 100%;
+    min-width: 0;
+    flex: 1;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
 
-  .chat-view__eyebrow {
-    margin: 0 0 var(--space-xs);
-    color: var(--color-accent);
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
+  .chat-view__agent-tabs::-webkit-scrollbar {
+    display: none;
   }
 
-  .chat-view h2,
-  .chat-view p {
-    margin: 0;
+  .chat-view__agent-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 14px;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-lo);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      border-color 150ms ease,
+      color 150ms ease;
   }
 
-  .chat-view h2 {
-    color: var(--color-text);
-    font-size: clamp(2.4rem, 8vw, 5rem);
-    line-height: 0.95;
+  .chat-view__agent-tab:hover {
+    color: var(--text-med);
   }
 
-  .chat-view p,
-  .chat-view label,
-  .chat-view select,
-  .chat-view button {
-    font-family: 'Trebuchet MS', Verdana, sans-serif;
+  .chat-view__agent-tab--active,
+  .chat-view__agent-tab--active:hover {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
   }
 
-  .chat-view p,
-  .chat-view label {
-    color: var(--color-muted);
+  .chat-view__tab-indicator {
+    width: 5px;
+    height: 5px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--text-lo);
+    transition: background 150ms ease;
   }
 
-  .chat-view select,
-  .chat-view button {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    padding: 0.75rem 0.9rem;
-    color: var(--color-text);
-    background: rgba(21, 19, 15, 0.82);
+  .chat-view__agent-tab--active .chat-view__tab-indicator {
+    background: var(--green);
   }
 
-  .chat-view button {
-    cursor: pointer;
+  .chat-view__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
-  .chat-view button:disabled,
-  .chat-view select:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
+  .chat-view__header-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .chat-view__model-badge,
+  .chat-view__run-badge,
+  .chat-view__session-value {
+    overflow: hidden;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-view__model-badge,
+  .chat-view__run-badge {
+    max-width: 220px;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+  }
+
+  .chat-view__run-badge--running {
+    color: var(--amber);
+  }
+
+  .chat-view__status-line {
+    align-self: center;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
   }
 
   .chat-view__notice,
   .chat-view__error {
+    margin: 0;
     padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-med);
+    font-size: 12.5px;
   }
 
   .chat-view__error {
-    color: var(--color-accent-strong) !important;
+    color: var(--red);
+  }
+
+  .chat-view__session-strip {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: 7px var(--space-lg);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .chat-view__session-label {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
   }
 
   .chat-view__surface {
-    display: grid;
+    display: flex;
     min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .chat-view svg {
+    width: 12px;
+    height: 12px;
   }
 
   @media (max-width: 760px) {
-    .chat-view {
-      max-height: none;
-    }
-
-    .chat-view__header,
-    .chat-view__agent-bar {
-      align-items: stretch;
-      flex-direction: column;
+    .chat-view__model-badge,
+    .chat-view__refresh-button {
+      display: none;
     }
   }
 </style>
