@@ -66,7 +66,9 @@
       const result = await rpc('agent.list');
       agents = Array.isArray(result?.agents) ? result.agents : [];
       const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
-      selectAgent(resolveSelectedAgentId(agents, preferredAgentId));
+      selectAgent(resolveSelectedAgentId(agents, preferredAgentId), {
+        clearNotices: false,
+      });
       notifyAgentsChanged();
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.loadError'));
@@ -83,7 +85,8 @@
     return nextAgents[0]?.id ?? '';
   }
 
-  function selectAgent(agentId) {
+  function selectAgent(agentId, options = {}) {
+    const shouldClearNotices = options.clearNotices ?? true;
     selectedAgentId = agentId;
     const agent = agents.find((item) => item.id === agentId) ?? null;
 
@@ -96,6 +99,9 @@
     }
 
     formErrors = {};
+    if (shouldClearNotices) {
+      clearNotices();
+    }
   }
 
   function startCreate() {
@@ -103,6 +109,11 @@
     formMode = AGENT_FORM_MODE_CREATE;
     formValues = createAgentFormValues();
     formErrors = {};
+    clearNotices();
+  }
+
+  function clearNotices() {
+    errorMessage = '';
     statusMessage = '';
   }
 
@@ -311,6 +322,7 @@
             bind:value={formValues.id}
             disabled={formMode === AGENT_FORM_MODE_EDIT}
             placeholder={t('agents.form.idPlaceholder', 'main-agent')}
+            aria-invalid={Boolean(formErrors.id)}
             aria-describedby="agent-id-help agent-id-error"
           />
           <small id="agent-id-help">
@@ -330,6 +342,7 @@
             type="text"
             bind:value={formValues.name}
             placeholder={t('agents.form.namePlaceholder', 'Main Agent')}
+            aria-invalid={Boolean(formErrors.name)}
           />
           {#if formErrors.name}
             <small class="agents-view__field-error">{fieldError('name')}</small>
@@ -377,6 +390,7 @@
             type="number"
             step="0.01"
             bind:value={formValues.temperature}
+            aria-invalid={Boolean(formErrors.temperature)}
           />
           {#if formErrors.temperature}
             <small class="agents-view__field-error">
