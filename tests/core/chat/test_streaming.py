@@ -82,6 +82,41 @@ async def test_finalizes_empty_content_tool_only_response() -> None:
     assert fields.finish_reason == "tool_calls"
 
 
+async def test_finalized_streamed_tool_calls_keep_stable_indexes_in_arrival_order() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_first",
+            "name_delta": "read",
+            "arguments_delta": '{"path":"one.md"}',
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_second",
+            "name_delta": "read",
+            "arguments_delta": '{"path":"two.md"}',
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_first",
+            "arguments_delta": "",
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls == [
+        {"id": "call_first", "name": "read", "arguments": {"path": "one.md"}},
+        {"id": "call_second", "name": "read", "arguments": {"path": "two.md"}},
+    ]
+
+
 async def test_preserves_reasoning_meta_without_public_delta() -> None:
     accumulator = StreamingAccumulator()
 

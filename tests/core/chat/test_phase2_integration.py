@@ -15,9 +15,14 @@ from core.chat import ChatLoop
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
+from core.tools import tool_success
 from core.utils.config import Config
 
 JsonObject = dict[str, Any]
+
+
+def _ok_tool_handler(_context: Any, _arguments: JsonObject) -> JsonObject:
+    return tool_success({"content": "ok"})
 
 
 @dataclass(frozen=True)
@@ -126,13 +131,13 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
             "read_file",
             "Read a workspace file.",
             {"type": "object"},
-            lambda arguments: {"content": "ok"},
+            _ok_tool_handler,
         )
         runtime.tools.register(
             "shell",
             "Run a shell command.",
             {"type": "object"},
-            lambda arguments: {"content": "ok"},
+            _ok_tool_handler,
         )
         agent = runtime.agents.create(
             "coder",
