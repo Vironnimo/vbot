@@ -11,19 +11,20 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from server.app import _parse_after_sequence, create_app
+from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
 from server.events import ServerEventBus
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 
 def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_path: Path) -> None:
     adapter = StubAdapter(
-        [
+        stream_deltas=[
+            {"type": "reasoning_delta", "text": "Readable thinking"},
+            {"type": "reasoning_meta", "reasoning_meta": {"secret": "opaque"}},
             {
-                "content": "Hello",
-                "reasoning": "Readable thinking",
-                "reasoning_meta": {"secret": "opaque"},
-                "tool_calls": None,
-            }
+                "type": "content_delta",
+                "text": "Hello",
+            },
         ]
     )
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, adapter)))
@@ -57,6 +58,59 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
     assert all(event["payload"]["run_id"] == run_id for event in events)
     assert events[2]["payload"]["run_event_type"] == "reasoning"
     assert "reasoning_meta" not in str(events)
+
+
+def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "reasoning_delta", "text": "Thinking"},
+            {"type": "content_delta", "text": "Hello"},
+        ]
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, adapter)))
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        )
+        with client.websocket_connect("/ws") as websocket:
+            response = client.post(
+                "/api/rpc",
+                json={
+                    "method": "chat.stream",
+                    "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+                },
+            )
+            run_id = response.json()["result"]["run_id"]
+            events = [websocket.receive_json() for _ in range(5)]
+
+    assert [event["type"] for event in events] == [
+        "run_started",
+        "run_output",
+        "run_output",
+        "run_output",
+        "run_completed",
+    ]
+    assert [event["payload"]["run_event_type"] for event in events] == [
+        "run_started",
+        "user_message_persisted",
+        "reasoning",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert all(event["payload"]["run_id"] == run_id for event in events)
+    assert "reasoning_delta" not in str(events)
+    assert "assistant_output_delta" not in str(events)
+    assert "tool_call_delta" not in str(events)
+
+
+def test_websocket_output_mappings_exclude_streaming_delta_event_types() -> None:
+    assert RUN_DELTA_EVENT_TYPES.isdisjoint(RUN_OUTPUT_EVENT_TYPES)
+    assert RUN_DELTA_EVENT_TYPES.isdisjoint(SERVER_EVENT_TYPES)
 
 
 def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> None:

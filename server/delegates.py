@@ -8,17 +8,21 @@ from typing import Any, cast
 
 from core.agents import AgentError
 from core.chat import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    REASONING_DELTA_EVENT,
     REASONING_EVENT,
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
     RUN_STARTED_EVENT,
+    TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
     USER_MESSAGE_EVENT,
     ActiveRunError,
     ChatError,
+    ChatLoop,
     ChatMessage,
     ChatSessionError,
     Run,
@@ -191,7 +195,8 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     content = _required_string(params, "content")
     try:
-        run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+        streaming_chat_loop = _streaming_chat_loop(state)
+        run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -384,6 +389,15 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     asyncio.create_task(_publish_run_events(event_bus, run))
 
 
+def _streaming_chat_loop(state: Any) -> Any:
+    chat_loop = getattr(state, "streaming_chat_loop", None)
+    if chat_loop is not None:
+        return chat_loop
+    chat_loop = ChatLoop(state.runtime, streaming=True)
+    state.streaming_chat_loop = chat_loop
+    return chat_loop
+
+
 def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> None:
     """Publish an agent CRUD event to the server event bus if available."""
     event_bus = getattr(state, "event_bus", None)
@@ -394,6 +408,8 @@ def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> No
 
 async def _publish_run_events(event_bus: Any, run: Run) -> None:
     async for event in run.subscribe():
+        if event.type in RUN_DELTA_EVENT_TYPES:
+            continue
         summary = _server_event_from_run_event(event)
         event_bus.publish(summary["type"], summary["payload"])
 
@@ -432,6 +448,11 @@ RUN_OUTPUT_EVENT_TYPES = {
     TOOL_CALL_STARTED_EVENT,
     TOOL_CALL_RESULT_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+}
+RUN_DELTA_EVENT_TYPES = {
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    TOOL_CALL_DELTA_EVENT,
 }
 RUN_TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_CANCELLED_EVENT, RUN_FAILED_EVENT}
 SERVER_EVENT_TYPES = {

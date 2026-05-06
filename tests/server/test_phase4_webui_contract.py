@@ -34,6 +34,13 @@ class Phase4Adapter:
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
 
+    async def stream(self, _messages: list[JsonObject], *, model_id: str, **_kwargs: Any) -> Any:
+        self.request_started.set()
+        if self._block:
+            await self.release.wait()
+        yield {"type": "content_delta", "text": "Phase 4 response"}
+        yield {"type": "finish", "reason": "stop"}
+
 
 class Phase4Runtime(Runtime):
     def __init__(self, config: Config, adapter: Phase4Adapter | None = None) -> None:

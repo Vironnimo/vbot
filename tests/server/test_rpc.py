@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -111,12 +111,20 @@ class StubPrompts:
 
 
 class StubAdapter:
-    def __init__(self, responses: list[JsonObject] | None = None, *, block: bool = False) -> None:
+    def __init__(
+        self,
+        responses: list[JsonObject] | None = None,
+        *,
+        stream_deltas: list[JsonObject] | None = None,
+        block: bool = False,
+    ) -> None:
         self._responses = responses or []
+        self._stream_deltas = stream_deltas or []
         self._block = block
         self.request_started = asyncio.Event()
         self.release = asyncio.Event()
         self.requests: list[JsonObject] = []
+        self.stream_requests: list[JsonObject] = []
 
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.requests.append(
@@ -131,6 +139,22 @@ class StubAdapter:
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
+
+    async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        self.request_started.set()
+        if self._block:
+            await self.release.wait()
+        deltas = self._next_stream_deltas()
+        for delta in deltas:
+            yield deepcopy(delta)
+
+    def _next_stream_deltas(self) -> list[JsonObject]:
+        if self._stream_deltas and isinstance(self._stream_deltas[0], list):
+            return cast(list[JsonObject], self._stream_deltas.pop(0))
+        return cast(list[JsonObject], self._stream_deltas)
 
 
 class StubRuntime:
@@ -410,7 +434,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
 
 @pytest.mark.asyncio
 async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(tmp_path: Path) -> None:
-    adapter = StubAdapter(block=True)
+    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -426,6 +450,8 @@ async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(tmp_pat
     assert response["ok"] is True
     assert response["result"]["status"] == "running"
     assert response["result"]["sse_url"].startswith("/api/runs/")
+    assert len(adapter.requests) == 0
+    assert len(adapter.stream_requests) == 1
 
     run_id = response["result"]["run_id"]
     adapter.release.set()
@@ -434,7 +460,7 @@ async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(tmp_pat
 
 @pytest.mark.asyncio
 async def test_second_run_in_same_session_is_rejected_while_active(tmp_path: Path) -> None:
-    adapter = StubAdapter(block=True)
+    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -465,7 +491,7 @@ async def test_second_run_in_same_session_is_rejected_while_active(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_chat_cancel_marks_running_run_cancelled(tmp_path: Path) -> None:
-    adapter = StubAdapter(block=True)
+    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     stream_response = await dispatch_rpc(
@@ -485,6 +511,49 @@ async def test_chat_cancel_marks_running_run_cancelled(tmp_path: Path) -> None:
 
     assert cancel_response["ok"] is True
     assert cancel_response["result"]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_chat_send_uses_non_streaming_chat_loop(tmp_path: Path) -> None:
+    adapter = StubAdapter([{"content": "Complete response", "tool_calls": None}])
+    state = make_state(tmp_path, adapter)
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.send",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["message"]["content"] == "Complete response"
+    assert len(adapter.requests) == 1
+    assert len(adapter.stream_requests) == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_uses_streaming_chat_loop(tmp_path: Path) -> None:
+    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "Streamed response"}])
+    state = make_state(tmp_path, adapter)
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+        },
+    )
+    run = state.chat_runs.get(response["result"]["run_id"])
+    final_message = await run.wait()
+
+    assert response["ok"] is True
+    assert final_message.content == "Streamed response"
+    assert len(adapter.requests) == 0
+    assert len(adapter.stream_requests) == 1
+    assert response["result"]["sse_url"] == f"/api/runs/{run.id}/events"
 
 
 @pytest.mark.asyncio

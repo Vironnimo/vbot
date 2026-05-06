@@ -11,21 +11,24 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from server.app import create_app
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
+EXPECTED_SSE_EVENT_NAMES = [
+    "run_started",
+    "user_message_persisted",
+    "reasoning_delta",
+    "tool_call_delta",
+    "tool_call_delta",
+    "reasoning",
+    "tool_call_started",
+    "assistant_output",
+    "tool_call_result",
+    "assistant_output_delta",
+    "assistant_output",
+    "run_completed",
+]
+
 
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Thinking clearly",
-                "reasoning_meta": {"secret": "opaque"},
-                "tool_calls": [
-                    {"id": "call-one", "name": "lookup", "arguments": {"query": "vBot"}}
-                ],
-            },
-            {"content": "Done", "tool_calls": None},
-        ]
-    )
+    adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
     runtime.tools.register(
         "lookup", "Look up a value", {"type": "object"}, lambda _args: {"ok": True}
@@ -54,20 +57,19 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
 
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse(response.text)
-    assert [event["event"] for event in events] == [
-        "run_started",
-        "user_message_persisted",
-        "reasoning",
-        "tool_call_started",
-        "tool_call_result",
-        "assistant_output",
-        "run_completed",
-    ]
-    reasoning_data = cast(dict[str, Any], events[2]["data"])
-    tool_data = cast(dict[str, Any], events[3]["data"])
-    assistant_data = cast(dict[str, Any], events[5]["data"])
+    assert [event["id"] for event in events] == [str(index) for index in range(1, 13)]
+    assert [event["event"] for event in events] == EXPECTED_SSE_EVENT_NAMES
+    reasoning_delta_data = cast(dict[str, Any], events[2]["data"])
+    tool_delta_data = cast(dict[str, Any], events[3]["data"])
+    reasoning_data = cast(dict[str, Any], events[5]["data"])
+    tool_data = cast(dict[str, Any], events[6]["data"])
+    assistant_delta_data = cast(dict[str, Any], events[9]["data"])
+    assistant_data = cast(dict[str, Any], events[10]["data"])
+    assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
+    assert tool_delta_data["payload"]["name_delta"] == "lookup"
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
     assert tool_data["payload"]["tool_call"]["name"] == "lookup"
+    assert assistant_delta_data["payload"]["content_delta"] == "Done"
     assert assistant_data["payload"]["message"]["content"] == "Done"
     assert "reasoning_meta" not in response.text
 
@@ -81,11 +83,137 @@ def test_sse_endpoint_returns_not_found_for_unknown_run(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
+    response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=3")
+
+    assert _event_names(response.text) == [
+        "tool_call_delta",
+        "tool_call_delta",
+        "reasoning",
+        "tool_call_started",
+        "assistant_output",
+        "tool_call_result",
+        "assistant_output_delta",
+        "assistant_output",
+        "run_completed",
+    ]
+
+
+def test_sse_endpoint_replays_after_last_event_id_header(tmp_path: Path) -> None:
+    response = _stream_test_run(tmp_path, headers={"Last-Event-ID": "4"})
+
+    assert _event_names(response.text) == [
+        "tool_call_delta",
+        "reasoning",
+        "tool_call_started",
+        "assistant_output",
+        "tool_call_result",
+        "assistant_output_delta",
+        "assistant_output",
+        "run_completed",
+    ]
+
+
+def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
+    tmp_path: Path,
+) -> None:
+    response = _stream_test_run(
+        tmp_path,
+        sse_url_suffix="?after_sequence=2",
+        headers={"Last-Event-ID": "5"},
+    )
+
+    assert _event_names(response.text) == [
+        "reasoning_delta",
+        "tool_call_delta",
+        "tool_call_delta",
+        "reasoning",
+        "tool_call_started",
+        "assistant_output",
+        "tool_call_result",
+        "assistant_output_delta",
+        "assistant_output",
+        "run_completed",
+    ]
+
+
+def test_sse_endpoint_clamps_malformed_sequence_controls(tmp_path: Path) -> None:
+    malformed_response = _stream_test_run(tmp_path, sse_url_suffix="?after_sequence=bad")
+    negative_response = _stream_test_run(tmp_path, headers={"Last-Event-ID": "-8"})
+
+    assert _event_names(malformed_response.text) == EXPECTED_SSE_EVENT_NAMES
+    assert _event_names(negative_response.text) == EXPECTED_SSE_EVENT_NAMES
+
+
+def _stream_test_run(
+    tmp_path: Path,
+    *,
+    sse_url_suffix: str = "",
+    headers: dict[str, str] | None = None,
+) -> Any:
+    adapter = StubAdapter(stream_deltas=_test_stream_turns())
+    runtime = StubRuntime(tmp_path, adapter)
+    runtime.tools.register(
+        "lookup", "Look up a value", {"type": "object"}, lambda _args: {"ok": True}
+    )
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {"agent_id": "coder", "session_id": "session-one"},
+            },
+        )
+        stream_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.stream",
+                "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+            },
+        )
+        sse_url = f"{stream_response.json()['result']['sse_url']}{sse_url_suffix}"
+        return client.get(sse_url, headers=headers)
+
+
+def _event_names(body: str) -> list[str]:
+    events = _parse_sse(body)
+    event_names = [event["event"] for event in events]
+    assert [event["id"] for event in events] == [str(event["data"]["sequence"]) for event in events]
+    assert event_names == [event["data"]["type"] for event in events]
+    return event_names
+
+
 def _parse_sse(body: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for block in body.strip().split("\n\n"):
+        if not block:
+            continue
         lines = block.splitlines()
-        event_name = lines[0].removeprefix("event: ")
-        data = json.loads(lines[1].removeprefix("data: "))
-        events.append({"event": event_name, "data": data})
+        fields = dict(line.split(": ", 1) for line in lines)
+        event_id = fields["id"]
+        event_name = fields["event"]
+        data = json.loads(fields["data"])
+        events.append({"id": event_id, "event": event_name, "data": data})
     return events
+
+
+def _test_stream_turns() -> list[Any]:
+    return [
+        [
+            {"type": "reasoning_delta", "text": "Thinking clearly"},
+            {"type": "reasoning_meta", "reasoning_meta": {"secret": "opaque"}},
+            {"type": "tool_call_delta", "id": "call-one", "name_delta": "lookup"},
+            {
+                "type": "tool_call_delta",
+                "id": "call-one",
+                "arguments_delta": '{"query":"vBot"}',
+            },
+            {"type": "finish", "reason": "tool_calls"},
+        ],
+        [
+            {"type": "content_delta", "text": "Done"},
+            {"type": "finish", "reason": "stop"},
+        ],
+    ]
