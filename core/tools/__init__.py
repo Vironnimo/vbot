@@ -1,5 +1,12 @@
 """Tool registry, definitions, result envelopes, and execution scheduling."""
 
+from core.tools.read import (
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
+    read_handler,
+    register_builtin_tools,
+)
 from core.tools.tools import (
     DEFAULT_TOOL_CONCURRENCY_LIMIT,
     TOOL_ALLOWLIST_WILDCARD,
@@ -26,6 +33,9 @@ __all__ = [
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
     "JsonObject",
+    "READ_TOOL_DESCRIPTION",
+    "READ_TOOL_NAME",
+    "READ_TOOL_PARAMETERS",
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",
@@ -40,6 +50,8 @@ __all__ = [
     "ToolNotFoundError",
     "ToolRegistry",
     "is_tool_result_envelope",
+    "read_handler",
+    "register_builtin_tools",
     "tool_failure",
     "tool_success",
 ]
