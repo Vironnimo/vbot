@@ -12,12 +12,15 @@ from core.chat.chat import (
     ToolCall,
 )
 from core.chat.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    REASONING_DELTA_EVENT,
     REASONING_EVENT,
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
     RUN_STARTED_EVENT,
+    TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
     USER_MESSAGE_EVENT,
@@ -32,6 +35,7 @@ from core.chat.runs import (
 )
 
 __all__ = [
+    "ASSISTANT_OUTPUT_DELTA_EVENT",
     "ASSISTANT_OUTPUT_EVENT",
     "ActiveRunError",
     "ChatError",
@@ -43,6 +47,7 @@ __all__ = [
     "ChatSessionError",
     "ChatSessionManager",
     "MAX_TOOL_ITERATIONS",
+    "REASONING_DELTA_EVENT",
     "REASONING_EVENT",
     "RUN_CANCELLED_EVENT",
     "RUN_COMPLETED_EVENT",
@@ -54,6 +59,7 @@ __all__ = [
     "RunEvent",
     "RunNotFoundError",
     "RunStatus",
+    "TOOL_CALL_DELTA_EVENT",
     "TOOL_CALL_RESULT_EVENT",
     "TOOL_CALL_STARTED_EVENT",
     "ToolCall",

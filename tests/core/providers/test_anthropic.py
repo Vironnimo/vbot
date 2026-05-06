@@ -1132,8 +1132,8 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_yields_anthropic_sse_chunks(self, anthropic_adapter):
-        """stream() parses Anthropic SSE data lines and yields parsed JSON."""
+    async def test_stream_yields_normalized_content_and_finish_deltas(self, anthropic_adapter):
+        """stream() parses Anthropic SSE lines into normalized content and finish deltas."""
         # Arrange
         sse_body = (
             "event: message_start\n"
@@ -1179,16 +1179,215 @@ class TestStreamSSE:
 
         # Assert — 7 chunks: message_start, content_block_start,
         # 2x content_block_delta, content_block_stop, message_delta,
-        # message_stop
-        assert len(chunks) == 7
-        assert chunks[0]["type"] == "message_start"
-        assert chunks[1]["type"] == "content_block_start"
-        assert chunks[2]["delta"]["text"] == "Hello"
-        assert chunks[3]["delta"]["text"] == " world"
-        assert chunks[4]["type"] == "content_block_stop"
-        assert chunks[5]["type"] == "message_delta"
-        assert chunks[6]["type"] == "message_stop"
+        # message_stop; only visible deltas and finish are yielded.
+        assert chunks == [
+            {"type": "content_delta", "text": "Hello"},
+            {"type": "content_delta", "text": " world"},
+            {"type": "finish", "reason": "stop"},
+        ]
         assert route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, anthropic_adapter):
+        """Thinking text streams visibly while supported thinking metadata stays opaque."""
+        # Arrange
+        sse_body = (
+            "event: content_block_start\n"
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"thinking","thinking":""}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta","thinking":"Need"}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta","thinking":" weather."}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"signature_delta","signature":"opaque-signature"}}\n'
+            "\n"
+            "event: content_block_stop\n"
+            'data: {"type":"content_block_stop","index":0}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "reasoning_delta", "text": "Need"},
+            {"type": "reasoning_delta", "text": " weather."},
+            {
+                "type": "reasoning_meta",
+                "reasoning_meta": {
+                    "content_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Need weather.",
+                            "signature": "opaque-signature",
+                        }
+                    ]
+                },
+            },
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_tool_call_input_fragments_and_finish(self, anthropic_adapter):
+        """Tool-use blocks stream name and input fragments as normalized tool deltas."""
+        # Arrange
+        sse_body = (
+            "event: content_block_start\n"
+            'data: {"type":"content_block_start","index":2,'
+            '"content_block":{"type":"tool_use","id":"toolu_abc","name":"get_weather",'
+            '"input":{}}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":2,'
+            '"delta":{"type":"input_json_delta","partial_json":"{\\"city\\""}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":2,'
+            '"delta":{"type":"input_json_delta","partial_json":":\\"Berlin\\"}"}}\n'
+            "\n"
+            "event: message_delta\n"
+            'data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {
+                "type": "tool_call_delta",
+                "id": "toolu_abc",
+                "name_delta": "get_weather",
+                "arguments_delta": "",
+            },
+            {
+                "type": "tool_call_delta",
+                "id": "toolu_abc",
+                "name_delta": "",
+                "arguments_delta": '{"city"',
+            },
+            {
+                "type": "tool_call_delta",
+                "id": "toolu_abc",
+                "name_delta": "",
+                "arguments_delta": ':"Berlin"}',
+            },
+            {"type": "finish", "reason": "tool_calls"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_preserves_redacted_thinking_metadata(self, anthropic_adapter):
+        """Redacted-thinking blocks are preserved as opaque metadata without visible deltas."""
+        # Arrange
+        sse_body = (
+            "event: content_block_start\n"
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"redacted_thinking","data":"opaque-redacted"}}\n'
+            "\n"
+            "event: content_block_stop\n"
+            'data: {"type":"content_block_stop","index":0}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {
+                "type": "reasoning_meta",
+                "reasoning_meta": {
+                    "content_blocks": [{"type": "redacted_thinking", "data": "opaque-redacted"}]
+                },
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_ignores_ping_and_message_bookkeeping_events(self, anthropic_adapter):
+        """Ping, message_start, and message_stop do not leak raw provider events."""
+        # Arrange
+        sse_body = (
+            "event: ping\n"
+            'data: {"type":"ping"}\n'
+            "\n"
+            "event: message_start\n"
+            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == []
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1224,7 +1423,7 @@ class TestStreamSSE:
     @respx.mock
     @pytest.mark.asyncio
     async def test_stream_ignores_comment_lines(self, anthropic_adapter):
-        """stream() skips comment lines and empty lines."""
+        """stream() skips comment lines, empty lines, and raw bookkeeping events."""
         # Arrange
         sse_body = (
             ": this is a comment\n"
@@ -1252,9 +1451,7 @@ class TestStreamSSE:
             chunks.append(chunk)
 
         # Assert
-        assert len(chunks) == 2
-        assert chunks[0]["type"] == "message_start"
-        assert chunks[1]["type"] == "message_stop"
+        assert chunks == []
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1367,7 +1564,7 @@ class TestStreamSSE:
 
         # Assert
         assert route.call_count == 2
-        assert len(chunks) >= 1
+        assert chunks == []
 
     @respx.mock
     @pytest.mark.asyncio

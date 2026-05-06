@@ -1,11 +1,13 @@
 """Tests for the ProviderAdapter abstract base class.
 
 Verifies that the ABC enforces its contract: direct instantiation is
-forbidden, and concrete subclasses must implement both ``send()`` and
-``stream()``.
+forbidden, concrete subclasses must implement both ``send()`` and
+``stream()``, and streaming adapters expose normalized deltas rather than
+raw provider SSE chunks.
 """
 
 from collections.abc import AsyncIterator
+from typing import get_type_hints
 
 import pytest
 
@@ -26,7 +28,15 @@ class _StubAdapter(ProviderAdapter):
         return {"model": model_id, "messages": messages}
 
     async def stream(self, messages: list[dict], *, model_id: str, **kwargs) -> AsyncIterator[dict]:
-        yield {"chunk": True, "model": model_id}
+        yield {"type": "content_delta", "text": "hello"}
+        yield {
+            "type": "tool_call_delta",
+            "id": f"call-{model_id}",
+            "name_delta": "read_file",
+            "arguments_delta": '{"path":',
+        }
+        yield {"type": "reasoning_meta", "reasoning_meta": {"provider": "opaque"}}
+        yield {"type": "finish", "reason": "tool_calls"}
 
 
 # ---------------------------------------------------------------------------
@@ -83,3 +93,33 @@ class TestProviderAdapterABC:
         adapter = _StubAdapter()
         with pytest.raises(NotImplementedError, match="normalize_response"):
             adapter.normalize_response({})
+
+    def test_stream_signature_stays_async_iterator_of_dicts(self) -> None:
+        """The public stream method shape remains unchanged for adapter callers."""
+        hints = get_type_hints(ProviderAdapter.stream)
+
+        assert hints["messages"] == list[dict]
+        assert hints["model_id"] is str
+        assert hints["return"] == AsyncIterator[dict]
+
+    @pytest.mark.asyncio
+    async def test_stream_contract_yields_normalized_deltas(self) -> None:
+        """Streaming chunks use normalized delta shapes, not raw provider SSE data."""
+        adapter = _StubAdapter()
+
+        chunks = [
+            chunk
+            async for chunk in adapter.stream([{"role": "user", "content": "hi"}], model_id="model")
+        ]
+
+        assert chunks == [
+            {"type": "content_delta", "text": "hello"},
+            {
+                "type": "tool_call_delta",
+                "id": "call-model",
+                "name_delta": "read_file",
+                "arguments_delta": '{"path":',
+            },
+            {"type": "reasoning_meta", "reasoning_meta": {"provider": "opaque"}},
+            {"type": "finish", "reason": "tool_calls"},
+        ]

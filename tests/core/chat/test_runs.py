@@ -8,6 +8,11 @@ from typing import Any
 import pytest
 
 from core.chat import ActiveRunError, ChatRunManager, Run, RunCancelledError, RunStatus
+from core.chat.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    TOOL_CALL_DELTA_EVENT,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -91,6 +96,40 @@ async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
         {"step": "before"}
     ]
     assert run.events[-1].type == "run_cancelled"
+
+
+async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "Hel"})
+    run.emit(REASONING_DELTA_EVENT, {"reasoning_delta": "Thinking"})
+    run.emit(TOOL_CALL_DELTA_EVENT, {"tool_call_id": "tool-one", "name_delta": "read"})
+    run.mark_completed("done")
+
+    replayed_events = [event async for event in run.subscribe(after_sequence=1)]
+
+    assert [event.sequence for event in run.events] == [1, 2, 3, 4]
+    assert [event.type for event in replayed_events] == [
+        REASONING_DELTA_EVENT,
+        TOOL_CALL_DELTA_EVENT,
+        "run_completed",
+    ]
+    assert replayed_events[1].payload == {
+        "tool_call_id": "tool-one",
+        "name_delta": "read",
+    }
+
+
+async def test_delta_events_obey_cancel_guard() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    first_event = run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "before"})
+    run.request_cancel()
+    late_event = run.emit(ASSISTANT_OUTPUT_DELTA_EVENT, {"content_delta": "late"})
+
+    assert first_event is not None
+    assert late_event is None
+    assert [event.payload for event in run.events] == [{"content_delta": "before"}]
 
 
 async def test_cancel_invokes_registered_abort_callback() -> None:

@@ -7,6 +7,10 @@ import {
   RPC_ERROR_NETWORK,
   RPC_ERROR_RESPONSE,
   SSE_ERROR_RESPONSE,
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_TOOL_CALL_DELTA,
+  RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   createRpcEnvelope,
   normalizeRpcError,
@@ -155,6 +159,12 @@ describe('normalizeRpcError()', () => {
 });
 
 describe('subscribeRunEvents()', () => {
+  it('includes streaming delta events in the default SSE subscription list', () => {
+    expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_ASSISTANT_OUTPUT_DELTA);
+    expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_REASONING_DELTA);
+    expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_TOOL_CALL_DELTA);
+  });
+
   it('subscribes to named SSE run events and closes on terminal events', () => {
     const onEvent = vi.fn();
     const onError = vi.fn();
@@ -182,6 +192,61 @@ describe('subscribeRunEvents()', () => {
     });
     expect(connection.source.closeCount).toBe(1);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('subscribes to delta SSE run events', () => {
+    const onEvent = vi.fn();
+    const connection = subscribeRunEvents(
+      '/api/runs/run-one/events',
+      { onEvent },
+      { EventSource: MockEventSource },
+    );
+
+    connection.source.emit(RUN_EVENT_ASSISTANT_OUTPUT_DELTA, {
+      data: JSON.stringify({ payload: { content_delta: 'hel' } }),
+    });
+    connection.source.emit(RUN_EVENT_REASONING_DELTA, {
+      data: JSON.stringify({ payload: { reasoning_delta: 'think' } }),
+    });
+    connection.source.emit(RUN_EVENT_TOOL_CALL_DELTA, {
+      data: JSON.stringify({
+        payload: { tool_call_id: 'tool-one', name_delta: 'read' },
+      }),
+    });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+      data: { payload: { content_delta: 'hel' } },
+      rawEvent: expect.any(Object),
+    });
+    expect(onEvent).toHaveBeenCalledWith({
+      type: RUN_EVENT_REASONING_DELTA,
+      data: { payload: { reasoning_delta: 'think' } },
+      rawEvent: expect.any(Object),
+    });
+    expect(onEvent).toHaveBeenCalledWith({
+      type: RUN_EVENT_TOOL_CALL_DELTA,
+      data: {
+        payload: { tool_call_id: 'tool-one', name_delta: 'read' },
+      },
+      rawEvent: expect.any(Object),
+    });
+  });
+
+  it('adds optional after_sequence query param to SSE subscriptions', () => {
+    const connection = subscribeRunEvents(
+      '/api/runs/run-one/events?mode=live',
+      { onEvent: vi.fn() },
+      {
+        EventSource: MockEventSource,
+        baseUrl: 'http://localhost:8420/',
+        afterSequence: 12,
+      },
+    );
+
+    expect(connection.source.url).toBe(
+      'http://localhost:8420/api/runs/run-one/events?mode=live&after_sequence=12',
+    );
   });
 
   it('reports malformed SSE JSON through the error handler', () => {

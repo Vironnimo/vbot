@@ -25,7 +25,10 @@ and Settings.
   - `rpc(method, params?, options?)` posts to `/api/rpc` and returns `result` or
     throws `ApiClientError` with a stable `code`.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
-    one Run timeline and returns `{ close, source }`.
+    one Run timeline and returns `{ close, source }`. It subscribes to whole
+    Run events plus streaming delta events and supports optional
+    `afterSequence` URL construction for manual replay; native reconnect uses
+    SSE event IDs / `Last-Event-ID` from the server.
   - `subscribeServerEvents(handlers, options?)` opens `/ws` and returns
     `{ close, socket }`. Supports `afterSequence` option for reconnect replay.
 - `webui/src/lib/i18n.js`
@@ -39,7 +42,8 @@ and Settings.
   - Tracks `lastSequence` for `after_sequence` reconnect replay.
 - `webui/src/lib/chatState.js`
   - Pure helpers for selected Agent, per-Agent/current-Session state, visible
-    timeline items, active Run status, and FIFO queued messages.
+    timeline items, active Run status, ordered streaming buffers, and FIFO
+    queued messages.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
     displayed from Agent data but omitted from public create/update payloads in
@@ -61,6 +65,13 @@ and Settings.
   `current_session_id`; old Sessions are not listed in Phase 4.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
+- Streaming output is accessor-local/in-memory. `streamingItems` preserves the
+  provider-visible order of reasoning, assistant text, and tool-call deltas;
+  the final `assistant_output` event clears the buffer and becomes the
+  authoritative rendered message.
+- Partial tool-call argument JSON may be accumulated internally but must not be
+  displayed as final normal UI data before the complete `tool_call_started`
+  event arrives.
 - In Chat, only the message timeline should scroll. The agent bar, notices,
   queued-message region, and composer stay visible inside the bounded view.
 
