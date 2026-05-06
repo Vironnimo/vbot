@@ -6,11 +6,14 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from core.chat import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
     ChatError,
     ChatLoop,
@@ -73,9 +76,11 @@ class StubPrompts:
 
 
 class StubAdapter:
-    def __init__(self, responses: list[JsonObject]) -> None:
+    def __init__(self, responses: list[Any], *, stream_responses: list[Any] | None = None) -> None:
         self._responses = responses
+        self._stream_responses = stream_responses or []
         self.requests: list[JsonObject] = []
+        self.stream_requests: list[JsonObject] = []
 
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.requests.append(
@@ -86,10 +91,30 @@ class StubAdapter:
         response = self._responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response
+        return cast(JsonObject, response)
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        if not self._stream_responses:
+            raise AssertionError("unexpected adapter stream request")
+        response = self._stream_responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        for delta in response:
+            if isinstance(delta, Exception):
+                raise delta
+            yield delta
 
 
 class ClosingStubAdapter(StubAdapter):
@@ -114,6 +139,44 @@ class BlockingStubAdapter(StubAdapter):
         self.request_started.set()
         await self.release.wait()
         return {"content": "Late", "tool_calls": None}
+
+
+class BlockingStreamingStubAdapter(ClosingStubAdapter):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.stream_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        yield {"type": "content_delta", "text": "before"}
+        self.stream_started.set()
+        await self.release.wait()
+        yield {"type": "content_delta", "text": "late"}
+
+
+class StalledStreamingStubAdapter(StubAdapter):
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        yield {"type": "content_delta", "text": "partial"}
+        await asyncio.sleep(1)
+        yield {"type": "content_delta", "text": "late"}
 
 
 class StubRuntime:
@@ -247,6 +310,238 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "encrypted_content": "opaque-current-turn"
     }
     assert adapter.requests[1]["messages"][2]["reasoning"] == "Need weather."
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Think"},
+                {"type": "content_delta", "text": "Hello"},
+                {"type": "content_delta", "text": " world"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert assistant.content == "Hello world"
+    assert assistant.reasoning == "Think"
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        REASONING_DELTA_EVENT,
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "reasoning",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert run.events[2].payload == {"reasoning_delta": "Think"}
+    assert run.events[3].payload == {"content_delta": "Hello"}
+    assert run.events[6].payload["message"]["content"] == "Hello world"
+    assert "reasoning_meta" not in run.events[6].payload["message"]
+    assert adapter.requests == []
+    assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_persists_only_final_messages_and_continues_tool_loop(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Need weather."},
+                {"type": "reasoning_meta", "reasoning_meta": {"signature": "opaque"}},
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_abc",
+                    "name_delta": "get_weather",
+                    "arguments_delta": '{"city":"Ber',
+                },
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_abc",
+                    "arguments_delta": 'lin"}',
+                },
+                {"type": "finish", "reason": "tool_calls"},
+            ],
+            [
+                {"type": "content_delta", "text": "Sunny"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda arguments: {"temp": 22, "city": arguments["city"]},
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder",
+        "Weather?",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    persisted = [
+        message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
+    ]
+    assert assistant.content == "Sunny"
+    assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
+    assert persisted[1]["reasoning_meta"] == {"signature": "opaque"}
+    assert persisted[1]["tool_calls"] == [
+        {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
+    ]
+    assert persisted[2]["content"] == '{"temp":22,"city":"Berlin"}'
+    assert adapter.stream_requests[1]["messages"][2]["reasoning_meta"] == {"signature": "opaque"}
+    assert [
+        event.type
+        for event in run.events
+        if event.type in {TOOL_CALL_DELTA_EVENT, "tool_call_started"}
+    ] == [
+        TOOL_CALL_DELTA_EVENT,
+        TOOL_CALL_DELTA_EVENT,
+        "tool_call_started",
+    ]
+    tool_started = next(event for event in run.events if event.type == "tool_call_started")
+    assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
+    assert all(
+        "reasoning_meta" not in event.payload.get("message", {})
+        for event in run.events
+        if isinstance(event.payload, dict)
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [{"content": "Fallback answer", "tool_calls": None}],
+        stream_responses=[ProviderError("streaming is not supported", retryable=False)],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await ChatLoop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert assistant.content == "Fallback answer"
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert len(adapter.stream_requests) == 1
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [{"content": "Should not use", "tool_calls": None}],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "partial"},
+                ProviderError("streaming is not supported", retryable=False),
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ProviderError, match="not supported"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user"]
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "run_failed",
+    ]
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_chunk_timeout_fails_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StalledStreamingStubAdapter([])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(Exception, match="stalled"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user"]
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "run_failed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_cancellation_closes_adapter_and_ignores_late_deltas(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStreamingStubAdapter()
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
+    await adapter.stream_started.wait()
+    run.request_cancel()
+    await asyncio.sleep(0)
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert adapter.closed is True
+    assert run.status == RunStatus.CANCELLED
+    assert [message.role for message in messages] == ["user"]
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        "run_cancelled",
+    ]
 
 
 @pytest.mark.asyncio

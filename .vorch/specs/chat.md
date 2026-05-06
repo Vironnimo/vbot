@@ -34,7 +34,8 @@ container; a Run is one active execution inside that session.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
 - `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, and allows parallel Runs in different Sessions.
-- `ChatLoop(runtime, max_tool_iterations=8)` — minimal non-streaming agentic loop.
+- Streaming Run events: `assistant_output_delta`, `reasoning_delta`, and `tool_call_delta` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
+- `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates provider/model split, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=...) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager.
 
@@ -50,6 +51,10 @@ container; a Run is one active execution inside that session.
 - Multiple Sessions may execute in parallel.
 - `send`, `stream`, and `cancel` should remain different access modes over the
   same underlying run execution model.
+- In streaming mode, provider adapters yield normalized deltas that the chat
+  loop accumulates into the final canonical assistant message. The final
+  message is persisted at the same turn boundary as non-streaming and remains
+  authoritative over transient deltas.
 - Readable `reasoning`, tool calls/results, and assistant outputs are part of
   the visible run timeline; opaque `reasoning_meta` is not.
 - Cancellation is best effort: once requested, late non-terminal output is not

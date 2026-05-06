@@ -20,7 +20,12 @@ from core.chat.runs import (
     ChatRunManager,
     Run,
 )
-from core.utils.errors import VBotError
+from core.chat.streaming import (
+    STREAM_CHUNK_TIMEOUT_SECONDS,
+    StreamingAccumulator,
+    iter_with_chunk_timeout,
+)
+from core.utils.errors import ProviderError, VBotError
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 JsonObject = dict[str, Any]
@@ -312,18 +317,20 @@ class ChatSessionManager:
 
 
 class ChatLoop:
-    """Minimal non-streaming agentic chat loop."""
+    """Minimal agentic chat loop."""
 
     def __init__(
         self,
         runtime: Any,
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
+        streaming: bool = False,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
         self._runtime = runtime
         self._max_tool_iterations = max_tool_iterations
+        self._streaming = streaming
 
     async def send(
         self,
@@ -440,10 +447,12 @@ class ChatLoop:
                 model_id,
                 messages,
                 tools,
+                run,
             )
             run.raise_if_cancelled()
             session.append(assistant_message)
-            _emit_assistant_events(run, assistant_message)
+            if not self._streaming:
+                _emit_assistant_events(run, assistant_message)
             messages.append(assistant_message.to_dict())
 
             if not assistant_message.tool_calls:
@@ -470,6 +479,29 @@ class ChatLoop:
         model_id: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
+        run: Run,
+    ) -> ChatMessage:
+        if self._streaming:
+            return await self._send_streaming_assistant_request(
+                agent,
+                adapter,
+                model_id,
+                messages,
+                tools,
+                run,
+            )
+
+        return await self._send_non_streaming_assistant_request(
+            agent, adapter, model_id, messages, tools
+        )
+
+    async def _send_non_streaming_assistant_request(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
     ) -> ChatMessage:
         response = await adapter.send(
             messages,
@@ -480,6 +512,56 @@ class ChatLoop:
         )
         normalized = adapter.normalize_response(response)
         return _assistant_message_from_response(agent.model, normalized)
+
+    async def _send_streaming_assistant_request(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        messages: list[JsonObject],
+        tools: list[JsonObject],
+        run: Run,
+    ) -> ChatMessage:
+        accumulator = StreamingAccumulator()
+        emitted_visible_delta = False
+        stream = adapter.stream(
+            messages,
+            model_id=model_id,
+            temperature=agent.temperature,
+            thinking_effort=agent.thinking_effort,
+            tools=tools,
+        )
+
+        try:
+            async for delta in iter_with_chunk_timeout(
+                stream,
+                timeout_seconds=STREAM_CHUNK_TIMEOUT_SECONDS,
+            ):
+                run.raise_if_cancelled()
+                visible_deltas = accumulator.add_delta(delta)
+                for visible_delta in visible_deltas:
+                    run.emit(visible_delta.event_type, visible_delta.payload)
+                    emitted_visible_delta = True
+                run.raise_if_cancelled()
+        except ProviderError as exc:
+            if emitted_visible_delta or not _is_streaming_fallback_error(exc):
+                raise
+            assistant_message = await self._send_non_streaming_assistant_request(
+                agent,
+                adapter,
+                model_id,
+                messages,
+                tools,
+            )
+            _emit_assistant_events(run, assistant_message)
+            return assistant_message
+
+        assistant_message = _assistant_message_from_response(
+            agent.model,
+            accumulator.finalize_assistant_fields().to_response_dict(),
+        )
+        _emit_streaming_assistant_events(run, assistant_message)
+        return assistant_message
 
     async def _dispatch_tool_calls(
         self,
@@ -533,8 +615,24 @@ def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
         _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
 
 
+def _emit_streaming_assistant_events(run: Run, message: ChatMessage) -> None:
+    if message.reasoning:
+        run.emit(REASONING_EVENT, {"message": _visible_message_payload(message)})
+    if message.tool_calls:
+        for tool_call in message.tool_calls:
+            run.emit(TOOL_CALL_STARTED_EVENT, {"tool_call": tool_call.to_dict()})
+    _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
+
+
 def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None:
     run.emit(event_type, {"message": _visible_message_payload(message)})
+
+
+def _is_streaming_fallback_error(error: ProviderError) -> bool:
+    if error.retryable:
+        return False
+    message = str(error).lower()
+    return all(token in message for token in ("stream", "support"))
 
 
 def _visible_message_payload(message: ChatMessage) -> JsonObject:
