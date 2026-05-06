@@ -20,6 +20,18 @@ class ProviderAdapter(ABC):
     and response types are intentionally kept as plain dicts so that
     the adapter layer can stabilise independently of the chat-layer
     data types introduced in Phase 2.
+
+    ``stream()`` yields normalized, provider-agnostic delta dicts rather
+    than raw provider SSE chunks.  Supported delta shapes are:
+
+    - ``{"type": "content_delta", "text": " token"}``
+    - ``{"type": "reasoning_delta", "text": " thinking"}``
+    - ``{"type": "tool_call_delta", "id": "...", "name_delta": "...", "arguments_delta": "..."}``
+    - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
+    - ``{"type": "finish", "reason": "stop" | "tool_calls"}``
+
+    ``reasoning_meta`` is internal to the adapter/chat boundary and must
+    remain opaque to callers outside the chat core.
     """
 
     @abstractmethod
@@ -55,7 +67,9 @@ class ProviderAdapter(ABC):
             **kwargs: Additional parameters (temperature, max_tokens, …).
 
         Yields:
-            Parsed response chunk dicts from the SSE event stream.
+            Normalized provider-agnostic streaming delta dicts.  Adapters
+            must hide raw SSE event formats and provider-specific chunk
+            structure from callers.
         """
 
     def normalize_response(self, response: JsonObject) -> JsonObject:

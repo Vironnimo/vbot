@@ -29,6 +29,10 @@ SSE_DONE_MARKER = "[DONE]"
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
 OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content")
+OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
+OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
+OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -178,11 +182,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Send a streaming chat completion request and yield SSE chunks.
+        """Send a streaming request and yield normalized provider-agnostic deltas.
 
         Retries the initial connection on retryable errors (429, 502, 503).
-        Once the stream is established, yields parsed SSE data chunks as
-        dicts until the ``[DONE]`` marker is received.
+        Once the stream is established, parses OpenAI-compatible SSE chunks
+        into ``content_delta``, ``reasoning_delta``, ``reasoning_meta``,
+        ``tool_call_delta``, and ``finish`` dictionaries until the ``[DONE]``
+        marker is received.
 
         Args:
             messages: Conversation messages in OpenAI format.
@@ -190,7 +196,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             **kwargs: Additional parameters (temperature, max_tokens, …).
 
         Yields:
-            Parsed response chunk dicts from the SSE event stream.
+            Normalized delta dictionaries consumed by the chat layer.
 
         Raises:
             ProviderAuthError: 401 / 403 responses.
@@ -234,6 +240,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return response
 
         response = await retry_async(_connect_stream)
+        tool_call_ids_by_index: dict[int, str] = {}
 
         try:
             async for line in response.aiter_lines():
@@ -242,9 +249,134 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 data = line[len(SSE_DATA_PREFIX) :]
                 if data.strip() == SSE_DONE_MARKER:
                     break
-                yield json.loads(data)
+                raw_chunk = json.loads(data)
+                for normalized_delta in _normalize_openai_stream_chunk(
+                    raw_chunk,
+                    tool_call_ids_by_index,
+                ):
+                    yield normalized_delta
         finally:
             await response.aclose()
+
+
+def _normalize_openai_stream_chunk(
+    chunk: dict[str, Any],
+    tool_call_ids_by_index: dict[int, str],
+) -> list[dict[str, Any]]:
+    normalized_deltas: list[dict[str, Any]] = []
+    for choice in _stream_choices(chunk):
+        delta = choice.get("delta", {})
+        if isinstance(delta, dict):
+            normalized_deltas.extend(_normalize_openai_message_delta(delta, tool_call_ids_by_index))
+
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None:
+            normalized_deltas.append(
+                {
+                    "type": "finish",
+                    "reason": _normalize_openai_finish_reason(
+                        finish_reason,
+                        has_tool_calls=bool(tool_call_ids_by_index),
+                    ),
+                }
+            )
+    return normalized_deltas
+
+
+def _stream_choices(chunk: dict[str, Any]) -> list[dict[str, Any]]:
+    choices = chunk.get("choices", [])
+    if not isinstance(choices, list):
+        return []
+    return [choice for choice in choices if isinstance(choice, dict)]
+
+
+def _normalize_openai_message_delta(
+    delta: dict[str, Any],
+    tool_call_ids_by_index: dict[int, str],
+) -> list[dict[str, Any]]:
+    normalized_deltas: list[dict[str, Any]] = []
+    content = delta.get("content")
+    if isinstance(content, str) and content:
+        normalized_deltas.append({"type": "content_delta", "text": content})
+
+    reasoning = _extract_openai_reasoning(delta)
+    if reasoning:
+        normalized_deltas.append({"type": "reasoning_delta", "text": reasoning})
+
+    reasoning_meta = _extract_openai_reasoning_meta(delta)
+    if reasoning_meta:
+        normalized_deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
+
+    normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_ids_by_index))
+    return normalized_deltas
+
+
+def _normalize_openai_tool_call_deltas(
+    delta: dict[str, Any],
+    tool_call_ids_by_index: dict[int, str],
+) -> list[dict[str, Any]]:
+    raw_tool_calls = delta.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return []
+
+    normalized_deltas: list[dict[str, Any]] = []
+    for position, raw_tool_call in enumerate(raw_tool_calls):
+        if not isinstance(raw_tool_call, dict):
+            continue
+        tool_call_index = _openai_tool_call_index(raw_tool_call, position)
+        tool_call_id = _openai_stream_tool_call_id(
+            raw_tool_call, tool_call_index, tool_call_ids_by_index
+        )
+        function = raw_tool_call.get("function", {})
+        if not isinstance(function, dict):
+            function = {}
+        name_delta = function.get("name")
+        arguments_delta = function.get("arguments")
+        if not isinstance(name_delta, str):
+            name_delta = ""
+        if not isinstance(arguments_delta, str):
+            arguments_delta = ""
+        if not name_delta and not arguments_delta:
+            continue
+        normalized_deltas.append(
+            {
+                "type": "tool_call_delta",
+                "id": tool_call_id,
+                "name_delta": name_delta,
+                "arguments_delta": arguments_delta,
+            }
+        )
+    return normalized_deltas
+
+
+def _openai_tool_call_index(raw_tool_call: dict[str, Any], position: int) -> int:
+    index = raw_tool_call.get("index")
+    return index if isinstance(index, int) else position
+
+
+def _openai_stream_tool_call_id(
+    raw_tool_call: dict[str, Any],
+    index: int,
+    tool_call_ids_by_index: dict[int, str],
+) -> str:
+    existing_id = tool_call_ids_by_index.get(index)
+    if existing_id:
+        return existing_id
+    provider_id = raw_tool_call.get("id")
+    if isinstance(provider_id, str) and provider_id:
+        tool_call_ids_by_index[index] = provider_id
+        return provider_id
+    generated_id = f"tool_call_{index}"
+    tool_call_ids_by_index[index] = generated_id
+    return generated_id
+
+
+def _normalize_openai_finish_reason(finish_reason: Any, *, has_tool_calls: bool) -> str:
+    if finish_reason in OPENAI_TOOL_FINISH_REASONS:
+        return "tool_calls"
+    if finish_reason in OPENAI_STOP_FINISH_REASONS:
+        return "stop"
+    return "tool_calls" if has_tool_calls else "stop"
 
 
 def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -358,7 +490,7 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
 
 
 def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
-    for key in ("reasoning", "reasoning_content"):
+    for key in OPENAI_REASONING_KEYS:
         value = message.get(key)
         if isinstance(value, str):
             return value
@@ -367,7 +499,7 @@ def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
 
 def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | None:
     meta: dict[str, Any] = {}
-    for key in ("encrypted_content", "reasoning_details"):
+    for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
     return meta or None
@@ -379,6 +511,6 @@ def _apply_openai_reasoning_meta(
 ) -> None:
     if not isinstance(reasoning_meta, dict):
         return
-    for key in ("encrypted_content", "reasoning_details"):
+    for key in OPENAI_REASONING_META_KEYS:
         if key in reasoning_meta:
             message[key] = reasoning_meta[key]

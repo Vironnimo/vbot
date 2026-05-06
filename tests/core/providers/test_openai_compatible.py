@@ -709,12 +709,13 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_yields_sse_chunks(self, openai_adapter):
-        """stream() parses SSE data lines and yields parsed JSON chunks."""
+    async def test_stream_yields_normalized_content_and_finish_deltas(self, openai_adapter):
+        """stream() parses SSE data lines into normalized content and finish deltas."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hello"}}]}\n\n'
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":" world"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
             "data: [DONE]\n\n"
         )
         route = respx.post(OPENAI_URL).mock(
@@ -729,10 +730,219 @@ class TestStreamSSE:
             chunks.append(chunk)
 
         # Assert
-        assert len(chunks) == 2
-        assert chunks[0]["choices"][0]["delta"]["content"] == "Hello"
-        assert chunks[1]["choices"][0]["delta"]["content"] == " world"
+        assert chunks == [
+            {"type": "content_delta", "text": "Hello"},
+            {"type": "content_delta", "text": " world"},
+            {"type": "finish", "reason": "stop"},
+        ]
         assert route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, openai_adapter):
+        """Reasoning text streams visibly while recognized metadata stays opaque."""
+        # Arrange
+        reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
+        chunk = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": "Think",
+                        "encrypted_content": "secret",
+                        "reasoning_details": reasoning_details,
+                        "unknown_provider_field": "ignored",
+                    }
+                }
+            ],
+        }
+        sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "reasoning_delta", "text": "Think"},
+            {
+                "type": "reasoning_meta",
+                "reasoning_meta": {
+                    "encrypted_content": "secret",
+                    "reasoning_details": reasoning_details,
+                },
+            },
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_index_keyed_tool_call_deltas_with_stable_ids(
+        self,
+        openai_adapter,
+    ):
+        """Tool calls are normalized by index and get stable IDs when providers omit IDs."""
+        # Arrange
+        first_chunk = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city"'},
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+        second_chunk = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {"arguments": ':"Berlin"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        sse_body = (
+            f"data: {json.dumps(first_chunk)}\n\n"
+            f"data: {json.dumps(second_chunk)}\n\n"
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {
+                "type": "tool_call_delta",
+                "id": "tool_call_0",
+                "name_delta": "get_weather",
+                "arguments_delta": '{"city"',
+            },
+            {
+                "type": "tool_call_delta",
+                "id": "tool_call_0",
+                "name_delta": "",
+                "arguments_delta": ':"Berlin"}',
+            },
+            {"type": "finish", "reason": "tool_calls"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_preserves_provider_tool_call_ids(self, openai_adapter):
+        """Provider-supplied tool call IDs are reused for later index-only fragments."""
+        # Arrange
+        first_chunk = {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "call_provider",
+                                "function": {"name": "read_file"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        second_chunk = {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 1, "function": {"arguments": '{"path":"README.md"}'}}
+                        ]
+                    }
+                }
+            ]
+        }
+        sse_body = (
+            f"data: {json.dumps(first_chunk)}\n\n"
+            f"data: {json.dumps(second_chunk)}\n\n"
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {
+                "type": "tool_call_delta",
+                "id": "call_provider",
+                "name_delta": "read_file",
+                "arguments_delta": "",
+            },
+            {
+                "type": "tool_call_delta",
+                "id": "call_provider",
+                "name_delta": "",
+                "arguments_delta": '{"path":"README.md"}',
+            },
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_normalizes_unknown_finish_reason_from_pending_tool_calls(
+        self,
+        openai_adapter,
+    ):
+        """Unknown finish reasons become tool_calls when a tool call was seen."""
+        # Arrange
+        sse_body = (
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            '"function":{"name":"search"}}]}}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"provider_tool_stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks[-1] == {"type": "finish", "reason": "tool_calls"}
 
     @respx.mock
     @pytest.mark.asyncio
@@ -780,7 +990,7 @@ class TestStreamSSE:
 
         # Assert
         assert len(chunks) == 1
-        assert chunks[0]["id"] == "1"
+        assert chunks[0] == {"type": "content_delta", "text": "A"}
 
     @respx.mock
     @pytest.mark.asyncio
