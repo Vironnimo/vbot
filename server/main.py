@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from core.utils.config import Config
 from server.app import create_app
@@ -26,6 +26,14 @@ DEFAULT_PORT = 8420
 PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
 
 
+class ServerBind(TypedDict):
+    """Resolved host/port metadata for server startup."""
+
+    listen_host: str
+    listen_port: int
+    port_source: str
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse server CLI arguments."""
     parser = argparse.ArgumentParser(description="Start the vBot server")
@@ -37,20 +45,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def resolve_port(config: Config, explicit_port: int | None = None) -> int:
     """Resolve port using --port > VBOT_SERVER_PORT > settings.json > default."""
+    server_bind = resolve_server_bind(config, host=DEFAULT_HOST, explicit_port=explicit_port)
+    return server_bind["listen_port"]
+
+
+def resolve_server_bind(
+    config: Config,
+    *,
+    host: str,
+    explicit_port: int | None = None,
+) -> ServerBind:
+    """Resolve server bind metadata for startup and Settings reads."""
+
     if explicit_port is not None:
-        return explicit_port
+        return {
+            "listen_host": host,
+            "listen_port": explicit_port,
+            "port_source": "cli",
+        }
 
     environment_port = os.environ.get("VBOT_SERVER_PORT")
     if environment_port:
-        return _coerce_port(environment_port, source="VBOT_SERVER_PORT")
+        return {
+            "listen_host": host,
+            "listen_port": _coerce_port(environment_port, source="VBOT_SERVER_PORT"),
+            "port_source": "VBOT_SERVER_PORT",
+        }
 
     settings = _load_settings_for_port(config)
     for key in PORT_SETTING_KEYS:
         value = settings.get(key)
         if value is not None:
-            return _coerce_port(value, source=f"settings.{key}")
+            return {
+                "listen_host": host,
+                "listen_port": _coerce_port(value, source=f"settings.{key}"),
+                "port_source": f"settings.{key}",
+            }
 
-    return DEFAULT_PORT
+    return {
+        "listen_host": host,
+        "listen_port": DEFAULT_PORT,
+        "port_source": "default",
+    }
 
 
 def _load_settings_for_port(config: Config) -> dict[str, Any]:
@@ -73,9 +109,14 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     data_dir = Path(args.data_dir) if args.data_dir else None
     config = Config(data_dir=data_dir)
-    port = resolve_port(config, args.port)
-    app = create_app(config=config)
-    uvicorn.run(app, host=args.host, port=port, log_level="info")
+    server_bind = resolve_server_bind(config, host=args.host, explicit_port=args.port)
+    app = create_app(config=config, server_bind=server_bind)
+    uvicorn.run(
+        app,
+        host=server_bind["listen_host"],
+        port=server_bind["listen_port"],
+        log_level="info",
+    )
 
 
 def _coerce_port(value: Any, *, source: str) -> int:

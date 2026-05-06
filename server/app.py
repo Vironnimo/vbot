@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
 from core.runtime import Runtime
@@ -16,6 +17,16 @@ from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
+
+
+class ServerBindState(TypedDict):
+    """Resolved bind metadata persisted in FastAPI app state."""
+
+    listen_host: str
+    listen_port: int
+    port_source: str
+
+
 _FASTAPI_IMPORT_ERROR: ModuleNotFoundError | None
 
 try:
@@ -42,27 +53,39 @@ else:
     FastAPIType = Any
 
 WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
+DEFAULT_SERVER_HOST = "127.0.0.1"
+DEFAULT_SERVER_PORT = 8420
+DEFAULT_SERVER_PORT_SOURCE = "default"
 
 
-def create_app(*, runtime: Runtime | None = None, config: Config | None = None) -> FastAPIType:
+def create_app(
+    *,
+    runtime: Runtime | None = None,
+    config: Config | None = None,
+    server_bind: ServerBindState | None = None,
+) -> FastAPIType:
     """Create the FastAPI app and wire runtime services into app state."""
     if FastAPI is None:
         raise RuntimeError(
             "FastAPI is required to create the server app"
         ) from _FASTAPI_IMPORT_ERROR
     app_runtime = runtime or Runtime(config or Config())
+    resolved_server_bind = _resolve_server_bind(
+        config=config or _runtime_config(app_runtime),
+        server_bind=server_bind,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
-        _initialize_app_state(app, app_runtime)
+        _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
         try:
             yield
         finally:
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
-    _initialize_app_state(app, app_runtime)
+    _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -103,13 +126,93 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
     return app
 
 
-def _initialize_app_state(app: FastAPIType, runtime: Runtime) -> None:
+def _initialize_app_state(
+    app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
+) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = ChatRunManager()
     app.state.chat_loop = ChatLoop(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.agent_delete_lock = asyncio.Lock()
+    app.state.server_bind = dict(server_bind)
     _attach_run_manager(runtime, app.state.chat_runs)
+
+
+def _resolve_server_bind(
+    *, config: Config | None, server_bind: ServerBindState | None
+) -> ServerBindState:
+    if server_bind is not None:
+        return {
+            "listen_host": _coerce_bind_host(server_bind.get("listen_host")),
+            "listen_port": _coerce_bind_port(
+                server_bind.get("listen_port"),
+                source="server_bind.listen_port",
+            ),
+            "port_source": _coerce_bind_port_source(server_bind.get("port_source")),
+        }
+
+    if config is None:
+        return _default_server_bind()
+
+    if environment_port := os.environ.get("VBOT_SERVER_PORT"):
+        return {
+            "listen_host": DEFAULT_SERVER_HOST,
+            "listen_port": _coerce_bind_port(environment_port, source="VBOT_SERVER_PORT"),
+            "port_source": "VBOT_SERVER_PORT",
+        }
+
+    settings_path = config.data_dir / "settings.json"
+    if settings_path.exists():
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected a JSON object at {settings_path}")
+        for key in ("server_port", "SERVER_PORT", "port", "PORT"):
+            value = data.get(key)
+            if value is not None:
+                return {
+                    "listen_host": DEFAULT_SERVER_HOST,
+                    "listen_port": _coerce_bind_port(value, source=f"settings.{key}"),
+                    "port_source": f"settings.{key}",
+                }
+
+    return _default_server_bind()
+
+
+def _default_server_bind() -> ServerBindState:
+    return {
+        "listen_host": DEFAULT_SERVER_HOST,
+        "listen_port": DEFAULT_SERVER_PORT,
+        "port_source": DEFAULT_SERVER_PORT_SOURCE,
+    }
+
+
+def _runtime_config(runtime: Runtime) -> Config | None:
+    config = getattr(runtime, "_config", None)
+    if isinstance(config, Config):
+        return config
+    return None
+
+
+def _coerce_bind_host(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return DEFAULT_SERVER_HOST
+    return value
+
+
+def _coerce_bind_port(value: Any, *, source: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be an integer port") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"{source} must be between 1 and 65535")
+    return port
+
+
+def _coerce_bind_port_source(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return DEFAULT_SERVER_PORT_SOURCE
+    return value
 
 
 def _mount_webui(app: FastAPIType) -> None:
