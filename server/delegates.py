@@ -108,7 +108,9 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _agent_response(agent)
+    response = _agent_response(agent)
+    _publish_agent_event(state, "agent.created", response)
+    return response
 
 
 def _update_agent(state: Any, params: JsonObject) -> JsonObject:
@@ -119,7 +121,9 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _agent_response(agent)
+    response = _agent_response(agent)
+    _publish_agent_event(state, "agent.updated", response)
+    return response
 
 
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
@@ -134,10 +138,12 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.agents.delete(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {
+    result = {
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(agent) for agent in remaining_agents],
     }
+    _publish_agent_event(state, "agent.deleted", result)
+    return result
 
 
 def _create_session(state: Any, params: JsonObject) -> JsonObject:
@@ -376,6 +382,14 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     if event_bus is None:
         return
     asyncio.create_task(_publish_run_events(event_bus, run))
+
+
+def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> None:
+    """Publish an agent CRUD event to the server event bus if available."""
+    event_bus = getattr(state, "event_bus", None)
+    if event_bus is None:
+        return
+    event_bus.publish(event_type, payload)
 
 
 async def _publish_run_events(event_bus: Any, run: Run) -> None:

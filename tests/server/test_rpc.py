@@ -15,6 +15,7 @@ import pytest
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.tools import ToolRegistry
 from server.delegates import dispatch_rpc
+from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
 
@@ -160,6 +161,7 @@ def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
         runtime=runtime,
         chat_runs=chat_runs,
         chat_loop=ChatLoop(runtime),
+        event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
     )
 
@@ -494,3 +496,78 @@ async def test_dispatch_validates_unknown_method_and_required_params(tmp_path: P
 
     assert unknown["error"]["code"] == "method_not_found"
     assert missing["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_agent_create_publishes_agent_created_event(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.create", "params": {"id": "writer", "name": "Writer"}},
+    )
+
+    assert response["ok"] is True
+    assert len(state.event_bus.events) == 1
+    event = state.event_bus.events[0]
+    assert event["type"] == "agent.created"
+    assert event["payload"]["id"] == "writer"
+    assert event["payload"]["name"] == "Writer"
+    assert event["sequence"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_update_publishes_agent_updated_event(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "coder", "name": "Updated Coder"}},
+    )
+
+    assert response["ok"] is True
+    assert len(state.event_bus.events) == 1
+    event = state.event_bus.events[0]
+    assert event["type"] == "agent.updated"
+    assert event["payload"]["id"] == "coder"
+    assert event["payload"]["name"] == "Updated Coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_publishes_agent_deleted_event(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.delete", "params": {"id": "writer"}},
+    )
+
+    assert response["ok"] is True
+    assert len(state.event_bus.events) == 1
+    event = state.event_bus.events[0]
+    assert event["type"] == "agent.deleted"
+    assert event["payload"]["agent_id"] == "writer"
+    assert len(event["payload"]["remaining_agents"]) == 1
+    assert event["payload"]["remaining_agents"][0]["id"] == "coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path) -> None:
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    chat_runs = ChatRunManager()
+    runtime.chat_runs = chat_runs
+    state = SimpleNamespace(
+        runtime=runtime,
+        chat_runs=chat_runs,
+        chat_loop=ChatLoop(runtime),
+        agent_delete_lock=asyncio.Lock(),
+    )
+    # No event_bus attribute — should not crash
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.create", "params": {"id": "writer", "name": "Writer"}},
+    )
+
+    assert response["ok"] is True

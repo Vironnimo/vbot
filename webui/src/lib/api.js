@@ -196,7 +196,11 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
   }
 
   const socket = new WebSocketClass(
-    buildWebSocketUrl(options.path ?? WEBSOCKET_ENDPOINT, options.baseUrl),
+    buildWebSocketUrl(
+      options.path ?? WEBSOCKET_ENDPOINT,
+      options.baseUrl,
+      options.afterSequence ?? 0,
+    ),
   );
   const cleanupCallbacks = [];
   let closed = false;
@@ -275,16 +279,28 @@ function buildHttpUrl(path, baseUrl) {
   return new URL(path, baseUrl).toString();
 }
 
-function buildWebSocketUrl(path, baseUrl) {
+function buildWebSocketUrl(path, baseUrl, afterSequence = 0) {
   if (path.startsWith('ws://') || path.startsWith('wss://')) {
+    if (afterSequence > 0) {
+      const url = new URL(path);
+      url.searchParams.set('after_sequence', String(afterSequence));
+      return url.toString();
+    }
     return path;
   }
   const browserBaseUrl = baseUrl ?? browserOrigin();
   if (!browserBaseUrl) {
+    if (afterSequence > 0) {
+      const separator = path.includes('?') ? '&' : '?';
+      return `${path}${separator}after_sequence=${afterSequence}`;
+    }
     return path;
   }
   const url = new URL(path, browserBaseUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (afterSequence > 0) {
+    url.searchParams.set('after_sequence', String(afterSequence));
+  }
   return url.toString();
 }
 
