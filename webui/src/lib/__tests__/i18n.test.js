@@ -77,6 +77,7 @@ describe('i18n t()', () => {
       'status.connected',
       'status.activeRun',
       'status.notReachable',
+      'status.reconnecting',
     ];
 
     expectCatalogKeys(requiredKeys);

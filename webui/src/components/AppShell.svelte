@@ -1,13 +1,48 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import {
+    CONNECTION_STATUS_CONNECTED,
+    CONNECTION_STATUS_RECONNECTING,
+    CONNECTION_STATUS_DISCONNECTED,
+  } from '$lib/connectionState.js';
 
-  let { items = [], activeViewId, onSelectView, children } = $props();
+  let {
+    items = [],
+    activeViewId,
+    onSelectView,
+    connectionStatus = CONNECTION_STATUS_RECONNECTING,
+    children,
+  } = $props();
 
   const handleSelectView = (viewId) => {
     if (onSelectView) {
       onSelectView(viewId);
     }
   };
+
+  const statusDotClass = $derived(
+    connectionStatus === CONNECTION_STATUS_CONNECTED
+      ? 'pulse-dot'
+      : connectionStatus === CONNECTION_STATUS_DISCONNECTED
+        ? 'pulse-dot pulse-dot--disconnected'
+        : 'pulse-dot pulse-dot--placeholder',
+  );
+
+  const statusLabel = $derived(
+    connectionStatus === CONNECTION_STATUS_CONNECTED
+      ? t('status.connected', 'Connected')
+      : connectionStatus === CONNECTION_STATUS_DISCONNECTED
+        ? t('status.notReachable', 'Not reachable')
+        : t('status.reconnecting', 'Reconnecting…'),
+  );
+
+  const statusAriaLabel = $derived(
+    connectionStatus === CONNECTION_STATUS_CONNECTED
+      ? t('status.connected', 'Connected')
+      : connectionStatus === CONNECTION_STATUS_DISCONNECTED
+        ? t('status.notReachable', 'Not reachable')
+        : t('status.reconnecting', 'Reconnecting…'),
+  );
 </script>
 
 <div class="app-shell">
@@ -64,13 +99,10 @@
       {/each}
     </nav>
 
-    <div
-      class="sidebar-footer app-shell__footer"
-      aria-label={t('app.statusPlaceholder', 'Local UI status placeholder')}
-    >
-      <div class="pulse-dot pulse-dot--placeholder" aria-hidden="true"></div>
+    <div class="sidebar-footer app-shell__footer" aria-label={statusAriaLabel}>
+      <div class={statusDotClass} aria-hidden="true"></div>
       <span class="footer-text">
-        {t('app.statusPlaceholder', 'Local UI status placeholder')}
+        {statusLabel}
       </span>
     </div>
   </aside>

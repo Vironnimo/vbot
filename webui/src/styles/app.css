@@ -301,6 +301,16 @@ svg {
   background: var(--amber);
 }
 
+.pulse-dot--disconnected,
+.pulse-dot--disconnected::after {
+  background: var(--red);
+}
+
+.pulse-dot--disconnected::after {
+  animation: none;
+  opacity: 0;
+}
+
 @keyframes ripple {
   0% {
     opacity: 0.25;
