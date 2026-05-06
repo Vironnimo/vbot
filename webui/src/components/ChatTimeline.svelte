@@ -1,4 +1,6 @@
 <script>
+  import { tick } from 'svelte';
+
   import { t } from '$lib/i18n.js';
 
   import { visibleTimelineItems } from '../lib/chatState.js';
@@ -6,21 +8,47 @@
   let { sessionState, agentName = '' } = $props();
 
   let timelineItems = $derived(visibleTimelineItems(sessionState));
+  let scrollContainer = $state();
+  let timelineSignature = $derived(
+    timelineItems
+      .map((item) =>
+        item.type === 'streaming'
+          ? `${item.id}:${item.streamingItem.sequence}:${item.streamingItem.content ?? ''}:${item.streamingItem.name ?? ''}`
+          : item.id,
+      )
+      .join('|'),
+  );
+
+  $effect.pre(() => {
+    timelineSignature;
+    const shouldAutoscroll = isNearBottom(scrollContainer);
+    if (shouldAutoscroll) {
+      tick().then(() => {
+        scrollContainer?.scrollTo(0, scrollContainer.scrollHeight);
+      });
+    }
+  });
 
   const isUserItem = (item) =>
-    item.type === 'message'
-      ? item.message.role === 'user'
-      : item.event.type === 'user_message_persisted';
+    item.type === 'streaming'
+      ? false
+      : item.type === 'message'
+        ? item.message.role === 'user'
+        : item.event.type === 'user_message_persisted';
 
   const isAssistantItem = (item) =>
-    item.type === 'message'
-      ? item.message.role === 'assistant'
-      : [
-          'assistant_output',
-          'reasoning',
-          'tool_call_started',
-          'tool_call_result',
-        ].includes(item.event.type);
+    item.type === 'streaming'
+      ? ['assistant', 'reasoning', 'tool_call'].includes(
+          item.streamingItem.type,
+        )
+      : item.type === 'message'
+        ? item.message.role === 'assistant'
+        : [
+            'assistant_output',
+            'reasoning',
+            'tool_call_started',
+            'tool_call_result',
+          ].includes(item.event.type);
 
   const shouldRenderMessage = (message) =>
     Boolean(textFromMessage(message)) || hasReadableReasoning(message);
@@ -221,9 +249,26 @@
     event.type === 'tool_call_result' && hasToolResultError(event);
 
   const isTerminalEvent = (event) => event.type.startsWith('run_');
+
+  const labelForStreamingItem = (streamingItem) => {
+    if (streamingItem.type === 'reasoning') {
+      return t('chat.event.thinking', 'Thinking').toUpperCase();
+    }
+    if (streamingItem.type === 'tool_call') {
+      return t('chat.event.toolPreparing', 'Preparing tool').toUpperCase();
+    }
+    return t('chat.role.assistant', 'Assistant').toUpperCase();
+  };
+
+  const streamingToolName = (streamingItem) =>
+    streamingItem.name || t('chat.toolPendingName', 'tool');
+
+  const isNearBottom = (container) =>
+    !container ||
+    container.offsetHeight + container.scrollTop > container.scrollHeight - 56;
 </script>
 
-<section class="messages" aria-live="polite">
+<section class="messages" bind:this={scrollContainer} aria-live="polite">
   <div class="messages__content">
     {#if timelineItems.length === 0}
       <div class="empty-state chat-empty-state">
@@ -245,7 +290,75 @@
         {formatDate(timestampForItem(timelineItems[0]))}
       </div>
       {#each timelineItems as item (item.id)}
-        {#if item.type === 'message' && shouldRenderMessage(item.message)}
+        {#if item.type === 'streaming'}
+          <article class="msg assistant streaming-message">
+            <div class="msg-header">
+              <div class="msg-avatar">{avatarForItem(item)}</div>
+              <span class="msg-author"
+                >{labelForStreamingItem(item.streamingItem)}</span
+              >
+              {#if agentName}
+                <span class="msg-meta-extra">· {agentName}</span>
+              {/if}
+            </div>
+            <div class="msg-content">
+              {#if item.streamingItem.type === 'reasoning'}
+                <details class="reasoning-block streaming-reasoning">
+                  <summary class="reasoning-header">
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path
+                        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+                      />
+                      <path d="M6 13h4" />
+                    </svg>
+                    {t('chat.event.thinking', 'Thinking').toUpperCase()}
+                    <span class="streaming-caret" aria-hidden="true"></span>
+                    <svg
+                      class="r-chevron"
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                    >
+                      <path d="M4 6l4 4 4-4" />
+                    </svg>
+                  </summary>
+                  <div class="reasoning-body">{item.streamingItem.content}</div>
+                </details>
+              {:else if item.streamingItem.type === 'tool_call'}
+                <details class="tool-event streaming-tool-event" open>
+                  <summary class="tool-event-line">
+                    <span class="te-dot running">●</span>
+                    <span class="te-fn"
+                      >{streamingToolName(item.streamingItem)}</span
+                    >
+                    <span class="te-time">
+                      {t('chat.toolPreparingArguments', 'preparing arguments')}
+                    </span>
+                  </summary>
+                  <div class="tool-event-body">
+                    <div class="teb-row">
+                      <span class="teb-label"
+                        >{t('chat.toolStatus', 'Status')}</span
+                      >
+                      <span class="teb-code">
+                        {t(
+                          'chat.toolArgumentsHidden',
+                          'Arguments are streaming and will appear when ready.',
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </details>
+              {:else}
+                <p class="msg-body-text streaming-text">
+                  {item.streamingItem.content}<span
+                    class="streaming-caret"
+                    aria-hidden="true"
+                  ></span>
+                </p>
+              {/if}
+            </div>
+          </article>
+        {:else if item.type === 'message' && shouldRenderMessage(item.message)}
           <article
             class:assistant={item.message.role === 'assistant'}
             class:user={item.message.role === 'user'}
@@ -502,6 +615,51 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     text-align: center;
+  }
+
+  .streaming-message .msg-author {
+    color: var(--text-med);
+  }
+
+  .streaming-text {
+    color: var(--text-hi);
+  }
+
+  .streaming-reasoning .reasoning-body {
+    color: var(--text-med);
+    font-style: italic;
+  }
+
+  .streaming-tool-event .te-time {
+    color: var(--amber);
+  }
+
+  .streaming-caret {
+    display: inline-block;
+    width: 5px;
+    height: 1em;
+    margin-left: 3px;
+    transform: translateY(2px);
+    background: var(--accent);
+    animation: stream-pulse 900ms steps(2, start) infinite;
+  }
+
+  .reasoning-header .streaming-caret {
+    width: 4px;
+    height: 10px;
+    margin-left: 2px;
+  }
+
+  @keyframes stream-pulse {
+    0%,
+    45% {
+      opacity: 1;
+    }
+
+    46%,
+    100% {
+      opacity: 0.2;
+    }
   }
 
   @media (max-width: 760px) {

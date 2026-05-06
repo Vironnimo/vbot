@@ -9,6 +9,7 @@ import {
   dequeueMessage,
   enqueueMessage,
   ensureSessionState,
+  highestRunEventSequence,
   loadHistory,
   removeQueuedMessage,
   restoreDequeuedMessage,
@@ -86,6 +87,33 @@ describe('chat state helpers', () => {
         session_id: undefined,
         timestamp: undefined,
       },
+    ]);
+  });
+
+  it('preserves active streaming items when history refreshes during a run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Hel' },
+    });
+
+    loadHistory(sessionState, [
+      { id: 'message-one', role: 'user', content: 'Hi' },
+    ]);
+
+    expect(sessionState.streamingItems).toEqual([
+      expect.objectContaining({ type: 'assistant', content: 'Hel' }),
     ]);
   });
 
@@ -210,5 +238,220 @@ describe('chat state helpers', () => {
         },
       },
     ]);
+  });
+
+  it('builds a visible timeline with ordered streaming items', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { reasoning_delta: 'Think' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { content_delta: 'Hi' },
+    });
+
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      {
+        id: 'streaming-reasoning-run-one-1',
+        type: 'streaming',
+        streamingItem: expect.objectContaining({
+          type: 'reasoning',
+          content: 'Think',
+        }),
+      },
+      {
+        id: 'streaming-assistant-run-one-2',
+        type: 'streaming',
+        streamingItem: expect.objectContaining({
+          type: 'assistant',
+          content: 'Hi',
+        }),
+      },
+    ]);
+  });
+
+  it('merges trailing text deltas while preserving interleaved order', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Hel' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { content_delta: 'lo' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { reasoning_delta: 'Then' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { content_delta: ' again' },
+    });
+
+    expect(sessionState.streamingItems.map((item) => item.content)).toEqual([
+      'Hello',
+      'Then',
+      ' again',
+    ]);
+    expect(sessionState.streamingItems.map((item) => item.type)).toEqual([
+      'assistant',
+      'reasoning',
+      'assistant',
+    ]);
+  });
+
+  it('accumulates partial tool call deltas without parsed final arguments', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'read_',
+        arguments_delta: '{"path"',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'file',
+        arguments_delta: ': "a.txt"}',
+      },
+    });
+
+    expect(sessionState.streamingItems).toEqual([
+      expect.objectContaining({
+        type: 'tool_call',
+        toolCallId: 'call-one',
+        name: 'read_file',
+        argumentsText: '{"path": "a.txt"}',
+        complete: false,
+      }),
+    ]);
+  });
+
+  it('ignores duplicate streaming event sequences', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const event = {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Hi' },
+    };
+
+    appendRunEvent(sessionState, event);
+    appendRunEvent(sessionState, event);
+
+    expect(sessionState.streamingItems).toHaveLength(1);
+    expect(sessionState.streamingItems[0].content).toBe('Hi');
+  });
+
+  it('clears streaming items when final assistant output arrives', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Draft' },
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { message: { role: 'assistant', content: 'Final' } },
+    });
+
+    expect(sessionState.streamingItems).toEqual([]);
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      expect.objectContaining({
+        type: 'event',
+        event: expect.objectContaining({ type: 'assistant_output' }),
+      }),
+    ]);
+  });
+
+  it('clears streaming items on terminal cleanup', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Draft' },
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(sessionState.streamingItems).toEqual([]);
+  });
+
+  it('tracks the highest seen run sequence for reconnect handoff', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { content_delta: 'Hi' },
+    });
+
+    expect(highestRunEventSequence(sessionState)).toBe(3);
   });
 });
