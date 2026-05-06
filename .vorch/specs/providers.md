@@ -79,7 +79,7 @@ class ProviderAdapter(ABC):
 ```
 
 - `send()` — non-streaming request, returns parsed response dict
-- `stream()` — streaming request, yields parsed SSE chunk dicts
+- `stream()` — streaming request, yields normalized provider-agnostic delta dicts (`content_delta`, `reasoning_delta`, `tool_call_delta`, internal-only `reasoning_meta`, `finish`), never raw provider SSE chunks
 - `messages` is a list of dicts (not typed — Phase 2 defines the chat layer's types)
 - `model_id` is the exact string sent to the provider API (no remapping)
 - `**kwargs` carries provider-specific overrides (temperature, max_tokens, thinking config, etc.)
@@ -114,7 +114,7 @@ class ProviderAdapter(ABC):
 - `extra_headers` added to request headers
 - Auth: `Authorization: Bearer <api_key>` (configurable via `AuthConfig`)
 
-**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. Each `data:` line between start and `[DONE]` is parsed as JSON and yielded as a dict.
+**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
 
 **Error format** — standard OpenAI error:
 ```json
@@ -187,7 +187,7 @@ Key differences from OpenAI:
 
 **Response normalization:** Concatenates text blocks into `content`, thinking blocks into `reasoning`, preserves supported opaque thinking/redacted-thinking content blocks under `reasoning_meta.content_blocks`, and maps `tool_use` blocks into canonical `tool_calls`. When resending current-turn metadata, these content blocks are emitted unchanged before text/tool-use blocks.
 
-**Streaming:** `stream: true` in payload. SSE uses both `event:` and `data:` lines (unlike OpenAI's `data:` only). Stream ends on `event: message_stop` (detected via `"type": "message_stop"` in parsed data). `event:` lines are skipped; data is parsed from `data:` lines.
+**Streaming:** `stream: true` in payload. SSE uses both `event:` and `data:` lines (unlike OpenAI's `data:` only). Stream ends on `event: message_stop` (detected via `"type": "message_stop"` in parsed data). The adapter tracks content block indexes internally and yields only normalized deltas: text blocks become `content_delta`, thinking deltas become `reasoning_delta`, supported thinking/redacted-thinking blocks become internal-only `reasoning_meta`, tool-use input fragments become `tool_call_delta`, and `message_delta.stop_reason` becomes `finish` with `reason: "stop" | "tool_calls"`.
 
 **Error format** — Anthropic-specific:
 ```json
@@ -266,6 +266,10 @@ Source: `core/runtime/runtime.py`.
 - **System message handling differs.** Anthropic extracts system-role messages from the messages array into a top-level `system` field. OpenAI-compatible providers keep system messages in the array. The adapter handles this translation.
 
 - **No request/response types yet.** `send()` and `stream()` accept and return plain dicts. Phase 2 will define the canonical ChatMessage type. The adapter will translate between ChatMessage and the provider's wire format.
+
+- **Streaming adapters hide provider wire formats.** Chat code consumes normalized deltas only and must not branch on OpenAI-compatible or Anthropic raw chunk shapes. Opaque metadata stays inside canonical `reasoning_meta` for provider round-tripping and must not be exposed publicly.
+
+- **Streaming is best-effort per provider/model.** OpenAI-compatible providers vary in streamed reasoning fields, tool-call IDs, and finish reasons. Adapters should tolerate missing optional deltas, generate stable tool-call IDs when needed, ignore unknown fields unless needed for opaque metadata, and degrade gracefully instead of leaking raw provider chunks upward.
 
 - **Streaming retry only covers connection establishment.** `retry_async` wraps the initial HTTP connection. Once the SSE stream is open, retry is not attempted — errors mid-stream propagate directly.
 

@@ -12,6 +12,7 @@
     dequeueMessage,
     enqueueMessage,
     ensureSessionState,
+    highestRunEventSequence,
     isRunActive,
     loadHistory,
     markSessionError,
@@ -194,7 +195,7 @@
         content,
       });
       startRun(sessionState, run);
-      subscribeToRun(sessionState, run.sse_url);
+      subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
       return true;
     } catch (error) {
       actionError = `${t('chat.sendError', 'Message could not be sent.')} ${error.message}`;
@@ -203,20 +204,28 @@
     }
   };
 
-  const subscribeToRun = (sessionState, sseUrl) => {
+  const subscribeToRun = (sessionState, sseUrl, options = {}) => {
     const existingSubscription = activeSubscriptions[sessionState.key];
     existingSubscription?.close();
-    const subscription = subscribeRunEvents(sseUrl, {
-      onEvent: ({ data }) => {
-        const event = appendRunEvent(sessionState, data);
-        if (event && event.type.startsWith('run_')) {
-          sendNextQueuedMessage(sessionState);
-        }
+    const afterSequence =
+      options.afterSequence ?? highestRunEventSequence(sessionState);
+    const subscription = subscribeRunEvents(
+      sseUrl,
+      {
+        onEvent: ({ data }) => {
+          const event = appendRunEvent(sessionState, data);
+          if (event && event.type.startsWith('run_')) {
+            sendNextQueuedMessage(sessionState);
+          }
+        },
+        onError: (error) => {
+          actionError = `${t('errors.streamClosed', 'The live stream closed before the run finished.')} ${error.message ?? ''}`;
+        },
       },
-      onError: (error) => {
-        actionError = `${t('errors.streamClosed', 'The live stream closed before the run finished.')} ${error.message ?? ''}`;
+      {
+        afterSequence,
       },
-    });
+    );
     activeSubscriptions[sessionState.key] = subscription;
   };
 

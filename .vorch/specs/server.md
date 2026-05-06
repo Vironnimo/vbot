@@ -49,7 +49,11 @@ Clients call the vBot server contract; provider wire details stay behind
   methods to transport-only delegates.
 - `GET /api/runs/{run_id}/events` — streams one Run timeline as SSE using
   `text/event-stream`, replaying existing events and then following new events
-  until a terminal Run event.
+  until a terminal Run event. Each SSE event includes `id: <RunEvent.sequence>`
+  so native EventSource reconnect can resume with `Last-Event-ID`.
+- The Run SSE endpoint supports replay filtering with optional
+  `after_sequence`; explicit query parameter wins over `Last-Event-ID`, and
+  malformed/negative values clamp to replay from the beginning.
 - `server.events.ServerEventBus` — in-memory replayable bus for general server
   lifecycle events sent over `/ws`. Supports `after_sequence` query param for
   reconnect replay: clients pass the last sequence number they saw, and the bus
@@ -77,6 +81,9 @@ Clients call the vBot server contract; provider wire details stay behind
   provider-agnostic.
 - Public history, Run, SSE, and WebSocket payloads must strip opaque provider
   metadata such as `reasoning_meta` recursively.
+- Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
+  `tool_call_delta`) are SSE-only. They must not be bridged to WebSocket
+  lifecycle summaries.
 
 ## Constraints & gotchas
 

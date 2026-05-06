@@ -1,3 +1,9 @@
+import {
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_TOOL_CALL_DELTA,
+} from './api.js';
+
 export const CHAT_STATUS_IDLE = 'idle';
 export const CHAT_STATUS_LOADING = 'loading';
 export const CHAT_STATUS_RUNNING = 'running';
@@ -61,6 +67,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       sessionId,
       messages: [],
       runEvents: [],
+      streamingItems: [],
       currentRun: null,
       queue: [],
       status: CHAT_STATUS_IDLE,
@@ -83,8 +90,12 @@ export function loadHistory(sessionState, messages) {
   const activeRunEvents = isRunActive(sessionState)
     ? sessionState.runEvents
     : [];
+  const activeStreamingItems = isRunActive(sessionState)
+    ? sessionState.streamingItems
+    : [];
   sessionState.messages = Array.isArray(messages) ? messages : [];
   sessionState.runEvents = activeRunEvents;
+  sessionState.streamingItems = activeStreamingItems;
   sessionState.error = null;
   if (!isRunActive(sessionState)) {
     sessionState.status = CHAT_STATUS_IDLE;
@@ -101,6 +112,7 @@ export function startRun(sessionState, run) {
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
+  sessionState.streamingItems = [];
   appendRunEvents(sessionState, run.events ?? []);
   return sessionState.currentRun;
 }
@@ -121,6 +133,7 @@ export function appendRunEvent(sessionState, event) {
   }
 
   sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
+  updateStreamingItems(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
   }
@@ -142,10 +155,20 @@ export function finishRun(sessionState, event) {
   }
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
+  sessionState.streamingItems = [];
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }
   return sessionState;
+}
+
+export function highestRunEventSequence(sessionState) {
+  return Math.max(
+    0,
+    ...(sessionState?.runEvents ?? [])
+      .map((event) => event.sequence)
+      .filter((sequence) => Number.isFinite(sequence)),
+  );
 }
 
 export function markSessionError(sessionState, error) {
@@ -203,19 +226,30 @@ export function visibleTimelineItems(sessionState) {
   if (!sessionState) {
     return [];
   }
+  const liveItems = [
+    ...sessionState.runEvents
+      .filter((event) => shouldShowRunEvent(event))
+      .map((event) => ({
+        sequence: event.sequence ?? 0,
+        id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
+        type: 'event',
+        event,
+      })),
+    ...(sessionState.streamingItems ?? []).map((streamingItem) => ({
+      sequence: streamingItem.sequence ?? 0,
+      id: `streaming-${streamingItem.id}`,
+      type: 'streaming',
+      streamingItem,
+    })),
+  ].sort((left, right) => left.sequence - right.sequence);
+
   return [
     ...sessionState.messages.map((message) => ({
       id: message.id ?? `history-${message.role}-${message.timestamp}`,
       type: 'message',
       message,
     })),
-    ...sessionState.runEvents
-      .filter((event) => event.type !== 'run_started')
-      .map((event) => ({
-        id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
-        type: 'event',
-        event,
-      })),
+    ...liveItems.map((item) => stripTimelineSequence(item)),
   ];
 }
 
@@ -248,4 +282,90 @@ function terminalStatus(eventType) {
     return CHAT_STATUS_CANCELLED;
   }
   return CHAT_STATUS_COMPLETED;
+}
+
+function updateStreamingItems(sessionState, event) {
+  if (event.type === RUN_EVENT_ASSISTANT_OUTPUT_DELTA) {
+    appendTextStreamingItem(sessionState, event, 'assistant', 'content_delta');
+    return;
+  }
+  if (event.type === RUN_EVENT_REASONING_DELTA) {
+    appendTextStreamingItem(
+      sessionState,
+      event,
+      'reasoning',
+      'reasoning_delta',
+    );
+    return;
+  }
+  if (event.type === RUN_EVENT_TOOL_CALL_DELTA) {
+    appendToolCallStreamingItem(sessionState, event);
+    return;
+  }
+  if (event.type === 'assistant_output') {
+    sessionState.streamingItems = [];
+  }
+}
+
+function appendTextStreamingItem(sessionState, event, itemType, payloadKey) {
+  const contentDelta = event.payload?.[payloadKey];
+  if (!contentDelta) {
+    return;
+  }
+  const trailingItem = sessionState.streamingItems.at(-1);
+  if (trailingItem?.type === itemType) {
+    trailingItem.content += contentDelta;
+    trailingItem.sequence = event.sequence;
+    return;
+  }
+  sessionState.streamingItems = [
+    ...sessionState.streamingItems,
+    {
+      id: `${itemType}-${event.run_id ?? 'run'}-${event.sequence ?? sessionState.streamingItems.length}`,
+      type: itemType,
+      content: contentDelta,
+      sequence: event.sequence,
+    },
+  ];
+}
+
+function appendToolCallStreamingItem(sessionState, event) {
+  const payload = event.payload ?? {};
+  const toolCallId = payload.tool_call_id ?? payload.id;
+  if (!toolCallId) {
+    return;
+  }
+  const existingItem = sessionState.streamingItems.find(
+    (item) => item.type === 'tool_call' && item.toolCallId === toolCallId,
+  );
+  if (existingItem) {
+    existingItem.name += payload.name_delta ?? '';
+    existingItem.argumentsText += payload.arguments_delta ?? '';
+    return;
+  }
+  sessionState.streamingItems = [
+    ...sessionState.streamingItems,
+    {
+      id: `tool-call-${event.run_id ?? 'run'}-${toolCallId}`,
+      type: 'tool_call',
+      toolCallId,
+      name: payload.name_delta ?? '',
+      argumentsText: payload.arguments_delta ?? '',
+      complete: false,
+      sequence: event.sequence,
+    },
+  ];
+}
+
+function shouldShowRunEvent(event) {
+  return ![
+    'run_started',
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+    RUN_EVENT_REASONING_DELTA,
+    RUN_EVENT_TOOL_CALL_DELTA,
+  ].includes(event.type);
+}
+
+function stripTimelineSequence({ sequence: _sequence, ...item }) {
+  return item;
 }

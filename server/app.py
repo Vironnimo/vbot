@@ -79,8 +79,9 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
             run = request.app.state.chat_runs.get(run_id)
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        after_sequence = _replay_after_sequence(request)
         return StreamingResponse(
-            _sse_run_events(run),
+            _sse_run_events(run, after_sequence=after_sequence),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache"},
         )
@@ -154,6 +155,12 @@ def _parse_after_sequence(raw: str | None) -> int:
     return max(value, 0)
 
 
+def _replay_after_sequence(request: Request) -> int:
+    if "after_sequence" in request.query_params:
+        return _parse_after_sequence(request.query_params.get("after_sequence"))
+    return _parse_after_sequence(request.headers.get("last-event-id"))
+
+
 def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:
     file_path = webui_dist_dir / requested_path
     try:
@@ -168,10 +175,14 @@ def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | N
     return None
 
 
-async def _sse_run_events(run: Any) -> AsyncIterator[str]:
-    async for event in run.subscribe():
+async def _sse_run_events(run: Any, *, after_sequence: int = 0) -> AsyncIterator[str]:
+    async for event in run.subscribe(after_sequence=after_sequence):
         data = _remove_opaque_provider_metadata(event.to_dict())
-        yield f"event: {event.type}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+        yield (
+            f"id: {event.sequence}\n"
+            f"event: {event.type}\n"
+            f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
+        )
 
 
 def _remove_opaque_provider_metadata(value: Any) -> Any:
