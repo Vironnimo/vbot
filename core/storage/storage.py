@@ -15,6 +15,8 @@ from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 PROMPT_FRAGMENT_NAMES = frozenset({"system.md", "runtime.md", "tools.md", "skills.md"})
+DEFAULT_APPEARANCE_LANGUAGE = "en"
+SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
@@ -106,6 +108,36 @@ class StorageManager:
 
         return data
 
+    def supported_appearance_languages(self) -> list[str]:
+        """Return language codes supported by the persisted Settings surface."""
+
+        return sorted(SUPPORTED_APPEARANCE_LANGUAGES)
+
+    def load_appearance_settings(self) -> dict[str, str]:
+        """Return normalized persisted Appearance settings."""
+
+        settings = self.load_settings()
+        return self._normalize_appearance_settings(settings.get("appearance"))
+
+    def update_appearance_settings(self, appearance: Mapping[str, Any]) -> dict[str, str]:
+        """Persist the supported Appearance Settings subset and return it."""
+
+        if not isinstance(appearance, Mapping):
+            raise StorageError("Appearance settings must be a mapping")
+
+        unsupported_fields = sorted(set(appearance) - {"language"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported appearance settings: {', '.join(unsupported_fields)}")
+
+        if "language" not in appearance:
+            raise StorageError("Appearance settings must include language")
+
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        merged_settings["appearance"] = self._normalize_appearance_settings(appearance)
+        self.save_settings(merged_settings)
+        return dict(merged_settings["appearance"])
+
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json`` as UTF-8 JSON."""
 
@@ -184,6 +216,35 @@ class StorageManager:
         if resources_dir is not None:
             return Path(resources_dir)
         return Path(__file__).resolve().parents[2] / "resources"
+
+    @classmethod
+    def _normalize_appearance_settings(cls, appearance: Any) -> dict[str, str]:
+        return {"language": cls._normalize_appearance_language(appearance)}
+
+    @classmethod
+    def _normalize_appearance_language(cls, appearance: Any) -> str:
+        section = cls._coerce_appearance_section(appearance)
+        value = section.get("language")
+        if value is None:
+            return DEFAULT_APPEARANCE_LANGUAGE
+        return cls._validate_appearance_language(value)
+
+    @staticmethod
+    def _coerce_appearance_section(appearance: Any) -> dict[str, Any]:
+        if appearance is None:
+            return {}
+        if not isinstance(appearance, Mapping):
+            raise StorageError("Expected settings.appearance to be an object")
+        return dict(appearance)
+
+    @staticmethod
+    def _validate_appearance_language(value: Any) -> str:
+        if not isinstance(value, str) or not value:
+            raise StorageError("Appearance language must be a non-empty string")
+        if value not in SUPPORTED_APPEARANCE_LANGUAGES:
+            supported = ", ".join(sorted(SUPPORTED_APPEARANCE_LANGUAGES))
+            raise StorageError(f"Unsupported appearance language: {value}. Supported: {supported}")
+        return value
 
     @staticmethod
     def _validate_prompt_fragment_name(fragment_name: str) -> str:

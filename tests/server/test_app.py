@@ -38,9 +38,58 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert isinstance(app.state.chat_loop, ChatLoop)
         assert isinstance(app.state.event_bus, ServerEventBus)
         assert isinstance(app.state.agent_delete_lock, asyncio.Lock)
+        assert app.state.server_bind == {
+            "listen_host": "127.0.0.1",
+            "listen_port": 8420,
+            "port_source": "default",
+        }
         assert runtime.chat_runs is app.state.chat_runs
 
     assert runtime.logger is not None
+
+
+def test_create_app_uses_explicit_server_bind_state(tmp_path: Path) -> None:
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    app = create_app(
+        runtime=runtime,
+        server_bind={"listen_host": "0.0.0.0", "listen_port": 9100, "port_source": "cli"},
+    )
+
+    with TestClient(app):
+        assert app.state.server_bind == {
+            "listen_host": "0.0.0.0",
+            "listen_port": 9100,
+            "port_source": "cli",
+        }
+
+
+def test_create_app_derives_server_bind_from_environment_port(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VBOT_SERVER_PORT", "8600")
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app):
+        assert app.state.server_bind == {
+            "listen_host": "127.0.0.1",
+            "listen_port": 8600,
+            "port_source": "VBOT_SERVER_PORT",
+        }
+
+
+def test_create_app_derives_server_bind_from_settings_file(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "settings.json").write_text('{"server_port": 8500}', encoding="utf-8")
+    app = create_app(runtime=Runtime(Config(data_dir=data_dir)))
+
+    with TestClient(app):
+        assert app.state.server_bind == {
+            "listen_host": "127.0.0.1",
+            "listen_port": 8500,
+            "port_source": "settings.server_port",
+        }
 
 
 def test_create_app_lifecycle_stops_runtime_on_shutdown(tmp_path: Path) -> None:
