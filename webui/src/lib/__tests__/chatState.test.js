@@ -362,6 +362,61 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps a streaming tool call at its first chronological position', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'read_',
+        arguments_delta: '{"path"',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { content_delta: 'Checking the file.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'file',
+        arguments_delta: ': "a.txt"}',
+      },
+    });
+
+    expect(sessionState.streamingItems).toEqual([
+      expect.objectContaining({
+        type: 'tool_call',
+        toolCallId: 'call-one',
+        name: 'read_file',
+        argumentsText: '{"path": "a.txt"}',
+        sequence: 1,
+      }),
+      expect.objectContaining({
+        type: 'assistant',
+        content: 'Checking the file.',
+        sequence: 2,
+      }),
+    ]);
+    expect(
+      visibleTimelineItems(sessionState).map(
+        (item) => item.streamingItem?.type,
+      ),
+    ).toEqual(['tool_call', 'assistant']);
+  });
+
   it('ignores duplicate streaming event sequences', () => {
     const sessionState = ensureSessionState(
       createChatState(),
