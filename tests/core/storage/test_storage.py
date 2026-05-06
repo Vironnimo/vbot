@@ -2,10 +2,16 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from core.storage import PHASE_TWO_DIRECTORIES, StorageError, StorageManager
+from core.storage import (
+    DEFAULT_APPEARANCE_LANGUAGE,
+    PHASE_TWO_DIRECTORIES,
+    StorageError,
+    StorageManager,
+)
 
 
 def create_prompt_resources(resources_dir: Path) -> None:
@@ -121,6 +127,72 @@ def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:
         storage.save_settings({"path": object()})
 
     assert not storage.settings_path.exists()
+
+
+def test_load_appearance_settings_returns_default_language_when_missing(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_appearance_settings() == {"language": DEFAULT_APPEARANCE_LANGUAGE}
+
+
+def test_load_appearance_settings_rejects_non_object_section(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"appearance": []})
+
+    with pytest.raises(StorageError, match="Expected settings.appearance to be an object"):
+        storage.load_appearance_settings()
+
+
+def test_update_appearance_settings_persists_language_and_preserves_other_settings(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500, "appearance": {}})
+
+    updated = storage.update_appearance_settings({"language": "en"})
+
+    assert updated == {"language": "en"}
+    assert storage.load_settings() == {"appearance": {"language": "en"}, "server_port": 8500}
+
+
+def test_update_appearance_settings_drops_deprecated_appearance_keys(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "server_port": 8500,
+            "appearance": {
+                "language": "en",
+                "show_token_counts": False,
+                "theme": "dark",
+            },
+        }
+    )
+
+    updated = storage.update_appearance_settings({"language": "en"})
+
+    assert updated == {"language": "en"}
+    assert storage.load_settings() == {"appearance": {"language": "en"}, "server_port": 8500}
+
+
+@pytest.mark.parametrize(
+    ("appearance", "message"),
+    [
+        ("en", "Appearance settings must be a mapping"),
+        ({}, "Appearance settings must include language"),
+        ({"language": "en", "show_token_counts": False}, "Unsupported appearance settings"),
+        ({"language": ""}, "Appearance language must be a non-empty string"),
+        ({"language": "fr"}, "Unsupported appearance language: fr"),
+    ],
+)
+def test_update_appearance_settings_rejects_invalid_payloads(
+    tmp_path: Path,
+    appearance: Any,
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match=message):
+        storage.update_appearance_settings(appearance)
 
 
 def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> None:

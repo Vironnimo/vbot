@@ -106,7 +106,8 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 
 **Framework:** pytest (backend), Vitest (frontend). Backend pytest uses
 `--import-mode=importlib` so mirrored test modules may share basenames without
-collection collisions.
+collection collisions. Frontend rendered-component tests may use `jsdom` via
+Vitest when helper-level assertions are not enough.
 
 **Structure:** Tests mirror source. Backend: `tests/<package>/<module>/test_<file>.py`.
 Frontend: `webui/src/<module>/__tests__/` mirroring source (e.g. `src/lib/__tests__/` for library tests, `src/components/__tests__/` for component tests).

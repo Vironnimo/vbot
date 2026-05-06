@@ -1,5 +1,21 @@
 <script>
-  import { t } from '$lib/i18n.js';
+  import { onMount } from 'svelte';
+
+  import { rpc } from '$lib/api.js';
+  import { init, t } from '$lib/i18n.js';
+  import {
+    SETTINGS_LAYOUT_CLASS,
+    buildLanguageOptions,
+    createLanguageUpdatePayload,
+    describeProvider,
+    formatServerHost,
+    getDataDirectoryValue,
+    providerStatusClass,
+    providerStatusLabel,
+    getProviderItems,
+    getPersistedLanguageId,
+    isLanguageSaveDisabled,
+  } from '$lib/settingsView.js';
 
   const panels = [
     {
@@ -10,7 +26,7 @@
       subtitle: () =>
         t(
           'settings.general.subtitle',
-          'Server connection and workspace path settings.',
+          'Bind address and application data directory.',
         ),
     },
     {
@@ -21,7 +37,7 @@
       subtitle: () =>
         t(
           'settings.providers.subtitle',
-          'API keys and connection status for LLM providers.',
+          'API-key presence and endpoint metadata for available providers.',
         ),
     },
     {
@@ -29,57 +45,105 @@
       labelKey: 'settings.appearance.title',
       labelFallback: 'Appearance',
       label: () => t('settings.appearance.title', 'Appearance'),
-      subtitle: () =>
-        t('settings.appearance.subtitle', 'Display and language preferences.'),
+      subtitle: () => t('settings.appearance.subtitle', 'Language preference.'),
     },
   ];
 
   let activePanelId = $state('general');
-  const placeholderValues = {
-    serverHost: '—',
-    dataDirectory: '—',
-    ollamaHost: 'localhost:11434',
-  };
-
-  let autoScrollEnabled = $state(true);
-  let tokenCountsEnabled = $state(true);
-  let languageDropdownOpen = $state(false);
+  let settings = $state(null);
+  let loading = $state(true);
+  let loadError = $state('');
+  let saveError = $state('');
+  let saveNotice = $state('');
+  let saving = $state(false);
   let selectedLanguageId = $state('en');
-
-  const languageOptions = [
-    { id: 'en', labelKey: 'settings.language.en', labelFallback: 'English' },
-    { id: 'de', labelKey: 'settings.language.de', labelFallback: 'Deutsch' },
-    { id: 'fr', labelKey: 'settings.language.fr', labelFallback: 'Français' },
-    { id: 'es', labelKey: 'settings.language.es', labelFallback: 'Español' },
-    { id: 'pt', labelKey: 'settings.language.pt', labelFallback: 'Português' },
-    { id: 'ja', labelKey: 'settings.language.ja', labelFallback: '日本語' },
-    { id: 'zh', labelKey: 'settings.language.zh', labelFallback: '中文' },
-    { id: 'ko', labelKey: 'settings.language.ko', labelFallback: '한국어' },
-  ];
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
   );
-  let selectedLanguage = $derived(
-    languageOptions.find((language) => language.id === selectedLanguageId) ??
-      languageOptions[0],
+  let serverHostValue = $derived(
+    formatServerHost(settings?.general?.server, t),
   );
-  let selectedLanguageLabel = $derived(
-    t(selectedLanguage.labelKey, selectedLanguage.labelFallback),
+  let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
+  let providerItems = $derived(getProviderItems(settings));
+  let availableLanguageOptions = $derived(
+    buildLanguageOptions(settings?.appearance),
   );
+  let persistedLanguageId = $derived(getPersistedLanguageId(settings));
+  let saveDisabled = $derived(
+    isLanguageSaveDisabled({
+      loading,
+      saving,
+      selectedLanguageId,
+      persistedLanguageId,
+    }),
+  );
+
+  onMount(() => {
+    loadSettings();
+  });
 
   function selectPanel(panelId) {
     activePanelId = panelId;
-    languageDropdownOpen = false;
+    saveError = '';
+    saveNotice = '';
   }
 
-  function selectLanguage(language) {
-    selectedLanguageId = language.id;
-    languageDropdownOpen = false;
+  function applySettings(nextSettings) {
+    settings = nextSettings;
+
+    const language = nextSettings?.appearance?.language ?? 'en';
+    selectedLanguageId = language;
+    init(language);
+  }
+
+  async function loadSettings() {
+    loading = true;
+    loadError = '';
+
+    try {
+      const nextSettings = await rpc('settings.get');
+      applySettings(nextSettings);
+    } catch (error) {
+      loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveLanguage() {
+    if (saveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+    saveNotice = '';
+
+    try {
+      const nextSettings = await rpc('settings.update', {
+        ...createLanguageUpdatePayload(selectedLanguageId),
+      });
+      applySettings(nextSettings);
+      saveNotice = t(
+        'settings.appearance.saveSuccess',
+        'Language preference updated.',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
+  function handleLanguageChange(event) {
+    selectedLanguageId = event.currentTarget.value;
+    saveError = '';
+    saveNotice = '';
   }
 </script>
 
-<section class="settings-layout view active" aria-labelledby="settings-title">
+<section class={SETTINGS_LAYOUT_CLASS} aria-labelledby="settings-title">
   <nav
     class="settings-nav"
     aria-label={t('settings.sections', 'Settings sections')}
@@ -101,224 +165,167 @@
 
   <div class="settings-content">
     <div class="s-panel">
-      <h2 id="settings-title" class="s-panel-title">{activePanel.label()}</h2>
-      <p class="s-panel-sub">{activePanel.subtitle()}</p>
-      <p class="settings-placeholder-note" role="note">
-        {t(
-          'settings.placeholderNote',
-          'Placeholder-only controls are disabled until settings persistence is available.',
-        )}
-      </p>
+      <div class="s-panel-header">
+        <div>
+          <h2 id="settings-title" class="s-panel-title">
+            {activePanel.label()}
+          </h2>
+          <p class="s-panel-sub">{activePanel.subtitle()}</p>
+        </div>
 
-      {#if activePanelId === 'general'}
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.general.serverHost', 'Server host')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.general.serverHostDescription',
-                'Address and port the vBot server listens on.',
-              )}
-            </div>
-          </div>
-          <input
-            class="s-input"
-            type="text"
-            value={placeholderValues.serverHost}
-            aria-label={t(
-              'settings.general.serverHostPlaceholder',
-              'Server host placeholder, not a detected runtime value',
-            )}
-            disabled
-          />
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.general.dataDirectory', 'Data directory')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.general.dataDirectoryDescription',
-                'Root path for agents, sessions, and workspace files.',
-              )}
-            </div>
-          </div>
-          <input
-            class="s-input"
-            type="text"
-            value={placeholderValues.dataDirectory}
-            aria-label={t(
-              'settings.general.dataDirectoryPlaceholder',
-              'Data directory placeholder, not a detected runtime value',
-            )}
-            disabled
-          />
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.general.autoScroll', 'Auto-scroll chat')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.general.autoScrollDescription',
-                'Scroll to bottom as new tokens arrive.',
-              )}
-            </div>
-          </div>
+        {#if activePanelId === 'appearance' && !loading && !loadError}
           <button
-            class:off={!autoScrollEnabled}
-            class="toggle on"
+            class="btn-primary s-save-button"
             type="button"
-            role="switch"
-            aria-checked={autoScrollEnabled}
-            aria-label={t('settings.general.autoScroll', 'Auto-scroll chat')}
-            disabled
+            disabled={saveDisabled}
+            onclick={saveLanguage}
           >
-            <span class="t-knob"></span>
+            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </button>
+        {/if}
+      </div>
+
+      {#if loading}
+        <div class="s-feedback s-feedback--neutral">
+          {t('settings.loading', 'Loading settings…')}
         </div>
-      {:else if activePanelId === 'providers'}
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.providers.openRouter', 'OpenRouter')}
-            </div>
-            <div class="s-row-desc">
-              {t('settings.providers.openRouterDescription', 'API key via')}
-              <code>{t('settings.providers.envPath', '~/.vbot/.env')}</code>
-            </div>
-          </div>
-          <span class="chip chip-amber"
-            >{t('settings.placeholder', 'Placeholder')}</span
-          >
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.providers.anthropic', 'Anthropic')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.providers.anthropicDescription',
-                'Direct Anthropic Messages API.',
-              )}
-            </div>
-          </div>
-          <span class="chip chip-amber"
-            >{t('settings.placeholder', 'Placeholder')}</span
-          >
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.providers.ollama', 'Ollama')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.providers.ollamaDescription',
-                'Local model server placeholder: {host}',
-                { host: placeholderValues.ollamaHost },
-              )}
-            </div>
-          </div>
-          <span class="chip chip-amber"
-            >{t('settings.placeholder', 'Placeholder')}</span
-          >
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.providers.customEndpoint', 'Custom endpoint')}
-            </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.providers.customEndpointDescription',
-                'Add an OpenAI-compatible API endpoint.',
-              )}
-            </div>
-          </div>
-          <button class="btn-outline" type="button" disabled>
-            {t('settings.providers.configure', 'Configure…')}
+      {:else if loadError}
+        <div class="s-feedback s-feedback--error">
+          <p>{loadError}</p>
+          <button class="btn-outline" type="button" onclick={loadSettings}>
+            {t('common.retry', 'Retry')}
           </button>
         </div>
       {:else}
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.appearance.language', 'Language')}
+        {#if saveError}
+          <div class="s-feedback s-feedback--error">{saveError}</div>
+        {:else if saveNotice}
+          <div class="s-feedback s-feedback--success">{saveNotice}</div>
+        {/if}
+
+        {#if activePanelId === 'general'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.general.serverHost', 'Server host')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.general.serverHostDescription',
+                  'Address and port the vBot server listens on.',
+                )}
+              </div>
             </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.appearance.languageDescription',
-                'Interface language.',
-              )}
+            <div class="s-row-control s-row-control--input">
+              <div class="s-value-box">{serverHostValue}</div>
             </div>
           </div>
-          <div
-            class:open={languageDropdownOpen}
-            class="dropdown settings-language"
-          >
-            <button
-              class="dropdown-trigger"
-              type="button"
-              aria-expanded={languageDropdownOpen}
-              disabled
-              onclick={() => (languageDropdownOpen = !languageDropdownOpen)}
-            >
-              <span>{selectedLanguageLabel}</span>
-              <svg
-                class="dropdown-chevron"
-                viewBox="0 0 12 12"
-                aria-hidden="true"
-              >
-                <path d="M2 4l4 4 4-4" />
-              </svg>
-            </button>
-            <div class="dropdown-list">
-              {#each languageOptions as language (language.id)}
-                <button
-                  class:selected={language.id === selectedLanguageId}
-                  class="dropdown-option"
-                  type="button"
-                  onclick={() => selectLanguage(language)}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.general.dataDirectory', 'Data directory')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.general.dataDirectoryDescription',
+                  'Root path for agents, sessions, and workspace files.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <div class="s-value-box">{dataDirectoryValue}</div>
+            </div>
+          </div>
+        {:else if activePanelId === 'providers'}
+          {#if providerItems.length === 0}
+            <div class="s-feedback s-feedback--neutral">
+              {t('settings.providers.empty', 'No providers are available.')}
+            </div>
+          {:else}
+            {#each providerItems as provider (provider.id)}
+              <div class="s-row">
+                <div class="s-row-info">
+                  <div class="s-row-label">{provider.name ?? provider.id}</div>
+                  <div class="s-row-desc">{describeProvider(provider, t)}</div>
+                </div>
+                <div class="s-row-control">
+                  <span class={`chip ${providerStatusClass(provider)}`}
+                    >{providerStatusLabel(provider, t)}</span
+                  >
+                </div>
+              </div>
+            {/each}
+          {/if}
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.providers.customEndpoint', 'Custom endpoint')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.providers.customEndpointDescription',
+                  'OpenAI-compatible custom endpoints remain placeholder-only in this phase.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control">
+              <div class="s-row-actions">
+                <span class="chip chip-orange"
+                  >{t(
+                    'settings.providers.customEndpointStatus',
+                    'Placeholder',
+                  )}</span
                 >
-                  {t(language.labelKey, language.labelFallback)}
+                <button class="btn-outline" type="button" disabled>
+                  {t('settings.providers.configure', 'Configure…')}
                 </button>
-              {/each}
+              </div>
             </div>
           </div>
-        </div>
-        <div class="s-row">
-          <div class="s-row-info">
-            <div class="s-row-label">
-              {t('settings.appearance.showTokenCounts', 'Show token counts')}
+        {:else}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.appearance.language', 'Language')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.appearance.languageDescription',
+                  'Interface language.',
+                )}
+              </div>
             </div>
-            <div class="s-row-desc">
-              {t(
-                'settings.appearance.showTokenCountsDescription',
-                'Display token usage in the chat header.',
-              )}
+            <div class="s-row-control s-row-control--appearance">
+              <select
+                bind:value={selectedLanguageId}
+                class="s-select"
+                aria-label={t('settings.appearance.language', 'Language')}
+                disabled={loading ||
+                  saving ||
+                  availableLanguageOptions.length <= 1}
+                onchange={handleLanguageChange}
+              >
+                {#each availableLanguageOptions as language (language.id)}
+                  <option value={language.id}>
+                    {t(language.labelKey, language.labelFallback)}
+                  </option>
+                {/each}
+              </select>
+
+              <button
+                class="btn-primary s-save-button s-save-button--inline"
+                type="button"
+                disabled={saveDisabled}
+                onclick={saveLanguage}
+              >
+                {saving
+                  ? t('common.saving', 'Saving…')
+                  : t('common.save', 'Save')}
+              </button>
             </div>
           </div>
-          <button
-            class:off={!tokenCountsEnabled}
-            class="toggle on"
-            type="button"
-            role="switch"
-            aria-checked={tokenCountsEnabled}
-            aria-label={t(
-              'settings.appearance.showTokenCounts',
-              'Show token counts',
-            )}
-            disabled
-          >
-            <span class="t-knob"></span>
-          </button>
-        </div>
+        {/if}
       {/if}
     </div>
   </div>
@@ -327,7 +334,9 @@
 <style>
   .settings-layout {
     display: flex;
+    flex-direction: row;
     min-height: 0;
+    min-width: 0;
     flex: 1;
     overflow: hidden;
     background: var(--surface);
@@ -385,10 +394,23 @@
   }
 
   .settings-content {
+    display: flex;
     min-width: 0;
     flex: 1;
     overflow-y: auto;
     padding: 24px 32px;
+  }
+
+  .s-panel {
+    width: 100%;
+  }
+
+  .s-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 6px;
   }
 
   .s-panel-title {
@@ -406,16 +428,38 @@
     font-size: 12.5px;
   }
 
-  .settings-placeholder-note {
-    margin: -12px 0 14px;
-    padding: 9px 11px;
-    border: 1px solid rgba(245, 158, 11, 0.22);
-    border-left: 2px solid var(--amber);
+  .s-feedback {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-2);
     border-radius: var(--r-md);
-    color: var(--amber);
-    background: rgba(245, 158, 11, 0.06);
-    font-size: 12px;
-    line-height: 1.4;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .s-feedback p {
+    margin: 0;
+  }
+
+  .s-feedback--neutral {
+    color: var(--text-med);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .s-feedback--error {
+    color: var(--red);
+    background: rgba(252, 129, 129, 0.08);
+    border-color: rgba(252, 129, 129, 0.18);
+  }
+
+  .s-feedback--success {
+    color: var(--green);
+    background: rgba(74, 222, 128, 0.08);
+    border-color: rgba(74, 222, 128, 0.2);
   }
 
   .s-row {
@@ -449,39 +493,74 @@
     line-height: 1.4;
   }
 
+  .s-value-box,
+  .s-select {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 11px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    color: var(--text-hi);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .s-value-box {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .s-select {
+    appearance: none;
+    cursor: pointer;
+  }
+
+  .s-select:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
   .s-row-desc :global(code) {
     color: var(--text-med);
     font-family: var(--font-mono);
     font-size: 11.5px;
   }
 
-  .s-input {
+  .s-row-control {
+    display: flex;
+    min-width: fit-content;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+  }
+
+  .s-row-control--input {
+    width: min(220px, 100%);
     min-width: 180px;
   }
 
-  .toggle.off {
-    border-color: var(--border-2);
-    background: var(--surface-3);
+  .s-row-control--appearance {
+    gap: 10px;
+    width: min(360px, 100%);
+    min-width: 220px;
   }
 
-  .toggle.off .t-knob {
-    left: 2px;
+  .s-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 
-  .settings-language {
-    min-width: 160px;
+  .s-save-button {
+    min-width: 84px;
   }
 
-  .dropdown-trigger {
-    width: 100%;
-  }
-
-  .dropdown-option {
-    display: block;
-    width: 100%;
-    border: 0;
-    background: transparent;
-    text-align: left;
+  .s-save-button--inline {
+    display: none;
   }
 
   @media (max-width: 760px) {
@@ -500,6 +579,44 @@
     .s-row {
       align-items: flex-start;
       flex-direction: column;
+    }
+
+    .settings-content {
+      padding: 20px;
+    }
+
+    .s-panel-header {
+      flex-direction: column;
+      align-items: stretch;
+      margin-bottom: 2px;
+    }
+
+    .s-row-control,
+    .s-row-control--input {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+    }
+
+    .s-row-control--appearance {
+      width: 100%;
+      min-width: 0;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .s-save-button {
+      display: none;
+    }
+
+    .s-save-button--inline {
+      display: inline-flex;
+      width: 100%;
+    }
+
+    .s-feedback {
+      flex-direction: column;
+      align-items: stretch;
     }
   }
 </style>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from typing import Any, cast
 
 from core.agents import AgentError
@@ -91,6 +92,10 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _stream_chat(state, params)
         case "chat.cancel":
             return await _cancel_chat(state, params)
+        case "settings.get":
+            return _get_settings(state, params)
+        case "settings.update":
+            return _update_settings(state, params)
         case _:
             raise RpcError(RPC_ERROR_METHOD_NOT_FOUND, f"unknown RPC method: {method}")
 
@@ -212,6 +217,24 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     return _run_response(run)
 
 
+def _get_settings(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.get does not accept params")
+    try:
+        return _settings_response(state)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _update_settings(state: Any, params: JsonObject) -> JsonObject:
+    appearance = _parse_settings_update(params)
+    try:
+        state.runtime.storage.update_appearance_settings(appearance)
+        return _settings_response(state)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
 def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
     if not isinstance(request, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "RPC request must be a JSON object")
@@ -224,11 +247,97 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
     return method, params
 
 
+def _parse_settings_update(params: JsonObject) -> JsonObject:
+    supported_sections = {"appearance"}
+    unsupported_sections = sorted(set(params) - supported_sections)
+    if unsupported_sections:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported settings sections: {', '.join(unsupported_sections)}",
+        )
+
+    appearance = params.get("appearance")
+    if not isinstance(appearance, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.appearance must be an object")
+
+    unsupported_fields = sorted(set(appearance) - {"language"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported appearance settings: {', '.join(unsupported_fields)}",
+        )
+
+    language = appearance.get("language")
+    if not isinstance(language, str) or not language:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.appearance.language must be a non-empty string",
+        )
+
+    return {"language": language}
+
+
 def _required_string(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
     return value
+
+
+def _settings_response(state: Any) -> JsonObject:
+    runtime = state.runtime
+    appearance = runtime.storage.load_appearance_settings()
+    server_bind = _server_bind_response(state)
+
+    return {
+        "general": {
+            "server": server_bind,
+            "data_directory": str(runtime.storage.data_dir),
+        },
+        "providers": {
+            "items": [
+                _provider_settings_item(runtime, provider_id)
+                for provider_id in runtime.providers.list_ids()
+            ],
+            "custom_endpoints": {
+                "supported": False,
+                "items": [],
+            },
+        },
+        "appearance": {
+            "language": appearance["language"],
+            "available_languages": runtime.storage.supported_appearance_languages(),
+        },
+    }
+
+
+def _server_bind_response(state: Any) -> JsonObject:
+    server_bind = getattr(state, "server_bind", {})
+    listen_host = server_bind.get("listen_host", "127.0.0.1")
+    listen_port = server_bind.get("listen_port", 8420)
+    port_source = server_bind.get("port_source", "default")
+    return {
+        "listen_host": listen_host,
+        "listen_port": listen_port,
+        "port_source": port_source,
+    }
+
+
+def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
+    provider = runtime.providers.get(provider_id)
+    env_key = provider.auth.env_key
+    api_key_configured = bool(os.environ.get(env_key)) if env_key else False
+    return {
+        "id": provider.id,
+        "name": provider.name,
+        "base_url": provider.base_url,
+        "env_key": env_key,
+        "api_key_configured": api_key_configured,
+        "status": "configured" if api_key_configured else "missing_api_key",
+        "model_count": len(runtime.models.list_for_provider(provider_id)),
+        "kind": "remote" if provider.base_url else "local",
+        "editable": False,
+    }
 
 
 def _optional_string(params: JsonObject, key: str) -> str | None:
