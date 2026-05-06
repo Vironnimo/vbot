@@ -27,9 +27,16 @@ and Settings.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
     one Run timeline and returns `{ close, source }`.
   - `subscribeServerEvents(handlers, options?)` opens `/ws` and returns
-    `{ close, socket }`.
+    `{ close, socket }`. Supports `afterSequence` option for reconnect replay.
 - `webui/src/lib/i18n.js`
   - `t(key, fallback?, values?)` is required for all user-visible strings.
+- `webui/src/lib/connectionState.js`
+  - Manages persistent WebSocket connection state: `createConnectionState()`,
+    `connect(state, handlers)`, `disconnect(state)`.
+  - Three statuses: `CONNECTION_STATUS_CONNECTED`, `CONNECTION_STATUS_RECONNECTING`,
+    `CONNECTION_STATUS_DISCONNECTED`.
+  - Reconnect with exponential backoff (1s initial, 30s max, ±25% jitter).
+  - Tracks `lastSequence` for `after_sequence` reconnect replay.
 - `webui/src/lib/chatState.js`
   - Pure helpers for selected Agent, per-Agent/current-Session state, visible
     timeline items, active Run status, and FIFO queued messages.
