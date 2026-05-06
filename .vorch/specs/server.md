@@ -37,7 +37,8 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.cancel` targets a Run ID, not a Session.
 - Server event bus events contain lifecycle summaries for WebSocket clients:
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
-  `run_failed`.
+  `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
+  `agent.deleted` (full agent payload via `_agent_response`).
 
 ## Interfaces
 
@@ -50,7 +51,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `text/event-stream`, replaying existing events and then following new events
   until a terminal Run event.
 - `server.events.ServerEventBus` — in-memory replayable bus for general server
-  lifecycle events sent over `/ws`.
+  lifecycle events sent over `/ws`. Supports `after_sequence` query param for
+  reconnect replay: clients pass the last sequence number they saw, and the bus
+  replays all events with a higher sequence before streaming new ones.
 - `server.main.main(argv=None)` — starts uvicorn. Port priority is `--port` >
   `VBOT_SERVER_PORT` > `settings.json` > `8420`; ambient `PORT` /
   `SERVER_PORT` process environment variables are ignored unless they are keys
@@ -67,7 +70,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - Session creation is explicit at the server/product boundary.
 - Only one active Run is allowed per Session; parallel Runs in different
   Sessions are allowed.
-- WebSocket is for general server events, not the primary per-Run output stream.
+- WebSocket is the persistent signalling channel for app-wide events (connection
+  status, agent CRUD, run lifecycle summaries). It is server-push only; clients
+  send requests via `POST /api/rpc`.
 - SSE is the primary per-Run output stream and should remain event-level and
   provider-agnostic.
 - Public history, Run, SSE, and WebSocket payloads must strip opaque provider
