@@ -341,7 +341,6 @@ function appendToolCallStreamingItem(sessionState, event) {
   if (existingItem) {
     existingItem.name += payload.name_delta ?? '';
     existingItem.argumentsText += payload.arguments_delta ?? '';
-    existingItem.sequence = event.sequence;
     return;
   }
   sessionState.streamingItems = [
