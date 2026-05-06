@@ -5,6 +5,7 @@
 .venv/
 .tmp/
 .worktrees/
+.playwright-cli/
 
 # Python
 .mypy_cache/
