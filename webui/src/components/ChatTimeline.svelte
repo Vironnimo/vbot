@@ -7,6 +7,13 @@
 
   let { sessionState, agentName = '' } = $props();
 
+  function isNearBottom(container) {
+    return (
+      !container ||
+      container.offsetHeight + container.scrollTop > container.scrollHeight - 56
+    );
+  }
+
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
   let timelineSignature = $derived(
@@ -262,10 +269,6 @@
 
   const streamingToolName = (streamingItem) =>
     streamingItem.name || t('chat.toolPendingName', 'tool');
-
-  const isNearBottom = (container) =>
-    !container ||
-    container.offsetHeight + container.scrollTop > container.scrollHeight - 56;
 </script>
 
 <section class="messages" bind:this={scrollContainer} aria-live="polite">
