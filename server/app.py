@@ -88,8 +88,11 @@ def create_app(*, runtime: Runtime | None = None, config: Config | None = None) 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
         await websocket.accept()
+        after_sequence = _parse_after_sequence(websocket.query_params.get("after_sequence"))
         try:
-            async for event in websocket.app.state.event_bus.subscribe():
+            async for event in websocket.app.state.event_bus.subscribe(
+                after_sequence=after_sequence
+            ):
                 await websocket.send_json(event)
         except WebSocketDisconnect:
             return
@@ -138,6 +141,17 @@ def _attach_run_manager(runtime: Any, run_manager: ChatRunManager) -> None:
 
 def _is_reserved_server_path(path: str) -> bool:
     return path == "health" or path == "ws" or path.startswith("api/")
+
+
+def _parse_after_sequence(raw: str | None) -> int:
+    """Parse the after_sequence query param, clamping to int ≥ 0 with 0 on failure."""
+    if raw is None:
+        return 0
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        return 0
+    return max(value, 0)
 
 
 def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | None:

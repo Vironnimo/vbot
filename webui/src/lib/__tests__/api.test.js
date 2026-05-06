@@ -239,6 +239,47 @@ describe('subscribeServerEvents()', () => {
       expect.any(Object),
     );
   });
+
+  it('includes after_sequence query param when afterSequence is greater than 0', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        afterSequence: 5,
+      },
+    );
+
+    expect(connection.socket.url).toContain('after_sequence=5');
+
+    connection.close();
+  });
+
+  it('omits after_sequence query param when afterSequence is 0', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        afterSequence: 0,
+      },
+    );
+
+    expect(connection.socket.url).not.toContain('after_sequence');
+
+    connection.close();
+  });
+
+  it('omits after_sequence query param when afterSequence is omitted', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+
+    expect(connection.socket.url).not.toContain('after_sequence');
+
+    connection.close();
+  });
 });
 
 function jsonResponse(body, options = {}) {

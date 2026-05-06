@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,7 +30,7 @@ class ServerEventBus:
             subscriber.put_nowait(event)
         return event
 
-    async def subscribe(self, *, after_sequence: int = 0) -> AsyncIterator[JsonObject]:
+    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject, None]:
         """Replay existing events and stream new events until the client disconnects."""
         for event in self.events:
             if _event_sequence(event) > after_sequence:
