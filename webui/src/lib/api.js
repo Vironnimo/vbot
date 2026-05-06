@@ -8,12 +8,19 @@ export const RPC_ERROR_RESPONSE = 'invalid_rpc_response';
 export const SSE_ERROR_RESPONSE = 'invalid_sse_event';
 export const WEBSOCKET_ERROR_RESPONSE = 'invalid_websocket_event';
 
+export const RUN_EVENT_ASSISTANT_OUTPUT_DELTA = 'assistant_output_delta';
+export const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
+export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
+
 export const RUN_EVENT_TYPES = [
   'run_started',
   'user_message_persisted',
+  RUN_EVENT_REASONING_DELTA,
   'reasoning',
+  RUN_EVENT_TOOL_CALL_DELTA,
   'tool_call_started',
   'tool_call_result',
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   'assistant_output',
   'run_completed',
   'run_cancelled',
@@ -143,7 +150,12 @@ export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
     throw new ApiClientError(RPC_ERROR_NETWORK, 'EventSource is not available');
   }
 
-  const source = new EventSourceClass(buildHttpUrl(sseUrl, options.baseUrl));
+  const source = new EventSourceClass(
+    buildHttpUrl(
+      buildHttpUrlWithAfterSequence(sseUrl, options.afterSequence ?? 0),
+      options.baseUrl,
+    ),
+  );
   const cleanupCallbacks = [];
   let closed = false;
 
@@ -277,6 +289,18 @@ function buildHttpUrl(path, baseUrl) {
     return path;
   }
   return new URL(path, baseUrl).toString();
+}
+
+function buildHttpUrlWithAfterSequence(path, afterSequence = 0) {
+  if (afterSequence <= 0) {
+    return path;
+  }
+  const url = new URL(path, 'http://vbot.local');
+  url.searchParams.set('after_sequence', String(afterSequence));
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return url.toString();
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 function buildWebSocketUrl(path, baseUrl, afterSequence = 0) {

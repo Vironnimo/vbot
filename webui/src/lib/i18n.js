@@ -98,6 +98,7 @@ export const englishCatalog = Object.freeze({
   'chat.role.systemAvatar': 'S',
   'chat.event.thinking': 'Thinking',
   'chat.event.toolStarted': 'Tool started',
+  'chat.event.toolPreparing': 'Preparing tool',
   'chat.event.toolResult': 'Tool result',
   'chat.event.assistantOutput': 'Assistant output',
   'chat.event.completed': 'Run completed',
@@ -116,6 +117,11 @@ export const englishCatalog = Object.freeze({
   'chat.empty.subtitle': 'Send a message to start the conversation.',
   'chat.toolDone': 'done',
   'chat.toolArgs': 'Args',
+  'chat.toolStatus': 'Status',
+  'chat.toolPendingName': 'tool',
+  'chat.toolPreparingArguments': 'preparing arguments',
+  'chat.toolArgumentsHidden':
+    'Arguments are streaming and will appear when ready.',
   'chat.toolResultLabel': 'Result',
   'chat.tokenBadge': '{count} tok',
 
