@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
+from core.storage import StorageError
 from core.tools import ToolRegistry
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
@@ -96,10 +97,61 @@ class InstrumentedAgentDeleteLock:
 
 
 class StubProviders:
+    def __init__(self) -> None:
+        self._providers = {
+            "anthropic": SimpleNamespace(
+                id="anthropic",
+                name="Anthropic",
+                base_url="https://api.anthropic.com/v1",
+                auth=SimpleNamespace(env_key="ANTHROPIC_API_KEY"),
+            ),
+            "openai": SimpleNamespace(
+                id="openai",
+                name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                auth=SimpleNamespace(env_key="OPENAI_API_KEY"),
+            ),
+        }
+
     def get(self, provider_id: str) -> object:
-        if provider_id != "openai":
+        if provider_id not in self._providers:
             raise KeyError(provider_id)
-        return object()
+        return self._providers[provider_id]
+
+    def list_ids(self) -> list[str]:
+        return sorted(self._providers)
+
+
+class StubModels:
+    def __init__(self) -> None:
+        self._counts = {"anthropic": 1, "openai": 2}
+
+    def list_for_provider(self, provider_id: str) -> list[object]:
+        return [object() for _ in range(self._counts[provider_id])]
+
+
+class StubStorage:
+    def __init__(self, tmp_path: Path) -> None:
+        self.data_dir = tmp_path
+        self._appearance = {"language": "en"}
+
+    def load_appearance_settings(self) -> JsonObject:
+        return dict(self._appearance)
+
+    def supported_appearance_languages(self) -> list[str]:
+        return ["en"]
+
+    def update_appearance_settings(self, appearance: JsonObject) -> JsonObject:
+        unsupported_fields = sorted(set(appearance) - {"language"})
+        if unsupported_fields:
+            raise StorageError(f"unsupported appearance settings: {', '.join(unsupported_fields)}")
+        language = appearance.get("language")
+        if not isinstance(language, str) or not language:
+            raise StorageError("Appearance language must be a non-empty string")
+        if language != "en":
+            raise StorageError(f"Unsupported appearance language: {language}")
+        self._appearance = {"language": language}
+        return dict(self._appearance)
 
 
 class StubPrompts:
@@ -162,7 +214,9 @@ class StubRuntime:
         self.agents = StubAgents(StubAgent(id="coder", allowed_tools=["*"]))
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
+        self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
+        self.models = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
@@ -187,7 +241,146 @@ def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
         chat_loop=ChatLoop(runtime),
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
+        server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )
+
+
+@pytest.mark.asyncio
+async def test_settings_get_returns_normalized_settings_payload_without_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-secret")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.server_bind = {
+        "listen_host": "0.0.0.0",
+        "listen_port": 9001,
+        "port_source": "settings.server_port",
+    }
+
+    response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+
+    assert response["ok"] is True
+    assert response["result"] == {
+        "general": {
+            "server": {
+                "listen_host": "0.0.0.0",
+                "listen_port": 9001,
+                "port_source": "settings.server_port",
+            },
+            "data_directory": str(tmp_path),
+        },
+        "providers": {
+            "items": [
+                {
+                    "id": "anthropic",
+                    "name": "Anthropic",
+                    "base_url": "https://api.anthropic.com/v1",
+                    "env_key": "ANTHROPIC_API_KEY",
+                    "api_key_configured": False,
+                    "status": "missing_api_key",
+                    "model_count": 1,
+                    "kind": "remote",
+                    "editable": False,
+                },
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "base_url": "https://api.openai.com/v1",
+                    "env_key": "OPENAI_API_KEY",
+                    "api_key_configured": True,
+                    "status": "configured",
+                    "model_count": 2,
+                    "kind": "remote",
+                    "editable": False,
+                },
+            ],
+            "custom_endpoints": {"supported": False, "items": []},
+        },
+        "appearance": {"language": "en", "available_languages": ["en"]},
+    }
+    assert "sk-live-secret" not in str(response)
+    assert "show_token_counts" not in str(response)
+    assert "origin" not in response["result"]["general"]["server"]
+
+
+@pytest.mark.asyncio
+async def test_settings_get_rejects_params(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "settings.get", "params": {"extra": True}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_settings_update_persists_supported_language_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.server_bind = {
+        "listen_host": "127.0.0.1",
+        "listen_port": 8500,
+        "port_source": "VBOT_SERVER_PORT",
+    }
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.update", "params": {"appearance": {"language": "en"}}},
+    )
+
+    assert response["ok"] is True
+    assert state.runtime.storage.load_appearance_settings() == {"language": "en"}
+    assert response["result"]["appearance"] == {"language": "en", "available_languages": ["en"]}
+    assert response["result"]["general"]["server"] == {
+        "listen_host": "127.0.0.1",
+        "listen_port": 8500,
+        "port_source": "VBOT_SERVER_PORT",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"general": {}},
+        {"appearance": []},
+        {"appearance": {}},
+        {"appearance": {"show_token_counts": False}},
+        {"appearance": {"language": ""}},
+    ],
+)
+async def test_settings_update_rejects_unsupported_sections_and_fields(
+    tmp_path: Path,
+    params: JsonObject,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    original_appearance = state.runtime.storage.load_appearance_settings()
+
+    response = await dispatch_rpc(state, {"method": "settings.update", "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert state.runtime.storage.load_appearance_settings() == original_appearance
+
+
+@pytest.mark.asyncio
+async def test_settings_update_maps_storage_validation_errors_to_domain_error(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.update", "params": {"appearance": {"language": "fr"}}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "Unsupported appearance language" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

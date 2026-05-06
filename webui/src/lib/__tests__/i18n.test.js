@@ -109,34 +109,70 @@ describe('i18n t()', () => {
 
   it('contains Toasted design labels for Settings sections', () => {
     const requiredKeys = [
+      'settings.title',
       'settings.sections',
       'settings.placeholder',
-      'settings.placeholderNote',
+      'settings.loading',
+      'settings.loadError',
+      'settings.saveError',
       'settings.general.title',
+      'settings.general.subtitle',
       'settings.general.serverHost',
+      'settings.general.serverHostDescription',
       'settings.general.serverHostPlaceholder',
       'settings.general.dataDirectory',
+      'settings.general.dataDirectoryDescription',
       'settings.general.dataDirectoryPlaceholder',
-      'settings.general.autoScroll',
       'settings.providers.title',
-      'settings.providers.openRouter',
-      'settings.providers.envPath',
-      'settings.providers.anthropic',
-      'settings.providers.ollama',
-      'settings.providers.ollamaDescription',
+      'settings.providers.subtitle',
+      'settings.providers.empty',
+      'settings.providers.description.apiKey',
+      'settings.providers.description.baseUrl',
+      'settings.providers.description.modelCount',
+      'settings.providers.description.none',
+      'settings.providers.status.configured',
+      'settings.providers.status.missingApiKey',
+      'settings.providers.status.placeholder',
       'settings.providers.customEndpoint',
+      'settings.providers.customEndpointDescription',
+      'settings.providers.customEndpointStatus',
+      'settings.providers.configure',
       'settings.appearance.title',
+      'settings.appearance.subtitle',
       'settings.appearance.language',
-      'settings.appearance.showTokenCounts',
+      'settings.appearance.languageDescription',
+      'settings.appearance.saveSuccess',
       'settings.language.en',
     ];
 
     expectCatalogKeys(requiredKeys);
+    expect(englishCatalog['settings.placeholderNote']).toBeUndefined();
+    expect(englishCatalog['settings.general.autoScroll']).toBeUndefined();
     expect(
-      t('settings.providers.ollamaDescription', undefined, {
-        host: 'localhost:11434',
+      englishCatalog['settings.general.autoScrollDescription'],
+    ).toBeUndefined();
+    expect(
+      englishCatalog['settings.appearance.showTokenCounts'],
+    ).toBeUndefined();
+    expect(
+      englishCatalog['settings.appearance.showTokenCountsDescription'],
+    ).toBeUndefined();
+    expect(englishCatalog['settings.language.de']).toBeUndefined();
+    expect(
+      t('settings.providers.description.apiKey', undefined, {
+        envKey: 'OPENAI_API_KEY',
       }),
-    ).toBe('Local model server placeholder: localhost:11434');
+    ).toBe('Env key: OPENAI_API_KEY.');
+    expect(
+      t('settings.providers.description.baseUrl', undefined, {
+        baseUrl: 'https://api.example.com/v1',
+      }),
+    ).toBe('Endpoint: https://api.example.com/v1.');
+    expect(
+      t('settings.providers.description.modelCount', undefined, {
+        count: 3,
+      }),
+    ).toBe('3 models available.');
   });
 
   it('does not expose Components showcase labels in the live catalog', () => {
