@@ -70,6 +70,7 @@ class SequencedAdapter:
         self.release = asyncio.Event()
         self.closed = False
         self.requests: list[JsonObject] = []
+        self.stream_requests: list[JsonObject] = []
 
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.requests.append(
@@ -84,6 +85,21 @@ class SequencedAdapter:
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
+
+    async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        self.request_started.set()
+        if self._block:
+            await self.release.wait()
+        if not self._responses:
+            yield {"type": "content_delta", "text": "OK"}
+            yield {"type": "finish", "reason": "stop"}
+            return
+        response = self._responses.pop(0)
+        for delta in _response_to_stream_deltas(response):
+            yield delta
 
     async def aclose(self) -> None:
         self.closed = True
@@ -245,12 +261,16 @@ def test_http_stream_sse_replays_visible_running_timeline(tmp_path: Path) -> Non
     assert [event["event"] for event in events] == [
         "run_started",
         "user_message_persisted",
+        "reasoning_delta",
+        "assistant_output_delta",
         "reasoning",
         "assistant_output",
         "run_completed",
     ]
-    assert events[2]["data"]["payload"]["message"]["reasoning"] == "Readable thinking."
-    assert events[3]["data"]["payload"]["message"]["content"] == "Streamed final."
+    assert events[2]["data"]["payload"]["reasoning_delta"] == "Readable thinking."
+    assert events[3]["data"]["payload"]["content_delta"] == "Streamed final."
+    assert events[4]["data"]["payload"]["message"]["reasoning"] == "Readable thinking."
+    assert events[5]["data"]["payload"]["message"]["content"] == "Streamed final."
     assert "reasoning_meta" not in sse_response.text
 
 
@@ -307,13 +327,17 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
+        "reasoning_delta",
+        "tool_call_delta",
+        "tool_call_delta",
         "reasoning",
         "tool_call_started",
+        "assistant_output",
         "run_cancelled",
     ]
     assert [message.role for message in messages] == ["user", "assistant"]
     assert tool_results == []
-    assert len(adapter.requests) == 1
+    assert len(adapter.stream_requests) == 1
 
 
 @pytest.mark.asyncio
@@ -370,6 +394,7 @@ def _make_state(runtime: IntegrationRuntime) -> Any:
             "runtime": runtime,
             "chat_runs": chat_runs,
             "chat_loop": ChatLoop(runtime),
+            "event_bus": None,
         },
     )()
 
@@ -377,8 +402,47 @@ def _make_state(runtime: IntegrationRuntime) -> Any:
 def _parse_sse(body: str) -> list[JsonObject]:
     events: list[JsonObject] = []
     for block in body.strip().split("\n\n"):
+        if not block:
+            continue
         lines = block.splitlines()
-        event_name = lines[0].removeprefix("event: ")
-        data = json.loads(lines[1].removeprefix("data: "))
+        fields = dict(line.split(": ", 1) for line in lines)
+        event_name = fields["event"]
+        data = json.loads(fields["data"])
         events.append({"event": event_name, "data": data})
     return events
+
+
+def _response_to_stream_deltas(response: JsonObject) -> list[JsonObject]:
+    deltas: list[JsonObject] = []
+    reasoning = response.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        deltas.append({"type": "reasoning_delta", "text": reasoning})
+    reasoning_meta = response.get("reasoning_meta")
+    if isinstance(reasoning_meta, dict):
+        deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
+    for tool_call in response.get("tool_calls") or []:
+        deltas.extend(_tool_call_to_stream_deltas(tool_call))
+    if response.get("tool_calls"):
+        deltas.append({"type": "finish", "reason": "tool_calls"})
+    content = response.get("content")
+    if isinstance(content, str) and content:
+        deltas.append({"type": "content_delta", "text": content})
+    if not response.get("tool_calls"):
+        deltas.append({"type": "finish", "reason": "stop"})
+    return deltas
+
+
+def _tool_call_to_stream_deltas(tool_call: JsonObject) -> list[JsonObject]:
+    tool_call_id = cast(str, tool_call["id"])
+    return [
+        {"type": "tool_call_delta", "id": tool_call_id, "name_delta": tool_call["name"]},
+        {
+            "type": "tool_call_delta",
+            "id": tool_call_id,
+            "arguments_delta": json.dumps(
+                tool_call["arguments"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        },
+    ]
