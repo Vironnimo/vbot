@@ -265,6 +265,7 @@ export const englishCatalog = Object.freeze({
   'status.activeRun': 'active run',
   'status.medium': 'medium',
   'status.notReachable': 'Not reachable',
+  'status.reconnecting': 'Reconnecting…',
   'status.inactive': 'Inactive',
 });
 

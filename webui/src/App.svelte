@@ -36,11 +36,18 @@
 </script>
 
 <script>
+  import { onMount } from 'svelte';
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
+  import {
+    createConnectionState,
+    connect,
+    disconnect,
+  } from '$lib/connectionState.js';
+  import { rpc } from '$lib/api.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
@@ -49,6 +56,7 @@
   let agents = $state([]);
   let selectedAgentId = $state('');
   let agentsRefreshToken = $state(0);
+  let connectionState = $state(createConnectionState());
 
   const selectView = (viewId) => {
     activeViewId = viewId;
@@ -77,9 +85,32 @@
     syncAgents(nextAgents);
     agentsRefreshToken += 1;
   };
+
+  const handleServerEvent = async (event) => {
+    const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
+    if (!agentEventTypes.includes(event.type)) {
+      return;
+    }
+    try {
+      const result = await rpc('agent.list');
+      refreshAgents(result.agents);
+    } catch (error) {
+      console.warn('Agent list refresh failed:', error);
+    }
+  };
+
+  onMount(() => {
+    connect(connectionState, { onEvent: handleServerEvent });
+    return () => disconnect(connectionState);
+  });
 </script>
 
-<AppShell items={navigationItems} {activeViewId} onSelectView={selectView}>
+<AppShell
+  items={navigationItems}
+  {activeViewId}
+  onSelectView={selectView}
+  connectionStatus={connectionState.status}
+>
   {#if activeViewId === 'chat'}
     <ChatView
       sharedAgents={agents}
