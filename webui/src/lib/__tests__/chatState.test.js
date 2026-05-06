@@ -6,6 +6,7 @@ import {
   appendRunEvent,
   canCreateNewSession,
   createChatState,
+  currentSessionState,
   dequeueMessage,
   enqueueMessage,
   ensureSessionState,
@@ -35,6 +36,23 @@ describe('chat state helpers', () => {
       current_session_id: 'session-one',
     });
     expect(sessionState.key).toBe('alpha::session-one');
+  });
+
+  it('does not create session state when reading the current session', () => {
+    const state = createChatState();
+
+    setAgents(state, [{ id: 'alpha', current_session_id: 'session-one' }]);
+
+    expect(currentSessionState(state)).toBeNull();
+    expect(state.sessions).toEqual({});
+
+    const createdSessionState = ensureSessionState(
+      state,
+      'alpha',
+      'session-one',
+    );
+
+    expect(currentSessionState(state)).toBe(createdSessionState);
   });
 
   it('loads history without losing the visible queue', () => {

@@ -43,6 +43,23 @@
   let actionError = $state('');
   const activeSubscriptions = {};
 
+  function estimateTokens(messages) {
+    const characterCount = messages.reduce(
+      (total, message) =>
+        total +
+        String(message.content ?? '').length +
+        String(message.reasoning ?? '').length,
+      0,
+    );
+    return Math.ceil(characterCount / 4);
+  }
+
+  function formatTokenEstimate(tokenCount) {
+    return t('chat.tokenBadge', '{count} tok', {
+      count: new Intl.NumberFormat(undefined).format(tokenCount),
+    });
+  }
+
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(currentSessionState(chatState));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
@@ -285,22 +302,6 @@
       removeQueuedMessage(activeSessionState, queuedMessageId);
     }
   };
-
-  const estimateTokens = (messages) => {
-    const characterCount = messages.reduce(
-      (total, message) =>
-        total +
-        String(message.content ?? '').length +
-        String(message.reasoning ?? '').length,
-      0,
-    );
-    return Math.ceil(characterCount / 4);
-  };
-
-  const formatTokenEstimate = (tokenCount) =>
-    t('chat.tokenBadge', '{count} tok', {
-      count: new Intl.NumberFormat(undefined).format(tokenCount),
-    });
 </script>
 
 <section class="view view-chat active chat-view" aria-labelledby="chat-title">

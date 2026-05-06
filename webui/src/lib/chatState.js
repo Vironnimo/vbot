@@ -83,7 +83,7 @@ export function currentSessionState(state) {
   if (!agent?.current_session_id) {
     return null;
   }
-  return ensureSessionState(state, agent.id, agent.current_session_id);
+  return state.sessions[sessionKey(agent.id, agent.current_session_id)] ?? null;
 }
 
 export function loadHistory(sessionState, messages) {
