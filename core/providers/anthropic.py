@@ -44,9 +44,19 @@ SSE_EVENT_PREFIX = "event: "
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+TEXT_BLOCK_TYPE = "text"
+TOOL_USE_BLOCK_TYPE = "tool_use"
 THINKING_BLOCK_TYPE = "thinking"
 REDACTED_THINKING_BLOCK_TYPE = "redacted_thinking"
 REASONING_META_CONTENT_BLOCKS = "content_blocks"
+ANTHROPIC_TOOL_STOP_REASONS = {"tool_use"}
+ANTHROPIC_STOP_REASONS = {
+    "end_turn",
+    "max_tokens",
+    "pause_turn",
+    "refusal",
+    "stop_sequence",
+}
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -258,11 +268,13 @@ class AnthropicAdapter(ProviderAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         """Send a streaming request to the Anthropic Messages API and yield
-        SSE event chunks.
+        normalized provider-agnostic deltas.
 
         Anthropic uses ``event:`` and ``data:`` lines in its SSE stream.
-        The stream ends on a ``message_stop`` event.  Yields parsed JSON
-        dicts from each ``data:`` line.
+        The stream ends on a ``message_stop`` event.  Provider-specific
+        stream events are translated into ``content_delta``,
+        ``reasoning_delta``, ``tool_call_delta``, ``reasoning_meta``, and
+        ``finish`` dictionaries before being yielded.
 
         Retries the initial connection on retryable errors (429, 502, 503,
         529).  Once the stream is established, yields parsed SSE data
@@ -275,7 +287,7 @@ class AnthropicAdapter(ProviderAdapter):
             **kwargs: Additional parameters (thinking, output_config, …).
 
         Yields:
-            Parsed response chunk dicts from the SSE event stream.
+            Normalized delta dicts from the SSE event stream.
 
         Raises:
             ProviderAuthError: 401 / 403 responses.
@@ -317,6 +329,8 @@ class AnthropicAdapter(ProviderAdapter):
             return response
 
         response = await retry_async(_connect_stream)
+        content_blocks_by_index: dict[int, dict[str, Any]] = {}
+        reasoning_meta_blocks: list[dict[str, Any]] = []
 
         try:
             async for line in response.aiter_lines():
@@ -332,11 +346,215 @@ class AnthropicAdapter(ProviderAdapter):
                 if not data.strip():
                     continue
                 parsed = json.loads(data)
-                yield parsed
+                if not isinstance(parsed, dict):
+                    continue
+                for normalized_delta in _normalize_anthropic_stream_event(
+                    parsed,
+                    content_blocks_by_index,
+                    reasoning_meta_blocks,
+                ):
+                    yield normalized_delta
                 if parsed.get("type") == "message_stop":
                     break
         finally:
             await response.aclose()
+
+
+def _normalize_anthropic_stream_event(
+    event: dict[str, Any],
+    content_blocks_by_index: dict[int, dict[str, Any]],
+    reasoning_meta_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    event_type = event.get("type")
+    if event_type == "content_block_start":
+        return _normalize_anthropic_content_block_start(event, content_blocks_by_index)
+    if event_type == "content_block_delta":
+        return _normalize_anthropic_content_block_delta(event, content_blocks_by_index)
+    if event_type == "content_block_stop":
+        return _normalize_anthropic_content_block_stop(
+            event,
+            content_blocks_by_index,
+            reasoning_meta_blocks,
+        )
+    if event_type == "message_delta":
+        return _normalize_anthropic_message_delta(event, content_blocks_by_index)
+    return []
+
+
+def _normalize_anthropic_content_block_start(
+    event: dict[str, Any],
+    content_blocks_by_index: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    index = _anthropic_stream_index(event)
+    content_block = event.get("content_block", {})
+    if index is None or not isinstance(content_block, dict):
+        return []
+
+    block_type = content_block.get("type")
+    block_state: dict[str, Any] = {"type": block_type}
+    if block_type == TOOL_USE_BLOCK_TYPE:
+        tool_call_id = content_block.get("id")
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            tool_call_id = f"tool_call_{index}"
+        name = content_block.get("name")
+        block_state["id"] = tool_call_id
+        block_state["name"] = name if isinstance(name, str) else ""
+        content_blocks_by_index[index] = block_state
+        if block_state["name"]:
+            return [
+                {
+                    "type": "tool_call_delta",
+                    "id": tool_call_id,
+                    "name_delta": block_state["name"],
+                    "arguments_delta": "",
+                }
+            ]
+        return []
+
+    if _is_supported_reasoning_block(content_block):
+        block_state["block"] = dict(content_block)
+
+    content_blocks_by_index[index] = block_state
+    return []
+
+
+def _normalize_anthropic_content_block_delta(
+    event: dict[str, Any],
+    content_blocks_by_index: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    index = _anthropic_stream_index(event)
+    delta = event.get("delta", {})
+    if index is None or not isinstance(delta, dict):
+        return []
+
+    block_state = content_blocks_by_index.get(index, {})
+    delta_type = delta.get("type")
+    if delta_type == "text_delta":
+        text = delta.get("text")
+        return [{"type": "content_delta", "text": text}] if isinstance(text, str) and text else []
+    if delta_type == "thinking_delta":
+        return _normalize_anthropic_thinking_delta(delta, block_state)
+    if delta_type == "signature_delta":
+        _apply_anthropic_signature_delta(delta, block_state)
+        return []
+    if delta_type == "input_json_delta":
+        return _normalize_anthropic_tool_input_delta(delta, block_state)
+    return []
+
+
+def _normalize_anthropic_content_block_stop(
+    event: dict[str, Any],
+    content_blocks_by_index: dict[int, dict[str, Any]],
+    reasoning_meta_blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    index = _anthropic_stream_index(event)
+    if index is None:
+        return []
+    block_state = content_blocks_by_index.get(index, {})
+    block = block_state.get("block")
+    if not isinstance(block, dict) or not _is_supported_reasoning_block(block):
+        return []
+
+    reasoning_meta_blocks.append(dict(block))
+    return [
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                REASONING_META_CONTENT_BLOCKS: [
+                    dict(meta_block) for meta_block in reasoning_meta_blocks
+                ]
+            },
+        }
+    ]
+
+
+def _normalize_anthropic_message_delta(
+    event: dict[str, Any],
+    content_blocks_by_index: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    delta = event.get("delta", {})
+    if not isinstance(delta, dict):
+        return []
+    stop_reason = delta.get("stop_reason")
+    if stop_reason is None:
+        return []
+    return [
+        {
+            "type": "finish",
+            "reason": _normalize_anthropic_stop_reason(
+                stop_reason,
+                has_tool_calls=_has_anthropic_stream_tool_calls(content_blocks_by_index),
+            ),
+        }
+    ]
+
+
+def _normalize_anthropic_thinking_delta(
+    delta: dict[str, Any],
+    block_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    thinking = delta.get("thinking")
+    if not isinstance(thinking, str) or not thinking:
+        return []
+    block = block_state.get("block")
+    if isinstance(block, dict):
+        block["thinking"] = f"{block.get('thinking', '')}{thinking}"
+    return [{"type": "reasoning_delta", "text": thinking}]
+
+
+def _apply_anthropic_signature_delta(
+    delta: dict[str, Any],
+    block_state: dict[str, Any],
+) -> None:
+    signature = delta.get("signature")
+    block = block_state.get("block")
+    if isinstance(signature, str) and signature and isinstance(block, dict):
+        block["signature"] = signature
+
+
+def _normalize_anthropic_tool_input_delta(
+    delta: dict[str, Any],
+    block_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if block_state.get("type") != TOOL_USE_BLOCK_TYPE:
+        return []
+    arguments_delta = delta.get("partial_json")
+    if not isinstance(arguments_delta, str):
+        arguments_delta = delta.get("input_delta")
+    if not isinstance(arguments_delta, str) or not arguments_delta:
+        return []
+    tool_call_id = block_state.get("id")
+    if not isinstance(tool_call_id, str) or not tool_call_id:
+        return []
+    return [
+        {
+            "type": "tool_call_delta",
+            "id": tool_call_id,
+            "name_delta": "",
+            "arguments_delta": arguments_delta,
+        }
+    ]
+
+
+def _normalize_anthropic_stop_reason(stop_reason: Any, *, has_tool_calls: bool) -> str:
+    if stop_reason in ANTHROPIC_TOOL_STOP_REASONS:
+        return "tool_calls"
+    if stop_reason in ANTHROPIC_STOP_REASONS:
+        return "stop"
+    return "tool_calls" if has_tool_calls else "stop"
+
+
+def _anthropic_stream_index(event: dict[str, Any]) -> int | None:
+    index = event.get("index")
+    return index if isinstance(index, int) else None
+
+
+def _has_anthropic_stream_tool_calls(
+    content_blocks_by_index: dict[int, dict[str, Any]],
+) -> bool:
+    return any(
+        block.get("type") == TOOL_USE_BLOCK_TYPE for block in content_blocks_by_index.values()
+    )
 
 
 def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
