@@ -135,6 +135,14 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 
 - The Toasted `Components` showcase is a design/reference artifact only. It must
   not ship as a live WebUI tab.
+- **Two-channel transport architecture:** SSE is the per-Run streaming channel
+  (token-by-token output for one Run). WebSocket is the persistent app-wide
+  signalling channel (connection status, agent CRUD, run lifecycle summaries).
+  SSE and WS serve different purposes and should not be merged.
+- **WebSocket is server-push only.** Clients send requests via `POST /api/rpc`.
+  The WS channel broadcasts server events; it does not accept client commands.
+- **WebSocket reconnect uses `after_sequence` replay.** Clients send the last
+  sequence number they saw, and the server replays missed events.
 
 ## Specs
 
