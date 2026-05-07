@@ -92,14 +92,14 @@ def test_read_absolute_path_is_allowed(tmp_path: Path) -> None:
     assert result == tool_success({"content": "outside"})
 
 
-def test_read_offset_uses_zero_based_line_index(tmp_path: Path) -> None:
+def test_read_offset_is_one_indexed(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "lines.txt").write_text("zero\none\ntwo\n", encoding="utf-8")
+    (workspace / "lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
 
-    result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 1})
+    result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 2})
 
-    assert result == tool_success({"content": "one\ntwo\n"})
+    assert result == tool_success({"content": "two\nthree\n"})
 
 
 def test_read_limit_caps_returned_line_count(tmp_path: Path) -> None:
@@ -109,7 +109,9 @@ def test_read_limit_caps_returned_line_count(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "lines.txt", "limit": 2})
 
-    assert result == tool_success({"content": "zero\none\n"})
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert content.startswith("zero\none\n")
 
 
 def test_read_offset_and_limit_slice_lines(tmp_path: Path) -> None:
@@ -117,9 +119,11 @@ def test_read_offset_and_limit_slice_lines(tmp_path: Path) -> None:
     workspace.mkdir()
     (workspace / "lines.txt").write_text("zero\none\ntwo\nthree\n", encoding="utf-8")
 
-    result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 1, "limit": 2})
+    result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 2, "limit": 2})
 
-    assert result == tool_success({"content": "one\ntwo\n"})
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert content.startswith("one\ntwo\n")
 
 
 def test_read_missing_file_returns_failure_envelope(tmp_path: Path) -> None:
@@ -147,10 +151,11 @@ def test_read_directory_path_returns_failure_envelope(tmp_path: Path) -> None:
         ({}, "path must be a non-empty string"),
         ({"path": ""}, "path must be a non-empty string"),
         ({"path": 7}, "path must be a non-empty string"),
-        ({"path": "file.txt", "offset": -1}, "offset must be non-negative"),
-        ({"path": "file.txt", "offset": "1"}, "offset must be an integer"),
-        ({"path": "file.txt", "limit": -1}, "limit must be non-negative"),
-        ({"path": "file.txt", "limit": True}, "limit must be an integer"),
+        ({"path": "file.txt", "offset": -1}, "offset must be a positive integer"),
+        ({"path": "file.txt", "offset": 0}, "offset must be a positive integer"),
+        ({"path": "file.txt", "offset": "1"}, "offset must be a positive integer"),
+        ({"path": "file.txt", "limit": -1}, "limit must be a positive integer"),
+        ({"path": "file.txt", "limit": True}, "limit must be a positive integer"),
         ({"path": "file.txt", "encoding": "utf-8"}, "Unsupported argument(s): encoding"),
     ],
 )
@@ -198,3 +203,84 @@ def test_read_does_not_inject_line_numbers(tmp_path: Path) -> None:
     result = read_handler(make_context(workspace), {"path": "plain.txt"})
 
     assert result == tool_success({"content": "alpha\nbeta\n"})
+
+
+def test_read_default_limit_truncates_large_file(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    lines = "".join(f"line{i}\n" for i in range(1, 2002))
+    (workspace / "big.txt").write_text(lines, encoding="utf-8")
+
+    result = read_handler(make_context(workspace), {"path": "big.txt"})
+
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert "[Showing lines 1-2000 of 2001." in content
+    assert "line2001" not in content
+
+
+def test_read_offset_beyond_eof_returns_notice(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "short.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result = read_handler(make_context(workspace), {"path": "short.txt", "offset": 10})
+
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert "[Offset 10 is beyond end of file (3 lines)." in content
+
+
+def test_read_byte_limit_truncates_output(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    # single line exceeding 50 KB
+    (workspace / "huge.txt").write_bytes(("x" * 60000 + "\n").encode("utf-8"))
+
+    result = read_handler(make_context(workspace), {"path": "huge.txt"})
+
+    assert result["ok"] is True
+    content = result["data"]["content"]
+    assert len(content.encode("utf-8")) <= 50 * 1024 + 500  # allow for hint overhead
+    assert "Output truncated at 50 KB" in content
+
+
+def test_read_float_offset_is_accepted(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result_float = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 2.0})
+    result_int = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 2})
+
+    assert result_float == result_int
+
+
+def test_read_float_limit_is_accepted(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    result_float = read_handler(make_context(workspace), {"path": "lines.txt", "limit": 2.0})
+    result_int = read_handler(make_context(workspace), {"path": "lines.txt", "limit": 2})
+
+    assert result_float == result_int
+
+
+def test_read_float_non_integer_offset_returns_failure(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = read_handler(make_context(workspace), {"path": "file.txt", "offset": 1.5})
+
+    assert result == tool_failure("invalid_arguments", "offset must be a positive integer")
+
+
+def test_read_empty_file_returns_empty_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "empty.txt").write_text("", encoding="utf-8")
+
+    result = read_handler(make_context(workspace), {"path": "empty.txt"})
+
+    assert result == tool_success({"content": ""})
