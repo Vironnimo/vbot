@@ -19,7 +19,13 @@ from core.providers.providers import ProviderConfig, ProviderRegistry
 from core.runtime.interfaces import ConfigProtocol, LoggerProtocol
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
-from core.tools import register_edit_tool, register_read_tool, register_write_tool
+from core.tools import (
+    register_edit_tool,
+    register_glob_tool,
+    register_grep_tool,
+    register_read_tool,
+    register_write_tool,
+)
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -114,6 +120,8 @@ class Runtime:
         self._tools = ToolRegistry()
         register_read_tool(self._tools)
         register_edit_tool(self._tools)
+        register_glob_tool(self._tools)
+        register_grep_tool(self._tools)
         register_write_tool(self._tools)
         self._skills = SkillRegistry.load(self._storage.data_dir / "skills")
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
