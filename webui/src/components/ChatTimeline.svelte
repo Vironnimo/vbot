@@ -25,7 +25,7 @@
     const shouldAutoscroll = isNearBottom(scrollContainer);
     if (shouldAutoscroll) {
       tick().then(() => {
-        scrollContainer?.scrollTo(0, scrollContainer.scrollHeight);
+        scrollContainer?.scrollTo?.(0, scrollContainer.scrollHeight);
       });
     }
   });
@@ -279,7 +279,7 @@
     return message?.content ?? '';
   };
 
-  const formatJson = (value) => {
+  function formatJson(value) {
     if (typeof value === 'string') {
       return value;
     }
@@ -288,7 +288,7 @@
     } catch {
       return String(value);
     }
-  };
+  }
 
   const formatTime = (timestamp) => {
     if (!timestamp) {
