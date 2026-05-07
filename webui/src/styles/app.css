@@ -1294,9 +1294,9 @@ textarea::placeholder {
 .teb-row {
   display: flex;
   min-width: 0;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 5px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .teb-label {
@@ -1307,44 +1307,10 @@ textarea::placeholder {
   text-transform: uppercase;
 }
 
-.teb-entry-list {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.teb-entry {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-}
-
-.teb-entry--value-only {
-  display: block;
-}
-
-.teb-entry-key {
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .teb-code {
   color: var(--text-med);
   font-size: 11.5px;
   line-height: 1.5;
-}
-
-.teb-entry-value {
-  min-width: 0;
-}
-
-.teb-entry-value.multiline {
-  display: block;
 }
 
 .run-tool-event .tool-event-line {
