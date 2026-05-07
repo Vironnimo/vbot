@@ -14,7 +14,7 @@ import pytest
 
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.storage import StorageError
-from core.tools import ToolRegistry, register_builtin_tools
+from core.tools import ToolRegistry, register_read_tool
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
@@ -642,7 +642,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
         ]
     )
     state = make_state(tmp_path, adapter)
-    register_builtin_tools(state.runtime.tools)
+    register_read_tool(state.runtime.tools)
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(state.runtime.agents.get("coder").workspace)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -680,6 +680,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
         "data": {"content": "rpc content"},
         "artifacts": [],
     }
+    assert "path" not in tool_result["payload"]["result"]["data"]
     assert "reasoning_meta" not in str(result["events"])
     assert "batch" not in str(result["events"])
 

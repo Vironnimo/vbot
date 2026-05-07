@@ -95,15 +95,13 @@ def test_phase_two_services_available_after_start(config: Config):
 
 
 def test_start_registers_read_builtin_tool(config: Config):
-    """Runtime.start() registers built-in tools for agent use."""
+    """Runtime.start() registers the canonical read tool for agent use."""
     runtime = Runtime(config)
 
     runtime.start()
 
     read_tool = runtime.tools.get("read")
-    read2_tool = runtime.tools.get("read2")
     assert read_tool.name == "read"
-    assert read2_tool.name == "read2"
 
 
 def test_read_provider_definition_exposes_model_visible_metadata_only(config: Config):
@@ -117,19 +115,27 @@ def test_read_provider_definition_exposes_model_visible_metadata_only(config: Co
     assert definitions == [
         {
             "name": "read",
-            "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+            "description": (
+                "Read the contents of a file. Output is truncated to 2000 lines or "
+                "50 KB (whichever is hit first). If offset is past EOF, returns an "
+                "explicit end-of-file notice. Use offset/limit for large files."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file to read (relative to workspace, or absolute)."
+                        ),
+                    },
                     "offset": {
                         "type": "number",
-                        "description": "1-indexed line number to start reading from.",
+                        "description": "Line number to start reading from (1-indexed).",
                     },
-                    "limit": {"type": "number"},
-                    "description": {
-                        "type": "string",
-                        "description": "Brief description of what this tool call is doing",
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of lines to read.",
                     },
                 },
                 "required": ["path"],
@@ -140,33 +146,14 @@ def test_read_provider_definition_exposes_model_visible_metadata_only(config: Co
     assert set(definitions[0]) == {"name", "description", "parameters"}
 
 
-def test_read2_provider_definition_excludes_description_argument(config: Config):
-    """Runtime startup exposes read2 schema without display-only arguments."""
-    runtime = Runtime(config)
-
-    runtime.start()
-
-    definitions = runtime.tools.provider_definitions(["read2"])
-
-    assert len(definitions) == 1
-    definition = definitions[0]
-    assert set(definition) == {"name", "description", "parameters"}
-    assert definition["name"] == "read2"
-
-    parameters = definition["parameters"]
-    assert parameters["required"] == ["path"]
-    assert set(parameters["properties"]) == {"path", "offset", "limit"}
-    assert "description" not in parameters["properties"]
-
-
-def test_runtime_start_exposes_existing_tools_and_read2(config: Config):
-    """Adding read2 preserves existing runtime tool exposure."""
+def test_runtime_start_exposes_only_canonical_read_tool(config: Config):
+    """Runtime startup exposes exactly one canonical read tool."""
     runtime = Runtime(config)
 
     runtime.start()
 
     tool_names = [tool.name for tool in runtime.tools.list_tools()]
-    assert tool_names == ["read", "read2"]
+    assert tool_names == ["read"]
 
 
 def test_phase_two_services_inaccessible_before_start(config: Config):
