@@ -61,7 +61,6 @@ def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     return tool_success(
         {
-            "path": str(path),
             "content": _slice_lines(content, offset, limit),
         }
     )
