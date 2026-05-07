@@ -1092,6 +1092,14 @@ textarea::placeholder {
   color: var(--text-med);
 }
 
+.msg.assistant-run {
+  gap: 8px;
+}
+
+.assistant-run-content {
+  gap: 8px;
+}
+
 .msg-timestamp,
 .msg-meta-extra {
   color: var(--text-lo);
@@ -1250,8 +1258,13 @@ textarea::placeholder {
 }
 
 .te-arg {
+  min-width: 0;
+  max-width: min(42rem, calc(100vw - 520px));
+  overflow: hidden;
   color: var(--text-lo);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .te-time {
@@ -1298,6 +1311,14 @@ textarea::placeholder {
   color: var(--text-med);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.run-tool-event .tool-event-line {
+  max-width: 100%;
+}
+
+.run-tool-event .te-time {
+  flex-shrink: 0;
 }
 
 .msg-code,

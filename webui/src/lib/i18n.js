@@ -116,6 +116,8 @@ export const englishCatalog = Object.freeze({
   'chat.empty.title': 'No messages yet',
   'chat.empty.subtitle': 'Send a message to start the conversation.',
   'chat.toolDone': 'done',
+  'chat.toolSucceeded': 'succeeded',
+  'chat.toolFailed': 'failed',
   'chat.toolArgs': 'Args',
   'chat.toolStatus': 'Status',
   'chat.toolPendingName': 'tool',
@@ -123,6 +125,9 @@ export const englishCatalog = Object.freeze({
   'chat.toolArgumentsHidden':
     'Arguments are streaming and will appear when ready.',
   'chat.toolResultLabel': 'Result',
+  'chat.toolNoData': '—',
+  'chat.runIterations': '{count} iter',
+  'chat.runDurationSeconds': '{seconds}s',
   'chat.tokenBadge': '{count} tok',
 
   'queue.title': 'Queued messages',
