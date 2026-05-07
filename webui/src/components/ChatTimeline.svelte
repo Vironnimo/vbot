@@ -154,7 +154,11 @@
     if (!toolCall) {
       return '';
     }
-    return `(${formatJson(toolCall.arguments ?? {})})`;
+    const label = humanReadableToolLabel(
+      toolCall?.name ?? '',
+      toolCall.arguments ?? {},
+    );
+    return label ? `(${label})` : '';
   };
 
   const visibleRunChildren = (assistantRun) =>
@@ -245,7 +249,15 @@
 
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
-  const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts']);
+  const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
+  const TOOL_DISPLAY_ARGS = {
+    read: ['path'],
+    write: ['filePath'],
+    edit: ['filePath'],
+    bash: ['command'],
+    glob: ['pattern'],
+  };
+  const MAX_TOOL_LABEL_LENGTH = 80;
   const TOOL_ERROR_DETAIL_KEYS = [
     'error',
     'message',
@@ -255,12 +267,60 @@
     'type',
   ];
 
+  const humanReadableToolLabel = (toolName, argumentsValue) => {
+    let args = argumentsValue;
+    if (typeof args === 'string') {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        return args;
+      }
+    }
+
+    if (!args || typeof args !== 'object' || Array.isArray(args)) {
+      return formatJson(argumentsValue);
+    }
+
+    if (
+      typeof args.description === 'string' &&
+      args.description.trim() !== ''
+    ) {
+      return args.description;
+    }
+
+    const displayArgs = TOOL_DISPLAY_ARGS[toolName];
+    if (displayArgs) {
+      for (const key of displayArgs) {
+        const value = args[key];
+        if (typeof value === 'string' && value.trim() !== '') {
+          return value;
+        }
+      }
+    }
+
+    const firstStringEntry = Object.values(args).find(
+      (v) =>
+        typeof v === 'string' &&
+        v.length <= MAX_TOOL_LABEL_LENGTH &&
+        v.trim() !== '',
+    );
+    if (firstStringEntry !== undefined) {
+      return firstStringEntry;
+    }
+
+    return formatJson(argumentsValue);
+  };
+
   const toolArgumentSummary = (tool) => {
     const argumentsValue = toolArguments(tool);
     if (argumentsValue === undefined || argumentsValue === null) {
       return '';
     }
-    return `(${formatJson(argumentsValue)})`;
+    const label = humanReadableToolLabel(
+      toolNameForRunTool(tool),
+      argumentsValue,
+    );
+    return label ? `(${label})` : '';
   };
 
   const isPlainObject = (value) =>

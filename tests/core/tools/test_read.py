@@ -40,9 +40,32 @@ def test_register_builtin_tools_adds_read_with_compact_schema() -> None:
     assert tool.name == READ_TOOL_NAME
     assert tool.description == READ_TOOL_DESCRIPTION
     assert tool.parameters == READ_TOOL_PARAMETERS
-    assert set(tool.parameters["properties"]) == {"path", "offset", "limit"}
+    assert set(tool.parameters["properties"]) == {"path", "offset", "limit", "description"}
     assert tool.parameters["required"] == ["path"]
     assert tool.parameters["additionalProperties"] is False
+
+
+def test_description_is_not_required() -> None:
+    """description should be optional, not listed in required."""
+    assert "description" not in READ_TOOL_PARAMETERS["required"]
+
+
+@pytest.mark.asyncio
+async def test_read_with_description_succeeds(tmp_path: Path) -> None:
+    """Calling read with a description argument should not cause an error."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    registry = ToolRegistry()
+    register_builtin_tools(registry)
+
+    result = await registry.dispatch(
+        make_context(workspace),
+        {"path": "file.txt", "description": "reading the file"},
+        ["*"],
+    )
+
+    assert result == tool_success({"path": str(workspace / "file.txt"), "content": "hello"})
 
 
 @pytest.mark.asyncio
