@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.tools import register_builtin_tools
+from core.tools import register_read_tool
 from server.app import create_app
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
@@ -31,7 +31,7 @@ EXPECTED_SSE_EVENT_NAMES = [
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_builtin_tools(runtime.tools)
+    register_read_tool(runtime.tools)
     runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(runtime.agents.get("coder").workspace)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -175,7 +175,7 @@ def _stream_test_run(
 ) -> Any:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    register_builtin_tools(runtime.tools)
+    register_read_tool(runtime.tools)
     runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(runtime.agents.get("coder").workspace)
     workspace.mkdir(parents=True, exist_ok=True)
