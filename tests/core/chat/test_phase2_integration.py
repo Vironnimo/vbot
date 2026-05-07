@@ -195,12 +195,11 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
         tool_result = json.loads(messages[2].content or "{}")
         assert assistant.content == "The file was missing, so I recovered."
         assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
-        assert tool_result == {
-            "ok": False,
-            "error": {"code": "not_found", "message": "File not found"},
-            "data": None,
-            "artifacts": [],
-        }
+        assert tool_result["ok"] is False
+        assert tool_result["error"]["code"] == "file_not_found"
+        assert "missing.txt" in tool_result["error"]["message"]
+        assert tool_result["data"] is None
+        assert tool_result["artifacts"] == []
         assert adapter.requests[1].messages[3]["content"] == messages[2].content
     finally:
         runtime.stop()

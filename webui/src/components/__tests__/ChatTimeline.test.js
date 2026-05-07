@@ -34,7 +34,7 @@ describe('ChatTimeline', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders compact tool details and hides internal result fields', () => {
+  it('renders brace-free tool details and hides internal result fields', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -113,6 +113,14 @@ describe('ChatTimeline', () => {
     expect(toolDetailRows).toHaveLength(2);
     expect(toolDetailRows[0].textContent).toContain('Args');
     expect(toolDetailRows[1].textContent).toContain('Result');
+
+    const argsCode = toolDetailRows[0].querySelector('.teb-code').textContent;
+    const resultCode = toolDetailRows[1].querySelector('.teb-code').textContent;
+    expect(argsCode).not.toContain('{"path":"a.txt"}');
+    expect(resultCode).not.toContain('{"content":"A","lines":1}');
+    expect(resultCode.indexOf('content')).toBeLessThan(
+      resultCode.indexOf('lines'),
+    );
   });
 
   it('uses human-readable label instead of raw JSON for known tool', () => {
@@ -283,7 +291,7 @@ describe('ChatTimeline', () => {
     const tebRows = document.querySelectorAll('.teb-row');
     expect(tebRows.length).toBeGreaterThan(0);
 
-    // Args row should contain the compact JSON value inline
+    // Args row should contain the inner value without the outer object wrapper
     const argsRow = Array.from(tebRows).find(
       (el) => el.querySelector('.teb-label')?.textContent === 'Args',
     );
@@ -291,6 +299,7 @@ describe('ChatTimeline', () => {
     const argsCode = argsRow.querySelector('.teb-code');
     expect(argsCode).toBeTruthy();
     expect(argsCode.textContent).toContain('a.txt');
+    expect(argsCode.textContent).not.toContain('{"path":"a.txt"}');
   });
 
   it('falls back to first string argument for unknown tools', () => {
@@ -400,7 +409,7 @@ describe('ChatTimeline', () => {
    * Result `.teb-code` element.  `resultValue` is placed verbatim into
    * payload.result (preferPayload=true path).
    */
-  function getResultCodeText(resultValue, sessionId) {
+  function getResultCodeText(resultValue, sessionId, toolName = 'probe') {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -411,7 +420,12 @@ describe('ChatTimeline', () => {
       run_id: `run-${sessionId}`,
       sequence: 1,
       payload: {
-        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe', arguments: {} },
+        tool_call: {
+          id: `call-${sessionId}`,
+          index: 0,
+          name: toolName,
+          arguments: {},
+        },
       },
     });
     appendRunEvent(sessionState, {
@@ -419,7 +433,7 @@ describe('ChatTimeline', () => {
       run_id: `run-${sessionId}`,
       sequence: 2,
       payload: {
-        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe' },
+        tool_call: { id: `call-${sessionId}`, index: 0, name: toolName },
         result: resultValue,
       },
     });
@@ -453,7 +467,12 @@ describe('ChatTimeline', () => {
       run_id: `run-${sessionId}`,
       sequence: 1,
       payload: {
-        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe', arguments: argsValue },
+        tool_call: {
+          id: `call-${sessionId}`,
+          index: 0,
+          name: 'probe',
+          arguments: argsValue,
+        },
       },
     });
     const comp = mount(ChatTimeline, {
@@ -472,9 +491,16 @@ describe('ChatTimeline', () => {
   }
 
   describe('compactToolValue', () => {
-    it('plain object → compact JSON string (no indentation)', () => {
+    it('plain object → inner fields without the outer JSON object wrapper', () => {
       const text = getArgsCodeText({ path: 'file.txt', count: 3 }, 'ctv-obj');
-      expect(text).toBe('{"path":"file.txt","count":3}');
+      expect(text).toContain('path');
+      expect(text).toContain('file.txt');
+      expect(text).toContain('count');
+      expect(text).toContain('3');
+      expect(text.indexOf('path')).toBeLessThan(text.indexOf('count'));
+      expect(text).not.toBe('{"path":"file.txt","count":3}');
+      expect(text.trim().startsWith('{')).toBe(false);
+      expect(text.trim().endsWith('}')).toBe(false);
     });
 
     it('plain string → returned as-is', () => {
@@ -499,13 +525,43 @@ describe('ChatTimeline', () => {
       expect(text).toBe('—');
     });
 
-    it('object with .data field and preferPayload:true → returns .data value', () => {
+    it('object with .data field and preferPayload:true → returns inner data fields without outer braces', () => {
       // Result value with a .data field; preferPayload=true (Result row uses it)
       const text = getResultCodeText(
         { ok: true, data: { content: 'hello', lines: 2 } },
         'ctv-data',
       );
-      expect(text).toBe('{"content":"hello","lines":2}');
+      expect(text).toContain('content');
+      expect(text).toContain('hello');
+      expect(text).toContain('lines');
+      expect(text).toContain('2');
+      expect(text.indexOf('content')).toBeLessThan(text.indexOf('lines'));
+      expect(text).not.toBe('{"content":"hello","lines":2}');
+      expect(text.trim().startsWith('{')).toBe(false);
+      expect(text.trim().endsWith('}')).toBe(false);
+    });
+
+    it('successful content-only read result → displays content directly', () => {
+      const text = getResultCodeText(
+        { ok: true, data: { content: 'file content here' } },
+        'ctv-read-content',
+        'read',
+      );
+      expect(text).toBe('file content here');
+    });
+
+    it('successful persisted read result with path → displays content and hides path', () => {
+      const text = getResultCodeText(
+        {
+          ok: true,
+          data: { path: 'MEMORY.md', content: 'persisted file content' },
+        },
+        'ctv-read-persisted-path',
+        'read',
+      );
+      expect(text).toBe('persisted file content');
+      expect(text).not.toContain('MEMORY.md');
+      expect(text).not.toContain('path');
     });
 
     it('error envelope with .error field and preferPayload:true → returns error text', () => {
