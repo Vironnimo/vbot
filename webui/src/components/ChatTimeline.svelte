@@ -236,18 +236,6 @@
     return 'running';
   };
 
-  // eslint-disable-next-line no-unused-vars -- kept for potential future use; template usage removed per plan
-  const toolStatusLabel = (tool) => {
-    const status = toolStatus(tool);
-    if (status === 'failed') {
-      return t('chat.toolFailed', 'failed');
-    }
-    if (status === 'success') {
-      return t('chat.toolSucceeded', 'succeeded');
-    }
-    return t('chat.runStatus.running', 'Running');
-  };
-
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
   const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
@@ -440,114 +428,37 @@
     return sanitizedValue;
   };
 
-  const detailTextValue = (value) => {
-    const normalizedValue = sanitizeToolDetailNode(value);
+  const toolNameForRunTool = (tool) =>
+    tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
-    if (!hasMeaningfulToolDetail(normalizedValue)) {
+  const compactToolValue = (value, { preferPayload = false } = {}) => {
+    const processed = preferPayload
+      ? preferredToolResultValue(value)
+      : sanitizeToolDetailNode(value);
+
+    if (!hasMeaningfulToolDetail(processed)) {
       return t('chat.toolNoData', '—');
     }
 
-    if (typeof normalizedValue === 'string') {
-      return normalizedValue;
+    if (typeof processed === 'string') {
+      return processed;
     }
 
-    if (
-      typeof normalizedValue === 'number' ||
-      typeof normalizedValue === 'boolean'
-    ) {
-      return String(normalizedValue);
+    if (typeof processed === 'number' || typeof processed === 'boolean') {
+      return String(processed);
     }
 
     try {
-      return JSON.stringify(normalizedValue, null, 2);
+      return JSON.stringify(processed);
     } catch {
-      return String(normalizedValue);
+      return String(processed);
     }
   };
-
-  const isMultilineDetailValue = (value) => {
-    const normalizedValue = sanitizeToolDetailNode(value);
-    if (typeof normalizedValue === 'string') {
-      return normalizedValue.includes('\n');
-    }
-    return Array.isArray(normalizedValue) || isPlainObject(normalizedValue);
-  };
-
-  const detailEntriesFromValue = (value) => {
-    if (!hasMeaningfulToolDetail(value)) {
-      return [
-        {
-          key: '',
-          value: t('chat.toolNoData', '—'),
-          multiline: false,
-        },
-      ];
-    }
-
-    if (Array.isArray(value)) {
-      return [
-        {
-          key: '',
-          value: detailTextValue(value),
-          multiline: true,
-        },
-      ];
-    }
-
-    if (isPlainObject(value)) {
-      const entries = Object.entries(value);
-      if (entries.length === 0) {
-        return [
-          {
-            key: '',
-            value: t('chat.toolNoData', '—'),
-            multiline: false,
-          },
-        ];
-      }
-
-      return entries.map(([key, entryValue]) => ({
-        key,
-        value: detailTextValue(entryValue),
-        multiline: isMultilineDetailValue(entryValue),
-      }));
-    }
-
-    return [
-      {
-        key: '',
-        value: detailTextValue(value),
-        multiline: isMultilineDetailValue(value),
-      },
-    ];
-  };
-
-  const toolDetailEntries = (value, { preferPayload = false } = {}) =>
-    detailEntriesFromValue(
-      preferPayload
-        ? preferredToolResultValue(value)
-        : sanitizeToolDetailNode(value),
-    );
-
-  const toolArgumentDetailEntries = (tool) =>
-    toolDetailEntries(toolArguments(tool));
-
-  const toolResultDetailEntries = (tool) =>
-    toolDetailEntries(tool.result, { preferPayload: true });
-
-  const toolNameForRunTool = (tool) =>
-    tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
   const toolResultValueForEvent = (event) =>
     event.payload?.result ??
     event.payload?.error ??
     messageFromEvent(event)?.content;
-
-  const toolArgumentDetailEntriesForEvent = (event) =>
-    toolDetailEntries(toolCallFromEvent(event)?.arguments);
-
-  const toolResultDetailEntriesForEvent = (event) =>
-    toolDetailEntries(toolResultValueForEvent(event), { preferPayload: true });
 
   function formatJson(value) {
     if (typeof value === 'string') {
@@ -676,23 +587,17 @@
     streamingItem.name || t('chat.toolPendingName', 'tool');
 </script>
 
-{#snippet toolDetailSection(label, entries, isError = false)}
+{#snippet toolDetailSection(
+  label,
+  value,
+  isError = false,
+  preferPayload = false,
+)}
   <div class="teb-row">
     <span class="teb-label">{label}</span>
-    <div class="teb-entry-list">
-      {#each entries as entry, index (`${entry.key || 'value'}-${index}`)}
-        <div class:teb-entry--value-only={!entry.key} class="teb-entry">
-          {#if entry.key}
-            <span class="teb-entry-key">{entry.key}</span>
-          {/if}
-          <span
-            class:error={isError}
-            class:multiline={entry.multiline}
-            class="teb-code teb-entry-value">{entry.value}</span
-          >
-        </div>
-      {/each}
-    </div>
+    <span class:error={isError} class="teb-code"
+      >{compactToolValue(value, { preferPayload })}</span
+    >
   </div>
 {/snippet}
 
@@ -845,12 +750,13 @@
                     <div class="tool-event-body">
                       {@render toolDetailSection(
                         t('chat.toolArgs', 'Args'),
-                        toolArgumentDetailEntries(child),
+                        toolArguments(child),
                       )}
                       {@render toolDetailSection(
                         t('chat.toolResultLabel', 'Result'),
-                        toolResultDetailEntries(child),
+                        child.result,
                         toolStatus(child) === 'failed',
+                        true,
                       )}
                     </div>
                   </details>
@@ -946,13 +852,14 @@
                   <div class="tool-event-body">
                     {@render toolDetailSection(
                       t('chat.toolArgs', 'Args'),
-                      toolArgumentDetailEntriesForEvent(item.event),
+                      toolCallFromEvent(item.event)?.arguments,
                     )}
                     {#if toolResultValueForEvent(item.event)}
                       {@render toolDetailSection(
                         t('chat.toolResultLabel', 'Result'),
-                        toolResultDetailEntriesForEvent(item.event),
+                        toolResultValueForEvent(item.event),
                         isFailedToolEvent(item.event),
+                        true,
                       )}
                     {/if}
                   </div>
@@ -1092,9 +999,25 @@
     max-width: min(64rem, calc(100vw - 340px));
   }
 
+  .teb-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .teb-label {
+    flex-shrink: 0;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
   .teb-code {
+    flex: 1;
     min-width: 0;
     overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
 
   .chat-terminal-event {
