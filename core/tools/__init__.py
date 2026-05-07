@@ -1,5 +1,12 @@
 """Tool registry, definitions, result envelopes, and execution scheduling."""
 
+from core.tools.read_new import (
+    READ_NEW_TOOL_DESCRIPTION,
+    READ_NEW_TOOL_NAME,
+    READ_NEW_TOOL_PARAMETERS,
+    read_new_handler,
+    register_read_new_tool,
+)
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
@@ -33,6 +40,9 @@ __all__ = [
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
     "JsonObject",
+    "READ_NEW_TOOL_DESCRIPTION",
+    "READ_NEW_TOOL_NAME",
+    "READ_NEW_TOOL_PARAMETERS",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
@@ -51,7 +61,9 @@ __all__ = [
     "ToolRegistry",
     "is_tool_result_envelope",
     "read_handler",
+    "read_new_handler",
     "register_builtin_tools",
+    "register_read_new_tool",
     "tool_failure",
     "tool_success",
 ]
