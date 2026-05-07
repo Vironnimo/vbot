@@ -236,18 +236,6 @@
     return 'running';
   };
 
-  // eslint-disable-next-line no-unused-vars -- kept for potential future use; template usage removed per plan
-  const toolStatusLabel = (tool) => {
-    const status = toolStatus(tool);
-    if (status === 'failed') {
-      return t('chat.toolFailed', 'failed');
-    }
-    if (status === 'success') {
-      return t('chat.toolSucceeded', 'succeeded');
-    }
-    return t('chat.runStatus.running', 'Running');
-  };
-
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
   const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
