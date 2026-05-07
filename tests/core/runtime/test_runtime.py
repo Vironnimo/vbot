@@ -94,66 +94,43 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.system_prompts, SystemPromptManager)
 
 
-def test_start_registers_read_builtin_tool(config: Config):
-    """Runtime.start() registers the canonical read tool for agent use."""
+def test_start_registers_builtin_tools_once(config: Config):
+    """Runtime.start() registers each built-in tool exactly once for agent use."""
     runtime = Runtime(config)
 
     runtime.start()
 
-    read_tool = runtime.tools.get("read")
-    assert read_tool.name == "read"
+    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
+    assert tool_names == ["edit", "read", "write"]
 
 
-def test_read_provider_definition_exposes_model_visible_metadata_only(config: Config):
-    """Runtime tool definitions expose schema without handler or context."""
+def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):
+    """Runtime tool definitions expose schemas without handlers or context."""
     runtime = Runtime(config)
 
     runtime.start()
 
-    definitions = runtime.tools.provider_definitions(["read"])
+    definitions = runtime.tools.provider_definitions()
+    definitions_by_name = {definition["name"]: definition for definition in definitions}
 
-    assert definitions == [
-        {
-            "name": "read",
-            "description": (
-                "Read the contents of a file. Output is truncated to 2000 lines or "
-                "50 KB (whichever is hit first). If offset is past EOF, returns an "
-                "explicit end-of-file notice. Use offset/limit for large files."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": (
-                            "Path to the file to read (relative to workspace, or absolute)."
-                        ),
-                    },
-                    "offset": {
-                        "type": "number",
-                        "description": "Line number to start reading from (1-indexed).",
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "Maximum number of lines to read.",
-                    },
-                },
-                "required": ["path"],
-                "additionalProperties": False,
-            },
-        }
-    ]
-    assert set(definitions[0]) == {"name", "description", "parameters"}
+    assert sorted(definitions_by_name) == ["edit", "read", "write"]
+    for tool_name, definition in definitions_by_name.items():
+        tool = runtime.tools.get(tool_name)
+        assert set(definition) == {"name", "description", "parameters"}
+        assert definition["description"] == tool.description
+        assert definition["parameters"] == tool.parameters
+        assert "handler" not in definition
+        assert "context" not in definition
 
 
-def test_runtime_start_exposes_only_canonical_read_tool(config: Config):
-    """Runtime startup exposes exactly one canonical read tool."""
+def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
+    """Runtime startup exposes the canonical built-in tool set."""
     runtime = Runtime(config)
 
     runtime.start()
 
-    tool_names = [tool.name for tool in runtime.tools.list_tools()]
-    assert tool_names == ["read"]
+    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
+    assert tool_names == ["edit", "read", "write"]
 
 
 def test_phase_two_services_inaccessible_before_start(config: Config):
