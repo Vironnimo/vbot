@@ -1096,6 +1096,8 @@
   .reasoning-block[open] .reasoning-body,
   .tool-event[open] .tool-event-body {
     display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .reasoning-block[open] .reasoning-body {
