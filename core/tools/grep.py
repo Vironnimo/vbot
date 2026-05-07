@@ -332,8 +332,8 @@ def _grep_with_rg(
             errors="replace",
             check=False,
         )
-    except OSError:
-        return None, None
+    except OSError as error:
+        return None, f"failed to execute ripgrep: {error}"
 
     if completed.returncode not in (0, 1):
         return None, completed.stderr.strip() or "ripgrep failed"
