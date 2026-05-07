@@ -65,7 +65,7 @@ async def test_read_with_description_succeeds(tmp_path: Path) -> None:
         ["*"],
     )
 
-    assert result == tool_success({"path": str(workspace / "file.txt"), "content": "hello"})
+    assert result == tool_success({"content": "hello"})
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_read_relative_path_resolves_from_workspace(tmp_path: Path) -> Non
 
     result = await registry.dispatch(make_context(workspace), {"path": "SOUL.md"}, ["*"])
 
-    assert result == tool_success({"path": str(workspace / "SOUL.md"), "content": "hello"})
+    assert result == tool_success({"content": "hello"})
 
 
 def test_read_absolute_path_is_allowed(tmp_path: Path) -> None:
@@ -89,7 +89,7 @@ def test_read_absolute_path_is_allowed(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": str(absolute_file)})
 
-    assert result == tool_success({"path": str(absolute_file), "content": "outside"})
+    assert result == tool_success({"content": "outside"})
 
 
 def test_read_offset_uses_zero_based_line_index(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def test_read_offset_uses_zero_based_line_index(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 1})
 
-    assert result == tool_success({"path": str(workspace / "lines.txt"), "content": "one\ntwo\n"})
+    assert result == tool_success({"content": "one\ntwo\n"})
 
 
 def test_read_limit_caps_returned_line_count(tmp_path: Path) -> None:
@@ -109,7 +109,7 @@ def test_read_limit_caps_returned_line_count(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "lines.txt", "limit": 2})
 
-    assert result == tool_success({"path": str(workspace / "lines.txt"), "content": "zero\none\n"})
+    assert result == tool_success({"content": "zero\none\n"})
 
 
 def test_read_offset_and_limit_slice_lines(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_read_offset_and_limit_slice_lines(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "lines.txt", "offset": 1, "limit": 2})
 
-    assert result == tool_success({"path": str(workspace / "lines.txt"), "content": "one\ntwo\n"})
+    assert result == tool_success({"content": "one\ntwo\n"})
 
 
 def test_read_missing_file_returns_failure_envelope(tmp_path: Path) -> None:
@@ -187,7 +187,7 @@ def test_read_invalid_utf8_uses_replacement_character(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "invalid.txt"})
 
-    assert result == tool_success({"path": str(workspace / "invalid.txt"), "content": "valid�text"})
+    assert result == tool_success({"content": "valid\ufffdtext"})
 
 
 def test_read_does_not_inject_line_numbers(tmp_path: Path) -> None:
@@ -197,6 +197,4 @@ def test_read_does_not_inject_line_numbers(tmp_path: Path) -> None:
 
     result = read_handler(make_context(workspace), {"path": "plain.txt"})
 
-    assert result == tool_success(
-        {"path": str(workspace / "plain.txt"), "content": "alpha\nbeta\n"}
-    )
+    assert result == tool_success({"content": "alpha\nbeta\n"})
