@@ -1280,37 +1280,71 @@ textarea::placeholder {
 
 .tool-event-body {
   display: none;
-  margin-top: 3px;
-  padding: 5px 0 3px 18px;
+  margin-top: 4px;
+  padding: 6px 0 3px 18px;
   border-left: 1px solid var(--border-2);
 }
 
 .tool-event.open .tool-event-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
 }
 
 .teb-row {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
 }
 
 .teb-label {
-  min-width: 46px;
   flex-shrink: 0;
-  padding-top: 1px;
   color: var(--text-lo);
   font-size: 10px;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
+.teb-entry-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.teb-entry {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+.teb-entry--value-only {
+  display: block;
+}
+
+.teb-entry-key {
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .teb-code {
   color: var(--text-med);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.teb-entry-value {
+  min-width: 0;
+}
+
+.teb-entry-value.multiline {
+  display: block;
 }
 
 .run-tool-event .tool-event-line {
