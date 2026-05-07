@@ -357,19 +357,27 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
     assert definitions == [
         {
             "name": "read",
-            "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+            "description": (
+                "Read the contents of a file. Output is truncated to 2000 lines or "
+                "50 KB (whichever is hit first). If offset is past EOF, returns an "
+                "explicit end-of-file notice. Use offset/limit for large files."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string"},
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file to read (relative to workspace, or absolute)."
+                        ),
+                    },
                     "offset": {
                         "type": "number",
-                        "description": "1-indexed line number to start reading from.",
+                        "description": "Line number to start reading from (1-indexed).",
                     },
-                    "limit": {"type": "number"},
-                    "description": {
-                        "type": "string",
-                        "description": "Brief description of what this tool call is doing",
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of lines to read.",
                     },
                 },
                 "required": ["path"],
@@ -381,5 +389,5 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
         "path",
         "offset",
         "limit",
-        "description",
     }
+    assert "description" not in definitions[0]["parameters"]["properties"]

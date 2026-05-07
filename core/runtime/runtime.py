@@ -19,7 +19,7 @@ from core.providers.providers import ProviderConfig, ProviderRegistry
 from core.runtime.interfaces import ConfigProtocol, LoggerProtocol
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
-from core.tools import register_builtin_tools, register_read2_tool
+from core.tools import register_read_tool
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -112,8 +112,7 @@ class Runtime:
             template_dir=resources_path / "workspace-templates",
         )
         self._tools = ToolRegistry()
-        register_builtin_tools(self._tools)
-        register_read2_tool(self._tools)
+        register_read_tool(self._tools)
         self._skills = SkillRegistry.load(self._storage.data_dir / "skills")
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
