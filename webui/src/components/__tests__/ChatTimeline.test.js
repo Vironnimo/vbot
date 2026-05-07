@@ -946,6 +946,80 @@ describe('ChatTimeline', () => {
     expect(renderedChildren[2].textContent).toContain('Done');
   });
 
+  it('renders distinct assistant output phases around a tool row', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-output-tool-output',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-output-tool-output',
+      sequence: 1,
+      payload: {
+        content_delta: 'First answer',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-output-tool-output',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-output-tool-output',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'MEMORY.md' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-output-tool-output',
+      sequence: 3,
+      payload: {
+        tool_call: {
+          id: 'call-output-tool-output',
+          index: 0,
+          name: 'read',
+        },
+        result: {
+          ok: true,
+          data: { content: 'A' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-output-tool-output',
+      sequence: 4,
+      payload: {
+        content_delta: 'Second answer',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const runContent = document.querySelector('.assistant-run-content');
+    const renderedChildren = Array.from(runContent.children);
+
+    expect(renderedChildren).toHaveLength(3);
+    expect(renderedChildren[0].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[0].textContent).toContain('First answer');
+    expect(renderedChildren[1].classList.contains('run-tool-event')).toBe(true);
+    expect(renderedChildren[1].textContent).toContain('read');
+    expect(renderedChildren[2].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[2].textContent).toContain('Second answer');
+  });
+
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
     const sessionState = ensureSessionState(
       createChatState(),

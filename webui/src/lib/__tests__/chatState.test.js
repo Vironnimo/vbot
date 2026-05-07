@@ -385,6 +385,116 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps distinct assistant output phases across a tool-use loop', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'First answer' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read_file' },
+        result: { ok: true, content: 'A' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { content_delta: 'Second answer' },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'assistant_output',
+      'tool_call',
+      'assistant_output',
+    ]);
+    expect(assistantRun.outputs).toEqual([
+      expect.objectContaining({ content: 'First answer', sequence: 1 }),
+      expect.objectContaining({ content: 'Second answer', sequence: 4 }),
+    ]);
+  });
+
+  it('keeps distinct reasoning phases across a tool-use loop', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { reasoning_delta: 'Plan first' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read_file' },
+        result: { ok: true, content: 'A' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { reasoning_delta: 'Plan second' },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'reasoning',
+      'tool_call',
+      'reasoning',
+    ]);
+    expect(assistantRun.reasoning).toEqual([
+      expect.objectContaining({ content: 'Plan first', sequence: 1 }),
+      expect.objectContaining({ content: 'Plan second', sequence: 4 }),
+    ]);
+  });
+
   it('merges tool started and result events into success, running, and failed rows', () => {
     const sessionState = ensureSessionState(
       createChatState(),
