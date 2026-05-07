@@ -145,6 +145,16 @@ def test_glob_returns_failure_for_empty_pattern(tmp_path: Path) -> None:
     assert "pattern" in error["message"]
 
 
+def test_glob_returns_failure_for_invalid_pattern_values(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for pattern in ("/absolute/*.py", "../*.py"):
+        result = glob_handler(make_context(workspace), {"pattern": pattern})
+        error = assert_failure_envelope(result, "invalid_arguments")
+        assert "pattern" in error["message"]
+
+
 def test_glob_suffixes_directories_and_special_cases_double_star(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

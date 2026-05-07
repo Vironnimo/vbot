@@ -1,5 +1,6 @@
 """Tests for the built-in grep tool."""
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +239,20 @@ def test_grep_glob_filter_limits_candidate_files(
     assert data["content"] == "keep.py:1: needle"
 
 
+@pytest.mark.parametrize("glob_pattern", ["/absolute/*.py", "../*.py"])
+def test_grep_rejects_invalid_glob_filter_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, glob_pattern: str
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = grep_handler(make_context(workspace), {"pattern": "needle", "glob": glob_pattern})
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "glob" in error["message"]
+
+
 def test_grep_context_lines_in_python_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -330,6 +345,79 @@ def test_grep_skips_read_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     result = grep_handler(make_context(workspace), {"pattern": "needle"})
     data = assert_success_envelope(result)
     assert data["content"] == "good.txt:1: needle"
+
+
+def test_grep_uses_python_fallback_when_rg_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("fallback hit\n", encoding="utf-8")
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("subprocess.run should not be called without rg")
+
+    monkeypatch.setattr(grep_module.subprocess, "run", fail_if_called)
+
+    result = grep_handler(make_context(workspace), {"pattern": "fallback"})
+    data = assert_success_envelope(result)
+    assert data["content"] == "notes.txt:1: fallback hit"
+
+
+def test_grep_returns_failure_for_rg_nonzero_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
+
+    def fail_rg(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 2, stdout="", stderr="regex parse error")
+
+    monkeypatch.setattr(grep_module.subprocess, "run", fail_rg)
+
+    result = grep_handler(make_context(workspace), {"pattern": "hello"})
+    error = assert_failure_envelope(result, "grep_error")
+    assert error["message"] == "regex parse error"
+
+
+def test_grep_returns_failure_for_discovered_rg_execution_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
+
+    def raise_oserror(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(grep_module.subprocess, "run", raise_oserror)
+
+    result = grep_handler(make_context(workspace), {"pattern": "hello"})
+    error = assert_failure_envelope(result, "grep_error")
+    assert "failed to execute ripgrep" in error["message"]
+    assert "permission denied" in error["message"]
+
+
+def test_grep_uses_rg_success_output_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(grep_module.shutil, "which", lambda _name: "rg")
+
+    def succeed_rg(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="notes.txt:1:hello\n", stderr="")
+
+    monkeypatch.setattr(grep_module.subprocess, "run", succeed_rg)
+
+    result = grep_handler(make_context(workspace), {"pattern": "hello"})
+    data = assert_success_envelope(result)
+    assert data["content"] == "notes.txt:1: hello"
 
 
 def test_grep_rejects_unknown_arguments(tmp_path: Path) -> None:
