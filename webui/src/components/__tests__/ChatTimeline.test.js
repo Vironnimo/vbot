@@ -875,4 +875,119 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).toContain('compute');
     expect(summaryLine.textContent).toContain('count');
   });
+
+  it('keeps thinking above later tool rows after subsequent reasoning updates', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-run-order',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-order',
+      sequence: 1,
+      payload: {
+        reasoning_delta: 'Thinking starts',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-order',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-order',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'MEMORY.md' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-order',
+      sequence: 3,
+      payload: {
+        reasoning_delta: ' and keeps going',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-order',
+      sequence: 4,
+      payload: {
+        message: { role: 'assistant', content: 'Done' },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const runContent = document.querySelector('.assistant-run-content');
+    const renderedChildren = Array.from(runContent.children);
+
+    expect(renderedChildren).toHaveLength(3);
+    expect(renderedChildren[0].classList.contains('reasoning-block')).toBe(
+      true,
+    );
+    expect(renderedChildren[1].classList.contains('run-tool-event')).toBe(true);
+    expect(renderedChildren[2].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[0].textContent).toContain(
+      'Thinking starts and keeps going',
+    );
+    expect(renderedChildren[1].textContent).toContain('read');
+    expect(renderedChildren[2].textContent).toContain('Done');
+  });
+
+  it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-thinking-chevron',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning',
+      run_id: 'run-thinking-chevron',
+      sequence: 1,
+      payload: {
+        message: { role: 'assistant', reasoning: 'Trace the issue' },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const reasoningBlock = document.querySelector(
+      '.assistant-run .reasoning-block',
+    );
+    const chevron = reasoningBlock.querySelector('.r-chevron');
+
+    expect(reasoningBlock.open).toBe(false);
+    expect(chevron.getAttribute('width')).toBe('10');
+    expect(chevron.getAttribute('height')).toBe('10');
+    expect(chevron.style.transform).toBe('none');
+
+    reasoningBlock.open = true;
+    reasoningBlock.dispatchEvent(new Event('toggle'));
+    flushSync();
+
+    expect(reasoningBlock.open).toBe(true);
+    expect(chevron.getAttribute('width')).toBe('10');
+    expect(chevron.getAttribute('height')).toBe('10');
+    expect(chevron.style.transform).toBe('rotate(180deg)');
+  });
 });
