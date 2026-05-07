@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHAT_STATUS_COMPLETED,
+  CHAT_STATUS_FAILED,
   CHAT_STATUS_RUNNING,
   appendRunEvent,
   canCreateNewSession,
@@ -221,7 +222,7 @@ describe('chat state helpers', () => {
     expect(canCreateNewSession(sessionState)).toBe(true);
   });
 
-  it('builds a visible timeline from history and run events', () => {
+  it('builds a visible timeline from history and live assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -242,23 +243,15 @@ describe('chat state helpers', () => {
         type: 'message',
         message: { id: 'message-one', role: 'user', content: 'Hi' },
       },
-      {
-        id: 'event-run-1',
-        type: 'event',
-        event: {
-          type: 'assistant_output',
-          sequence: 1,
-          payload: { message: { role: 'assistant', content: 'Hello' } },
-          run_id: undefined,
-          agent_id: undefined,
-          session_id: undefined,
-          timestamp: undefined,
-        },
-      },
+      expect.objectContaining({
+        id: 'assistant-run-run',
+        type: 'assistant_run',
+        outputs: [expect.objectContaining({ content: 'Hello' })],
+      }),
     ]);
   });
 
-  it('builds a visible timeline with ordered streaming items', () => {
+  it('groups live reasoning, tool lifecycle, and final output into one assistant run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -271,29 +264,376 @@ describe('chat state helpers', () => {
       payload: { reasoning_delta: 'Think' },
     });
     appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
+      type: 'tool_call_started',
       run_id: 'run-one',
       sequence: 2,
-      payload: { content_delta: 'Hi' },
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read_file' },
+        result: { ok: true, content: 'File contents' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { message: { role: 'assistant', content: 'Hi' } },
     });
 
-    expect(visibleTimelineItems(sessionState)).toEqual([
-      {
-        id: 'streaming-reasoning-run-one-1',
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: 'Think',
-        }),
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(sessionState.runEvents).toHaveLength(4);
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        runId: 'run-one',
+      }),
+    );
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'reasoning',
+      'tool_call',
+      'assistant_output',
+    ]);
+    expect(assistantRun.reasoning).toEqual([
+      expect.objectContaining({ content: 'Think', streaming: true }),
+    ]);
+    expect(assistantRun.tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'read_file',
+        arguments: { path: 'a.txt' },
+        result: { ok: true, content: 'File contents' },
+        status: 'success',
+      }),
+    ]);
+    expect(assistantRun.outputs).toEqual([
+      expect.objectContaining({ content: 'Hi', streaming: false }),
+    ]);
+  });
+
+  it('merges tool started and result events into success, running, and failed rows', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        tool_call: { id: 'call-success', index: 0, name: 'ok_tool' },
       },
-      {
-        id: 'streaming-assistant-run-one-2',
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'Hi',
-        }),
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call: { id: 'call-success', index: 0, name: 'ok_tool' },
+        result: { ok: true },
       },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-running', index: 1, name: 'slow_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: {
+        tool_call: { id: 'call-failed', index: 2, name: 'bad_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 5,
+      payload: {
+        tool_call: { id: 'call-failed', index: 2, name: 'bad_tool' },
+        result: { ok: false, error: 'Denied' },
+      },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.tools).toHaveLength(3);
+    expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual([
+      'call-success',
+      'call-running',
+      'call-failed',
+    ]);
+    expect(assistantRun.tools.map((tool) => tool.status)).toEqual([
+      'success',
+      CHAT_STATUS_RUNNING,
+      CHAT_STATUS_FAILED,
+    ]);
+  });
+
+  it('keeps new runs ordered after older runs without nesting tool rows', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-old',
+      sequence: 1,
+      payload: {
+        tool_call: { id: 'old-tool', index: 0, name: 'old_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-new',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'new-tool', index: 0, name: 'new_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-old',
+      sequence: 4,
+      payload: {
+        tool_call: { id: 'old-tool', index: 0, name: 'old_tool' },
+        result: { ok: true },
+      },
+    });
+
+    const assistantRuns = visibleTimelineItems(sessionState);
+
+    expect(assistantRuns.map((item) => item.runId)).toEqual([
+      'run-old',
+      'run-new',
+    ]);
+    expect(assistantRuns[0].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'old-tool', status: 'success' }),
+    ]);
+    expect(assistantRuns[1].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'new-tool',
+        status: CHAT_STATUS_RUNNING,
+      }),
+    ]);
+  });
+
+  it('orders each live run user event before its assistant block using run arrival', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-one',
+      sequence: 1,
+      timestamp: '2026-05-07T10:00:00Z',
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 2,
+      timestamp: '2026-05-07T10:00:01Z',
+      payload: {
+        message: { id: 'user-one', role: 'user', content: 'First request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 3,
+      timestamp: '2026-05-07T10:00:02Z',
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 4,
+      timestamp: '2026-05-07T10:00:03Z',
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read_file' },
+        result: { ok: true, content: 'A' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 5,
+      timestamp: '2026-05-07T10:00:04Z',
+      payload: { message: { role: 'assistant', content: 'First answer' } },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      timestamp: '2026-05-07T10:01:00Z',
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-two',
+      sequence: 2,
+      timestamp: '2026-05-07T10:01:01Z',
+      payload: {
+        message: { id: 'user-two', role: 'user', content: 'Second request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-two',
+      sequence: 3,
+      timestamp: '2026-05-07T10:01:02Z',
+      payload: { reasoning_delta: 'Planning' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-two',
+      sequence: 4,
+      timestamp: '2026-05-07T10:01:03Z',
+      payload: {
+        tool_call: {
+          id: 'call-two',
+          index: 0,
+          name: 'list_files',
+          arguments: { path: '.' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-two',
+      sequence: 5,
+      timestamp: '2026-05-07T10:01:04Z',
+      payload: {
+        tool_call: { id: 'call-two', index: 0, name: 'list_files' },
+        result: { ok: true, content: ['a.txt'] },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.type)).toEqual([
+      'event',
+      'assistant_run',
+      'event',
+      'assistant_run',
+    ]);
+    expect(timelineItems[0].event.payload.message.content).toBe(
+      'First request',
+    );
+    expect(timelineItems[1]).toEqual(
+      expect.objectContaining({ runId: 'run-one', type: 'assistant_run' }),
+    );
+    expect(timelineItems[2].event.payload.message.content).toBe(
+      'Second request',
+    );
+    expect(timelineItems[3]).toEqual(
+      expect.objectContaining({ runId: 'run-two', type: 'assistant_run' }),
+    );
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-one', status: 'success' }),
+    ]);
+    expect(timelineItems[3].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-two', status: 'success' }),
+    ]);
+  });
+
+  it('appends later runs after older runs even when run-local sequences restart', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-old',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-old',
+      sequence: 2,
+      payload: {
+        message: { id: 'user-old', role: 'user', content: 'Old request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-old',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'old-tool', index: 0, name: 'old_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-new',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-new',
+      sequence: 2,
+      payload: {
+        message: { id: 'user-new', role: 'user', content: 'New request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-new',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'new-tool', index: 0, name: 'new_tool' },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.id)).toEqual([
+      'event-run-old-2',
+      'assistant-run-run-old',
+      'event-run-new-2',
+      'assistant-run-run-new',
+    ]);
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'old-tool' }),
+    ]);
+    expect(timelineItems[3].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'new-tool' }),
     ]);
   });
 
@@ -429,10 +769,8 @@ describe('chat state helpers', () => {
       }),
     ]);
     expect(
-      visibleTimelineItems(sessionState).map(
-        (item) => item.streamingItem?.type,
-      ),
-    ).toEqual(['tool_call', 'assistant']);
+      visibleTimelineItems(sessionState)[0].items.map((item) => item.type),
+    ).toEqual(['tool_call', 'assistant_output']);
   });
 
   it('ignores duplicate streaming event sequences', () => {
@@ -478,9 +816,118 @@ describe('chat state helpers', () => {
     expect(sessionState.streamingItems).toEqual([]);
     expect(visibleTimelineItems(sessionState)).toEqual([
       expect.objectContaining({
-        type: 'event',
-        event: expect.objectContaining({ type: 'assistant_output' }),
+        type: 'assistant_run',
+        outputs: [
+          expect.objectContaining({
+            content: 'Final',
+            streaming: false,
+          }),
+        ],
       }),
+    ]);
+  });
+
+  it('replaces assistant streaming draft output with final output in the same run block', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { content_delta: 'Draft' },
+    });
+
+    let [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.outputs).toEqual([
+      expect.objectContaining({ content: 'Draft', streaming: true }),
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { message: { role: 'assistant', content: 'Final' } },
+    });
+
+    [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+      }),
+    );
+    expect(assistantRun.outputs).toEqual([
+      expect.objectContaining({ content: 'Final', streaming: false }),
+    ]);
+    expect(assistantRun.items.map((item) => item.content)).not.toContain(
+      'Draft',
+    );
+  });
+
+  it('groups persisted assistant, tool, and final assistant messages best-effort', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-tools',
+        role: 'assistant',
+        reasoning: 'Need to read it.',
+        tool_calls: [
+          {
+            id: 'call-one',
+            name: 'read_file',
+            arguments: { path: 'a.txt' },
+          },
+        ],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-one',
+        name: 'read_file',
+        content: '{"ok": true, "content": "A"}',
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+      { id: 'user-two', role: 'user', content: 'Thanks' },
+    ]);
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems).toEqual([
+      expect.objectContaining({ id: 'user-one', type: 'message' }),
+      expect.objectContaining({ type: 'assistant_run', source: 'history' }),
+      expect.objectContaining({ id: 'user-two', type: 'message' }),
+    ]);
+    expect(timelineItems[1].items.map((item) => item.type)).toEqual([
+      'reasoning',
+      'tool_call',
+      'assistant_output',
+    ]);
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'read_file',
+        arguments: { path: 'a.txt' },
+        result: '{"ok": true, "content": "A"}',
+        status: 'success',
+      }),
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'The file says A.' }),
     ]);
   });
 

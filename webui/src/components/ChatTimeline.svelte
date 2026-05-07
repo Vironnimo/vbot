@@ -17,13 +17,7 @@
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
   let timelineSignature = $derived(
-    timelineItems
-      .map((item) =>
-        item.type === 'streaming'
-          ? `${item.id}:${item.streamingItem.sequence}:${item.streamingItem.content ?? ''}:${item.streamingItem.name ?? ''}`
-          : item.id,
-      )
-      .join('|'),
+    timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
 
   $effect.pre(() => {
@@ -36,26 +30,43 @@
     }
   });
 
+  function timelineItemSignature(item) {
+    if (item.type === 'streaming') {
+      return `${item.id}:${item.streamingItem.sequence}:${item.streamingItem.content ?? ''}:${item.streamingItem.name ?? ''}`;
+    }
+    if (item.type === 'assistant_run') {
+      return `${item.id}:${item.status}:${(item.items ?? [])
+        .map(
+          (child) =>
+            `${child.id}:${child.status ?? ''}:${child.content ?? ''}:${child.name ?? ''}:${formatJson(child.arguments ?? '')}:${formatJson(child.result ?? '')}`,
+        )
+        .join('~')}`;
+    }
+    return item.id;
+  }
+
   const isUserItem = (item) =>
-    item.type === 'streaming'
+    item.type === 'streaming' || item.type === 'assistant_run'
       ? false
       : item.type === 'message'
         ? item.message.role === 'user'
         : item.event.type === 'user_message_persisted';
 
   const isAssistantItem = (item) =>
-    item.type === 'streaming'
-      ? ['assistant', 'reasoning', 'tool_call'].includes(
-          item.streamingItem.type,
-        )
-      : item.type === 'message'
-        ? item.message.role === 'assistant'
-        : [
-            'assistant_output',
-            'reasoning',
-            'tool_call_started',
-            'tool_call_result',
-          ].includes(item.event.type);
+    item.type === 'assistant_run'
+      ? true
+      : item.type === 'streaming'
+        ? ['assistant', 'reasoning', 'tool_call'].includes(
+            item.streamingItem.type,
+          )
+        : item.type === 'message'
+          ? item.message.role === 'assistant'
+          : [
+              'assistant_output',
+              'reasoning',
+              'tool_call_started',
+              'tool_call_result',
+            ].includes(item.event.type);
 
   const shouldRenderMessage = (message) =>
     Boolean(textFromMessage(message)) || hasReadableReasoning(message);
@@ -146,6 +157,123 @@
     return `(${formatJson(toolCall.arguments ?? {})})`;
   };
 
+  const visibleRunChildren = (assistantRun) =>
+    (assistantRun.items ?? []).filter((child) => {
+      if (child.type === 'tool_call') {
+        return Boolean(child.name || child.toolCallId || child.startedEvent);
+      }
+      return Boolean(child.content);
+    });
+
+  const runIterationCount = (assistantRun) => {
+    const outputCount = (assistantRun.outputs ?? []).length;
+    const toolCount = (assistantRun.tools ?? []).length;
+    return Math.max(1, outputCount + (toolCount > 0 ? 1 : 0));
+  };
+
+  const labelForRunIterations = (assistantRun) =>
+    t('chat.runIterations', '{count} iter', {
+      count: runIterationCount(assistantRun),
+    });
+
+  const runStatusLabel = (status) => {
+    if (status === 'failed') {
+      return t('chat.runStatus.failed', 'Failed');
+    }
+    if (status === 'cancelled') {
+      return t('chat.runStatus.cancelled', 'Cancelled');
+    }
+    if (status === 'completed' || status === 'success') {
+      return t('chat.runStatus.completed', 'Completed');
+    }
+    return t('chat.runStatus.running', 'Running');
+  };
+
+  const formatRunDuration = (assistantRun) => {
+    const start = timestampToMs(
+      assistantRun.startTimestamp ?? assistantRun.timestamp,
+    );
+    const end = timestampToMs(assistantRun.endTimestamp);
+    if (start === null || end === null || end < start) {
+      return '';
+    }
+    const elapsedSeconds = (end - start) / 1000;
+    if (elapsedSeconds < 10) {
+      return t('chat.runDurationSeconds', '{seconds}s', {
+        seconds: elapsedSeconds.toFixed(1),
+      });
+    }
+    return t('chat.runDurationSeconds', '{seconds}s', {
+      seconds: Math.round(elapsedSeconds),
+    });
+  };
+
+  const timestampToMs = (timestamp) => {
+    if (!timestamp) {
+      return null;
+    }
+    const value = new Date(timestamp).getTime();
+    return Number.isNaN(value) ? null : value;
+  };
+
+  const runMetaParts = (assistantRun) =>
+    [
+      labelForRunIterations(assistantRun),
+      formatRunDuration(assistantRun) || runStatusLabel(assistantRun.status),
+    ].filter(Boolean);
+
+  const toolStatus = (tool) => {
+    if (tool.status === 'failed') {
+      return 'failed';
+    }
+    if (tool.status === 'success' || tool.status === 'completed') {
+      return 'success';
+    }
+    return 'running';
+  };
+
+  const toolStatusLabel = (tool) => {
+    const status = toolStatus(tool);
+    if (status === 'failed') {
+      return t('chat.toolFailed', 'failed');
+    }
+    if (status === 'success') {
+      return t('chat.toolSucceeded', 'succeeded');
+    }
+    return t('chat.runStatus.running', 'Running');
+  };
+
+  const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
+
+  const toolArgumentSummary = (tool) => {
+    const argumentsValue = toolArguments(tool);
+    if (argumentsValue === undefined || argumentsValue === null) {
+      return '';
+    }
+    return `(${formatJson(argumentsValue)})`;
+  };
+
+  const toolDetailValue = (value) => {
+    if (value === undefined || value === null || value === '') {
+      return t('chat.toolNoData', '—');
+    }
+    if (typeof value === 'string') {
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const toolNameForRunTool = (tool) =>
+    tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
+
   const toolResultForEvent = (event) => {
     const message = messageFromEvent(event);
     return message?.content ?? '';
@@ -191,8 +319,15 @@
     }).format(date);
   };
 
-  const timestampForItem = (item) =>
-    item.type === 'message' ? item.message.timestamp : item.event.timestamp;
+  const timestampForItem = (item) => {
+    if (item.type === 'message') {
+      return item.message.timestamp;
+    }
+    if (item.type === 'assistant_run') {
+      return item.timestamp ?? item.startTimestamp ?? item.endTimestamp;
+    }
+    return item.event.timestamp;
+  };
 
   const avatarForItem = (item) => {
     if (isUserItem(item)) {
@@ -359,6 +494,106 @@
                   ></span>
                 </p>
               {/if}
+            </div>
+          </article>
+        {:else if item.type === 'assistant_run'}
+          <article class="msg assistant assistant-run">
+            <div class="msg-header">
+              <div class="msg-avatar">{avatarForItem(item)}</div>
+              <span class="msg-author"
+                >{t('chat.role.assistant', 'Assistant').toUpperCase()}</span
+              >
+              {#if formatTime(timestampForItem(item))}
+                <span class="msg-timestamp"
+                  >{formatTime(timestampForItem(item))}</span
+                >
+              {/if}
+              {#each runMetaParts(item) as metaPart (metaPart)}
+                <span class="msg-meta-extra">· {metaPart}</span>
+              {/each}
+              {#if agentName}
+                <span class="msg-meta-extra">· {agentName}</span>
+              {/if}
+            </div>
+            <div class="msg-content assistant-run-content">
+              {#each visibleRunChildren(item) as child (child.id)}
+                {#if child.type === 'reasoning'}
+                  <details class="reasoning-block">
+                    <summary class="reasoning-header">
+                      <svg viewBox="0 0 16 16" aria-hidden="true">
+                        <path
+                          d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+                        />
+                        <path d="M6 13h4" />
+                      </svg>
+                      {t('chat.event.thinking', 'Thinking').toUpperCase()}
+                      {#if child.streaming}
+                        <span class="streaming-caret" aria-hidden="true"></span>
+                      {/if}
+                      <svg
+                        class="r-chevron"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
+                    </summary>
+                    <div class="reasoning-body">{child.content}</div>
+                  </details>
+                {:else if child.type === 'tool_call'}
+                  <details
+                    class="tool-event run-tool-event"
+                    open={toolStatus(child) !== 'running'}
+                  >
+                    <summary class="tool-event-line">
+                      <span
+                        class:done={toolStatus(child) === 'success'}
+                        class:error={toolStatus(child) === 'failed'}
+                        class:running={toolStatus(child) === 'running'}
+                        class="te-dot">●</span
+                      >
+                      <span class="te-fn">{toolNameForRunTool(child)}</span>
+                      {#if toolArgumentSummary(child)}
+                        <span class="te-arg">{toolArgumentSummary(child)}</span>
+                      {/if}
+                      <span
+                        class:error={toolStatus(child) === 'failed'}
+                        class="te-time">{toolStatusLabel(child)}</span
+                      >
+                    </summary>
+                    <div class="tool-event-body">
+                      <div class="teb-row">
+                        <span class="teb-label"
+                          >{t('chat.toolArgs', 'Args')}</span
+                        >
+                        <span class="teb-code"
+                          >{toolDetailValue(toolArguments(child))}</span
+                        >
+                      </div>
+                      <div class="teb-row">
+                        <span class="teb-label"
+                          >{t('chat.toolResultLabel', 'Result')}</span
+                        >
+                        <span
+                          class:error={toolStatus(child) === 'failed'}
+                          class="teb-code result"
+                          >{toolDetailValue(child.result)}</span
+                        >
+                      </div>
+                    </div>
+                  </details>
+                {:else if child.type === 'assistant_output'}
+                  <p
+                    class="msg-body-text"
+                    class:streaming-text={child.streaming}
+                  >
+                    {child.content}{#if child.streaming}<span
+                        class="streaming-caret"
+                        aria-hidden="true"
+                      ></span>{/if}
+                  </p>
+                {/if}
+              {/each}
             </div>
           </article>
         {:else if item.type === 'message' && shouldRenderMessage(item.message)}

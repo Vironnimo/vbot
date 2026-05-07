@@ -43,7 +43,9 @@ and Settings.
 - `webui/src/lib/chatState.js`
   - Pure helpers for selected Agent, per-Agent/current-Session state, visible
     timeline items, active Run status, ordered streaming buffers, and FIFO
-    queued messages.
+    queued messages. Visible timeline aggregation groups Run events into one
+    `assistant_run` item per Run so thinking, tool lifecycle rows, and assistant
+    output render together.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
     displayed from Agent data but omitted from public create/update payloads in
@@ -69,6 +71,10 @@ and Settings.
   provider-visible order of reasoning, assistant text, and tool-call deltas;
   the final `assistant_output` event clears the buffer and becomes the
   authoritative rendered message.
+- Visible chat rendering treats an assistant Run as one assistant block. Tool
+  lifecycle events (`tool_call_started` and `tool_call_result`) are merged into a
+  single expandable tool row inside that block rather than rendered as separate
+  chat messages.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`
   event arrives.
