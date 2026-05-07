@@ -145,6 +145,8 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     assert runtime.agents.data_dir == runtime.storage.data_dir
     assert [tool.name for tool in runtime.tools.list_tools()] == [
         "edit",
+        "glob",
+        "grep",
         "read",
         "write",
     ]

@@ -7,6 +7,20 @@ from core.tools.edit import (
     edit_handler,
     register_edit_tool,
 )
+from core.tools.glob import (
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+    glob_handler,
+    register_glob_tool,
+)
+from core.tools.grep import (
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
+    grep_handler,
+    register_grep_tool,
+)
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
@@ -49,6 +63,12 @@ __all__ = [
     "EDIT_TOOL_DESCRIPTION",
     "EDIT_TOOL_NAME",
     "EDIT_TOOL_PARAMETERS",
+    "GLOB_TOOL_DESCRIPTION",
+    "GLOB_TOOL_NAME",
+    "GLOB_TOOL_PARAMETERS",
+    "GREP_TOOL_DESCRIPTION",
+    "GREP_TOOL_NAME",
+    "GREP_TOOL_PARAMETERS",
     "JsonObject",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
@@ -70,9 +90,13 @@ __all__ = [
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
     "edit_handler",
+    "glob_handler",
+    "grep_handler",
     "is_tool_result_envelope",
     "read_handler",
     "register_edit_tool",
+    "register_glob_tool",
+    "register_grep_tool",
     "register_read_tool",
     "register_write_tool",
     "tool_failure",
