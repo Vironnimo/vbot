@@ -198,6 +198,8 @@ def read2_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
+    except OSError as error:
+        return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
 
     data: JsonObject = {
         "path": str(resolved),
