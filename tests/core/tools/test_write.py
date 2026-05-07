@@ -89,7 +89,7 @@ def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:
 
     data = assert_success_envelope(result)
     target = workspace / "notes.txt"
-    assert target.read_text(encoding="utf-8") == "hello\nworkspace\n"
+    assert target.read_bytes() == b"hello\nworkspace\n"
     assert data["path"] == str(target.resolve())
     assert data["bytes"] == len(b"hello\nworkspace\n")
     assert data["message"] == f"OK: written {data['bytes']} bytes to {target.resolve()}"
@@ -106,7 +106,7 @@ def test_write_writes_absolute_path(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "absolute\npath\n"
+    assert target.read_bytes() == b"absolute\npath\n"
     assert data["path"] == str(target.resolve())
 
 
@@ -121,7 +121,7 @@ def test_write_creates_parent_directories(tmp_path: Path) -> None:
     )
 
     assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "created parents"
+    assert target.read_bytes() == b"created parents"
 
 
 def test_write_replaces_full_file_content(tmp_path: Path) -> None:
@@ -136,7 +136,22 @@ def test_write_replaces_full_file_content(tmp_path: Path) -> None:
     )
 
     assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "new"
+    assert target.read_bytes() == b"new"
+
+
+def test_write_preserves_exact_supplied_content_at_byte_level(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    content = "lf\ncrlf\r\ncr\rend\nemoji: 🚀\n"
+
+    result = write_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "content": content},
+    )
+
+    data = assert_success_envelope(result)
+    assert (workspace / "notes.txt").read_bytes() == content.encode("utf-8")
+    assert data["bytes"] == len(content.encode("utf-8"))
 
 
 @pytest.mark.parametrize(
@@ -186,10 +201,10 @@ def test_write_returns_failure_envelope_for_filesystem_error(
     workspace.mkdir()
     target = workspace / "notes.txt"
 
-    def raise_permission_error(self: Path, data: str, encoding: str | None = None) -> int:
+    def raise_permission_error(self: Path, data: bytes) -> int:
         raise PermissionError("access denied while writing")
 
-    monkeypatch.setattr(Path, "write_text", raise_permission_error)
+    monkeypatch.setattr(Path, "write_bytes", raise_permission_error)
 
     result = write_handler(
         make_context(workspace),

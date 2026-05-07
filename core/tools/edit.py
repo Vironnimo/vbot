@@ -246,7 +246,7 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
             return tool_failure("file_not_found", f"file not found: {resolved}")
         if not resolved.is_file():
             return tool_failure("not_a_file", f"path is not a file: {resolved}")
-        content = resolved.read_text(encoding="utf-8", errors="replace")
+        content = resolved.read_bytes().decode("utf-8", errors="replace")
     except OSError as error:
         return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
 
@@ -273,7 +273,7 @@ def edit_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return tool_failure("no_changes", "replacement produced no changes")
 
     try:
-        resolved.write_text(updated_content, encoding="utf-8")
+        resolved.write_bytes(updated_content.encode("utf-8"))
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
 
