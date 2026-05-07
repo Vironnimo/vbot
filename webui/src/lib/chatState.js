@@ -455,7 +455,6 @@ function appendLiveRunEvent(assistantRun, event) {
   }
 
   if (event.type === 'reasoning') {
-    removeStreamingSections(assistantRun, 'reasoning');
     appendTextSection(assistantRun, {
       type: 'reasoning',
       content: textFromRunEventMessage(event, 'reasoning'),
@@ -476,7 +475,6 @@ function appendLiveRunEvent(assistantRun, event) {
   }
 
   if (event.type === 'assistant_output') {
-    removeStreamingSections(assistantRun, 'assistant_output');
     appendTextSection(assistantRun, {
       type: 'assistant_output',
       content: textFromRunEventMessage(event, 'content'),
@@ -565,15 +563,18 @@ function appendTextSection(
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
-  const trailingItem = assistantRun.items.at(-1);
-  if (trailingItem?.type === type && trailingItem.streaming === streaming) {
-    trailingItem.content += content;
-    trailingItem.sequence = sequence;
-    trailingItem.timestamp = event?.timestamp ?? message?.timestamp;
-    trailingItem.events = [...(trailingItem.events ?? []), event].filter(
+  const existingItem = mergeableTextSection(assistantRun, type);
+  if (existingItem) {
+    existingItem.content = streaming
+      ? `${existingItem.content}${content}`
+      : content;
+    existingItem.sequence = firstSeenSequence(existingItem.sequence, sequence);
+    existingItem.timestamp ??= event?.timestamp ?? message?.timestamp;
+    existingItem.streaming = streaming;
+    existingItem.events = [...(existingItem.events ?? []), event].filter(
       Boolean,
     );
-    trailingItem.messages = [...(trailingItem.messages ?? []), message].filter(
+    existingItem.messages = [...(existingItem.messages ?? []), message].filter(
       Boolean,
     );
     syncAssistantRunCollections(assistantRun);
@@ -591,6 +592,26 @@ function appendTextSection(
     messages: message ? [message] : [],
   });
   syncAssistantRunCollections(assistantRun);
+}
+
+function mergeableTextSection(assistantRun, type) {
+  const lastMatchingIndex = assistantRun.items.findLastIndex(
+    (item) => item.type === type,
+  );
+  if (lastMatchingIndex < 0) {
+    return null;
+  }
+
+  const lastMatchingItem = assistantRun.items[lastMatchingIndex];
+  const interveningItems = assistantRun.items.slice(lastMatchingIndex + 1);
+  if (interveningItems.length === 0) {
+    return lastMatchingItem;
+  }
+
+  const onlyPendingToolRows = interveningItems.every(
+    (item) => item.type === 'tool_call' && !item.resultEvent,
+  );
+  return onlyPendingToolRows ? lastMatchingItem : null;
 }
 
 function appendToolDelta(assistantRun, event) {
@@ -697,13 +718,6 @@ function syncAssistantRunCollections(assistantRun) {
   );
 }
 
-function removeStreamingSections(assistantRun, type) {
-  assistantRun.items = assistantRun.items.filter(
-    (item) => item.type !== type || !item.streaming,
-  );
-  syncAssistantRunCollections(assistantRun);
-}
-
 function pushActiveAssistantRun(timelineItems, assistantRun) {
   if (!assistantRun) {
     return;
@@ -746,6 +760,16 @@ function compareRunEvents(left, right) {
 
 function compareTimelineChildren(left, right) {
   return (left.sequence ?? 0) - (right.sequence ?? 0);
+}
+
+function firstSeenSequence(existingSequence, candidateSequence) {
+  if (!Number.isFinite(existingSequence)) {
+    return candidateSequence;
+  }
+  if (!Number.isFinite(candidateSequence)) {
+    return existingSequence;
+  }
+  return Math.min(existingSequence, candidateSequence);
 }
 
 function hasToolCalls(message) {

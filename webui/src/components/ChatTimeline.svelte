@@ -16,6 +16,7 @@
 
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
+  let reasoningDisclosureState = $state({});
   let timelineSignature = $derived(
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
@@ -43,6 +44,14 @@
         .join('~')}`;
     }
     return item.id;
+  }
+
+  function isReasoningOpen(id) {
+    return Boolean(reasoningDisclosureState[id]);
+  }
+
+  function setReasoningOpen(id, isOpen) {
+    reasoningDisclosureState[id] = isOpen;
   }
 
   const isUserItem = (item) =>
@@ -692,6 +701,31 @@
   </div>
 {/snippet}
 
+{#snippet reasoningSummary(isStreaming = false, isOpen = false)}
+  <summary class="reasoning-header">
+    <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+      />
+      <path d="M6 13h4" />
+    </svg>
+    <span>{t('chat.event.thinking', 'Thinking').toUpperCase()}</span>
+    {#if isStreaming}
+      <span class="streaming-caret" aria-hidden="true"></span>
+    {/if}
+    <svg
+      class="r-chevron"
+      viewBox="0 0 16 16"
+      width="10"
+      height="10"
+      style:transform={isOpen ? 'rotate(180deg)' : 'none'}
+      aria-hidden="true"
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  </summary>
+{/snippet}
+
 <section class="messages" bind:this={scrollContainer} aria-live="polite">
   <div class="messages__content">
     {#if timelineItems.length === 0}
@@ -727,24 +761,13 @@
             </div>
             <div class="msg-content">
               {#if item.streamingItem.type === 'reasoning'}
-                <details class="reasoning-block streaming-reasoning">
-                  <summary class="reasoning-header">
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path
-                        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-                      />
-                      <path d="M6 13h4" />
-                    </svg>
-                    {t('chat.event.thinking', 'Thinking').toUpperCase()}
-                    <span class="streaming-caret" aria-hidden="true"></span>
-                    <svg
-                      class="r-chevron"
-                      viewBox="0 0 16 16"
-                      aria-hidden="true"
-                    >
-                      <path d="M4 6l4 4 4-4" />
-                    </svg>
-                  </summary>
+                <details
+                  class="reasoning-block streaming-reasoning"
+                  open={isReasoningOpen(item.id)}
+                  ontoggle={(event) =>
+                    setReasoningOpen(item.id, event.currentTarget.open)}
+                >
+                  {@render reasoningSummary(true, isReasoningOpen(item.id))}
                   <div class="reasoning-body">{item.streamingItem.content}</div>
                 </details>
               {:else if item.streamingItem.type === 'tool_call'}
@@ -802,26 +825,16 @@
             <div class="msg-content assistant-run-content">
               {#each visibleRunChildren(item) as child (child.id)}
                 {#if child.type === 'reasoning'}
-                  <details class="reasoning-block">
-                    <summary class="reasoning-header">
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path
-                          d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-                        />
-                        <path d="M6 13h4" />
-                      </svg>
-                      {t('chat.event.thinking', 'Thinking').toUpperCase()}
-                      {#if child.streaming}
-                        <span class="streaming-caret" aria-hidden="true"></span>
-                      {/if}
-                      <svg
-                        class="r-chevron"
-                        viewBox="0 0 16 16"
-                        aria-hidden="true"
-                      >
-                        <path d="M4 6l4 4 4-4" />
-                      </svg>
-                    </summary>
+                  <details
+                    class="reasoning-block"
+                    open={isReasoningOpen(child.id)}
+                    ontoggle={(event) =>
+                      setReasoningOpen(child.id, event.currentTarget.open)}
+                  >
+                    {@render reasoningSummary(
+                      Boolean(child.streaming),
+                      isReasoningOpen(child.id),
+                    )}
                     <div class="reasoning-body">{child.content}</div>
                   </details>
                 {:else if child.type === 'tool_call'}
@@ -887,23 +900,13 @@
             </div>
             <div class="msg-content">
               {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
-                <details class="reasoning-block">
-                  <summary class="reasoning-header">
-                    <svg viewBox="0 0 16 16" aria-hidden="true">
-                      <path
-                        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-                      />
-                      <path d="M6 13h4" />
-                    </svg>
-                    {t('chat.event.thinking', 'Thinking').toUpperCase()}
-                    <svg
-                      class="r-chevron"
-                      viewBox="0 0 16 16"
-                      aria-hidden="true"
-                    >
-                      <path d="M4 6l4 4 4-4" />
-                    </svg>
-                  </summary>
+                <details
+                  class="reasoning-block"
+                  open={isReasoningOpen(item.id)}
+                  ontoggle={(event) =>
+                    setReasoningOpen(item.id, event.currentTarget.open)}
+                >
+                  {@render reasoningSummary(false, isReasoningOpen(item.id))}
                   <div class="reasoning-body">{item.message.reasoning}</div>
                 </details>
               {/if}
@@ -983,23 +986,13 @@
               </div>
               <div class="msg-content">
                 {#if item.event.type === 'reasoning'}
-                  <details class="reasoning-block">
-                    <summary class="reasoning-header">
-                      <svg viewBox="0 0 16 16" aria-hidden="true">
-                        <path
-                          d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
-                        />
-                        <path d="M6 13h4" />
-                      </svg>
-                      {t('chat.event.thinking', 'Thinking').toUpperCase()}
-                      <svg
-                        class="r-chevron"
-                        viewBox="0 0 16 16"
-                        aria-hidden="true"
-                      >
-                        <path d="M4 6l4 4 4-4" />
-                      </svg>
-                    </summary>
+                  <details
+                    class="reasoning-block"
+                    open={isReasoningOpen(item.id)}
+                    ontoggle={(event) =>
+                      setReasoningOpen(item.id, event.currentTarget.open)}
+                  >
+                    {@render reasoningSummary(false, isReasoningOpen(item.id))}
                     <div class="reasoning-body">
                       {textFromEvent(item.event)}
                     </div>
@@ -1056,6 +1049,10 @@
     max-width: 100%;
   }
 
+  .reasoning-block {
+    align-self: flex-start;
+  }
+
   .reasoning-block summary,
   .tool-event summary {
     cursor: pointer;
@@ -1067,10 +1064,47 @@
     display: none;
   }
 
-  .reasoning-header svg:first-child {
+  .reasoning-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 2px 0;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    user-select: none;
+  }
+
+  .reasoning-header:hover {
+    color: var(--text-hi);
+  }
+
+  .reasoning-icon {
     width: 10px;
     height: 10px;
+    flex-shrink: 0;
     opacity: 0.4;
+  }
+
+  .r-chevron {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    margin-left: 4px;
+    opacity: 0.4;
+    transform-origin: center;
+    transition: transform 0.2s;
+  }
+
+  .reasoning-body {
+    display: none;
+    margin-top: 4px;
+    border-left: 2px solid var(--border-2);
+    padding: 6px 0 2px 16px;
+    color: var(--text-med);
+    font-size: 13px;
+    font-style: italic;
+    line-height: 1.6;
   }
 
   .reasoning-block[open] .reasoning-body,
