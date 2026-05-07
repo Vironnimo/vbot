@@ -27,10 +27,6 @@ READ_NEW_TOOL_PARAMETERS: JsonObject = {
             "type": "number",
             "description": "Maximum number of lines to read.",
         },
-        "description": {
-            "type": "string",
-            "description": "Brief description of what this tool call is doing",
-        },
     },
     "required": ["path"],
     "additionalProperties": False,
@@ -39,7 +35,7 @@ READ_NEW_TOOL_PARAMETERS: JsonObject = {
 DEFAULT_LINE_LIMIT = 2000
 MAX_FILE_BYTES = 50 * 1024
 
-_KNOWN_ARGUMENTS = frozenset({"path", "offset", "limit", "description"})
+_KNOWN_ARGUMENTS = frozenset({"path", "offset", "limit"})
 
 
 def register_read_new_tool(registry: ToolRegistry) -> None:
