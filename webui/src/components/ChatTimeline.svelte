@@ -405,7 +405,22 @@
     return null;
   };
 
-  const preferredToolResultValue = (value) => {
+  const isSuccessfulToolResult = (value) =>
+    isPlainObject(value) &&
+    !preferredToolErrorValue(value) &&
+    (value.ok === true ||
+      value.success === true ||
+      ['success', 'completed'].includes(value.status) ||
+      (value.ok !== false && value.success !== false && !value.status));
+
+  const plainObjectKeys = (value) => Object.keys(value);
+
+  const hasOnlyContentField = (value) =>
+    isPlainObject(value) &&
+    plainObjectKeys(value).length === 1 &&
+    hasMeaningfulToolDetail(value.content);
+
+  const preferredToolResultValue = (value, toolName = '') => {
     const sanitizedValue = sanitizeToolDetailNode(value);
 
     if (!isPlainObject(sanitizedValue)) {
@@ -415,6 +430,22 @@
     const errorValue = preferredToolErrorValue(sanitizedValue);
     if (errorValue !== null) {
       return errorValue;
+    }
+
+    if (
+      isSuccessfulToolResult(sanitizedValue) &&
+      isPlainObject(sanitizedValue.data)
+    ) {
+      if (
+        toolName === 'read' &&
+        hasMeaningfulToolDetail(sanitizedValue.data.content)
+      ) {
+        return sanitizeToolDetailNode(sanitizedValue.data.content);
+      }
+
+      if (hasOnlyContentField(sanitizedValue.data)) {
+        return sanitizeToolDetailNode(sanitizedValue.data.content);
+      }
     }
 
     if (hasMeaningfulToolDetail(sanitizedValue.data)) {
@@ -431,9 +462,12 @@
   const toolNameForRunTool = (tool) =>
     tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
-  const compactToolValue = (value, { preferPayload = false } = {}) => {
+  const compactToolValue = (
+    value,
+    { preferPayload = false, toolName = '' } = {},
+  ) => {
     const processed = preferPayload
-      ? preferredToolResultValue(value)
+      ? preferredToolResultValue(value, toolName)
       : sanitizeToolDetailNode(value);
 
     if (!hasMeaningfulToolDetail(processed)) {
@@ -448,10 +482,40 @@
       return String(processed);
     }
 
+    if (isPlainObject(processed)) {
+      return formatPlainObjectInner(processed);
+    }
+
     try {
       return JSON.stringify(processed);
     } catch {
       return String(processed);
+    }
+  };
+
+  const formatPlainObjectInner = (value) =>
+    Object.entries(value)
+      .filter(([, entryValue]) => hasMeaningfulToolDetail(entryValue))
+      .map(([key, entryValue]) => `${key}: ${formatToolFieldValue(entryValue)}`)
+      .join('\n');
+
+  const formatToolFieldValue = (value) => {
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+
+    if (value === null) {
+      return 'null';
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
     }
   };
 
@@ -592,11 +656,12 @@
   value,
   isError = false,
   preferPayload = false,
+  toolName = '',
 )}
   <div class="teb-row">
     <span class="teb-label">{label}</span>
     <span class:error={isError} class="teb-code"
-      >{compactToolValue(value, { preferPayload })}</span
+      >{compactToolValue(value, { preferPayload, toolName })}</span
     >
   </div>
 {/snippet}
@@ -757,6 +822,7 @@
                         child.result,
                         toolStatus(child) === 'failed',
                         true,
+                        toolNameForRunTool(child),
                       )}
                     </div>
                   </details>
@@ -860,6 +926,7 @@
                         toolResultValueForEvent(item.event),
                         isFailedToolEvent(item.event),
                         true,
+                        toolNameForEvent(item.event),
                       )}
                     {/if}
                   </div>
