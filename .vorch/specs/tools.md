@@ -14,7 +14,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, plus small runtime hooks.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - `ToolCall`: one requested tool invocation with stable id, index, name, and arguments.
-- Built-in `read` tool: flat name `read`; schema includes required `path`, optional `description` (for display labels in the UI, ignored by the handler), and optional line-based `offset`/`limit`; relative paths resolve from `ToolContext.workspace`; absolute paths are allowed.
+- Built-in `read2` tool: flat name `read2`; schema includes required `path`
+  plus optional line-based `offset`/`limit`. It does **not** have a
+  `description` argument. Relative paths resolve from `ToolContext.workspace`;
+  absolute paths are allowed.
 
 ## Interfaces
 
@@ -25,7 +28,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `prompt_definitions(allowed_tools=None) -> list[dict]` — name and description only.
 - `dispatch(context, name, arguments, allowed_tools=None) -> dict` — executes through an async interface and returns a result envelope.
 - `ToolExecutor.execute_many(...) -> list[ToolExecutionResult]` — executes sibling tool calls concurrently, applies per-run/global concurrency limits, and returns terminal results in original tool-call order.
-- `register_builtin_tools(registry) -> None` — registers built-in host tools such as `read`.
+- `register_builtin_tools(registry) -> None` — registers legacy built-in host tools.
+- `register_read2_tool(registry) -> None` — registers the vControl-derived `read2` tool.
 
 ## Conventions
 
@@ -35,8 +39,21 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - Provider-visible definitions include only `name`, `description`, and `parameters`; handlers and runtime context are internal.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
 - Tool execution failures are represented as failure envelopes where possible.
-- `read` decodes text as UTF-8 with replacement, returns plain content without injected line numbers, and reports expected file/argument errors as failure envelopes.
-- The optional `description` argument on `read` (and future tools) is a display-only parameter for the UI — handlers ignore it, and the frontend uses it as a human-readable label for the tool-call summary line.
+- `read2` is the authoritative read-like tool for new work. It was copied from
+  vControl and then adapted only for vBot module naming, `ToolContext` path
+  resolution, registry metadata/schema, and stable result envelopes.
+- Do not infer `read2` behavior from `core/tools/read.py`, `core/tools/read_new.py`,
+  or older documentation. Those sources are stale for `read2` decisions.
+- `read2` schemas must never contain a provider/tool parameter named
+  `description`. A tool's metadata description is separate from model-supplied
+  arguments. Display labels are not a read-tool argument.
+- `read2` accepts exactly `path`, `offset`, and `limit`; `additionalProperties`
+  is false. `path` is required. `offset` and `limit` are positive 1-indexed
+  line controls when supplied.
+- `read2` decodes file bytes as UTF-8 with replacement, returns content under
+  `data.content`, reports the resolved file path under `data.path`, truncates
+  output to the built-in line/byte limits, and reports expected file/argument
+  errors as failure envelopes.
 
 ## Constraints & Gotchas
 

@@ -143,7 +143,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     """Runtime.start() loads Phase 2 services alongside registries."""
     assert runtime.storage.data_dir.exists()
     assert runtime.agents.data_dir == runtime.storage.data_dir
-    assert [tool.name for tool in runtime.tools.list_tools()] == ["read"]
+    assert [tool.name for tool in runtime.tools.list_tools()] == ["read", "read2"]
     assert runtime.skills.list_all() == []
     assert runtime.chat_sessions.sessions_dir("coder") == (
         runtime.storage.data_dir / "agents" / "coder" / "sessions"

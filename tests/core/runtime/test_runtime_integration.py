@@ -362,8 +362,11 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "offset": {"type": "integer"},
-                    "limit": {"type": "integer"},
+                    "offset": {
+                        "type": "number",
+                        "description": "1-indexed line number to start reading from.",
+                    },
+                    "limit": {"type": "number"},
                     "description": {
                         "type": "string",
                         "description": "Brief description of what this tool call is doing",
