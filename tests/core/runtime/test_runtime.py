@@ -122,6 +122,10 @@ def test_read_provider_definition_exposes_model_visible_metadata_only(config: Co
                     "path": {"type": "string"},
                     "offset": {"type": "integer"},
                     "limit": {"type": "integer"},
+                    "description": {
+                        "type": "string",
+                        "description": "Brief description of what this tool call is doing",
+                    },
                 },
                 "required": ["path"],
                 "additionalProperties": False,
