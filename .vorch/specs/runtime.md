@@ -23,7 +23,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `providers` / `models` — provider and model registries.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; currently includes `edit`, `read`, and `write`.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; currently includes `edit`, `glob`, `grep`, `read`, and `write`.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
