@@ -34,7 +34,7 @@ describe('ChatTimeline', () => {
     document.body.innerHTML = '';
   });
 
-  it('renders assistant runs with tool arguments without crashing during initialization', () => {
+  it('renders compact tool details and hides internal result fields', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -64,7 +64,16 @@ describe('ChatTimeline', () => {
           index: 0,
           name: 'read_file',
         },
-        result: { ok: true, content: 'A' },
+        result: {
+          ok: true,
+          data: {
+            content: 'A',
+            lines: 1,
+          },
+          artifacts: {
+            stdout_path: '/tmp/internal.json',
+          },
+        },
       },
     });
     appendRunEvent(sessionState, {
@@ -89,6 +98,20 @@ describe('ChatTimeline', () => {
 
     expect(document.body.textContent).toContain('read_file');
     expect(document.body.textContent).toContain('Done');
-    expect(document.body.textContent).toContain('"path": "a.txt"');
+    expect(document.body.textContent).toContain('path');
+    expect(document.body.textContent).toContain('a.txt');
+    expect(document.body.textContent).toContain('content');
+    expect(document.body.textContent).toContain('A');
+    expect(document.body.textContent).toContain('lines');
+    expect(document.body.textContent).toContain('1');
+    expect(document.body.textContent).not.toContain('artifacts');
+    expect(document.body.textContent).not.toContain('stdout_path');
+
+    const toolDetailRows = document.querySelectorAll(
+      '.tool-event-body .teb-row',
+    );
+    expect(toolDetailRows).toHaveLength(2);
+    expect(toolDetailRows[0].textContent).toContain('Args');
+    expect(toolDetailRows[1].textContent).toContain('Result');
   });
 });

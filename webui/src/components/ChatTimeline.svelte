@@ -245,6 +245,16 @@
 
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
+  const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts']);
+  const TOOL_ERROR_DETAIL_KEYS = [
+    'error',
+    'message',
+    'code',
+    'details',
+    'status',
+    'type',
+  ];
+
   const toolArgumentSummary = (tool) => {
     const argumentsValue = toolArguments(tool);
     if (argumentsValue === undefined || argumentsValue === null) {
@@ -253,31 +263,230 @@
     return `(${formatJson(argumentsValue)})`;
   };
 
-  const toolDetailValue = (value) => {
-    if (value === undefined || value === null || value === '') {
-      return t('chat.toolNoData', '—');
+  const isPlainObject = (value) =>
+    Object.prototype.toString.call(value) === '[object Object]';
+
+  const parseJsonValue = (value) => {
+    if (typeof value !== 'string') {
+      return value;
     }
-    if (typeof value === 'string') {
-      try {
-        return JSON.stringify(JSON.parse(value), null, 2);
-      } catch {
-        return value;
-      }
-    }
+
     try {
-      return JSON.stringify(value, null, 2);
+      return JSON.parse(value);
     } catch {
-      return String(value);
+      return value;
     }
   };
+
+  const sanitizeToolDetailNode = (value) => {
+    const parsedValue = parseJsonValue(value);
+
+    if (Array.isArray(parsedValue)) {
+      return parsedValue
+        .map((entry) => sanitizeToolDetailNode(entry))
+        .filter((entry) => entry !== undefined);
+    }
+
+    if (!isPlainObject(parsedValue)) {
+      return parsedValue;
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsedValue).flatMap(([key, entryValue]) => {
+        if (TOOL_DETAIL_HIDDEN_KEYS.has(key) || entryValue === undefined) {
+          return [];
+        }
+        return [[key, sanitizeToolDetailNode(entryValue)]];
+      }),
+    );
+  };
+
+  const hasMeaningfulToolDetail = (value) => {
+    if (value === undefined || value === null || value === '') {
+      return false;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    if (isPlainObject(value)) {
+      return Object.keys(value).length > 0;
+    }
+    return true;
+  };
+
+  const preferredToolErrorValue = (value) => {
+    if (!isPlainObject(value)) {
+      return null;
+    }
+
+    if (hasMeaningfulToolDetail(value.error)) {
+      const errorValue = sanitizeToolDetailNode(value.error);
+      if (isPlainObject(errorValue)) {
+        return errorValue;
+      }
+
+      const errorDetails = TOOL_ERROR_DETAIL_KEYS.reduce((details, key) => {
+        const detailValue =
+          key === 'error' ? errorValue : sanitizeToolDetailNode(value[key]);
+        if (hasMeaningfulToolDetail(detailValue)) {
+          details[key] = detailValue;
+        }
+        return details;
+      }, {});
+
+      return Object.keys(errorDetails).length > 1 ? errorDetails : errorValue;
+    }
+
+    if (
+      value.ok === false ||
+      value.success === false ||
+      ['error', 'failed'].includes(value.status)
+    ) {
+      const errorDetails = TOOL_ERROR_DETAIL_KEYS.reduce((details, key) => {
+        const detailValue = sanitizeToolDetailNode(value[key]);
+        if (hasMeaningfulToolDetail(detailValue)) {
+          details[key] = detailValue;
+        }
+        return details;
+      }, {});
+
+      return Object.keys(errorDetails).length > 0 ? errorDetails : value;
+    }
+
+    return null;
+  };
+
+  const preferredToolResultValue = (value) => {
+    const sanitizedValue = sanitizeToolDetailNode(value);
+
+    if (!isPlainObject(sanitizedValue)) {
+      return sanitizedValue;
+    }
+
+    const errorValue = preferredToolErrorValue(sanitizedValue);
+    if (errorValue !== null) {
+      return errorValue;
+    }
+
+    if (hasMeaningfulToolDetail(sanitizedValue.data)) {
+      return sanitizeToolDetailNode(sanitizedValue.data);
+    }
+
+    if (hasMeaningfulToolDetail(sanitizedValue.result)) {
+      return sanitizeToolDetailNode(sanitizedValue.result);
+    }
+
+    return sanitizedValue;
+  };
+
+  const detailTextValue = (value) => {
+    const normalizedValue = sanitizeToolDetailNode(value);
+
+    if (!hasMeaningfulToolDetail(normalizedValue)) {
+      return t('chat.toolNoData', '—');
+    }
+
+    if (typeof normalizedValue === 'string') {
+      return normalizedValue;
+    }
+
+    if (
+      typeof normalizedValue === 'number' ||
+      typeof normalizedValue === 'boolean'
+    ) {
+      return String(normalizedValue);
+    }
+
+    try {
+      return JSON.stringify(normalizedValue, null, 2);
+    } catch {
+      return String(normalizedValue);
+    }
+  };
+
+  const isMultilineDetailValue = (value) => {
+    const normalizedValue = sanitizeToolDetailNode(value);
+    if (typeof normalizedValue === 'string') {
+      return normalizedValue.includes('\n');
+    }
+    return Array.isArray(normalizedValue) || isPlainObject(normalizedValue);
+  };
+
+  const detailEntriesFromValue = (value) => {
+    if (!hasMeaningfulToolDetail(value)) {
+      return [
+        {
+          key: '',
+          value: t('chat.toolNoData', '—'),
+          multiline: false,
+        },
+      ];
+    }
+
+    if (Array.isArray(value)) {
+      return [
+        {
+          key: '',
+          value: detailTextValue(value),
+          multiline: true,
+        },
+      ];
+    }
+
+    if (isPlainObject(value)) {
+      const entries = Object.entries(value);
+      if (entries.length === 0) {
+        return [
+          {
+            key: '',
+            value: t('chat.toolNoData', '—'),
+            multiline: false,
+          },
+        ];
+      }
+
+      return entries.map(([key, entryValue]) => ({
+        key,
+        value: detailTextValue(entryValue),
+        multiline: isMultilineDetailValue(entryValue),
+      }));
+    }
+
+    return [
+      {
+        key: '',
+        value: detailTextValue(value),
+        multiline: isMultilineDetailValue(value),
+      },
+    ];
+  };
+
+  const toolDetailEntries = (value, { preferPayload = false } = {}) =>
+    detailEntriesFromValue(
+      preferPayload
+        ? preferredToolResultValue(value)
+        : sanitizeToolDetailNode(value),
+    );
+
+  const toolArgumentDetailEntries = (tool) =>
+    toolDetailEntries(toolArguments(tool));
+
+  const toolResultDetailEntries = (tool) =>
+    toolDetailEntries(tool.result, { preferPayload: true });
 
   const toolNameForRunTool = (tool) =>
     tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
-  const toolResultForEvent = (event) => {
-    const message = messageFromEvent(event);
-    return message?.content ?? '';
-  };
+  const toolResultValueForEvent = (event) =>
+    event.payload?.result ??
+    event.payload?.error ??
+    messageFromEvent(event)?.content;
+
+  const toolArgumentDetailEntriesForEvent = (event) =>
+    toolDetailEntries(toolCallFromEvent(event)?.arguments);
+
+  const toolResultDetailEntriesForEvent = (event) =>
+    toolDetailEntries(toolResultValueForEvent(event), { preferPayload: true });
 
   function formatJson(value) {
     if (typeof value === 'string') {
@@ -405,6 +614,26 @@
   const streamingToolName = (streamingItem) =>
     streamingItem.name || t('chat.toolPendingName', 'tool');
 </script>
+
+{#snippet toolDetailSection(label, entries, isError = false)}
+  <div class="teb-row">
+    <span class="teb-label">{label}</span>
+    <div class="teb-entry-list">
+      {#each entries as entry, index (`${entry.key || 'value'}-${index}`)}
+        <div class:teb-entry--value-only={!entry.key} class="teb-entry">
+          {#if entry.key}
+            <span class="teb-entry-key">{entry.key}</span>
+          {/if}
+          <span
+            class:error={isError}
+            class:multiline={entry.multiline}
+            class="teb-code teb-entry-value">{entry.value}</span
+          >
+        </div>
+      {/each}
+    </div>
+  </div>
+{/snippet}
 
 <section class="messages" bind:this={scrollContainer} aria-live="polite">
   <div class="messages__content">
@@ -562,24 +791,15 @@
                       >
                     </summary>
                     <div class="tool-event-body">
-                      <div class="teb-row">
-                        <span class="teb-label"
-                          >{t('chat.toolArgs', 'Args')}</span
-                        >
-                        <span class="teb-code"
-                          >{toolDetailValue(toolArguments(child))}</span
-                        >
-                      </div>
-                      <div class="teb-row">
-                        <span class="teb-label"
-                          >{t('chat.toolResultLabel', 'Result')}</span
-                        >
-                        <span
-                          class:error={toolStatus(child) === 'failed'}
-                          class="teb-code result"
-                          >{toolDetailValue(child.result)}</span
-                        >
-                      </div>
+                      {@render toolDetailSection(
+                        t('chat.toolArgs', 'Args'),
+                        toolArgumentDetailEntries(child),
+                      )}
+                      {@render toolDetailSection(
+                        t('chat.toolResultLabel', 'Result'),
+                        toolResultDetailEntries(child),
+                        toolStatus(child) === 'failed',
+                      )}
                     </div>
                   </details>
                 {:else if child.type === 'assistant_output'}
@@ -684,27 +904,16 @@
                     </span>
                   </summary>
                   <div class="tool-event-body">
-                    {#if toolArgumentForEvent(item.event)}
-                      <div class="teb-row">
-                        <span class="teb-label"
-                          >{t('chat.toolArgs', 'Args')}</span
-                        >
-                        <span class="teb-code"
-                          >{toolArgumentForEvent(item.event)}</span
-                        >
-                      </div>
-                    {/if}
-                    {#if toolResultForEvent(item.event)}
-                      <div class="teb-row">
-                        <span class="teb-label"
-                          >{t('chat.toolResultLabel', 'Result')}</span
-                        >
-                        <span
-                          class:error={isFailedToolEvent(item.event)}
-                          class="teb-code result"
-                          >{toolResultForEvent(item.event)}</span
-                        >
-                      </div>
+                    {@render toolDetailSection(
+                      t('chat.toolArgs', 'Args'),
+                      toolArgumentDetailEntriesForEvent(item.event),
+                    )}
+                    {#if toolResultValueForEvent(item.event)}
+                      {@render toolDetailSection(
+                        t('chat.toolResultLabel', 'Result'),
+                        toolResultDetailEntriesForEvent(item.event),
+                        isFailedToolEvent(item.event),
+                      )}
                     {/if}
                   </div>
                 </details>
