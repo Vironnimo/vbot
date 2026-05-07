@@ -515,6 +515,140 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).not.toContain('{"path":"config.yaml"');
   });
 
+  it('uses glob pattern for summary and successful envelope content for result', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-glob-label',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-glob-label',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-glob-label',
+          index: 0,
+          name: 'glob',
+          arguments: {
+            pattern: '**/*.md',
+            path: 'docs',
+            description: 'model supplied glob label',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-glob-label',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-glob-label',
+          index: 0,
+          name: 'glob',
+        },
+        result: {
+          ok: true,
+          data: { content: 'README.md\nplans/current.md' },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('glob');
+    expect(summaryLine.textContent).toContain('**/*.md');
+    expect(summaryLine.textContent).not.toContain('model supplied glob label');
+    expect(summaryLine.textContent).not.toContain('docs');
+
+    const resultRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Result',
+    );
+    expect(resultRow.querySelector('.teb-code').textContent).toBe(
+      'README.md\nplans/current.md',
+    );
+  });
+
+  it('uses grep pattern plus path for summary and failed style for error envelope', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-grep-failed',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-grep-failed',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-grep-failed',
+          index: 0,
+          name: 'grep',
+          arguments: {
+            pattern: 'TODO',
+            path: 'src',
+            description: 'model supplied grep label',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-grep-failed',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-grep-failed',
+          index: 0,
+          name: 'grep',
+        },
+        result: {
+          ok: false,
+          error: {
+            code: 'invalid_regex',
+            message: 'Invalid regular expression',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('grep');
+    expect(summaryLine.textContent).toContain('TODO · src');
+    expect(summaryLine.textContent).not.toContain('model supplied grep label');
+
+    const failedDot = summaryLine.querySelector('.te-dot.error');
+    expect(failedDot).toBeTruthy();
+
+    const resultRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Result',
+    );
+    const resultCode = resultRow.querySelector('.teb-code.error');
+    expect(resultCode).toBeTruthy();
+    expect(resultCode.textContent).toContain('invalid_regex');
+    expect(resultCode.textContent).toContain('Invalid regular expression');
+  });
+
   // ---------------------------------------------------------------------------
   // compactToolValue unit tests (tested via rendered .teb-code elements)
   // ---------------------------------------------------------------------------
