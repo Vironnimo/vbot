@@ -71,9 +71,15 @@ describe('i18n t()', () => {
       'app.serverStatus',
       'app.statusPlaceholder',
       'chat.tokenBadge',
+      'chat.runIterations',
+      'chat.runDurationSeconds',
       'chat.attachPlaceholder',
       'chat.toolArgs',
       'chat.toolResultLabel',
+      'chat.toolSucceeded',
+      'chat.toolFailed',
+      'chat.toolPreparingArguments',
+      'chat.toolArgumentsHidden',
       'status.connected',
       'status.activeRun',
       'status.notReachable',
@@ -83,6 +89,10 @@ describe('i18n t()', () => {
     expectCatalogKeys(requiredKeys);
     expect(t('app.statusPlaceholder')).toContain('placeholder');
     expect(t('app.serverStatus')).not.toMatch(/server:\d+/u);
+    expect(t('chat.runIterations', undefined, { count: 2 })).toBe('2 iter');
+    expect(t('chat.runDurationSeconds', undefined, { seconds: '1.5' })).toBe(
+      '1.5s',
+    );
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });
 

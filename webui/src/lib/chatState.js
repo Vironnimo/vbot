@@ -226,30 +226,12 @@ export function visibleTimelineItems(sessionState) {
   if (!sessionState) {
     return [];
   }
-  const liveItems = [
-    ...sessionState.runEvents
-      .filter((event) => shouldShowRunEvent(event))
-      .map((event) => ({
-        sequence: event.sequence ?? 0,
-        id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
-        type: 'event',
-        event,
-      })),
-    ...(sessionState.streamingItems ?? []).map((streamingItem) => ({
-      sequence: streamingItem.sequence ?? 0,
-      id: `streaming-${streamingItem.id}`,
-      type: 'streaming',
-      streamingItem,
-    })),
-  ].sort((left, right) => left.sequence - right.sequence);
 
   return [
-    ...sessionState.messages.map((message) => ({
-      id: message.id ?? `history-${message.role}-${message.timestamp}`,
-      type: 'message',
-      message,
-    })),
-    ...liveItems.map((item) => stripTimelineSequence(item)),
+    ...historyTimelineItems(sessionState.messages),
+    ...liveTimelineItems(sessionState.runEvents).map((item) =>
+      stripTimelineSequence(item),
+    ),
   ];
 }
 
@@ -282,6 +264,558 @@ function terminalStatus(eventType) {
     return CHAT_STATUS_CANCELLED;
   }
   return CHAT_STATUS_COMPLETED;
+}
+
+function historyTimelineItems(messages) {
+  const timelineItems = [];
+  let activeAssistantRun = null;
+
+  for (const message of messages ?? []) {
+    if (message?.role === 'user') {
+      pushActiveAssistantRun(timelineItems, activeAssistantRun);
+      activeAssistantRun = null;
+      timelineItems.push(historyMessageItem(message));
+      continue;
+    }
+
+    if (message?.role === 'assistant') {
+      if (!activeAssistantRun && hasToolCalls(message)) {
+        activeAssistantRun = createAssistantRunItem({
+          id: `history-run-${message.id ?? message.timestamp ?? timelineItems.length}`,
+          runId: null,
+          source: 'history',
+          sequence: timelineItems.length,
+          timestamp: message.timestamp,
+        });
+      }
+
+      if (activeAssistantRun) {
+        appendHistoryAssistantMessage(activeAssistantRun, message);
+        continue;
+      }
+
+      timelineItems.push(historyMessageItem(message));
+      continue;
+    }
+
+    if (message?.role === 'tool' && activeAssistantRun) {
+      appendHistoryToolResult(activeAssistantRun, message);
+      continue;
+    }
+
+    pushActiveAssistantRun(timelineItems, activeAssistantRun);
+    activeAssistantRun = null;
+    timelineItems.push(historyMessageItem(message));
+  }
+
+  pushActiveAssistantRun(timelineItems, activeAssistantRun);
+  return timelineItems;
+}
+
+function liveTimelineItems(runEvents) {
+  const runGroups = new Map();
+  const timelineEntries = [];
+
+  for (const [arrivalIndex, event] of (runEvents ?? []).entries()) {
+    if (isAssistantRunEvent(event)) {
+      const runGroup = ensureLiveRunGroup(
+        runGroups,
+        timelineEntries,
+        event,
+        arrivalIndex,
+      );
+      runGroup.events.push(event);
+      continue;
+    }
+
+    if (shouldShowStandaloneRunEvent(event)) {
+      const eventItem = createStandaloneRunEventItem(event);
+      if (event.run_id) {
+        const runGroup = ensureLiveRunGroup(
+          runGroups,
+          timelineEntries,
+          event,
+          arrivalIndex,
+        );
+        runGroup.userItem = eventItem;
+        continue;
+      }
+
+      timelineEntries.push({
+        kind: 'standalone',
+        order: arrivalIndex,
+        item: eventItem,
+      });
+    }
+  }
+
+  return timelineEntries
+    .sort((left, right) => left.order - right.order)
+    .flatMap((entry) => liveTimelineEntryItems(entry));
+}
+
+function ensureLiveRunGroup(runGroups, timelineEntries, event, arrivalIndex) {
+  const runKey = event.run_id ?? 'run';
+  if (runGroups.has(runKey)) {
+    return runGroups.get(runKey);
+  }
+
+  const runGroup = {
+    kind: 'run',
+    order: arrivalIndex,
+    runKey,
+    events: [],
+    userItem: null,
+  };
+  runGroups.set(runKey, runGroup);
+  timelineEntries.push(runGroup);
+  return runGroup;
+}
+
+function liveTimelineEntryItems(entry) {
+  if (entry.kind === 'standalone') {
+    return [entry.item];
+  }
+
+  const assistantRun = buildLiveAssistantRunItem(entry.runKey, entry.events);
+  return [entry.userItem, assistantRun].filter(Boolean);
+}
+
+function createStandaloneRunEventItem(event) {
+  return {
+    id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
+    type: 'event',
+    event,
+  };
+}
+
+function buildLiveAssistantRunItem(runKey, events) {
+  const orderedEvents = [...events].sort(compareRunEvents);
+  const firstEvent = orderedEvents[0] ?? {};
+  const assistantRun = createAssistantRunItem({
+    id: `assistant-run-${runKey}`,
+    runId: firstEvent.run_id,
+    source: 'live',
+    sequence: firstEvent.sequence ?? 0,
+    timestamp: firstEvent.timestamp,
+  });
+  assistantRun.events = orderedEvents;
+
+  for (const event of orderedEvents) {
+    appendLiveRunEvent(assistantRun, event);
+  }
+
+  syncAssistantRunCollections(assistantRun);
+  return assistantRun;
+}
+
+function createAssistantRunItem({ id, runId, source, sequence, timestamp }) {
+  return {
+    id,
+    type: 'assistant_run',
+    source,
+    runId,
+    run_id: runId,
+    sequence,
+    timestamp,
+    startTimestamp: timestamp,
+    endTimestamp: null,
+    status: CHAT_STATUS_RUNNING,
+    items: [],
+    reasoning: [],
+    outputs: [],
+    tools: [],
+    events: [],
+  };
+}
+
+function appendLiveRunEvent(assistantRun, event) {
+  if (event.type === 'run_started') {
+    assistantRun.startTimestamp =
+      event.timestamp ?? assistantRun.startTimestamp;
+    assistantRun.status = event.payload?.status ?? CHAT_STATUS_RUNNING;
+    return;
+  }
+
+  if (TERMINAL_RUN_EVENTS.has(event.type)) {
+    assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
+    assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
+    assistantRun.terminalEvent = event;
+    return;
+  }
+
+  if (event.type === RUN_EVENT_REASONING_DELTA) {
+    appendTextSection(assistantRun, {
+      type: 'reasoning',
+      content: event.payload?.reasoning_delta,
+      event,
+      streaming: true,
+    });
+    return;
+  }
+
+  if (event.type === 'reasoning') {
+    removeStreamingSections(assistantRun, 'reasoning');
+    appendTextSection(assistantRun, {
+      type: 'reasoning',
+      content: textFromRunEventMessage(event, 'reasoning'),
+      event,
+      streaming: false,
+    });
+    return;
+  }
+
+  if (event.type === RUN_EVENT_ASSISTANT_OUTPUT_DELTA) {
+    appendTextSection(assistantRun, {
+      type: 'assistant_output',
+      content: event.payload?.content_delta,
+      event,
+      streaming: true,
+    });
+    return;
+  }
+
+  if (event.type === 'assistant_output') {
+    removeStreamingSections(assistantRun, 'assistant_output');
+    appendTextSection(assistantRun, {
+      type: 'assistant_output',
+      content: textFromRunEventMessage(event, 'content'),
+      event,
+      streaming: false,
+    });
+    return;
+  }
+
+  if (event.type === RUN_EVENT_TOOL_CALL_DELTA) {
+    appendToolDelta(assistantRun, event);
+    return;
+  }
+
+  if (event.type === 'tool_call_started') {
+    mergeToolStarted(assistantRun, event);
+    return;
+  }
+
+  if (event.type === 'tool_call_result') {
+    mergeToolResult(assistantRun, event);
+  }
+}
+
+function appendHistoryAssistantMessage(assistantRun, message) {
+  if (message.reasoning) {
+    appendTextSection(assistantRun, {
+      type: 'reasoning',
+      content: message.reasoning,
+      message,
+      streaming: false,
+    });
+  }
+
+  for (const [index, toolCall] of (message.tool_calls ?? []).entries()) {
+    mergeToolStarted(assistantRun, {
+      type: 'tool_call_started',
+      sequence: assistantRun.items.length,
+      timestamp: message.timestamp,
+      payload: {
+        tool_call: {
+          index,
+          ...toolCall,
+        },
+      },
+    });
+  }
+
+  if (message.content) {
+    appendTextSection(assistantRun, {
+      type: 'assistant_output',
+      content: message.content,
+      message,
+      streaming: false,
+    });
+  }
+
+  assistantRun.status = CHAT_STATUS_COMPLETED;
+}
+
+function appendHistoryToolResult(assistantRun, message) {
+  mergeToolResult(assistantRun, {
+    type: 'tool_call_result',
+    sequence: assistantRun.items.length,
+    timestamp: message.timestamp,
+    payload: {
+      tool_call: {
+        id: message.tool_call_id,
+        name: message.name,
+      },
+      result: message.content,
+      message,
+    },
+  });
+  assistantRun.status = hasResultFailure(message.content)
+    ? CHAT_STATUS_FAILED
+    : CHAT_STATUS_COMPLETED;
+}
+
+function appendTextSection(
+  assistantRun,
+  { type, content, event = null, message = null, streaming },
+) {
+  if (!content) {
+    return;
+  }
+
+  const sequence = event?.sequence ?? assistantRun.items.length;
+  const trailingItem = assistantRun.items.at(-1);
+  if (trailingItem?.type === type && trailingItem.streaming === streaming) {
+    trailingItem.content += content;
+    trailingItem.sequence = sequence;
+    trailingItem.timestamp = event?.timestamp ?? message?.timestamp;
+    trailingItem.events = [...(trailingItem.events ?? []), event].filter(
+      Boolean,
+    );
+    trailingItem.messages = [...(trailingItem.messages ?? []), message].filter(
+      Boolean,
+    );
+    syncAssistantRunCollections(assistantRun);
+    return;
+  }
+
+  assistantRun.items.push({
+    id: `${type}-${assistantRun.id}-${sequence}`,
+    type,
+    content,
+    sequence,
+    timestamp: event?.timestamp ?? message?.timestamp,
+    streaming,
+    events: event ? [event] : [],
+    messages: message ? [message] : [],
+  });
+  syncAssistantRunCollections(assistantRun);
+}
+
+function appendToolDelta(assistantRun, event) {
+  const payload = event.payload ?? {};
+  const toolKey = toolKeyFromValues(payload.tool_call_id ?? payload.id);
+  const tool = upsertToolRow(assistantRun, toolKey, event, {
+    id: payload.tool_call_id ?? payload.id,
+  });
+  tool.streaming = true;
+  tool.toolCallId = payload.tool_call_id ?? payload.id ?? tool.toolCallId;
+  tool.name = `${tool.name ?? ''}${payload.name_delta ?? ''}`;
+  tool.partialArgumentsText = `${tool.partialArgumentsText ?? ''}${payload.arguments_delta ?? ''}`;
+  tool.status = 'preparing';
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
+function mergeToolStarted(assistantRun, event) {
+  const toolCall = event.payload?.tool_call ?? {};
+  const tool = upsertToolRow(
+    assistantRun,
+    toolKeyFromToolCall(toolCall),
+    event,
+    toolCall,
+  );
+  tool.streaming = false;
+  tool.toolCall = toolCall;
+  tool.toolCallId = toolCall.id ?? tool.toolCallId;
+  tool.index = toolCall.index ?? tool.index;
+  tool.name = toolCall.name ?? tool.name;
+  tool.arguments = toolCall.arguments;
+  tool.partialArgumentsText = null;
+  tool.startedEvent = event;
+  tool.status = tool.resultEvent ? tool.status : CHAT_STATUS_RUNNING;
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
+function mergeToolResult(assistantRun, event) {
+  const toolCall = event.payload?.tool_call ?? {};
+  const tool = upsertToolRow(
+    assistantRun,
+    toolKeyFromToolCall(toolCall),
+    event,
+    toolCall,
+  );
+  tool.toolCall = {
+    ...(tool.toolCall ?? {}),
+    ...toolCall,
+  };
+  tool.toolCallId = toolCall.id ?? tool.toolCallId;
+  tool.index = toolCall.index ?? tool.index;
+  tool.name = toolCall.name ?? tool.name;
+  tool.result = event.payload?.result ?? event.payload?.message?.content;
+  tool.resultEvent = event;
+  tool.status = hasToolResultFailure(event) ? CHAT_STATUS_FAILED : 'success';
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
+function upsertToolRow(assistantRun, key, event, toolCall = {}) {
+  const existingTool = assistantRun.items.find(
+    (item) =>
+      item.type === 'tool_call' &&
+      (item.key === key || toolMatchesCall(item, toolCall)),
+  );
+  if (existingTool) {
+    existingTool.key = moreStableToolKey(existingTool.key, key);
+    return existingTool;
+  }
+
+  const sequence = event?.sequence ?? assistantRun.items.length;
+  const tool = {
+    id: `tool-${assistantRun.id}-${key}`,
+    type: 'tool_call',
+    key,
+    sequence,
+    timestamp: event?.timestamp,
+    status: CHAT_STATUS_RUNNING,
+    name: '',
+    arguments: undefined,
+    partialArgumentsText: null,
+    result: undefined,
+    toolCall: null,
+    startedEvent: null,
+    resultEvent: null,
+    events: [],
+  };
+  assistantRun.items.push(tool);
+  syncAssistantRunCollections(assistantRun);
+  return tool;
+}
+
+function syncAssistantRunCollections(assistantRun) {
+  assistantRun.items.sort(compareTimelineChildren);
+  assistantRun.reasoning = assistantRun.items.filter(
+    (item) => item.type === 'reasoning',
+  );
+  assistantRun.outputs = assistantRun.items.filter(
+    (item) => item.type === 'assistant_output',
+  );
+  assistantRun.tools = assistantRun.items.filter(
+    (item) => item.type === 'tool_call',
+  );
+}
+
+function removeStreamingSections(assistantRun, type) {
+  assistantRun.items = assistantRun.items.filter(
+    (item) => item.type !== type || !item.streaming,
+  );
+  syncAssistantRunCollections(assistantRun);
+}
+
+function pushActiveAssistantRun(timelineItems, assistantRun) {
+  if (!assistantRun) {
+    return;
+  }
+  syncAssistantRunCollections(assistantRun);
+  timelineItems.push(stripTimelineSequence(assistantRun));
+}
+
+function historyMessageItem(message) {
+  return {
+    id: message.id ?? `history-${message.role}-${message.timestamp}`,
+    type: 'message',
+    message,
+  };
+}
+
+function isAssistantRunEvent(event) {
+  return [
+    'run_started',
+    RUN_EVENT_REASONING_DELTA,
+    'reasoning',
+    RUN_EVENT_TOOL_CALL_DELTA,
+    'tool_call_started',
+    'tool_call_result',
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+    'assistant_output',
+    'run_completed',
+    'run_failed',
+    'run_cancelled',
+  ].includes(event?.type);
+}
+
+function shouldShowStandaloneRunEvent(event) {
+  return event?.type === 'user_message_persisted';
+}
+
+function compareRunEvents(left, right) {
+  return (left.sequence ?? 0) - (right.sequence ?? 0);
+}
+
+function compareTimelineChildren(left, right) {
+  return (left.sequence ?? 0) - (right.sequence ?? 0);
+}
+
+function hasToolCalls(message) {
+  return Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
+}
+
+function textFromRunEventMessage(event, key) {
+  const message = event.payload?.message;
+  if (message?.[key]) {
+    return message[key];
+  }
+  return event.payload?.[key] ?? '';
+}
+
+function toolKeyFromToolCall(toolCall) {
+  return toolKeyFromValues(toolCall?.id, toolCall?.index);
+}
+
+function toolKeyFromValues(id, index) {
+  if (id !== undefined && id !== null && id !== '') {
+    return `id-${id}`;
+  }
+  if (index !== undefined && index !== null) {
+    return `index-${index}`;
+  }
+  return 'unknown';
+}
+
+function toolMatchesCall(tool, toolCall) {
+  if (toolCall?.id && tool.toolCallId === toolCall.id) {
+    return true;
+  }
+  return toolCall?.index !== undefined && tool.index === toolCall.index;
+}
+
+function moreStableToolKey(existingKey, candidateKey) {
+  if (candidateKey?.startsWith('id-')) {
+    return candidateKey;
+  }
+  return existingKey;
+}
+
+function hasToolResultFailure(event) {
+  return (
+    Boolean(event.payload?.error) || hasResultFailure(event.payload?.result)
+  );
+}
+
+function hasResultFailure(result) {
+  const normalizedResult = parseResult(result);
+  if (!normalizedResult || typeof normalizedResult !== 'object') {
+    return false;
+  }
+  return Boolean(
+    normalizedResult.error ||
+    normalizedResult.ok === false ||
+    normalizedResult.success === false ||
+    ['error', 'failed'].includes(normalizedResult.status),
+  );
+}
+
+function parseResult(result) {
+  if (typeof result !== 'string') {
+    return result;
+  }
+  try {
+    return JSON.parse(result);
+  } catch {
+    return result;
+  }
 }
 
 function updateStreamingItems(sessionState, event) {
@@ -355,15 +889,6 @@ function appendToolCallStreamingItem(sessionState, event) {
       sequence: event.sequence,
     },
   ];
-}
-
-function shouldShowRunEvent(event) {
-  return ![
-    'run_started',
-    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
-    RUN_EVENT_REASONING_DELTA,
-    RUN_EVENT_TOOL_CALL_DELTA,
-  ].includes(event.type);
 }
 
 function stripTimelineSequence({ sequence: _sequence, ...item }) {

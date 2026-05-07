@@ -87,7 +87,7 @@ def _parse_arguments(arguments: JsonObject) -> tuple[str, int | None, int | None
 
 
 def _parse_non_negative_integer(arguments: JsonObject, name: str) -> int | None | JsonObject:
-    value = arguments.get(name)
+    value: object = arguments.get(name)
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
