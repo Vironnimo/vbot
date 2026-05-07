@@ -14,7 +14,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, plus small runtime hooks.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - `ToolCall`: one requested tool invocation with stable id, index, name, and arguments.
-- Built-in `read` tool: flat name `read`; schema includes required `path` and optional line-based `offset`/`limit` only; relative paths resolve from `ToolContext.workspace`; absolute paths are allowed.
+- Built-in `read` tool: flat name `read`; schema includes required `path`, optional `description` (for display labels in the UI, ignored by the handler), and optional line-based `offset`/`limit`; relative paths resolve from `ToolContext.workspace`; absolute paths are allowed.
 
 ## Interfaces
 
@@ -36,6 +36,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
 - Tool execution failures are represented as failure envelopes where possible.
 - `read` decodes text as UTF-8 with replacement, returns plain content without injected line numbers, and reports expected file/argument errors as failure envelopes.
+- The optional `description` argument on `read` (and future tools) is a display-only parameter for the UI — handlers ignore it, and the frontend uses it as a human-readable label for the tool-call summary line.
 
 ## Constraints & Gotchas
 

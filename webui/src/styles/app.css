@@ -1315,11 +1315,11 @@ textarea::placeholder {
 }
 
 .teb-entry {
-  display: grid;
+  display: flex;
   min-width: 0;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
 }
 
 .teb-entry--value-only {
