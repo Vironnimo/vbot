@@ -176,6 +176,121 @@ describe('ChatTimeline', () => {
     expect(summaryEl.textContent).not.toContain('{"path":"MEMORY.md"}');
   });
 
+  it('uses path label instead of raw JSON for edit tool summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-edit-label',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-edit-label',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-edit-label',
+          index: 0,
+          name: 'edit',
+          arguments: {
+            oldString: 'before',
+            newString: 'after',
+            path: 'notes/plan.md',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-edit-label',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-edit-label',
+          index: 0,
+          name: 'edit',
+        },
+        result: {
+          ok: true,
+          data: { message: 'Updated notes/plan.md' },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('edit');
+    expect(summaryLine.textContent).toContain('notes/plan.md');
+    expect(summaryLine.textContent).not.toContain('before');
+    expect(summaryLine.textContent).not.toContain('oldString');
+    expect(summaryLine.textContent).not.toContain('{"oldString":"before"');
+  });
+
+  it('uses path label instead of raw JSON for write tool summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-write-label',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-write-label',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-write-label',
+          index: 0,
+          name: 'write',
+          arguments: {
+            content: 'draft content',
+            path: 'drafts/output.md',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-write-label',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-write-label',
+          index: 0,
+          name: 'write',
+        },
+        result: {
+          ok: true,
+          data: { message: 'Wrote drafts/output.md' },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('write');
+    expect(summaryLine.textContent).toContain('drafts/output.md');
+    expect(summaryLine.textContent).not.toContain('draft content');
+    expect(summaryLine.textContent).not.toContain('content');
+    expect(summaryLine.textContent).not.toContain('{"content":"draft content"');
+  });
+
   it('prefers description argument over path/command in tool summary', () => {
     const sessionState = ensureSessionState(
       createChatState(),
