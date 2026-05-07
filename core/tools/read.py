@@ -14,6 +14,10 @@ READ_TOOL_PARAMETERS: JsonObject = {
         "path": {"type": "string"},
         "offset": {"type": "integer"},
         "limit": {"type": "integer"},
+        "description": {
+            "type": "string",
+            "description": "Brief description of what this tool call is doing",
+        },
     },
     "required": ["path"],
     "additionalProperties": False,
