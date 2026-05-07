@@ -563,7 +563,7 @@ function appendTextSection(
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
-  const existingItem = assistantRun.items.find((item) => item.type === type);
+  const existingItem = mergeableTextSection(assistantRun, type);
   if (existingItem) {
     existingItem.content = streaming
       ? `${existingItem.content}${content}`
@@ -592,6 +592,26 @@ function appendTextSection(
     messages: message ? [message] : [],
   });
   syncAssistantRunCollections(assistantRun);
+}
+
+function mergeableTextSection(assistantRun, type) {
+  const lastMatchingIndex = assistantRun.items.findLastIndex(
+    (item) => item.type === type,
+  );
+  if (lastMatchingIndex < 0) {
+    return null;
+  }
+
+  const lastMatchingItem = assistantRun.items[lastMatchingIndex];
+  const interveningItems = assistantRun.items.slice(lastMatchingIndex + 1);
+  if (interveningItems.length === 0) {
+    return lastMatchingItem;
+  }
+
+  const onlyPendingToolRows = interveningItems.every(
+    (item) => item.type === 'tool_call' && !item.resultEvent,
+  );
+  return onlyPendingToolRows ? lastMatchingItem : null;
 }
 
 function appendToolDelta(assistantRun, event) {
