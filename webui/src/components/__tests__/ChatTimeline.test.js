@@ -391,6 +391,138 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).not.toContain('{"path":"config.yaml"');
   });
 
+  // ---------------------------------------------------------------------------
+  // compactToolValue unit tests (tested via rendered .teb-code elements)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Mounts a single tool_call_result event and returns the text content of the
+   * Result `.teb-code` element.  `resultValue` is placed verbatim into
+   * payload.result (preferPayload=true path).
+   */
+  function getResultCodeText(resultValue, sessionId) {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      sessionId,
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: `run-${sessionId}`,
+      sequence: 1,
+      payload: {
+        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe', arguments: {} },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: `run-${sessionId}`,
+      sequence: 2,
+      payload: {
+        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe' },
+        result: resultValue,
+      },
+    });
+    const comp = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+    const tebRows = document.querySelectorAll('.teb-row');
+    const resultRow = Array.from(tebRows).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Result',
+    );
+    const text = resultRow?.querySelector('.teb-code')?.textContent ?? '';
+    unmount(comp);
+    document.body.innerHTML = '';
+    return text;
+  }
+
+  /**
+   * Mounts a single tool_call_started event and returns the Args `.teb-code`
+   * text (preferPayload=false path).
+   */
+  function getArgsCodeText(argsValue, sessionId) {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      sessionId,
+    );
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: `run-${sessionId}`,
+      sequence: 1,
+      payload: {
+        tool_call: { id: `call-${sessionId}`, index: 0, name: 'probe', arguments: argsValue },
+      },
+    });
+    const comp = mount(ChatTimeline, {
+      target: document.body,
+      props: { sessionState, agentName: 'Alpha' },
+    });
+    flushSync();
+    const tebRows = document.querySelectorAll('.teb-row');
+    const argsRow = Array.from(tebRows).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    const text = argsRow?.querySelector('.teb-code')?.textContent ?? '';
+    unmount(comp);
+    document.body.innerHTML = '';
+    return text;
+  }
+
+  describe('compactToolValue', () => {
+    it('plain object → compact JSON string (no indentation)', () => {
+      const text = getArgsCodeText({ path: 'file.txt', count: 3 }, 'ctv-obj');
+      expect(text).toBe('{"path":"file.txt","count":3}');
+    });
+
+    it('plain string → returned as-is', () => {
+      const text = getArgsCodeText('just a string', 'ctv-str');
+      expect(text).toBe('just a string');
+    });
+
+    it('null value → returns the no-data placeholder (—)', () => {
+      const text = getResultCodeText(null, 'ctv-null');
+      // i18n default fallback for chat.toolNoData is "—"
+      expect(text).toBe('—');
+    });
+
+    it('undefined value (missing result key) → Args with empty object returns the no-data placeholder (—)', () => {
+      // undefined is equivalent to an empty value; empty object also fails hasMeaningfulToolDetail
+      const text = getArgsCodeText(undefined, 'ctv-undef');
+      expect(text).toBe('—');
+    });
+
+    it('empty object → returns the no-data placeholder (—)', () => {
+      const text = getArgsCodeText({}, 'ctv-empty-obj');
+      expect(text).toBe('—');
+    });
+
+    it('object with .data field and preferPayload:true → returns .data value', () => {
+      // Result value with a .data field; preferPayload=true (Result row uses it)
+      const text = getResultCodeText(
+        { ok: true, data: { content: 'hello', lines: 2 } },
+        'ctv-data',
+      );
+      expect(text).toBe('{"content":"hello","lines":2}');
+    });
+
+    it('error envelope with .error field and preferPayload:true → returns error text', () => {
+      const text = getResultCodeText(
+        { error: 'something went wrong' },
+        'ctv-error',
+      );
+      expect(text).toContain('something went wrong');
+    });
+
+    it('array → compact JSON stringify (no indentation)', () => {
+      // Arrays are passed as args; preferPayload=false (sanitizeToolDetailNode path)
+      const text = getArgsCodeText([1, 2, 3], 'ctv-array');
+      expect(text).toBe('[1,2,3]');
+    });
+  });
+
   it('shows JSON fallback for tools with non-string argument values', () => {
     const sessionState = ensureSessionState(
       createChatState(),
