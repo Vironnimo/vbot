@@ -5,21 +5,7 @@ from core.tools.read import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
     read_handler,
-    register_builtin_tools,
-)
-from core.tools.read2 import (
-    READ2_TOOL_DESCRIPTION,
-    READ2_TOOL_NAME,
-    READ2_TOOL_PARAMETERS,
-    read2_handler,
-    register_read2_tool,
-)
-from core.tools.read_new import (
-    READ_NEW_TOOL_DESCRIPTION,
-    READ_NEW_TOOL_NAME,
-    READ_NEW_TOOL_PARAMETERS,
-    read_new_handler,
-    register_read_new_tool,
+    register_read_tool,
 )
 from core.tools.tools import (
     DEFAULT_TOOL_CONCURRENCY_LIMIT,
@@ -47,12 +33,6 @@ __all__ = [
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
     "JsonObject",
-    "READ2_TOOL_DESCRIPTION",
-    "READ2_TOOL_NAME",
-    "READ2_TOOL_PARAMETERS",
-    "READ_NEW_TOOL_DESCRIPTION",
-    "READ_NEW_TOOL_NAME",
-    "READ_NEW_TOOL_PARAMETERS",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
@@ -70,12 +50,8 @@ __all__ = [
     "ToolNotFoundError",
     "ToolRegistry",
     "is_tool_result_envelope",
-    "read2_handler",
     "read_handler",
-    "read_new_handler",
-    "register_builtin_tools",
-    "register_read2_tool",
-    "register_read_new_tool",
+    "register_read_tool",
     "tool_failure",
     "tool_success",
 ]
