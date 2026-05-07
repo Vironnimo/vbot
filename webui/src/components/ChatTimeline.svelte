@@ -236,6 +236,7 @@
     return 'running';
   };
 
+  // eslint-disable-next-line no-unused-vars -- kept for potential future use; template usage removed per plan
   const toolStatusLabel = (tool) => {
     const status = toolStatus(tool);
     if (status === 'failed') {
@@ -722,11 +723,11 @@
             <div class="msg-header">
               <div class="msg-avatar">{avatarForItem(item)}</div>
               <span class="msg-author"
-                >{labelForStreamingItem(item.streamingItem)}</span
+                >{item.streamingItem.type === 'assistant'
+                  ? agentName ||
+                    t('chat.role.assistant', 'Assistant').toUpperCase()
+                  : labelForStreamingItem(item.streamingItem)}</span
               >
-              {#if agentName}
-                <span class="msg-meta-extra">· {agentName}</span>
-              {/if}
             </div>
             <div class="msg-content">
               {#if item.streamingItem.type === 'reasoning'}
@@ -790,7 +791,8 @@
             <div class="msg-header">
               <div class="msg-avatar">{avatarForItem(item)}</div>
               <span class="msg-author"
-                >{t('chat.role.assistant', 'Assistant').toUpperCase()}</span
+                >{agentName ||
+                  t('chat.role.assistant', 'Assistant').toUpperCase()}</span
               >
               {#if formatTime(timestampForItem(item))}
                 <span class="msg-timestamp"
@@ -800,9 +802,6 @@
               {#each runMetaParts(item) as metaPart (metaPart)}
                 <span class="msg-meta-extra">· {metaPart}</span>
               {/each}
-              {#if agentName}
-                <span class="msg-meta-extra">· {agentName}</span>
-              {/if}
             </div>
             <div class="msg-content assistant-run-content">
               {#each visibleRunChildren(item) as child (child.id)}
@@ -830,10 +829,7 @@
                     <div class="reasoning-body">{child.content}</div>
                   </details>
                 {:else if child.type === 'tool_call'}
-                  <details
-                    class="tool-event run-tool-event"
-                    open={toolStatus(child) !== 'running'}
-                  >
+                  <details class="tool-event run-tool-event">
                     <summary class="tool-event-line">
                       <span
                         class:done={toolStatus(child) === 'success'}
@@ -845,10 +841,6 @@
                       {#if toolArgumentSummary(child)}
                         <span class="te-arg">{toolArgumentSummary(child)}</span>
                       {/if}
-                      <span
-                        class:error={toolStatus(child) === 'failed'}
-                        class="te-time">{toolStatusLabel(child)}</span
-                      >
                     </summary>
                     <div class="tool-event-body">
                       {@render toolDetailSection(
@@ -884,14 +876,15 @@
           >
             <div class="msg-header">
               <div class="msg-avatar">{avatarForItem(item)}</div>
-              <span class="msg-author">{labelForMessage(item.message)}</span>
+              <span class="msg-author"
+                >{item.message.role === 'assistant'
+                  ? agentName || labelForMessage(item.message)
+                  : labelForMessage(item.message)}</span
+              >
               {#if formatTime(item.message.timestamp)}
                 <span class="msg-timestamp"
                   >{formatTime(item.message.timestamp)}</span
                 >
-              {/if}
-              {#if item.message.role === 'assistant' && agentName}
-                <span class="msg-meta-extra">· {agentName}</span>
               {/if}
             </div>
             <div class="msg-content">
@@ -934,10 +927,7 @@
                 {/if}
               </div>
               <div class="msg-content">
-                <details
-                  class="tool-event"
-                  open={!isRunningToolEvent(item.event)}
-                >
+                <details class="tool-event">
                   <summary class="tool-event-line">
                     <span
                       class:error={isFailedToolEvent(item.event)}
@@ -952,16 +942,6 @@
                         >{toolArgumentForEvent(item.event)}</span
                       >
                     {/if}
-                    <span
-                      class:error={isFailedToolEvent(item.event)}
-                      class="te-time"
-                    >
-                      {isFailedToolEvent(item.event)
-                        ? t('chat.runStatus.failed', 'Failed')
-                        : isRunningToolEvent(item.event)
-                          ? t('chat.runStatus.running', 'Running')
-                          : t('chat.toolDone', 'done')}
-                    </span>
                   </summary>
                   <div class="tool-event-body">
                     {@render toolDetailSection(
