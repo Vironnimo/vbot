@@ -17,6 +17,8 @@ from core.storage.storage import StorageManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 
+CANONICAL_BUILTIN_TOOLS = ["edit", "glob", "grep", "read", "write"]
+
 
 @pytest.fixture
 def config(tmp_path: Path) -> Config:
@@ -101,7 +103,7 @@ def test_start_registers_builtin_tools_once(config: Config):
     runtime.start()
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == ["edit", "read", "write"]
+    assert tool_names == CANONICAL_BUILTIN_TOOLS
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):
@@ -113,7 +115,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
     definitions = runtime.tools.provider_definitions()
     definitions_by_name = {definition["name"]: definition for definition in definitions}
 
-    assert sorted(definitions_by_name) == ["edit", "read", "write"]
+    assert sorted(definitions_by_name) == CANONICAL_BUILTIN_TOOLS
     for tool_name, definition in definitions_by_name.items():
         tool = runtime.tools.get(tool_name)
         assert set(definition) == {"name", "description", "parameters"}
@@ -130,7 +132,7 @@ def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
     runtime.start()
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
-    assert tool_names == ["edit", "read", "write"]
+    assert tool_names == CANONICAL_BUILTIN_TOOLS
 
 
 def test_phase_two_services_inaccessible_before_start(config: Config):

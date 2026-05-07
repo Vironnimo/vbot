@@ -27,7 +27,14 @@ from core.chat import (
     RunStatus,
 )
 from core.tools import JsonObject as ToolJsonObject
-from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools import (
+    ToolContext,
+    ToolRegistry,
+    register_glob_tool,
+    register_grep_tool,
+    tool_failure,
+    tool_success,
+)
 from core.utils.errors import ProviderError
 
 JsonObject = dict[str, Any]
@@ -722,6 +729,102 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
         "tool_not_allowed",
         "Tool not allowed: get_weather",
     )
+
+
+@pytest.mark.asyncio
+async def test_registered_search_tools_execute_and_persist_envelopes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("core.tools.grep.shutil.which", lambda _command: None)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    (workspace / "src").mkdir()
+    (workspace / "src" / "code.py").write_text("print('alpha')\n", encoding="utf-8")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["glob", "grep"],
+        workspace=workspace,
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_glob", "name": "glob", "arguments": {"pattern": "**/*.txt"}},
+                    {"id": "call_grep", "name": "grep", "arguments": {"pattern": "alpha"}},
+                ],
+            },
+            {"content": "Search complete", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    register_glob_tool(tools)
+    register_grep_tool(tools)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    tool_messages = [message for message in messages if message.role == "tool"]
+    glob_result = json.loads(tool_messages[0].content or "{}")
+    grep_result = json.loads(tool_messages[1].content or "{}")
+    assert assistant.content == "Search complete"
+    assert [message.name for message in tool_messages] == ["glob", "grep"]
+    assert glob_result == tool_success({"content": "notes.txt"})
+    assert grep_result == tool_success(
+        {"content": "notes.txt:1: alpha\nsrc/code.py:1: print('alpha')"}
+    )
+    assert [
+        event.payload["tool_call"]["name"]
+        for event in run.events
+        if event.type == TOOL_CALL_STARTED_EVENT
+    ] == ["glob", "grep"]
+    assert [
+        event.payload["result"] for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
+    ] == [glob_result, grep_result]
+
+
+@pytest.mark.asyncio
+async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("alpha\n", encoding="utf-8")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["glob"],
+        workspace=workspace,
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_grep", "name": "grep", "arguments": {"pattern": "alpha"}}
+                ],
+            },
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    register_glob_tool(tools)
+    register_grep_tool(tools)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    failure = tool_failure("tool_not_allowed", "Tool not allowed: grep")
+    assert json.loads(messages[2].content or "{}") == failure
+    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
+        "tool_call": {"id": "call_grep", "index": 0, "name": "grep"},
+        "result": failure,
+    }
 
 
 @pytest.mark.asyncio

@@ -245,6 +245,7 @@
     edit: ['path'],
     bash: ['command'],
     glob: ['pattern'],
+    grep: ['pattern', 'path'],
   };
   const MAX_TOOL_LABEL_LENGTH = 80;
   const TOOL_ERROR_DETAIL_KEYS = [
@@ -268,6 +269,14 @@
 
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
       return formatJson(argumentsValue);
+    }
+
+    if (toolName === 'glob') {
+      return searchToolLabel(args, false) ?? formatJson(argumentsValue);
+    }
+
+    if (toolName === 'grep') {
+      return searchToolLabel(args, true) ?? formatJson(argumentsValue);
     }
 
     if (
@@ -298,6 +307,23 @@
     }
 
     return formatJson(argumentsValue);
+  };
+
+  const searchToolLabel = (args, includePath) => {
+    const pattern = trimmedString(args.pattern);
+    if (!pattern) {
+      return null;
+    }
+
+    const path = includePath ? trimmedString(args.path) : '';
+    return path ? `${pattern} · ${path}` : pattern;
+  };
+
+  const trimmedString = (value) => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return value.trim();
   };
 
   const toolArgumentSummary = (tool) => {
@@ -437,7 +463,7 @@
       isPlainObject(sanitizedValue.data)
     ) {
       if (
-        toolName === 'read' &&
+        ['read', 'glob', 'grep'].includes(toolName) &&
         hasMeaningfulToolDetail(sanitizedValue.data.content)
       ) {
         return sanitizeToolDetailNode(sanitizedValue.data.content);

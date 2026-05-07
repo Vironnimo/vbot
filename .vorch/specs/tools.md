@@ -26,6 +26,15 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `content`. It writes full file contents, creates parent directories, and
   replaces existing file contents. Relative paths resolve from
   `ToolContext.workspace`; absolute paths are allowed.
+- Built-in `glob` tool: flat name `glob`; schema includes required `pattern`
+  and optional `path`. It returns matching file and directory paths relative to
+  the search root; directory entries end with `/`. Relative paths resolve from
+  `ToolContext.workspace`; absolute paths are allowed.
+- Built-in `grep` tool: flat name `grep`; schema includes required `pattern`
+  and optional `path`, `glob`, `ignoreCase`, `literal`, `context`, `limit`, and
+  `output_mode`. It searches file contents by regex by default or fixed string
+  when `literal: true`. Relative paths resolve from `ToolContext.workspace`;
+  absolute file or directory paths are allowed.
 
 ## Interfaces
 
@@ -39,6 +48,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_read_tool(registry) -> None` — registers the built-in `read` tool.
 - `register_edit_tool(registry) -> None` — registers the built-in `edit` tool.
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
+- `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
+- `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
 
 ## Conventions
 
@@ -75,6 +86,18 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   edits or appends; use `edit` for surgical changes.
 - `write` success data includes a human-readable `message`, the resolved `path`,
   and written byte count.
+- `glob` is for path discovery. It accepts glob-style relative patterns such as
+  `**/*.py`, includes files and directories, sorts matches relative to the
+  search root, caps output at 100 matches, and returns no-match messages as
+  success envelopes under `data.content`.
+- `grep` is for content search. It supports regex mode, `literal` fixed-string
+  mode, `ignoreCase`, optional candidate-file `glob` filters, `context` lines,
+  `limit`, and `output_mode` values `content`, `files_with_matches`, and
+  `count`. Successful textual output is returned under `data.content`; no-match
+  messages are success envelopes. Invalid arguments, invalid regexes, and
+  expected path/search errors are failure envelopes.
+- `grep` may use `rg`/ripgrep when available on `PATH`, but must work via the
+  Python fallback without requiring ripgrep as a dependency.
 
 ## Constraints & Gotchas
 
