@@ -62,6 +62,24 @@ class StubProviders:
         return object()
 
 
+class LegacyDispatchToolRegistry:
+    def __init__(self, result: JsonObject) -> None:
+        self.result = result
+
+    async def dispatch(
+        self,
+        name: Any,
+        arguments: ToolJsonObject,
+        allowed_tools: list[str] | None = None,
+    ) -> JsonObject:
+        if not isinstance(name, str):
+            raise TypeError("legacy dispatch expected string argument")
+        assert name == "legacy"
+        assert arguments == {"value": "input"}
+        assert allowed_tools == ["legacy"]
+        return self.result
+
+
 class StubPrompts:
     def __init__(self) -> None:
         self.agent_for_tools: StubAgent | None = None
@@ -828,6 +846,41 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
         "tool_call": {"id": "call_1", "index": 0, "name": "explode"},
         "result": tool_failure("tool_execution_error", "boom"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_dispatch_non_envelope_result_is_failure_envelope(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["legacy"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "legacy", "arguments": {"value": "input"}}],
+            },
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=cast(ToolRegistry, LegacyDispatchToolRegistry({"content": "not enveloped"})),
+    )
+
+    assistant = await ChatLoop(runtime).send("coder", "Run legacy", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    failure = tool_failure(
+        "invalid_tool_result",
+        "Tool handler must return a valid result envelope: legacy",
+    )
+    assert assistant.content == "Recovered"
+    assert json.loads(messages[2].content or "{}") == failure
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
+        "tool_call": {"id": "call_1", "index": 0, "name": "legacy"},
+        "result": failure,
     }
 
 

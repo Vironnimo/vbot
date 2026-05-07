@@ -546,6 +546,58 @@ class TestToolExecutor:
             tool_success({"id": "call-3"}),
         ]
 
+    @pytest.mark.asyncio
+    async def test_global_limit_is_shared_across_executor_instances(self) -> None:
+        registry = ToolRegistry()
+        active_count = 0
+        max_active_count = 0
+        first_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def globally_limited_handler(
+            context: ToolContext,
+            arguments: JsonObject,
+        ) -> JsonObject:
+            nonlocal active_count, max_active_count
+            active_count += 1
+            max_active_count = max(max_active_count, active_count)
+            if context.tool_call_id == "call-1":
+                first_started.set()
+            await release.wait()
+            active_count -= 1
+            return tool_success({"id": context.tool_call_id})
+
+        registry.register(
+            "global_limit",
+            "Globally limited tool for testing.",
+            {"type": "object"},
+            globally_limited_handler,
+        )
+        first_executor = ToolExecutor(registry, per_run_limit=1, global_limit=1)
+        second_executor = ToolExecutor(registry, per_run_limit=1, global_limit=1)
+
+        first_task = asyncio.create_task(
+            first_executor.execute_many(
+                [ToolCall(id="call-1", name="global_limit", arguments={})],
+                make_execution_config(allowed_tools=["*"]),
+            )
+        )
+        await first_started.wait()
+        second_task = asyncio.create_task(
+            second_executor.execute_many(
+                [ToolCall(id="call-2", name="global_limit", arguments={})],
+                make_execution_config(allowed_tools=["*"]),
+            )
+        )
+        await asyncio.sleep(0.01)
+
+        assert max_active_count == 1
+
+        release.set()
+        assert await first_task == [tool_success({"id": "call-1"})]
+        assert await second_task == [tool_success({"id": "call-2"})]
+        assert max_active_count == 1
+
 
 class TestPublicExports:
     def test_registry_exports_from_package_root(self) -> None:

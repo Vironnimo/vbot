@@ -34,6 +34,7 @@ from core.tools import (
     ToolNotAllowedError,
     ToolNotFoundError,
     ToolRegistry,
+    is_tool_result_envelope,
     tool_failure,
 )
 from core.utils.errors import ProviderError, VBotError
@@ -399,7 +400,7 @@ class _EmittingToolRegistry(ToolRegistry):
     ) -> JsonObject:
         try:
             result = await self._registry.dispatch(context, arguments, allowed_tools)
-            return cast(JsonObject, result)
+            return _validated_tool_result(context.tool_name, result)
         except TypeError as error:
             if not _looks_like_legacy_dispatch_type_error(error):
                 raise
@@ -415,7 +416,7 @@ class _EmittingToolRegistry(ToolRegistry):
             result = self._registry.dispatch(context.tool_name, arguments, allowed_tools)
             if inspect.isawaitable(result):
                 result = await result
-            return cast(JsonObject, result)
+            return _validated_tool_result(context.tool_name, result)
         except ToolNotFoundError as error:
             return tool_failure("tool_not_found", str(error))
         except ToolNotAllowedError as error:
@@ -804,6 +805,14 @@ def _emit_tool_context_event(run: Run, event_type: str, payload: JsonObject) -> 
 def _looks_like_legacy_dispatch_type_error(error: TypeError) -> bool:
     message = str(error)
     return "positional" in message or "argument" in message
+
+
+def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
+    if not isinstance(result, dict):
+        raise ValueError(f"Tool handler must return a JSON object: {tool_name}")
+    if not is_tool_result_envelope(result):
+        raise ValueError(f"Tool handler must return a valid result envelope: {tool_name}")
+    return result
 
 
 def _new_message_id() -> str:

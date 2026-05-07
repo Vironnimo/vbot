@@ -23,6 +23,7 @@ INVALID_ARGUMENTS_CODE = "invalid_arguments"
 NOT_FOUND_CODE = "not_found"
 NOT_FILE_CODE = "not_file"
 READ_FAILED_CODE = "read_failed"
+SUPPORTED_ARGUMENTS = frozenset(READ_TOOL_PARAMETERS["properties"])
 
 
 def register_builtin_tools(registry: ToolRegistry) -> None:
@@ -63,6 +64,13 @@ def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
 
 def _parse_arguments(arguments: JsonObject) -> tuple[str, int | None, int | None] | JsonObject:
+    extra_arguments = sorted(set(arguments) - SUPPORTED_ARGUMENTS)
+    if extra_arguments:
+        return tool_failure(
+            INVALID_ARGUMENTS_CODE,
+            f"Unsupported argument(s): {', '.join(extra_arguments)}",
+        )
+
     path = arguments.get("path")
     if not isinstance(path, str) or not path:
         return tool_failure(INVALID_ARGUMENTS_CODE, "path must be a non-empty string")
