@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.tools import register_builtin_tools
 from server.app import create_app
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
@@ -18,8 +19,8 @@ EXPECTED_SSE_EVENT_NAMES = [
     "tool_call_delta",
     "tool_call_delta",
     "reasoning",
-    "tool_call_started",
     "assistant_output",
+    "tool_call_started",
     "tool_call_result",
     "assistant_output_delta",
     "assistant_output",
@@ -30,9 +31,11 @@ EXPECTED_SSE_EVENT_NAMES = [
 def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_path: Path) -> None:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    runtime.tools.register(
-        "lookup", "Look up a value", {"type": "object"}, lambda _args: {"ok": True}
-    )
+    register_builtin_tools(runtime.tools)
+    runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
+    workspace = Path(runtime.agents.get("coder").workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("note.txt").write_text("SSE visible content", encoding="utf-8")
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
@@ -62,13 +65,32 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     reasoning_delta_data = cast(dict[str, Any], events[2]["data"])
     tool_delta_data = cast(dict[str, Any], events[3]["data"])
     reasoning_data = cast(dict[str, Any], events[5]["data"])
-    tool_data = cast(dict[str, Any], events[6]["data"])
+    tool_started_data = cast(dict[str, Any], events[7]["data"])
+    tool_result_data = cast(dict[str, Any], events[8]["data"])
     assistant_delta_data = cast(dict[str, Any], events[9]["data"])
     assistant_data = cast(dict[str, Any], events[10]["data"])
     assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
-    assert tool_delta_data["payload"]["name_delta"] == "lookup"
+    assert tool_delta_data["payload"]["name_delta"] == "read"
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
-    assert tool_data["payload"]["tool_call"]["name"] == "lookup"
+    assert tool_started_data["payload"] == {
+        "tool_call": {
+            "id": "call-one",
+            "index": 0,
+            "name": "read",
+            "arguments": {"path": "note.txt"},
+        }
+    }
+    assert tool_result_data["payload"]["tool_call"] == {
+        "id": "call-one",
+        "index": 0,
+        "name": "read",
+    }
+    assert tool_result_data["payload"]["result"]["ok"] is True
+    assert tool_result_data["payload"]["result"]["error"] is None
+    assert tool_result_data["payload"]["result"]["data"]["content"] == "SSE visible content"
+    assert tool_result_data["payload"]["result"]["artifacts"] == []
+    assert "tool_call_failed" not in [event["event"] for event in events]
+    assert "batch" not in response.text
     assert assistant_delta_data["payload"]["content_delta"] == "Done"
     assert assistant_data["payload"]["message"]["content"] == "Done"
     assert "reasoning_meta" not in response.text
@@ -90,8 +112,8 @@ def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
         "tool_call_delta",
         "tool_call_delta",
         "reasoning",
-        "tool_call_started",
         "assistant_output",
+        "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
@@ -105,8 +127,8 @@ def test_sse_endpoint_replays_after_last_event_id_header(tmp_path: Path) -> None
     assert _event_names(response.text) == [
         "tool_call_delta",
         "reasoning",
-        "tool_call_started",
         "assistant_output",
+        "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
@@ -128,8 +150,8 @@ def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
         "tool_call_delta",
         "tool_call_delta",
         "reasoning",
-        "tool_call_started",
         "assistant_output",
+        "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
@@ -153,9 +175,11 @@ def _stream_test_run(
 ) -> Any:
     adapter = StubAdapter(stream_deltas=_test_stream_turns())
     runtime = StubRuntime(tmp_path, adapter)
-    runtime.tools.register(
-        "lookup", "Look up a value", {"type": "object"}, lambda _args: {"ok": True}
-    )
+    register_builtin_tools(runtime.tools)
+    runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
+    workspace = Path(runtime.agents.get("coder").workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("note.txt").write_text("SSE visible content", encoding="utf-8")
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
@@ -204,11 +228,11 @@ def _test_stream_turns() -> list[Any]:
         [
             {"type": "reasoning_delta", "text": "Thinking clearly"},
             {"type": "reasoning_meta", "reasoning_meta": {"secret": "opaque"}},
-            {"type": "tool_call_delta", "id": "call-one", "name_delta": "lookup"},
+            {"type": "tool_call_delta", "id": "call-one", "name_delta": "read"},
             {
                 "type": "tool_call_delta",
                 "id": "call-one",
-                "arguments_delta": '{"query":"vBot"}',
+                "arguments_delta": '{"path":"note.txt"}',
             },
             {"type": "finish", "reason": "tool_calls"},
         ],

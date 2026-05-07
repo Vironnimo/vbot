@@ -132,6 +132,21 @@ SAMPLE_TOOLS = [
     }
 ]
 
+READ_TOOL_DEFINITION = {
+    "name": "read",
+    "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+}
+
 SAMPLE_MESSAGES_WITH_SYSTEM = [
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello"},
@@ -458,6 +473,29 @@ class TestSendRequestFormat:
         ]
         assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert request_body["output_config"] == {"effort": "high"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_read_definition_to_input_schema(self, anthropic_adapter):
+        """The compact read definition maps to Anthropic input_schema tools."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            tools=[READ_TOOL_DEFINITION],
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["tools"] == [
+            {
+                "name": "read",
+                "description": READ_TOOL_DEFINITION["description"],
+                "input_schema": READ_TOOL_DEFINITION["parameters"],
+            }
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

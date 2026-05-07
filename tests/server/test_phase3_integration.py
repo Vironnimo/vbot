@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatLoop, ChatRunManager, ChatSessionManager
-from core.tools import ToolRegistry
+from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.delegates import dispatch_rpc
 
@@ -166,7 +166,7 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
         "lookup",
         "Look up a value.",
         {"type": "object"},
-        lambda arguments: {"result": f"found {arguments['query']}"},
+        lambda _context, arguments: tool_success({"result": f"found {arguments['query']}"}),
     )
     app = create_app(runtime=cast(Any, runtime))
 
@@ -219,7 +219,12 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
     assert messages[1].reasoning_meta == {"encrypted_content": "opaque"}
-    assert messages[2].content == '{"result":"found vBot"}'
+    assert json.loads(messages[2].content or "{}") == {
+        "ok": True,
+        "error": None,
+        "data": {"result": "found vBot"},
+        "artifacts": [],
+    }
     assert adapter.closed is True
 
 
@@ -294,10 +299,12 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
     release_tool = asyncio.Event()
     tool_results: list[JsonObject] = []
 
-    async def slow_tool(arguments: JsonObject) -> JsonObject:
+    async def slow_tool(context: ToolContext, arguments: JsonObject) -> JsonObject:
         slow_tool_started.set()
+        while not context.is_cancelled():
+            await asyncio.sleep(0)
         await release_tool.wait()
-        result = {"value": arguments["value"]}
+        result = tool_success({"value": arguments["value"]})
         tool_results.append(result)
         return result
 
@@ -331,8 +338,8 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
         "tool_call_delta",
         "tool_call_delta",
         "reasoning",
-        "tool_call_started",
         "assistant_output",
+        "tool_call_started",
         "run_cancelled",
     ]
     assert [message.role for message in messages] == ["user", "assistant"]
