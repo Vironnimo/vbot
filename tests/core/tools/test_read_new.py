@@ -44,13 +44,9 @@ def test_registration_correct_name_description_parameters() -> None:
     assert tool.name == READ_NEW_TOOL_NAME
     assert tool.description == READ_NEW_TOOL_DESCRIPTION
     assert tool.parameters == READ_NEW_TOOL_PARAMETERS
-    assert set(tool.parameters["properties"]) == {"path", "offset", "limit", "description"}
+    assert set(tool.parameters["properties"]) == {"path", "offset", "limit"}
     assert tool.parameters["required"] == ["path"]
     assert tool.parameters["additionalProperties"] is False
-
-
-def test_description_parameter_not_required() -> None:
-    assert "description" not in READ_NEW_TOOL_PARAMETERS["required"]
 
 
 # ---------------------------------------------------------------------------
@@ -313,19 +309,6 @@ def test_crlf_normalized_to_lf(tmp_path: Path) -> None:
     result = read_new_handler(make_context(workspace), {"path": "crlf.txt"})
 
     assert result == tool_success({"content": "line1\nline2\n"})
-
-
-def test_description_argument_silently_ignored(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "file.txt").write_text("hello", encoding="utf-8")
-
-    result = read_new_handler(
-        make_context(workspace),
-        {"path": "file.txt", "description": "reading the file"},
-    )
-
-    assert result == tool_success({"content": "hello"})
 
 
 @pytest.mark.asyncio
