@@ -128,6 +128,7 @@ def test_read_directory_path_returns_failure_envelope(tmp_path: Path) -> None:
         ({"path": "file.txt", "offset": "1"}, "offset must be an integer"),
         ({"path": "file.txt", "limit": -1}, "limit must be non-negative"),
         ({"path": "file.txt", "limit": True}, "limit must be an integer"),
+        ({"path": "file.txt", "encoding": "utf-8"}, "Unsupported argument(s): encoding"),
     ],
 )
 def test_read_invalid_arguments_return_failure_envelope(
@@ -141,6 +142,19 @@ def test_read_invalid_arguments_return_failure_envelope(
     result = read_handler(make_context(workspace), arguments)
 
     assert result == tool_failure("invalid_arguments", message)
+
+
+def test_read_reports_all_unsupported_arguments_before_reading(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("content", encoding="utf-8")
+
+    result = read_handler(
+        make_context(workspace),
+        {"path": "file.txt", "encoding": "utf-8", "mode": "text"},
+    )
+
+    assert result == tool_failure("invalid_arguments", "Unsupported argument(s): encoding, mode")
 
 
 def test_read_invalid_utf8_uses_replacement_character(tmp_path: Path) -> None:

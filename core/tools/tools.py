@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from core.utils.errors import VBotError
 
@@ -265,6 +266,10 @@ class ToolRegistry:
 class ToolExecutor:
     """Schedule tool calls concurrently while preserving returned call order."""
 
+    _global_semaphores: ClassVar[
+        weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]]
+    ] = weakref.WeakKeyDictionary()
+
     def __init__(
         self,
         registry: ToolRegistry,
@@ -279,7 +284,7 @@ class ToolExecutor:
 
         self._registry = registry
         self._per_run_limit = per_run_limit
-        self._global_semaphore = asyncio.Semaphore(global_limit)
+        self._global_limit = global_limit
 
     async def execute_many(
         self,
@@ -308,7 +313,7 @@ class ToolExecutor:
         config: ToolExecutionConfig,
         per_run_semaphore: asyncio.Semaphore,
     ) -> JsonObject:
-        async with per_run_semaphore, self._global_semaphore:
+        async with per_run_semaphore, self._get_global_semaphore():
             context = ToolContext(
                 agent_id=config.agent_id,
                 session_id=config.session_id,
@@ -323,6 +328,15 @@ class ToolExecutor:
                 cancellation_hook=config.cancellation_hook,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
+
+    def _get_global_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        loop_semaphores = self._global_semaphores.setdefault(loop, {})
+        semaphore = loop_semaphores.get(self._global_limit)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self._global_limit)
+            loop_semaphores[self._global_limit] = semaphore
+        return semaphore
 
     async def _dispatch_with_envelope(
         self,
