@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from core.tools.read2 import READ2_TOOL_NAME, read2_handler, register_read2_tool
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
@@ -129,6 +131,27 @@ def test_read2_returns_failure_envelope_for_directory_path(tmp_path: Path) -> No
     result = read2_handler(make_context(workspace), {"path": "folder"})
     error = assert_failure_envelope(result, "not_a_file")
     assert "folder" in error["message"]
+
+
+def test_read2_returns_failure_envelope_for_read_time_filesystem_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"hello\n")
+
+    def raise_permission_error(self: Path) -> bytes:
+        raise PermissionError("access denied while reading")
+
+    monkeypatch.setattr(Path, "read_bytes", raise_permission_error)
+
+    result = read2_handler(make_context(workspace), {"path": "notes.txt"})
+
+    error = assert_failure_envelope(result, "file_read_error")
+    assert str(target.resolve()) in error["message"]
+    assert "access denied while reading" in error["message"]
 
 
 def test_read2_applies_line_offset_and_limit(tmp_path: Path) -> None:
