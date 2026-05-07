@@ -35,7 +35,7 @@ class CapturedRequest:
 class FakeAdapter(ProviderAdapter):
     """Provider adapter test double that records canonical chat requests."""
 
-    def __init__(self, response: JsonObject) -> None:
+    def __init__(self, response: JsonObject | list[JsonObject]) -> None:
         self.response = response
         self.requests: list[CapturedRequest] = []
 
@@ -46,6 +46,8 @@ class FakeAdapter(ProviderAdapter):
         self.requests.append(
             CapturedRequest(messages=list(messages), model_id=model_id, kwargs=kwargs)
         )
+        if isinstance(self.response, list):
+            return self.response.pop(0)
         return self.response
 
     async def stream(
@@ -107,6 +109,102 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
         assert adapter.requests[0].kwargs["thinking_effort"] == "high"
         assert adapter.requests[0].kwargs["temperature"] == 0.1
         assert [message["role"] for message in adapter.requests[0].messages] == ["system", "user"]
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_read_tool_success_persists_result_and_final_response_uses_content(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_read", "name": "read", "arguments": {"path": "note.txt"}}
+                ],
+            },
+            {"content": "I read: file content", "tool_calls": None},
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["APP_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id: adapter)
+
+    runtime.start()
+    try:
+        agent = runtime.agents.create(
+            "coder",
+            "Coder Agent",
+            model="fake-provider/fake-model-v1",
+        )
+        Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
+
+        assistant = await ChatLoop(runtime).send("coder", "Read note", session_id="session-one")
+
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        tool_result = json.loads(messages[2].content or "{}")
+        assert assistant.content == "I read: file content"
+        assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+        assert tool_result["ok"] is True
+        assert tool_result["error"] is None
+        assert tool_result["data"] == {
+            "path": str(Path(agent.workspace) / "note.txt"),
+            "content": "file content",
+        }
+        assert tool_result["artifacts"] == []
+        assert adapter.requests[1].messages[3]["content"] == messages[2].content
+    finally:
+        runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_read_tool_missing_file_persists_failure_and_run_recovers(
+    tmp_path: Path,
+    resources_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_missing", "name": "read", "arguments": {"path": "missing.txt"}}
+                ],
+            },
+            {"content": "The file was missing, so I recovered.", "tool_calls": None},
+        ]
+    )
+    config = Config(data_dir=tmp_path / "data")
+    config._data["RESOURCES_PATH"] = str(resources_dir)
+    config._data["APP_VERSION"] = "test-version"
+    runtime = Runtime(config)
+    monkeypatch.setenv("FAKE_API_KEY", "test-key")
+    monkeypatch.setattr(runtime, "get_adapter", lambda provider_id: adapter)
+
+    runtime.start()
+    try:
+        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+
+        assistant = await ChatLoop(runtime).send("coder", "Read missing", session_id="session-one")
+
+        messages = runtime.chat_sessions.get("coder", "session-one").load()
+        tool_result = json.loads(messages[2].content or "{}")
+        assert assistant.content == "The file was missing, so I recovered."
+        assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+        assert tool_result == {
+            "ok": False,
+            "error": {"code": "not_found", "message": "File not found"},
+            "data": None,
+            "artifacts": [],
+        }
+        assert adapter.requests[1].messages[3]["content"] == messages[2].content
     finally:
         runtime.stop()
 

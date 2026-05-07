@@ -14,7 +14,7 @@ import pytest
 
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.storage import StorageError
-from core.tools import ToolRegistry
+from core.tools import ToolRegistry, register_builtin_tools
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
@@ -623,6 +623,65 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
         "run_completed",
     ]
     assert "reasoning_meta" not in str(result["events"])
+
+
+@pytest.mark.asyncio
+async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
+    tmp_path: Path,
+) -> None:
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "reasoning_meta": {"secret": "opaque"},
+                "tool_calls": [
+                    {"id": "call_read", "name": "read", "arguments": {"path": "note.txt"}}
+                ],
+            },
+            {"content": "Read the file", "tool_calls": None},
+        ]
+    )
+    state = make_state(tmp_path, adapter)
+    register_builtin_tools(state.runtime.tools)
+    state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
+    workspace = Path(state.runtime.agents.get("coder").workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    workspace.joinpath("note.txt").write_text("rpc content", encoding="utf-8")
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.send",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Read note"},
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    tool_started = next(event for event in result["events"] if event["type"] == "tool_call_started")
+    tool_result = next(event for event in result["events"] if event["type"] == "tool_call_result")
+    assert tool_started["payload"] == {
+        "tool_call": {
+            "id": "call_read",
+            "index": 0,
+            "name": "read",
+            "arguments": {"path": "note.txt"},
+        }
+    }
+    assert tool_result["payload"]["tool_call"] == {
+        "id": "call_read",
+        "index": 0,
+        "name": "read",
+    }
+    assert tool_result["payload"]["result"] == {
+        "ok": True,
+        "error": None,
+        "data": {"path": str(workspace / "note.txt"), "content": "rpc content"},
+        "artifacts": [],
+    }
+    assert "reasoning_meta" not in str(result["events"])
+    assert "batch" not in str(result["events"])
 
 
 @pytest.mark.asyncio
