@@ -1197,7 +1197,7 @@ textarea::placeholder {
   line-height: 1.6;
 }
 
-.reasoning-block.open .reasoning-body {
+.reasoning-block[open] .reasoning-body {
   display: block;
 }
 
@@ -1285,7 +1285,7 @@ textarea::placeholder {
   border-left: 1px solid var(--border-2);
 }
 
-.tool-event.open .tool-event-body {
+.tool-event[open] .tool-event-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
