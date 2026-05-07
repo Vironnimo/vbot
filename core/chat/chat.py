@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,17 @@ from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
     iter_with_chunk_timeout,
+)
+from core.tools import ToolCall as ScheduledToolCall
+from core.tools import (
+    ToolContext,
+    ToolExecutionConfig,
+    ToolExecutor,
+    ToolNotAllowedError,
+    ToolNotFoundError,
+    ToolRegistry,
+    is_tool_result_envelope,
+    tool_failure,
 )
 from core.utils.errors import ProviderError, VBotError
 
@@ -316,6 +328,108 @@ class ChatSessionManager:
         self.get(agent_id, session_id).delete()
 
 
+class _EmittingToolRegistry(ToolRegistry):
+    """Adapter that emits public lifecycle events around registry dispatch."""
+
+    def __init__(self, registry: Any, run: Run) -> None:
+        self._registry = registry
+        self._run = run
+
+    async def dispatch(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None = None,
+    ) -> JsonObject:
+        self._run.raise_if_cancelled()
+        self._run.emit(
+            TOOL_CALL_STARTED_EVENT,
+            {
+                "tool_call": {
+                    "id": context.tool_call_id,
+                    "index": context.tool_call_index,
+                    "name": context.tool_name,
+                    "arguments": dict(arguments),
+                }
+            },
+        )
+        result = await self._dispatch_with_failure_envelope(context, arguments, allowed_tools)
+        self._run.raise_if_cancelled()
+        self._run.emit(
+            TOOL_CALL_RESULT_EVENT,
+            {
+                "tool_call": {
+                    "id": context.tool_call_id,
+                    "index": context.tool_call_index,
+                    "name": context.tool_name,
+                },
+                "result": result,
+            },
+        )
+        return result
+
+    async def _dispatch_with_failure_envelope(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None,
+    ) -> JsonObject:
+        try:
+            return await self._dispatch_with_current_registry_signature(
+                context,
+                arguments,
+                allowed_tools,
+            )
+        except ToolNotFoundError as error:
+            return tool_failure("tool_not_found", str(error))
+        except ToolNotAllowedError as error:
+            return tool_failure("tool_not_allowed", str(error))
+        except ValueError as error:
+            return tool_failure(
+                "invalid_tool_result" if "return" in str(error) else "invalid_arguments",
+                str(error),
+            )
+        except Exception as error:
+            return tool_failure("tool_execution_error", str(error))
+
+    async def _dispatch_with_current_registry_signature(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None,
+    ) -> JsonObject:
+        try:
+            result = await self._registry.dispatch(context, arguments, allowed_tools)
+            return _validated_tool_result(context.tool_name, result)
+        except TypeError as error:
+            if not _looks_like_legacy_dispatch_type_error(error):
+                raise
+            return await self._dispatch_legacy(context, arguments, allowed_tools)
+
+    async def _dispatch_legacy(
+        self,
+        context: ToolContext,
+        arguments: JsonObject,
+        allowed_tools: Sequence[str] | None,
+    ) -> JsonObject:
+        try:
+            result = self._registry.dispatch(context.tool_name, arguments, allowed_tools)
+            if inspect.isawaitable(result):
+                result = await result
+            return _validated_tool_result(context.tool_name, result)
+        except ToolNotFoundError as error:
+            return tool_failure("tool_not_found", str(error))
+        except ToolNotAllowedError as error:
+            return tool_failure("tool_not_allowed", str(error))
+        except ValueError as error:
+            return tool_failure(
+                "invalid_tool_result" if "return" in str(error) else "invalid_arguments",
+                str(error),
+            )
+        except Exception as error:
+            return tool_failure("tool_execution_error", str(error))
+
+
 class ChatLoop:
     """Minimal agentic chat loop."""
 
@@ -467,7 +581,6 @@ class ChatLoop:
             for tool_message in tool_messages:
                 run.raise_if_cancelled()
                 session.append(tool_message)
-                _emit_message_event(run, TOOL_CALL_RESULT_EVENT, tool_message)
                 messages.append(tool_message.to_dict())
 
         raise ChatError("maximum tool iterations exceeded")
@@ -569,23 +682,42 @@ class ChatLoop:
         tool_calls: list[ToolCall],
         run: Run,
     ) -> list[ChatMessage]:
-        tool_messages: list[ChatMessage] = []
-        for tool_call in tool_calls:
-            run.raise_if_cancelled()
-            result = await self._runtime.tools.dispatch(
-                tool_call.name,
-                tool_call.arguments,
-                agent.allowed_tools,
-            )
-            run.raise_if_cancelled()
-            tool_messages.append(
-                ChatMessage.tool(
-                    tool_call_id=tool_call.id,
+        run.raise_if_cancelled()
+        executor = ToolExecutor(_EmittingToolRegistry(self._runtime.tools, run))
+        results = await executor.execute_many(
+            [
+                ScheduledToolCall(
+                    id=tool_call.id,
                     name=tool_call.name,
-                    content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    arguments=tool_call.arguments,
                 )
+                for tool_call in tool_calls
+            ],
+            ToolExecutionConfig(
+                agent_id=run.agent_id,
+                session_id=run.session_id,
+                run_id=run.id,
+                workspace=_agent_workspace(agent, _runtime_data_root(self._runtime)),
+                app_root=_runtime_app_root(self._runtime),
+                data_root=_runtime_data_root(self._runtime),
+                allowed_tools=agent.allowed_tools,
+                emit_hook=lambda event_type, payload: _emit_tool_context_event(
+                    run,
+                    event_type,
+                    payload,
+                ),
+                cancellation_hook=lambda: run.cancel_requested,
+            ),
+        )
+        run.raise_if_cancelled()
+        return [
+            ChatMessage.tool(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
             )
-        return tool_messages
+            for tool_call, result in zip(tool_calls, results, strict=True)
+        ]
 
     def _tool_iterations_exhausted(self, messages: list[JsonObject]) -> bool:
         assistant_tool_messages = [
@@ -605,12 +737,40 @@ def _runtime_run_manager(runtime: Any) -> ChatRunManager:
     return run_manager
 
 
+def _runtime_data_root(runtime: Any) -> Path:
+    storage = getattr(runtime, "storage", None)
+    data_dir = getattr(storage, "data_dir", None)
+    if data_dir is not None:
+        return Path(data_dir)
+
+    chat_sessions = getattr(runtime, "chat_sessions", None)
+    session_data_dir = getattr(chat_sessions, "data_dir", None)
+    if session_data_dir is not None:
+        return Path(session_data_dir)
+
+    return Path.cwd()
+
+
+def _runtime_app_root(runtime: Any) -> Path:
+    system_prompts = getattr(runtime, "system_prompts", None)
+    app_root = getattr(system_prompts, "_app_dir", None)
+    if app_root is not None:
+        return Path(app_root)
+
+    return Path.cwd()
+
+
+def _agent_workspace(agent: Any, data_root: Path) -> Path:
+    workspace = getattr(agent, "workspace", None)
+    if workspace is not None:
+        return Path(workspace)
+
+    return data_root / f"workspace-{agent.id}"
+
+
 def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
     if message.reasoning:
         run.emit(REASONING_EVENT, {"message": _visible_message_payload(message)})
-    if message.tool_calls:
-        for tool_call in message.tool_calls:
-            run.emit(TOOL_CALL_STARTED_EVENT, {"tool_call": tool_call.to_dict()})
     if message.content:
         _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
 
@@ -618,9 +778,6 @@ def _emit_assistant_events(run: Run, message: ChatMessage) -> None:
 def _emit_streaming_assistant_events(run: Run, message: ChatMessage) -> None:
     if message.reasoning:
         run.emit(REASONING_EVENT, {"message": _visible_message_payload(message)})
-    if message.tool_calls:
-        for tool_call in message.tool_calls:
-            run.emit(TOOL_CALL_STARTED_EVENT, {"tool_call": tool_call.to_dict()})
     _emit_message_event(run, ASSISTANT_OUTPUT_EVENT, message)
 
 
@@ -639,6 +796,23 @@ def _visible_message_payload(message: ChatMessage) -> JsonObject:
     data = message.to_dict()
     data.pop("reasoning_meta", None)
     return data
+
+
+def _emit_tool_context_event(run: Run, event_type: str, payload: JsonObject) -> None:
+    run.emit(event_type, payload)
+
+
+def _looks_like_legacy_dispatch_type_error(error: TypeError) -> bool:
+    message = str(error)
+    return "positional" in message or "argument" in message
+
+
+def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
+    if not isinstance(result, dict):
+        raise ValueError(f"Tool handler must return a JSON object: {tool_name}")
+    if not is_tool_result_envelope(result):
+        raise ValueError(f"Tool handler must return a valid result envelope: {tool_name}")
+    return result
 
 
 def _new_message_id() -> str:

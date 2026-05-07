@@ -345,3 +345,29 @@ def test_runtime_stop_then_start_reloads_registries(config: Config) -> None:
     assert "openai" in runtime.providers.list_ids()
     assert runtime.storage is not None
     assert runtime.agents is not None
+
+
+def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
+    """Runtime startup exposes only model-visible read metadata."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    definitions = runtime.tools.provider_definitions(["read"])
+    assert definitions == [
+        {
+            "name": "read",
+            "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    assert set(definitions[0]["parameters"]["properties"]) == {"path", "offset", "limit"}

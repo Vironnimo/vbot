@@ -14,7 +14,7 @@ container; a Run is one active execution inside that session.
 
 ## Data Model
 
-- `ToolCall` — assistant-requested tool invocation: `id`, `name`, `arguments`.
+- `ToolCall` — assistant-requested tool invocation: `id`, `name`, `arguments`. Tool-call index is derived from the assistant message order for runtime lifecycle events.
 - `ChatMessage` — persisted canonical message with role-specific fields:
   - common: `id`, `timestamp`, `role`
   - `system`: `model`, `content`
@@ -35,6 +35,7 @@ container; a Run is one active execution inside that session.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
 - `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, and allows parallel Runs in different Sessions.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, and `tool_call_delta` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
+- Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates provider/model split, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=...) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager.
@@ -57,8 +58,13 @@ container; a Run is one active execution inside that session.
   authoritative over transient deltas.
 - Readable `reasoning`, tool calls/results, and assistant outputs are part of
   the visible run timeline; opaque `reasoning_meta` is not.
+- Tool calls from the same assistant turn execute concurrently. The next model
+  request waits until every sibling tool call reaches a terminal result.
+- Tool result messages are persisted in the assistant's original tool-call order,
+  even when lifecycle result events complete and stream in a different order.
 - Cancellation is best effort: once requested, late non-terminal output is not
-  forwarded, new tool dispatch is blocked, and the Run ends as `cancelled`.
+  forwarded, new tool dispatch is blocked or suppressed, and the Run ends as
+  `cancelled`.
 
 ## Conventions
 
@@ -75,7 +81,7 @@ container; a Run is one active execution inside that session.
   from the old provider must never be sent to the new provider.
 - `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
-- Tool calls are dispatched only through the runtime tool registry and agent allowlist. Disallowed tools raise before a tool result is appended.
+- Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
 - Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.
 
 ## Constraints & Gotchas

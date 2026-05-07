@@ -114,6 +114,21 @@ SAMPLE_TOOLS = [
     }
 ]
 
+READ_TOOL_DEFINITION = {
+    "name": "read",
+    "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+}
+
 
 @pytest.fixture()
 def openai_adapter():
@@ -246,6 +261,26 @@ class TestSendRequestFormat:
             }
         ]
         assert request_body["reasoning_effort"] == "high"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_read_definition_to_function_tool(self, openai_adapter):
+        """The compact read definition maps to OpenAI function tools."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[READ_TOOL_DEFINITION])
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "description": READ_TOOL_DEFINITION["description"],
+                    "parameters": READ_TOOL_DEFINITION["parameters"],
+                },
+            }
+        ]
 
     @respx.mock
     @pytest.mark.asyncio
