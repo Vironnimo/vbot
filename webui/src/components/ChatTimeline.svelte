@@ -241,8 +241,8 @@
   const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
   const TOOL_DISPLAY_ARGS = {
     read: ['path'],
-    write: ['filePath'],
-    edit: ['filePath'],
+    write: ['path'],
+    edit: ['path'],
     bash: ['command'],
     glob: ['pattern'],
   };

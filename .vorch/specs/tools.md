@@ -18,6 +18,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   optional line-based `offset`/`limit`. It does **not** have a `description`
   argument. Relative paths resolve from `ToolContext.workspace`; absolute paths
   are allowed.
+- Built-in `edit` tool: flat name `edit`; schema includes required `path`,
+  `old_string`, and `new_string`, plus optional boolean `replace_all`. It
+  replaces exact text in an existing file. Relative paths resolve from
+  `ToolContext.workspace`; absolute paths are allowed.
+- Built-in `write` tool: flat name `write`; schema includes required `path` and
+  `content`. It writes full file contents, creates parent directories, and
+  replaces existing file contents. Relative paths resolve from
+  `ToolContext.workspace`; absolute paths are allowed.
 
 ## Interfaces
 
@@ -29,6 +37,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `dispatch(context, name, arguments, allowed_tools=None) -> dict` — executes through an async interface and returns a result envelope.
 - `ToolExecutor.execute_many(...) -> list[ToolExecutionResult]` — executes sibling tool calls concurrently, applies per-run/global concurrency limits, and returns terminal results in original tool-call order.
 - `register_read_tool(registry) -> None` — registers the built-in `read` tool.
+- `register_edit_tool(registry) -> None` — registers the built-in `edit` tool.
+- `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 
 ## Conventions
 
@@ -52,6 +62,19 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   reports expected file/argument/read-time filesystem errors as failure envelopes.
 - Successful `read` results do not include `data.path`. The agent already knows
   the requested path from the tool call arguments.
+- `edit` is for precise, surgical replacement in existing files. `old_string`
+  must be non-empty and different from `new_string`; it must match exactly and
+  uniquely unless `replace_all: true` is supplied. The tool normalizes line
+  endings for matching/replacement, preserves the file's line-ending style where
+  practical, and reports missing text, ambiguous matches, validation failures,
+  and expected filesystem errors as failure envelopes.
+- `edit` success data includes a human-readable `message`, the resolved `path`,
+  `first_changed_line`, and `replacements` count.
+- `write` is for replacing an entire file or creating a new file. It creates
+  parent directories automatically and writes UTF-8 text. It is not for partial
+  edits or appends; use `edit` for surgical changes.
+- `write` success data includes a human-readable `message`, the resolved `path`,
+  and written byte count.
 
 ## Constraints & Gotchas
 

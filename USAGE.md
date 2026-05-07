@@ -104,6 +104,10 @@ Danach existiert:
 - `~/.vbot/agents/coder/sessions/`
 - `~/.vbot/workspace-coder/`
 
+Eingebaute Tools für Agents sind `read`, `edit` und `write`. Relative Pfade
+werden vom Workspace des jeweiligen Agents aus aufgelöst; absolute Pfade sind
+ebenfalls erlaubt.
+
 Beispielhafte aktuell vorhandene Modelle:
 
 - `openai/gpt-5.2`

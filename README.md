@@ -23,6 +23,10 @@ Bereits umgesetzt:
 - **Phase 2:** Minimaler Chat im Backend
 - **Phase 3:** Server-Schicht mit `POST /api/rpc`, SSE und `/ws`
 
+Der Agent-Tool-Support umfasst die eingebauten Tools `read`, `edit` und
+`write`. Relative Pfade werden vom Workspace des Agents aus aufgelöst;
+absolute Pfade sind erlaubt.
+
 Noch offen:
 
 - **Phase 4:** WebUI mit echtem Chat
