@@ -313,36 +313,80 @@ function historyTimelineItems(messages) {
 }
 
 function liveTimelineItems(runEvents) {
-  const groupedEvents = new Map();
-  const visibleStandaloneEvents = [];
+  const runGroups = new Map();
+  const timelineEntries = [];
 
-  for (const event of runEvents ?? []) {
+  for (const [arrivalIndex, event] of (runEvents ?? []).entries()) {
     if (isAssistantRunEvent(event)) {
-      const runKey = event.run_id ?? 'run';
-      if (!groupedEvents.has(runKey)) {
-        groupedEvents.set(runKey, []);
-      }
-      groupedEvents.get(runKey).push(event);
+      const runGroup = ensureLiveRunGroup(
+        runGroups,
+        timelineEntries,
+        event,
+        arrivalIndex,
+      );
+      runGroup.events.push(event);
       continue;
     }
 
     if (shouldShowStandaloneRunEvent(event)) {
-      visibleStandaloneEvents.push({
-        sequence: event.sequence ?? 0,
-        id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
-        type: 'event',
-        event,
+      const eventItem = createStandaloneRunEventItem(event);
+      if (event.run_id) {
+        const runGroup = ensureLiveRunGroup(
+          runGroups,
+          timelineEntries,
+          event,
+          arrivalIndex,
+        );
+        runGroup.userItem = eventItem;
+        continue;
+      }
+
+      timelineEntries.push({
+        kind: 'standalone',
+        order: arrivalIndex,
+        item: eventItem,
       });
     }
   }
 
-  const assistantRuns = [...groupedEvents.entries()].map(([runKey, events]) =>
-    buildLiveAssistantRunItem(runKey, events),
-  );
+  return timelineEntries
+    .sort((left, right) => left.order - right.order)
+    .flatMap((entry) => liveTimelineEntryItems(entry));
+}
 
-  return [...visibleStandaloneEvents, ...assistantRuns].sort(
-    (left, right) => left.sequence - right.sequence,
-  );
+function ensureLiveRunGroup(runGroups, timelineEntries, event, arrivalIndex) {
+  const runKey = event.run_id ?? 'run';
+  if (runGroups.has(runKey)) {
+    return runGroups.get(runKey);
+  }
+
+  const runGroup = {
+    kind: 'run',
+    order: arrivalIndex,
+    runKey,
+    events: [],
+    userItem: null,
+  };
+  runGroups.set(runKey, runGroup);
+  timelineEntries.push(runGroup);
+  return runGroup;
+}
+
+function liveTimelineEntryItems(entry) {
+  if (entry.kind === 'standalone') {
+    return [entry.item];
+  }
+
+  const assistantRun = buildLiveAssistantRunItem(entry.runKey, entry.events);
+  return [entry.userItem, assistantRun].filter(Boolean);
+}
+
+function createStandaloneRunEventItem(event) {
+  return {
+    id: `event-${event.run_id ?? 'run'}-${event.sequence ?? event.timestamp ?? event.type}`,
+    type: 'event',
+    event,
+  };
 }
 
 function buildLiveAssistantRunItem(runKey, events) {

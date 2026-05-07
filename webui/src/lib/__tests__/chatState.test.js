@@ -439,6 +439,204 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('orders each live run user event before its assistant block using run arrival', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-one',
+      sequence: 1,
+      timestamp: '2026-05-07T10:00:00Z',
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 2,
+      timestamp: '2026-05-07T10:00:01Z',
+      payload: {
+        message: { id: 'user-one', role: 'user', content: 'First request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 3,
+      timestamp: '2026-05-07T10:00:02Z',
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 4,
+      timestamp: '2026-05-07T10:00:03Z',
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read_file' },
+        result: { ok: true, content: 'A' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 5,
+      timestamp: '2026-05-07T10:00:04Z',
+      payload: { message: { role: 'assistant', content: 'First answer' } },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      timestamp: '2026-05-07T10:01:00Z',
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-two',
+      sequence: 2,
+      timestamp: '2026-05-07T10:01:01Z',
+      payload: {
+        message: { id: 'user-two', role: 'user', content: 'Second request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-two',
+      sequence: 3,
+      timestamp: '2026-05-07T10:01:02Z',
+      payload: { reasoning_delta: 'Planning' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-two',
+      sequence: 4,
+      timestamp: '2026-05-07T10:01:03Z',
+      payload: {
+        tool_call: {
+          id: 'call-two',
+          index: 0,
+          name: 'list_files',
+          arguments: { path: '.' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-two',
+      sequence: 5,
+      timestamp: '2026-05-07T10:01:04Z',
+      payload: {
+        tool_call: { id: 'call-two', index: 0, name: 'list_files' },
+        result: { ok: true, content: ['a.txt'] },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.type)).toEqual([
+      'event',
+      'assistant_run',
+      'event',
+      'assistant_run',
+    ]);
+    expect(timelineItems[0].event.payload.message.content).toBe(
+      'First request',
+    );
+    expect(timelineItems[1]).toEqual(
+      expect.objectContaining({ runId: 'run-one', type: 'assistant_run' }),
+    );
+    expect(timelineItems[2].event.payload.message.content).toBe(
+      'Second request',
+    );
+    expect(timelineItems[3]).toEqual(
+      expect.objectContaining({ runId: 'run-two', type: 'assistant_run' }),
+    );
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-one', status: 'success' }),
+    ]);
+    expect(timelineItems[3].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-two', status: 'success' }),
+    ]);
+  });
+
+  it('appends later runs after older runs even when run-local sequences restart', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-old',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-old',
+      sequence: 2,
+      payload: {
+        message: { id: 'user-old', role: 'user', content: 'Old request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-old',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'old-tool', index: 0, name: 'old_tool' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-new',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-new',
+      sequence: 2,
+      payload: {
+        message: { id: 'user-new', role: 'user', content: 'New request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-new',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'new-tool', index: 0, name: 'new_tool' },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.id)).toEqual([
+      'event-run-old-2',
+      'assistant-run-run-old',
+      'event-run-new-2',
+      'assistant-run-run-new',
+    ]);
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'old-tool' }),
+    ]);
+    expect(timelineItems[3].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'new-tool' }),
+    ]);
+  });
+
   it('merges trailing text deltas while preserving interleaved order', () => {
     const sessionState = ensureSessionState(
       createChatState(),
