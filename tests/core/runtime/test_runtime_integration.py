@@ -364,10 +364,19 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
                     "path": {"type": "string"},
                     "offset": {"type": "integer"},
                     "limit": {"type": "integer"},
+                    "description": {
+                        "type": "string",
+                        "description": "Brief description of what this tool call is doing",
+                    },
                 },
                 "required": ["path"],
                 "additionalProperties": False,
             },
         }
     ]
-    assert set(definitions[0]["parameters"]["properties"]) == {"path", "offset", "limit"}
+    assert set(definitions[0]["parameters"]["properties"]) == {
+        "path",
+        "offset",
+        "limit",
+        "description",
+    }
