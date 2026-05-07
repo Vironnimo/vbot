@@ -677,7 +677,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     assert tool_result["payload"]["result"] == {
         "ok": True,
         "error": None,
-        "data": {"path": str(workspace / "note.txt"), "content": "rpc content"},
+        "data": {"content": "rpc content"},
         "artifacts": [],
     }
     assert "reasoning_meta" not in str(result["events"])
