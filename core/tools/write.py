@@ -58,7 +58,7 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
 
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content_argument, encoding="utf-8")
+        resolved.write_bytes(content_argument.encode("utf-8"))
     except OSError as error:
         return tool_failure("file_write_error", f"failed to write file: {resolved}: {error}")
 

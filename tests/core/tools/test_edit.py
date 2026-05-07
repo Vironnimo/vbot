@@ -78,7 +78,7 @@ def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
-    target.write_text("hello workspace\n", encoding="utf-8")
+    target.write_bytes(b"hello workspace\n")
 
     result = edit_handler(
         make_context(workspace),
@@ -86,7 +86,7 @@ def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "hello agent\n"
+    assert target.read_bytes() == b"hello agent\n"
     assert data["replacements"] == 1
     assert data["first_changed_line"] == 1
     assert data["path"] == str(target.resolve())
@@ -98,7 +98,7 @@ def test_edit_replaces_text_in_absolute_path(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = tmp_path / "outside.txt"
-    target.write_text("absolute path\n", encoding="utf-8")
+    target.write_bytes(b"absolute path\n")
 
     result = edit_handler(
         make_context(workspace),
@@ -106,7 +106,7 @@ def test_edit_replaces_text_in_absolute_path(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "direct path\n"
+    assert target.read_bytes() == b"direct path\n"
     assert data["path"] == str(target.resolve())
 
 
@@ -212,6 +212,22 @@ def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> Non
     assert data["first_changed_line"] == 1
 
 
+def test_edit_preserves_lf_file_line_endings_at_byte_level(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"alpha\nbeta\ngamma\n")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "alpha\nbeta", "new_string": "one\ntwo"},
+    )
+
+    data = assert_success_envelope(result)
+    assert target.read_bytes() == b"one\ntwo\ngamma\n"
+    assert data["replacements"] == 1
+
+
 def test_edit_normalizes_newlines_for_matching_and_replacement(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -226,6 +242,70 @@ def test_edit_normalizes_newlines_for_matching_and_replacement(tmp_path: Path) -
     data = assert_success_envelope(result)
     assert target.read_bytes() == b"one\r\ntwo\r\ngamma\r\n"
     assert data["replacements"] == 1
+
+
+def test_edit_preserves_crlf_for_exact_match_replacement_at_byte_level(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "beta", "new_string": "one\ntwo"},
+    )
+
+    data = assert_success_envelope(result)
+    assert target.read_bytes() == b"alpha\r\none\r\ntwo\r\ngamma\r\n"
+    assert data["replacements"] == 1
+
+
+def test_edit_returns_failure_envelope_for_filesystem_read_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"hello\n")
+
+    def raise_permission_error(self: Path) -> bytes:
+        raise PermissionError("access denied while reading")
+
+    monkeypatch.setattr(Path, "read_bytes", raise_permission_error)
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "hello", "new_string": "hi"},
+    )
+
+    error = assert_failure_envelope(result, "file_read_error")
+    assert str(target.resolve()) in error["message"]
+    assert "access denied while reading" in error["message"]
+
+
+def test_edit_returns_failure_envelope_for_filesystem_write_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    target.write_bytes(b"hello\n")
+
+    def raise_permission_error(self: Path, data: bytes) -> int:
+        raise PermissionError("access denied while writing")
+
+    monkeypatch.setattr(Path, "write_bytes", raise_permission_error)
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "hello", "new_string": "hi"},
+    )
+
+    error = assert_failure_envelope(result, "file_write_error")
+    assert str(target.resolve()) in error["message"]
+    assert "access denied while writing" in error["message"]
 
 
 def test_edit_returns_failure_for_unknown_argument(tmp_path: Path) -> None:
