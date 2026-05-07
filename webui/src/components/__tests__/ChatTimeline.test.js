@@ -163,7 +163,9 @@ describe('ChatTimeline', () => {
 
     expect(document.body.textContent).toContain('read');
     expect(document.body.textContent).toContain('MEMORY.md');
-    expect(document.body.textContent).not.toContain('{"path":"MEMORY.md"}');
+    // The tool summary line should show the human-readable label, not raw JSON
+    const summaryEl = document.querySelector('.tool-event-line');
+    expect(summaryEl.textContent).not.toContain('{"path":"MEMORY.md"}');
   });
 
   it('prefers description argument over path/command in tool summary', () => {
@@ -221,12 +223,17 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).toContain('checking repo status');
     expect(summaryLine.textContent).not.toContain('git status');
 
-    const detailKeys = document.querySelectorAll('.teb-entry-key');
-    const keyTexts = Array.from(detailKeys).map((el) => el.textContent);
-    expect(keyTexts).not.toContain('description');
+    // description key should not appear in the detail panel (it's hidden)
+    const tebRows = document.querySelectorAll('.teb-row');
+    const argsRow = Array.from(tebRows).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    expect(argsRow.querySelector('.teb-code').textContent).not.toContain(
+      'description',
+    );
   });
 
-  it('renders Args detail with key above value in DOM order', () => {
+  it('renders Args detail as compact inline value', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -272,19 +279,18 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const allEntries = document.querySelectorAll('.teb-entry');
-    const pathEntry = Array.from(allEntries).find(
-      (el) => el.querySelector('.teb-entry-key')?.textContent === 'path',
-    );
-    expect(pathEntry).toBeTruthy();
-    expect(pathEntry.querySelector('.teb-entry-value').textContent).toBe(
-      'a.txt',
-    );
+    // Compact layout: a single .teb-row per section, no .teb-entry children
+    const tebRows = document.querySelectorAll('.teb-row');
+    expect(tebRows.length).toBeGreaterThan(0);
 
-    const keyEl = pathEntry.querySelector('.teb-entry-key');
-    const valueEl = pathEntry.querySelector('.teb-entry-value');
-    const childList = Array.from(pathEntry.children);
-    expect(childList.indexOf(keyEl)).toBeLessThan(childList.indexOf(valueEl));
+    // Args row should contain the compact JSON value inline
+    const argsRow = Array.from(tebRows).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    expect(argsRow).toBeTruthy();
+    const argsCode = argsRow.querySelector('.teb-code');
+    expect(argsCode).toBeTruthy();
+    expect(argsCode.textContent).toContain('a.txt');
   });
 
   it('falls back to first string argument for unknown tools', () => {
