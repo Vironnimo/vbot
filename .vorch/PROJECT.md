@@ -71,6 +71,13 @@ unused.
 **Time:** Persisted timestamps in UTC with explicit offset (ISO 8601). UI renders
 in user timezone. No implicit `datetime.now()`.
 
+**No legacy compatibility in app code — ever.** We are in development; schemas
+and config formats can and will break. The app reads the current format and nothing
+else. No auto-migrations, no fallback keys, no "if old_field then…" branches in
+application code. If a format changes, the old version is simply invalid. Manual
+conversion scripts go in `scripts/converters/` — they are standalone tools run
+explicitly by the user, not hooked into app startup or storage layers.
+
 **Frontend:** Svelte with JavaScript (no TypeScript). All user-visible strings
 through i18n — no hardcoded text.
 
