@@ -17,13 +17,13 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 ```
 
-- `start()` — idempotent. Creates `vbot.core` logger via `LogManager`, loads provider/model registries, prepares data directories, loads `<data_dir>/.env` into the process environment without overwriting existing env vars, copies prompt fragments, wires Phase 2 services, and ensures a usable default Agent exists. Writes "Runtime started" at info level. Second call is no-op (debug log) and preserves service instances.
+- `start()` — idempotent. Creates `vbot.core` logger via `LogManager`, loads provider/model registries, prepares data directories, loads `<data_dir>/.env` into the process environment without overwriting existing env vars, copies prompt fragments, wires services, registers built-in tools, and ensures a usable default Agent exists. Writes "Runtime started" at info level. Second call is no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Resets started state and clears service references. Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
-- `tools` — runtime `ToolRegistry`, empty by default.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; currently includes `read`.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.

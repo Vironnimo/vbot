@@ -94,6 +94,43 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.system_prompts, SystemPromptManager)
 
 
+def test_start_registers_read_builtin_tool(config: Config):
+    """Runtime.start() registers built-in tools for agent use."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    read_tool = runtime.tools.get("read")
+    assert read_tool.name == "read"
+
+
+def test_read_provider_definition_exposes_model_visible_metadata_only(config: Config):
+    """Runtime tool definitions expose schema without handler or context."""
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    definitions = runtime.tools.provider_definitions(["read"])
+
+    assert definitions == [
+        {
+            "name": "read",
+            "description": "Read a text file from disk. Relative paths resolve from the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    assert set(definitions[0]) == {"name", "description", "parameters"}
+
+
 def test_phase_two_services_inaccessible_before_start(config: Config):
     """Runtime service properties raise a startup error before start()."""
     runtime = Runtime(config)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,8 @@ from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
+    TOOL_CALL_RESULT_EVENT,
+    TOOL_CALL_STARTED_EVENT,
     ActiveRunError,
     ChatError,
     ChatLoop,
@@ -23,7 +26,8 @@ from core.chat import (
     RunCancelledError,
     RunStatus,
 )
-from core.tools import ToolRegistry
+from core.tools import JsonObject as ToolJsonObject
+from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
 from core.utils.errors import ProviderError
 
 JsonObject = dict[str, Any]
@@ -36,6 +40,7 @@ class StubAgent:
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
+    workspace: Path | None = None
 
 
 class StubAgents:
@@ -55,6 +60,24 @@ class StubProviders:
         if provider_id not in self._provider_ids:
             raise KeyError(provider_id)
         return object()
+
+
+class LegacyDispatchToolRegistry:
+    def __init__(self, result: JsonObject) -> None:
+        self.result = result
+
+    async def dispatch(
+        self,
+        name: Any,
+        arguments: ToolJsonObject,
+        allowed_tools: list[str] | None = None,
+    ) -> JsonObject:
+        if not isinstance(name, str):
+            raise TypeError("legacy dispatch expected string argument")
+        assert name == "legacy"
+        assert arguments == {"value": "input"}
+        assert allowed_tools == ["legacy"]
+        return self.result
 
 
 class StubPrompts:
@@ -286,7 +309,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "get_weather",
         "Get weather.",
         {"type": "object"},
-        lambda arguments: {"temp": 22, "city": arguments["city"]},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
     )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
@@ -299,7 +322,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
     assert persisted[1]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
     assert persisted[2]["tool_call_id"] == "call_abc"
-    assert persisted[2]["content"] == '{"temp":22,"city":"Berlin"}'
+    assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
     assert [message["role"] for message in adapter.requests[1]["messages"]] == [
         "system",
         "user",
@@ -394,7 +417,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         "get_weather",
         "Get weather.",
         {"type": "object"},
-        lambda arguments: {"temp": 22, "city": arguments["city"]},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
     )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
@@ -414,19 +437,30 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     assert persisted[1]["tool_calls"] == [
         {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
     ]
-    assert persisted[2]["content"] == '{"temp":22,"city":"Berlin"}'
+    assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
     assert adapter.stream_requests[1]["messages"][2]["reasoning_meta"] == {"signature": "opaque"}
     assert [
         event.type
         for event in run.events
-        if event.type in {TOOL_CALL_DELTA_EVENT, "tool_call_started"}
+        if event.type in {TOOL_CALL_DELTA_EVENT, TOOL_CALL_STARTED_EVENT}
     ] == [
         TOOL_CALL_DELTA_EVENT,
         TOOL_CALL_DELTA_EVENT,
-        "tool_call_started",
+        TOOL_CALL_STARTED_EVENT,
     ]
-    tool_started = next(event for event in run.events if event.type == "tool_call_started")
+    tool_started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
     assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
+    assert tool_started.payload["tool_call"] == {
+        "id": "call_abc",
+        "index": 0,
+        "name": "get_weather",
+        "arguments": {"city": "Berlin"},
+    }
+    tool_result = next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT)
+    assert tool_result.payload == {
+        "tool_call": {"id": "call_abc", "index": 0, "name": "get_weather"},
+        "result": tool_success({"temp": 22, "city": "Berlin"}),
+    }
     assert all(
         "reasoning_meta" not in event.payload.get("message", {})
         for event in run.events
@@ -667,18 +701,187 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
                 "tool_calls": [
                     {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
                 ],
-            }
+            },
+            {"content": "Recovered", "tool_calls": None},
         ]
     )
     tools = ToolRegistry()
-    tools.register("get_weather", "Get weather.", {"type": "object"}, lambda arguments: {})
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({}),
+    )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    with pytest.raises(Exception, match="Tool not allowed"):
-        await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
+    await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+    assert json.loads(messages[2].content or "{}") == tool_failure(
+        "tool_not_allowed",
+        "Tool not allowed: get_weather",
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["slow"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "name": "slow", "arguments": {"value": "first"}},
+                    {"id": "call_2", "name": "slow", "arguments": {"value": "second"}},
+                ],
+            },
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    second_started = asyncio.Event()
+    first_can_finish = asyncio.Event()
+
+    async def slow_handler(context: ToolContext, arguments: ToolJsonObject) -> ToolJsonObject:
+        if context.tool_call_id == "call_1":
+            await second_started.wait()
+            first_can_finish.set()
+        else:
+            second_started.set()
+        return tool_success({"value": arguments["value"], "id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    tools.register("slow", "Slow tool.", {"type": "object"}, slow_handler)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    result_events = [event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT]
+    assert assistant.content == "Done"
+    assert first_can_finish.is_set()
+    assert [message.tool_call_id for message in messages if message.role == "tool"] == [
+        "call_1",
+        "call_2",
+    ]
+    assert [event.payload["tool_call"]["id"] for event in result_events] == ["call_2", "call_1"]
+    assert [
+        json.loads(message.content or "{}")["data"]["id"]
+        for message in messages
+        if message.role == "tool"
+    ] == [
+        "call_1",
+        "call_2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_same_tool_sibling_calls_run_in_parallel(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["same"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "name": "same", "arguments": {}},
+                    {"id": "call_2", "name": "same", "arguments": {}},
+                ],
+            },
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    active_count = 0
+    max_active_count = 0
+    release = asyncio.Event()
+
+    async def same_handler(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        nonlocal active_count, max_active_count
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        if max_active_count == 2:
+            release.set()
+        await release.wait()
+        active_count -= 1
+        return tool_success({"id": context.tool_call_id})
+
+    tools = ToolRegistry()
+    tools.register("same", "Same tool.", {"type": "object"}, same_handler)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
+
+    assert max_active_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["explode"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "explode", "arguments": {}}],
+            },
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+
+    def failing_handler(_context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        raise RuntimeError("boom")
+
+    tools = ToolRegistry()
+    tools.register("explode", "Explode.", {"type": "object"}, failing_handler)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert assistant.content == "Recovered"
+    assert run.status == RunStatus.COMPLETED
+    assert json.loads(messages[2].content or "{}") == tool_failure("tool_execution_error", "boom")
+    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
+        "tool_call": {"id": "call_1", "index": 0, "name": "explode"},
+        "result": tool_failure("tool_execution_error", "boom"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_dispatch_non_envelope_result_is_failure_envelope(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["legacy"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "legacy", "arguments": {"value": "input"}}],
+            },
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=cast(ToolRegistry, LegacyDispatchToolRegistry({"content": "not enveloped"})),
+    )
+
+    assistant = await ChatLoop(runtime).send("coder", "Run legacy", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    failure = tool_failure(
+        "invalid_tool_result",
+        "Tool handler must return a valid result envelope: legacy",
+    )
+    assert assistant.content == "Recovered"
+    assert json.loads(messages[2].content or "{}") == failure
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
+        "tool_call": {"id": "call_1", "index": 0, "name": "legacy"},
+        "result": failure,
+    }
 
 
 @pytest.mark.asyncio
@@ -695,7 +898,12 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
         ]
     )
     tools = ToolRegistry()
-    tools.register("get_weather", "Get weather.", {"type": "object"}, lambda arguments: {})
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({}),
+    )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     with pytest.raises(ChatError, match="maximum tool iterations"):
