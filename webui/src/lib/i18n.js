@@ -177,6 +177,8 @@ export const englishCatalog = Object.freeze({
   'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
+  'agents.form.modelUnavailableConnectionOption':
+    'Unavailable / custom: {model} ({connection})',
   'agents.form.thinkingEffortDefault': 'Default',
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',
