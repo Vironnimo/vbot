@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
+from core.models import Capabilities, Model, ReasoningCapabilities
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
 from server.delegates import dispatch_rpc
@@ -124,10 +125,51 @@ class StubProviders:
 
 class StubModels:
     def __init__(self) -> None:
-        self._counts = {"anthropic": 1, "openai": 2}
+        self._models = {
+            "anthropic": [
+                Model(
+                    model_id="claude-sonnet-4-20250219",
+                    name="Claude Sonnet 4",
+                    capabilities=Capabilities(
+                        vision=True,
+                        tools=True,
+                        json_mode=False,
+                        reasoning=ReasoningCapabilities(supported=True),
+                    ),
+                    context_window=200000,
+                    max_output_tokens=64000,
+                )
+            ],
+            "openai": [
+                Model(
+                    model_id="gpt-4.1-mini",
+                    name="GPT-4.1 mini",
+                    capabilities=Capabilities(
+                        vision=False,
+                        tools=True,
+                        json_mode=True,
+                        reasoning=ReasoningCapabilities(supported=False),
+                    ),
+                    context_window=128000,
+                    max_output_tokens=16000,
+                ),
+                Model(
+                    model_id="gpt-5.2",
+                    name="GPT-5.2",
+                    capabilities=Capabilities(
+                        vision=True,
+                        tools=True,
+                        json_mode=True,
+                        reasoning=ReasoningCapabilities(supported=True),
+                    ),
+                    context_window=256000,
+                    max_output_tokens=32000,
+                ),
+            ],
+        }
 
     def list_for_provider(self, provider_id: str) -> list[object]:
-        return [object() for _ in range(self._counts[provider_id])]
+        return list(self._models[provider_id])
 
 
 class StubStorage:
@@ -313,6 +355,102 @@ async def test_settings_get_rejects_params(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_model_list_returns_all_models_across_providers_with_full_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    monkeypatch.setattr(state.runtime.providers, "list_ids", lambda: ["openai", "anthropic"])
+    state.runtime.models._models["openai"] = [
+        state.runtime.models._models["openai"][1],
+        state.runtime.models._models["openai"][0],
+    ]
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "models": [
+                {
+                    "id": "anthropic/claude-sonnet-4-20250219",
+                    "provider_id": "anthropic",
+                    "model_id": "claude-sonnet-4-20250219",
+                    "name": "Claude Sonnet 4",
+                    "capabilities": {
+                        "vision": True,
+                        "tools": True,
+                        "json_mode": False,
+                        "reasoning": {"supported": True},
+                    },
+                    "context_window": 200000,
+                    "max_output_tokens": 64000,
+                },
+                {
+                    "id": "openai/gpt-4.1-mini",
+                    "provider_id": "openai",
+                    "model_id": "gpt-4.1-mini",
+                    "name": "GPT-4.1 mini",
+                    "capabilities": {
+                        "vision": False,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": False},
+                    },
+                    "context_window": 128000,
+                    "max_output_tokens": 16000,
+                },
+                {
+                    "id": "openai/gpt-5.2",
+                    "provider_id": "openai",
+                    "model_id": "gpt-5.2",
+                    "name": "GPT-5.2",
+                    "capabilities": {
+                        "vision": True,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": True},
+                    },
+                    "context_window": 256000,
+                    "max_output_tokens": 32000,
+                },
+            ]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_list_returns_all_registered_tools_with_name_and_description(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.tools.register(
+        "z_tool",
+        "Last tool alphabetically",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        lambda _context, _arguments: {"ok": True, "error": None, "data": {}, "artifacts": []},
+    )
+    state.runtime.tools.register(
+        "a_tool",
+        "First tool alphabetically",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        lambda _context, _arguments: {"ok": True, "error": None, "data": {}, "artifacts": []},
+    )
+
+    response = await dispatch_rpc(state, {"method": "tool.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "tools": [
+                {"name": "a_tool", "description": "First tool alphabetically"},
+                {"name": "z_tool", "description": "Last tool alphabetically"},
+            ]
+        },
+    }
 
 
 @pytest.mark.asyncio

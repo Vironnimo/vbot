@@ -48,8 +48,14 @@ and Settings.
     output render together.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
-    displayed from Agent data but omitted from public create/update payloads in
-    Phase 4.
+  displayed from Agent data but omitted from public create/update payloads in
+  Phase 4.
+- `webui/src/components/AgentsView.svelte`
+  - Loads `agent.list` plus the backend catalogs from `model.list` and
+    `tool.list` on mount.
+  - The Agent form uses backend-backed selects for `model`, `fallback_model`,
+    and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
+  - Skills remain textarea-based until a backend skill catalog exists.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
@@ -87,7 +93,7 @@ and Settings.
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` and `Settings` are placeholders in Phase 4. Toasted controls
-  that imply persistence or backend-sourced catalogs should remain disabled or
-  visibly placeholder-only until backend support exists.
+- `System Prompt` and `Settings` are placeholders in Phase 4. In the Agents
+  view, model and tool catalogs are now backend-backed; skills still remain
+  placeholder/textarea-based until a backend skill catalog exists.
 - The production build emits `webui/dist`, which FastAPI serves when present.
