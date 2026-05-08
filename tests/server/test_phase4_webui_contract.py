@@ -47,7 +47,7 @@ class Phase4Runtime(Runtime):
         super().__init__(config)
         self.adapter = adapter or Phase4Adapter()
 
-    def get_adapter(self, _provider_id: str) -> ProviderAdapter:
+    def get_adapter(self, _provider_id: str, _connection_id: str) -> ProviderAdapter:
         return cast(ProviderAdapter, self.adapter)
 
 
@@ -84,7 +84,12 @@ def test_phase4_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -
             "/api/rpc",
             json={
                 "method": "agent.create",
-                "params": {"id": "coder", "name": "Coder", "model": "openai/gpt-5.2"},
+                "params": {
+                    "id": "coder",
+                    "name": "Coder",
+                    "model": "openai/gpt-5.2",
+                    "connection": "openai:api-key",
+                },
             },
         )
         created_agent = create_response.json()["result"]
@@ -158,7 +163,14 @@ def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
     with TestClient(app) as client:
         client.post(
             "/api/rpc",
-            json={"method": "agent.update", "params": {"id": "main", "model": "openai/gpt-5.2"}},
+            json={
+                "method": "agent.update",
+                "params": {
+                    "id": "main",
+                    "model": "openai/gpt-5.2",
+                    "connection": "openai:api-key",
+                },
+            },
         )
         agent = client.post("/api/rpc", json={"method": "agent.list", "params": {}}).json()[
             "result"
@@ -194,7 +206,14 @@ def test_phase4_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
     with TestClient(app) as client:
         client.post(
             "/api/rpc",
-            json={"method": "agent.update", "params": {"id": "main", "model": "openai/gpt-5.2"}},
+            json={
+                "method": "agent.update",
+                "params": {
+                    "id": "main",
+                    "model": "openai/gpt-5.2",
+                    "connection": "openai:api-key",
+                },
+            },
         )
         agent = client.post("/api/rpc", json={"method": "agent.list", "params": {}}).json()[
             "result"

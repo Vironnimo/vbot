@@ -16,16 +16,14 @@ Clients call the vBot server contract; provider wire details stay behind
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional
   `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false,
   "error": { "code": ..., "message": ... } }`.
-- WebUI-facing RPC methods include `model.list`, `tool.list`, `agent.list`,
+- WebUI-facing RPC methods include `connection.list`, `model.list`, `tool.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `chat.history`, `chat.send`, `chat.stream`, and `chat.cancel`.
-- `model.list` returns models only for providers whose credentials are present
-  and non-empty as `{ id, provider_id, model_id, name, capabilities,
+- `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
+- `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
   `<provider>/<model-id-at-provider>` format.
-- `settings.get` provider items use credential-centric fields:
-  `credential_key`, `credentials_configured`, and provider status values such as
-  `configured` or `missing_credentials`.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name.
 - `agent.delete` rejects deletion when it would leave zero Agents.
@@ -33,7 +31,7 @@ Clients call the vBot server contract; provider wire details stay behind
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
-  fields. `workspace` is intentionally not accepted through public RPC in Phase 4.
+  fields. `connection` and `fallback_connection` are optional string fields alongside `model` and `fallback_model`. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `chat.history` returns visible persisted messages for `{ agent_id,
