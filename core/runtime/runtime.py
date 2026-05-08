@@ -4,7 +4,6 @@ The ``Runtime`` class is the single entry point that wires together
 all core services and manages the application lifecycle.
 """
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -14,9 +13,14 @@ from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import ProviderConfig, ProviderRegistry
-from core.runtime.interfaces import ConfigProtocol, LoggerProtocol
+from core.runtime.interfaces import (
+    ConfigProtocol,
+    LoggerProtocol,
+    ProviderCredentialResolverProtocol,
+)
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools import (
@@ -81,6 +85,7 @@ class Runtime:
         self.logger: LoggerProtocol | None = None
         self._started: bool = False
         self._providers: ProviderRegistry | None = None
+        self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._models: ModelRegistry | None = None
         self._storage: StorageManager | None = None
         self._agents: AgentStore | None = None
@@ -108,10 +113,14 @@ class Runtime:
 
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
         self._storage.ensure_directories()
-        self._storage.load_environment()
+        data_dir_credentials = self._storage.load_environment()
         self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)
+        self._provider_credentials = ProviderCredentialResolver(
+            self._providers,
+            fallback_credentials=data_dir_credentials,
+        )
         self._models = ModelRegistry.load(resources_path)
         self._agents = AgentStore(
             self._storage.data_dir,
@@ -147,6 +156,7 @@ class Runtime:
             self.logger.info("Runtime stopped")
         self._started = False
         self._providers = None
+        self._provider_credentials = None
         self._models = None
         self._storage = None
         self._agents = None
@@ -200,6 +210,14 @@ class Runtime:
         if self._models is None:
             raise RuntimeError("Model registry not available")
         return self._models
+
+    @property
+    def provider_credentials(self) -> ProviderCredentialResolverProtocol:
+        """Access to centralized provider credential resolution."""
+        self._ensure_started()
+        if self._provider_credentials is None:
+            raise RuntimeError("Provider credential service not available")
+        return self._provider_credentials
 
     @property
     def storage(self) -> StorageManager:
@@ -257,8 +275,8 @@ class Runtime:
         """Return a wired adapter instance for the given provider.
 
         Looks up the provider config from the registry, resolves the
-        API key from the environment using the provider's ``env_key``,
-        and instantiates the correct adapter class.
+        provider credential through the runtime's central credential
+        resolver, and instantiates the correct adapter class.
 
         Args:
             provider_id: Unique provider identifier (e.g. ``"openai"``).
@@ -269,20 +287,14 @@ class Runtime:
         Raises:
             RuntimeError: If the runtime has not been started.
             KeyError: If no provider with *provider_id* is registered.
-            ConfigError: If the API key is not set in the environment,
+            ConfigError: If the provider credential is not configured,
                 or if the adapter type is unknown.
         """
         if not self._started:
             raise RuntimeError("Runtime not started — call start() first")
 
         provider_config = self.providers.get(provider_id)
-
-        api_key = os.environ.get(provider_config.auth.env_key, "")
-        if not api_key:
-            raise ConfigError(
-                f"API key not found for provider '{provider_id}': "
-                f"environment variable '{provider_config.auth.env_key}' is not set"
-            )
+        api_key = self.get_provider_credentials(provider_id)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
         if adapter_class is None:
@@ -291,6 +303,22 @@ class Runtime:
             )
 
         return adapter_class(provider_config, api_key)
+
+    def has_provider_credentials(self, provider_id: str) -> bool:
+        """Return whether *provider_id* has usable configured credentials."""
+
+        if not self._started:
+            raise RuntimeError("Runtime not started — call start() first")
+
+        return self.provider_credentials.has_credentials(provider_id)
+
+    def get_provider_credentials(self, provider_id: str) -> str:
+        """Return the configured credential value for *provider_id*."""
+
+        if not self._started:
+            raise RuntimeError("Runtime not started — call start() first")
+
+        return self.provider_credentials.get_credentials(provider_id)
 
     # ------------------------------------------------------------------
     # Model lookup convenience
