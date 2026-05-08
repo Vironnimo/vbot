@@ -10,9 +10,11 @@ from pathlib import Path
 import pytest
 
 from core.models.models import ModelRegistry
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
+from core.utils.errors import ConfigError
 
 
 @pytest.fixture
@@ -55,7 +57,130 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert openai_config.name == "OpenAI"
     assert openai_config.adapter == "openai_compatible"
     assert openai_config.base_url == "https://api.openai.com/v1"
-    assert openai_config.auth.credential_key == "OPENAI_API_KEY"
+    assert [connection.id for connection in openai_config.connections] == [
+        "oauth",
+        "api-key",
+    ]
+    assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
+
+
+def test_provider_credential_resolver_has_credentials_for_connection(
+    tmp_path: Path,
+) -> None:
+    """Per-connection credential checks use the connection auth config."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+
+    # Act / Assert
+    assert runtime.provider_credentials.has_credentials("openai", "openai:api-key") is False
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={"OPENAI_API_KEY": "sk-test"},
+    )
+    assert resolver.has_credentials("openai", "openai:api-key") is True
+
+
+def test_provider_credential_resolver_get_credentials_for_connection(
+    tmp_path: Path,
+) -> None:
+    """Per-connection credential lookup returns the matching credential value."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={"OPENAI_API_KEY": "sk-test"},
+    )
+
+    # Act
+    credential = resolver.get_credentials("openai", "openai:api-key")
+
+    # Assert
+    assert credential == "sk-test"
+
+
+def test_provider_credential_resolver_get_connection_missing_credentials(
+    tmp_path: Path,
+) -> None:
+    """Per-connection credential lookup raises ConfigError when missing."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(runtime.providers, process_env={})
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="Provider credentials not found"):
+        resolver.get_credentials("openai", "openai:api-key")
+
+
+def test_provider_credential_resolver_connection_missing_from_env_and_fallback(
+    tmp_path: Path,
+) -> None:
+    """A credential absent from process env and fallback is not usable."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={},
+        fallback_credentials={"OTHER_KEY": "other-value"},
+    )
+
+    # Act / Assert
+    assert resolver.has_credentials("openai", "openai:api-key") is False
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        resolver.get_credentials("openai", "openai:api-key")
+
+
+def test_provider_credential_resolver_provider_level_delegates_to_first_usable(
+    tmp_path: Path,
+) -> None:
+    """Provider-level lookups return the first usable connection in config order."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={
+            "OPENAI_OAUTH_TOKEN": "oauth-token",
+            "OPENAI_API_KEY": "api-key",
+        },
+    )
+
+    # Act / Assert
+    assert resolver.has_credentials("openai") is True
+    assert resolver.get_credentials("openai") == "oauth-token"
+
+
+def test_provider_credential_resolver_provider_level_skips_unusable_connection(
+    tmp_path: Path,
+) -> None:
+    """Provider-level lookup skips missing credentials and uses the next usable connection."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={"OPENAI_API_KEY": "api-key"},
+    )
+
+    # Act / Assert
+    assert resolver.has_credentials("openai") is True
+    assert resolver.get_credentials("openai") == "api-key"
+
+
+def test_provider_credential_resolver_unknown_connection_id_raises_config_error(
+    tmp_path: Path,
+) -> None:
+    """Unknown connection IDs raise ConfigError."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+
+    # Act / Assert
+    with pytest.raises(ConfigError, match="Unknown connection id"):
+        runtime.provider_credentials.has_credentials("openai", "openai:missing")
 
 
 # ------------------------------------------------------------------

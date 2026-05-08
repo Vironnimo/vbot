@@ -21,7 +21,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -32,7 +32,40 @@ ANTHROPIC_CONFIG = ProviderConfig(
     name="Anthropic",
     adapter="anthropic",
     base_url="https://api.anthropic.com/v1",
-    auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
+        )
+    ],
+    defaults={"max_tokens": 4096},
+)
+
+ANTHROPIC_MULTI_AUTH_CONFIG = ProviderConfig(
+    id="anthropic",
+    name="Anthropic",
+    adapter="anthropic",
+    base_url="https://api.anthropic.com/v1",
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
+        ),
+        ConnectionConfig(
+            id="oauth",
+            type="oauth",
+            label="OAuth",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="ANTHROPIC_OAUTH_TOKEN",
+            ),
+        ),
+    ],
     defaults={"max_tokens": 4096},
 )
 
@@ -41,11 +74,18 @@ CUSTOM_CONFIG = ProviderConfig(
     name="Anthropic Custom",
     adapter="anthropic",
     base_url="https://custom.anthropic.example/v1",
-    auth=AuthConfig(
-        header="x-api-key",
-        prefix="",
-        credential_key="CUSTOM_ANTHROPIC_API_KEY",
-    ),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="x-api-key",
+                prefix="",
+                credential_key="CUSTOM_ANTHROPIC_API_KEY",
+            ),
+        )
+    ],
     defaults={"max_tokens": 8192, "temperature": 0.7},
     extra_headers={"X-Custom-Header": "custom-value"},
 )
@@ -55,11 +95,18 @@ NO_DEFAULTS_CONFIG = ProviderConfig(
     name="Anthropic Minimal",
     adapter="anthropic",
     base_url="https://minimal.anthropic.example/v1",
-    auth=AuthConfig(
-        header="x-api-key",
-        prefix="",
-        credential_key="MINIMAL_ANTHROPIC_API_KEY",
-    ),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="x-api-key",
+                prefix="",
+                credential_key="MINIMAL_ANTHROPIC_API_KEY",
+            ),
+        )
+    ],
 )
 
 API_KEY = "test-anthropic-key-12345"
@@ -686,6 +733,29 @@ class TestSendHeaders:
         api_key_header = route.calls.last.request.headers.get("x-api-key")
         assert not api_key_header.startswith("Bearer ")
         assert api_key_header == API_KEY
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_uses_selected_connection_auth_header(self):
+        """Selected connection auth metadata controls the request auth header."""
+        # Arrange
+        selected_connection = ANTHROPIC_MULTI_AUTH_CONFIG.get_connection("oauth")
+        adapter = AnthropicAdapter(
+            ANTHROPIC_MULTI_AUTH_CONFIG,
+            API_KEY,
+            auth_config=selected_connection.auth,
+        )
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        # Act
+        await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+        # Assert
+        request_headers = route.calls.last.request.headers
+        assert request_headers.get("authorization") == f"Bearer {API_KEY}"
+        assert request_headers.get("x-api-key") is None
 
 
 # ---------------------------------------------------------------------------

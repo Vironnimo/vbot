@@ -37,7 +37,7 @@ container; a Run is one active execution inside that session.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, and `tool_call_delta` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
-  - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates provider/model split, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
+  - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=...) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager.
 
 ## Phase 3 Server Contract Alignment
@@ -80,6 +80,7 @@ container; a Run is one active execution inside that session.
 - If a Session later continues with a different provider, stale `reasoning_meta`
   from the old provider must never be sent to the new provider.
 - `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
+- Runtime target resolution uses both `agent.model` and `agent.connection`: provider comes from `connection` (`<provider>:<connection-id>`), while adapter `model_id` still comes from the part after `/` in `model`. If `connection` is empty, the chat loop falls back to the first usable connection for the model provider in provider-config order.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
 - Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
 - Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.

@@ -1,7 +1,7 @@
 """Provider configuration dataclass and registry.
 
 A ``ProviderConfig`` holds the static settings that distinguish one provider
-from another: base URL, auth mechanism, default parameters, and optional
+from another: base URL, auth connections, default parameters, and optional
 extra headers.  Configs are frozen (immutable) and loaded from JSON files
 under ``resources/providers/``.
 
@@ -14,9 +14,11 @@ registry instance without re-reading disk.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from core.utils.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # Nested dataclass for auth configuration
@@ -38,6 +40,28 @@ class AuthConfig:
     credential_key: str
 
 
+VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
+
+
+@dataclass(frozen=True)
+class ConnectionConfig:
+    """Authentication connection configuration for a provider.
+
+    Attributes:
+        id: Local connection identifier within the provider config.
+        type: Connection kind. Supported values are ``"api_key"`` and ``"oauth"``.
+        label: Human-readable display label.
+        auth: Authentication configuration for this connection.
+        base_url: Optional provider base URL override for this connection.
+    """
+
+    id: str
+    type: str
+    label: str
+    auth: AuthConfig
+    base_url: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Provider configuration
 # ---------------------------------------------------------------------------
@@ -54,7 +78,7 @@ class ProviderConfig:
         adapter: Adapter class selector (e.g. ``"openai_compatible"``,
             ``"anthropic"``).
         base_url: Base URL for the provider API.
-        auth: Authentication configuration.
+        connections: Authentication connection configurations.
         defaults: Optional default request parameters (e.g. ``max_tokens``,
             ``temperature``).
         extra_headers: Optional provider-specific HTTP headers.
@@ -66,10 +90,21 @@ class ProviderConfig:
     name: str
     adapter: str
     base_url: str
-    auth: AuthConfig
+    connections: list[ConnectionConfig] = field(default_factory=list)
     defaults: dict[str, Any] | None = None
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
+
+    def get_connection(self, local_id: str) -> ConnectionConfig:
+        """Return a connection by its local provider-scoped ID."""
+
+        for connection in self.connections:
+            if connection.id == local_id:
+                return connection
+        raise KeyError(
+            f"No connection config found for id '{local_id}' on provider '{self.id}'. "
+            f"Available: {', '.join(connection.id for connection in self.connections)}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -177,19 +212,54 @@ class ProviderRegistry:
         Returns:
             A fully-constructed ``ProviderConfig``.
         """
-        auth_data = data["auth"]
-        auth = AuthConfig(
-            header=auth_data["header"],
-            prefix=auth_data["prefix"],
-            credential_key=auth_data["credential_key"],
-        )
+        connections = ProviderRegistry._parse_connections(data)
         return ProviderConfig(
             id=data["id"],
             name=data["name"],
             adapter=data["adapter"],
             base_url=data["base_url"],
-            auth=auth,
+            connections=connections,
             defaults=data.get("defaults"),
             extra_headers=data.get("extra_headers"),
             models_endpoint=data.get("models_endpoint"),
         )
+
+    @staticmethod
+    def _parse_connections(data: dict[str, Any]) -> list[ConnectionConfig]:
+        provider_id = data["id"]
+        connections: list[ConnectionConfig] = []
+        seen_ids: set[str] = set()
+
+        if "connections" not in data:
+            raise ConfigError(f"Provider '{provider_id}' is missing required field 'connections'")
+
+        for connection_data in data["connections"]:
+            local_id = connection_data["id"]
+            if local_id in seen_ids:
+                raise KeyError(f"Duplicate connection id '{local_id}' for provider '{provider_id}'")
+            seen_ids.add(local_id)
+
+            connection_type = connection_data["type"]
+            if connection_type not in VALID_CONNECTION_TYPES:
+                raise ConfigError(
+                    f"Unknown connection type '{connection_type}' for provider "
+                    f"'{provider_id}' connection '{local_id}'"
+                )
+
+            auth_data = connection_data["auth"]
+            auth = AuthConfig(
+                header=auth_data["header"],
+                prefix=auth_data["prefix"],
+                credential_key=auth_data["credential_key"],
+            )
+            connections.append(
+                ConnectionConfig(
+                    id=local_id,
+                    type=connection_type,
+                    label=connection_data["label"],
+                    auth=auth,
+                    base_url=connection_data.get("base_url"),
+                )
+            )
+
+        return connections

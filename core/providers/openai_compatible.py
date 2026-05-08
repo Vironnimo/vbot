@@ -17,7 +17,7 @@ import httpx
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
-from core.providers.providers import ProviderConfig
+from core.providers.providers import AuthConfig, ProviderConfig
 from core.utils.retry import retry_async
 
 # ---------------------------------------------------------------------------
@@ -48,11 +48,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         api_key: API key for authentication.
     """
 
-    def __init__(self, config: ProviderConfig, api_key: str) -> None:
+    def __init__(
+        self,
+        config: ProviderConfig,
+        api_key: str,
+        base_url: str | None = None,
+        auth_config: AuthConfig | None = None,
+    ) -> None:
         self._config = config
         self._api_key = api_key
+        self._auth_config = auth_config or config.connections[0].auth
         self._client = httpx.AsyncClient(
-            base_url=config.base_url,
+            base_url=base_url or config.base_url,
             timeout=60.0,
         )
 
@@ -75,9 +82,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # ------------------------------------------------------------------
 
     def _build_headers(self) -> dict[str, str]:
-        """Build request headers from provider config auth and extra_headers."""
+        """Build request headers from selected connection auth and extra_headers."""
         headers: dict[str, str] = {
-            self._config.auth.header: f"{self._config.auth.prefix}{self._api_key}",
+            self._auth_config.header: f"{self._auth_config.prefix}{self._api_key}",
         }
         if self._config.extra_headers:
             headers.update(self._config.extra_headers)

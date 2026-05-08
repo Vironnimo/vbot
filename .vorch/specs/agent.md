@@ -8,13 +8,15 @@ Persisted agent configuration and workspace lifecycle management.
 
 ## Data Model
 
-`Agent` fields match the Phase 2+/Phase 4 schema: `id`, `name`, `model`,
-`fallback_model`, `workspace`, `current_session_id`, `temperature`,
+`Agent` fields match the current schema: `id`, `name`, `model`,
+`fallback_model`, `connection`, `fallback_connection`, `workspace`, `current_session_id`, `temperature`,
 `thinking_effort`, `allowed_tools`, `allowed_skills`, `created_at`,
 `updated_at`.
 
 - `id` is immutable and used as the filesystem directory name.
 - `model` is user-facing `<provider>/<model-id>` and may be empty until chat time.
+- `connection` is user-facing `<provider>:<connection-id>` and stores how to reach `model`. It defaults to `""` for manually edited configs but normal create/update flows should persist model and connection together.
+- `fallback_connection` stores how to reach `fallback_model` and defaults to `""`.
 - `workspace` defaults to `<data_dir>/workspace-<id>/` and is stored as an absolute path.
   Public WebUI/RPC create/update does not accept workspace mutation in Phase 4;
   this avoids archiving arbitrary user paths if an Agent is later deleted.

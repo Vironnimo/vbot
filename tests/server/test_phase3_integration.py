@@ -25,6 +25,7 @@ JsonObject = dict[str, Any]
 class IntegrationAgent:
     id: str
     model: str = "openai/gpt-5.2"
+    connection: str = "openai:api-key"
     temperature: float = 0.2
     thinking_effort: str = "medium"
     allowed_tools: list[str] | None = None
@@ -47,13 +48,33 @@ class IntegrationProviders:
                 id="anthropic",
                 name="Anthropic",
                 base_url="https://api.anthropic.com/v1",
-                auth=IntegrationAuth(credential_key="ANTHROPIC_API_KEY"),
+                connections=[
+                    IntegrationConnection(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=IntegrationAuth(credential_key="ANTHROPIC_API_KEY"),
+                    )
+                ],
             ),
             "openai": IntegrationProvider(
                 id="openai",
                 name="OpenAI",
                 base_url="https://api.openai.com/v1",
-                auth=IntegrationAuth(credential_key="OPENAI_API_KEY"),
+                connections=[
+                    IntegrationConnection(
+                        id="oauth",
+                        type="oauth",
+                        label="OAuth",
+                        auth=IntegrationAuth(credential_key="OPENAI_OAUTH_TOKEN"),
+                    ),
+                    IntegrationConnection(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=IntegrationAuth(credential_key="OPENAI_API_KEY"),
+                    ),
+                ],
             ),
         }
 
@@ -72,11 +93,19 @@ class IntegrationAuth:
 
 
 @dataclass(frozen=True)
+class IntegrationConnection:
+    id: str
+    type: str
+    label: str
+    auth: IntegrationAuth
+
+
+@dataclass(frozen=True)
 class IntegrationProvider:
     id: str
     name: str
     base_url: str
-    auth: IntegrationAuth
+    connections: list[IntegrationConnection]
 
 
 class IntegrationModels:
@@ -229,11 +258,21 @@ class IntegrationRuntime:
     def stop(self) -> None:
         self.stopped = True
 
-    def get_adapter(self, _provider_id: str) -> SequencedAdapter:
+    def get_adapter(self, _provider_id: str, _connection_id: str) -> SequencedAdapter:
         return self._adapter_pool.next()
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         return provider_id in self._configured_provider_ids
+
+    @property
+    def provider_credentials(self) -> Any:
+        runtime = self
+
+        class CredentialResolver:
+            def has_credentials(self, provider_id: str, _connection_id: str | None = None) -> bool:
+                return runtime.has_provider_credentials(provider_id)
+
+        return CredentialResolver()
 
 
 def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) -> None:
@@ -282,7 +321,14 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "id": "anthropic",
                         "name": "Anthropic",
                         "base_url": "https://api.anthropic.com/v1",
-                        "credential_key": "ANTHROPIC_API_KEY",
+                        "connections": [
+                            {
+                                "id": "anthropic:api-key",
+                                "type": "api_key",
+                                "label": "API Key",
+                                "configured": False,
+                            }
+                        ],
                         "credentials_configured": False,
                         "status": "missing_credentials",
                         "model_count": 1,
@@ -293,7 +339,20 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "id": "openai",
                         "name": "OpenAI",
                         "base_url": "https://api.openai.com/v1",
-                        "credential_key": "OPENAI_API_KEY",
+                        "connections": [
+                            {
+                                "id": "openai:oauth",
+                                "type": "oauth",
+                                "label": "OAuth",
+                                "configured": True,
+                            },
+                            {
+                                "id": "openai:api-key",
+                                "type": "api_key",
+                                "label": "API Key",
+                                "configured": True,
+                            },
+                        ],
                         "credentials_configured": True,
                         "status": "configured",
                         "model_count": 1,
