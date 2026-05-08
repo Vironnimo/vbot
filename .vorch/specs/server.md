@@ -27,7 +27,7 @@ Clients call the vBot server contract; provider wire details stay behind
   configured `models_endpoint` and a usable connection credential, refreshes that
   provider's model file through the discovery pipeline, reloads the runtime model
   registry reference, and returns `{ provider_id, model_count, fetched_at }`.
-- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name.
 - `agent.delete` rejects deletion when it would leave zero Agents.

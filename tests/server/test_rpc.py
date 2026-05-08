@@ -237,6 +237,13 @@ class StubModels:
         return list(self._models[provider_id])
 
 
+class EmptyStubModels(StubModels):
+    def list_for_provider(self, provider_id: str) -> list[object]:
+        if provider_id not in self._models:
+            return []
+        return super().list_for_provider(provider_id)
+
+
 def openrouter_provider() -> SimpleNamespace:
     return SimpleNamespace(
         id="openrouter",
@@ -481,7 +488,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
 
     response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
 
-    assert response["ok"] is True
+    assert response["ok"] is True, response
     assert response["result"] == {
         "general": {
             "server": {
@@ -497,6 +504,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "anthropic",
                     "name": "Anthropic",
                     "base_url": "https://api.anthropic.com/v1",
+                    "models_endpoint": None,
                     "connections": [
                         {
                             "id": "anthropic:api-key",
@@ -515,6 +523,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "ollama",
                     "name": "Ollama",
                     "base_url": "",
+                    "models_endpoint": None,
                     "connections": [
                         {
                             "id": "ollama:api-key",
@@ -533,6 +542,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "openai",
                     "name": "OpenAI",
                     "base_url": "https://api.openai.com/v1",
+                    "models_endpoint": None,
                     "connections": [
                         {
                             "id": "openai:oauth",
@@ -561,6 +571,24 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     assert "sk-live-secret" not in str(response)
     assert "show_token_counts" not in str(response)
     assert "origin" not in response["result"]["general"]["server"]
+
+
+@pytest.mark.asyncio
+async def test_settings_get_exposes_provider_models_endpoint_for_refresh_button(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime._models = EmptyStubModels()
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+
+    assert response["ok"] is True
+    providers = response["result"]["providers"]["items"]
+    openrouter = next(provider for provider in providers if provider["id"] == "openrouter")
+    openai = next(provider for provider in providers if provider["id"] == "openai")
+    assert openrouter["models_endpoint"] == "/models"
+    assert openai["models_endpoint"] is None
 
 
 @pytest.mark.asyncio
