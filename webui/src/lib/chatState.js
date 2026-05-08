@@ -640,6 +640,16 @@ function appendLiveRunEvent(assistantRun, event) {
   }
 
   if (event.type === 'assistant_output') {
+    const message = event.payload?.message;
+    if (message?.reasoning) {
+      appendTextSection(assistantRun, {
+        type: 'reasoning',
+        content: message.reasoning,
+        event,
+        streaming: false,
+      });
+    }
+
     appendTextSection(assistantRun, {
       type: 'assistant_output',
       content: textFromRunEventMessage(event, 'content'),
@@ -728,7 +738,12 @@ function appendTextSection(
   }
 
   const sequence = event?.sequence ?? assistantRun.items.length;
-  const existingItem = mergeableTextSection(assistantRun, type);
+  const existingItem = mergeableTextSection(assistantRun, {
+    type,
+    content,
+    message: message ?? event?.payload?.message,
+    streaming,
+  });
   if (existingItem) {
     existingItem.content = streaming
       ? `${existingItem.content}${content}`
@@ -759,7 +774,10 @@ function appendTextSection(
   syncAssistantRunCollections(assistantRun);
 }
 
-function mergeableTextSection(assistantRun, type) {
+function mergeableTextSection(
+  assistantRun,
+  { type, content, message = null, streaming },
+) {
   const lastMatchingIndex = assistantRun.items.findLastIndex(
     (item) => item.type === type,
   );
@@ -776,7 +794,63 @@ function mergeableTextSection(assistantRun, type) {
   const onlyPendingToolRows = interveningItems.every(
     (item) => item.type === 'tool_call' && !item.resultEvent,
   );
-  return onlyPendingToolRows ? lastMatchingItem : null;
+  if (onlyPendingToolRows) {
+    return lastMatchingItem;
+  }
+
+  if (!streaming) {
+    return mergeableStreamingDraftAcrossFinalizedRows(
+      assistantRun,
+      type,
+      content,
+      message,
+    );
+  }
+
+  return null;
+}
+
+function mergeableStreamingDraftAcrossFinalizedRows(
+  assistantRun,
+  type,
+  content,
+  message,
+) {
+  const draftIndex = assistantRun.items.findLastIndex(
+    (item) =>
+      item.type === type &&
+      item.streaming &&
+      (item.content === content ||
+        messageSharesInterveningToolCall(message, item, assistantRun)),
+  );
+  if (draftIndex < 0) {
+    return null;
+  }
+
+  const interveningItems = assistantRun.items.slice(draftIndex + 1);
+  const hasFinalSameTypeAfterDraft = interveningItems.some(
+    (item) => item.type === type && !item.streaming,
+  );
+  return hasFinalSameTypeAfterDraft ? null : assistantRun.items[draftIndex];
+}
+
+function messageSharesInterveningToolCall(message, draftItem, assistantRun) {
+  const messageToolKeys = new Set(
+    (message?.tool_calls ?? []).map((toolCall, index) =>
+      toolKeyFromToolCall({ index, ...toolCall }),
+    ),
+  );
+  if (messageToolKeys.size === 0) {
+    return false;
+  }
+
+  return assistantRun.items.some(
+    (item) =>
+      item.type === 'tool_call' &&
+      (item.sequence ?? 0) > (draftItem.sequence ?? 0) &&
+      (messageToolKeys.has(item.key) ||
+        messageToolKeys.has(toolKeyFromValues(item.toolCallId, item.index))),
+  );
 }
 
 function appendToolDelta(assistantRun, event) {
