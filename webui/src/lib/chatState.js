@@ -799,7 +799,7 @@ function mergeableTextSection(
   }
 
   if (!streaming) {
-    return mergeableStreamingDraftAcrossFinalizedRows(
+    return mergeableDraftAcrossFinalizedRows(
       assistantRun,
       type,
       content,
@@ -810,31 +810,64 @@ function mergeableTextSection(
   return null;
 }
 
-function mergeableStreamingDraftAcrossFinalizedRows(
+function mergeableDraftAcrossFinalizedRows(
   assistantRun,
   type,
   content,
   message,
 ) {
   const draftIndex = assistantRun.items.findLastIndex(
-    (item) =>
-      item.type === type &&
-      item.streaming &&
-      (item.content === content ||
-        messageSharesInterveningToolCall(message, item, assistantRun)),
+    (item) => item.type === type && isFinalizableTextDraft(item),
   );
   if (draftIndex < 0) {
     return null;
   }
 
+  const draftItem = assistantRun.items[draftIndex];
   const interveningItems = assistantRun.items.slice(draftIndex + 1);
   const hasFinalSameTypeAfterDraft = interveningItems.some(
-    (item) => item.type === type && !item.streaming,
+    (item) => item.type === type && !isFinalizableTextDraft(item),
   );
-  return hasFinalSameTypeAfterDraft ? null : assistantRun.items[draftIndex];
+  if (hasFinalSameTypeAfterDraft) {
+    return null;
+  }
+
+  const hasClosedTextPhaseAfterDraft = interveningItems.some(
+    (item) => item.type !== 'tool_call' && !isFinalizableTextDraft(item),
+  );
+  if (hasClosedTextPhaseAfterDraft) {
+    return null;
+  }
+
+  const sharesCurrentToolPhase = messageSharesToolCallRows(
+    message,
+    interveningItems,
+  );
+  if (draftItem.content !== content && !sharesCurrentToolPhase) {
+    return null;
+  }
+
+  const hasCompletedToolRowAfterDraft = interveningItems.some(
+    (item) => item.type === 'tool_call' && item.resultEvent,
+  );
+  if (hasCompletedToolRowAfterDraft && !sharesCurrentToolPhase) {
+    return null;
+  }
+
+  return draftItem;
 }
 
-function messageSharesInterveningToolCall(message, draftItem, assistantRun) {
+function isFinalizableTextDraft(item) {
+  const events = item.events ?? [];
+  return (
+    item.streaming ||
+    (item.type === 'reasoning' &&
+      events.some((event) => event?.type === 'reasoning') &&
+      !events.some((event) => event?.type === 'assistant_output'))
+  );
+}
+
+function messageSharesToolCallRows(message, toolRows) {
   const messageToolKeys = new Set(
     (message?.tool_calls ?? []).map((toolCall, index) =>
       toolKeyFromToolCall({ index, ...toolCall }),
@@ -844,10 +877,9 @@ function messageSharesInterveningToolCall(message, draftItem, assistantRun) {
     return false;
   }
 
-  return assistantRun.items.some(
+  return toolRows.some(
     (item) =>
       item.type === 'tool_call' &&
-      (item.sequence ?? 0) > (draftItem.sequence ?? 0) &&
       (messageToolKeys.has(item.key) ||
         messageToolKeys.has(toolKeyFromValues(item.toolCallId, item.index))),
   );
