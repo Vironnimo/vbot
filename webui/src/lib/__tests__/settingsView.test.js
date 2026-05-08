@@ -78,7 +78,7 @@ describe('SettingsView', () => {
     clickButton('Providers');
 
     expect(document.body.textContent).toContain('Anthropic');
-    expect(document.body.textContent).toContain('Missing API key');
+    expect(document.body.textContent).toContain('Missing credentials');
     expect(document.body.textContent).toContain('OpenAI');
     expect(document.body.textContent).toContain('Configured');
     expect(document.body.textContent).toContain('Custom endpoint');
@@ -164,8 +164,8 @@ describe('settingsView helpers', () => {
     const provider = {
       name: 'OpenAI',
       base_url: 'https://api.openai.com/v1',
-      env_key: 'OPENAI_API_KEY',
-      api_key_configured: true,
+      credential_key: 'OPENAI_API_KEY',
+      credentials_configured: true,
       status: 'configured',
       model_count: 2,
     };
@@ -191,7 +191,7 @@ describe('settingsView helpers', () => {
       },
     });
     expect(describeProvider(provider, translate)).toBe(
-      'Env key: OPENAI_API_KEY. Endpoint: https://api.openai.com/v1. 2 models available.',
+      'Credential key: OPENAI_API_KEY. Endpoint: https://api.openai.com/v1. 2 models available.',
     );
     expect(providerStatusClass(provider)).toBe('chip-green');
     expect(providerStatusLabel(provider, translate)).toBe('Configured');
@@ -214,17 +214,17 @@ function createSettingsPayload(overrides = {}) {
           id: 'anthropic',
           name: 'Anthropic',
           base_url: 'https://api.anthropic.com/v1',
-          env_key: 'ANTHROPIC_API_KEY',
-          api_key_configured: false,
-          status: 'missing_api_key',
+          credential_key: 'ANTHROPIC_API_KEY',
+          credentials_configured: false,
+          status: 'missing_credentials',
           model_count: 1,
         },
         {
           id: 'openai',
           name: 'OpenAI',
           base_url: 'https://api.openai.com/v1',
-          env_key: 'OPENAI_API_KEY',
-          api_key_configured: true,
+          credential_key: 'OPENAI_API_KEY',
+          credentials_configured: true,
           status: 'configured',
           model_count: 2,
         },
@@ -296,13 +296,14 @@ async function waitForText(text, attempts = 20) {
 function translate(key, fallback, values) {
   const templates = {
     'common.unknown': 'Unknown',
-    'settings.providers.description.apiKey': 'Env key: {envKey}.',
+    'settings.providers.description.credentialKey':
+      'Credential key: {credentialKey}.',
     'settings.providers.description.baseUrl': 'Endpoint: {baseUrl}.',
     'settings.providers.description.modelCount': '{count} models available.',
     'settings.providers.description.none':
       'Provider metadata is not available yet.',
     'settings.providers.status.configured': 'Configured',
-    'settings.providers.status.missingApiKey': 'Missing API key',
+    'settings.providers.status.missingCredentials': 'Missing credentials',
     'settings.providers.status.placeholder': 'Placeholder',
   };
   const template = templates[key] ?? fallback ?? key;
