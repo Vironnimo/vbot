@@ -29,6 +29,8 @@ class StubAgent:
     name: str = "Coder Agent"
     model: str = "openai/gpt-5.2"
     fallback_model: str = ""
+    connection: str = "openai:api-key"
+    fallback_connection: str = ""
     workspace: str = "C:/workspace"
     temperature: float = 0.1
     thinking_effort: str = ""
@@ -105,19 +107,46 @@ class StubProviders:
                 id="anthropic",
                 name="Anthropic",
                 base_url="https://api.anthropic.com/v1",
-                auth=SimpleNamespace(credential_key="ANTHROPIC_API_KEY"),
+                connections=[
+                    SimpleNamespace(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=SimpleNamespace(credential_key="ANTHROPIC_API_KEY"),
+                    )
+                ],
             ),
             "openai": SimpleNamespace(
                 id="openai",
                 name="OpenAI",
                 base_url="https://api.openai.com/v1",
-                auth=SimpleNamespace(credential_key="OPENAI_API_KEY"),
+                connections=[
+                    SimpleNamespace(
+                        id="oauth",
+                        type="oauth",
+                        label="OAuth",
+                        auth=SimpleNamespace(credential_key="OPENAI_OAUTH_TOKEN"),
+                    ),
+                    SimpleNamespace(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=SimpleNamespace(credential_key="OPENAI_API_KEY"),
+                    ),
+                ],
             ),
             "ollama": SimpleNamespace(
                 id="ollama",
                 name="Ollama",
                 base_url="",
-                auth=SimpleNamespace(credential_key="OLLAMA_API_KEY"),
+                connections=[
+                    SimpleNamespace(
+                        id="api-key",
+                        type="api_key",
+                        label="API Key",
+                        auth=SimpleNamespace(credential_key="OLLAMA_API_KEY"),
+                    )
+                ],
             ),
         }
 
@@ -290,15 +319,32 @@ class StubRuntime:
     def stop(self) -> None:
         return None
 
-    def get_adapter(self, _provider_id: str) -> StubAdapter:
+    def get_adapter(self, _provider_id: str, _connection_id: str) -> StubAdapter:
         return self.adapter
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))
-        credential_key = provider.auth.credential_key
-        if not credential_key:
-            return False
-        return bool(os.environ.get(credential_key))
+        return any(
+            bool(os.environ.get(connection.auth.credential_key))
+            for connection in provider.connections
+        )
+
+    @property
+    def provider_credentials(self) -> Any:
+        runtime = self
+
+        class CredentialResolver:
+            def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
+                provider = cast(Any, runtime.providers.get(provider_id))
+                if connection_id is None:
+                    return runtime.has_provider_credentials(provider_id)
+                local_id = connection_id.removeprefix(f"{provider_id}:")
+                connection = next(
+                    connection for connection in provider.connections if connection.id == local_id
+                )
+                return bool(os.environ.get(connection.auth.credential_key))
+
+        return CredentialResolver()
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
@@ -347,7 +393,14 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "anthropic",
                     "name": "Anthropic",
                     "base_url": "https://api.anthropic.com/v1",
-                    "credential_key": "ANTHROPIC_API_KEY",
+                    "connections": [
+                        {
+                            "id": "anthropic:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": False,
+                        }
+                    ],
                     "credentials_configured": False,
                     "status": "missing_credentials",
                     "model_count": 1,
@@ -358,7 +411,14 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "ollama",
                     "name": "Ollama",
                     "base_url": "",
-                    "credential_key": "OLLAMA_API_KEY",
+                    "connections": [
+                        {
+                            "id": "ollama:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": False,
+                        }
+                    ],
                     "credentials_configured": False,
                     "status": "missing_credentials",
                     "model_count": 1,
@@ -369,7 +429,20 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "openai",
                     "name": "OpenAI",
                     "base_url": "https://api.openai.com/v1",
-                    "credential_key": "OPENAI_API_KEY",
+                    "connections": [
+                        {
+                            "id": "openai:oauth",
+                            "type": "oauth",
+                            "label": "OAuth",
+                            "configured": False,
+                        },
+                        {
+                            "id": "openai:api-key",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "configured": True,
+                        },
+                    ],
                     "credentials_configured": True,
                     "status": "configured",
                     "model_count": 2,
@@ -391,6 +464,65 @@ async def test_settings_get_rejects_params(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(state, {"method": "settings.get", "params": {"extra": True}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_connection_list_returns_connections_with_usability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "connection.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "connections": [
+                {
+                    "id": "anthropic:api-key",
+                    "provider_id": "anthropic",
+                    "type": "api_key",
+                    "label": "API Key",
+                    "usable": False,
+                },
+                {
+                    "id": "ollama:api-key",
+                    "provider_id": "ollama",
+                    "type": "api_key",
+                    "label": "API Key",
+                    "usable": False,
+                },
+                {
+                    "id": "openai:oauth",
+                    "provider_id": "openai",
+                    "type": "oauth",
+                    "label": "OAuth",
+                    "usable": False,
+                },
+                {
+                    "id": "openai:api-key",
+                    "provider_id": "openai",
+                    "type": "api_key",
+                    "label": "API Key",
+                    "usable": True,
+                },
+            ]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_connection_list_rejects_params(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "connection.list", "params": {"x": 1}})
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
@@ -483,11 +615,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
 
 
 @pytest.mark.asyncio
-async def test_model_list_filters_out_providers_with_missing_or_empty_credentials(
+async def test_model_list_filters_by_connection_usability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     state = make_state(tmp_path, StubAdapter())
@@ -675,6 +808,56 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_agent_crud_accepts_and_returns_connection_fields(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    create_response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {
+                "id": "writer",
+                "name": "Writer",
+                "model": "openai/gpt-5.2",
+                "connection": "openai:api-key",
+                "fallback_model": "anthropic/claude-sonnet-4-20250219",
+                "fallback_connection": "anthropic:api-key",
+            },
+        },
+    )
+    update_response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {
+                "id": "writer",
+                "connection": "openai:oauth",
+                "fallback_connection": "",
+            },
+        },
+    )
+
+    assert create_response["ok"] is True
+    assert create_response["result"]["connection"] == "openai:api-key"
+    assert create_response["result"]["fallback_connection"] == "anthropic:api-key"
+    assert update_response["ok"] is True
+    assert update_response["result"]["connection"] == "openai:oauth"
+    assert update_response["result"]["fallback_connection"] == ""
+
+
+@pytest.mark.asyncio
+async def test_agent_list_response_includes_connection_fields(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["connection"] == "openai:api-key"
+    assert agent["fallback_connection"] == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params"),
     [
@@ -702,6 +885,8 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
         ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
         ("agent.update", {"id": "coder", "name": ""}),
         ("agent.update", {"id": "coder", "model": 5}),
+        ("agent.update", {"id": "coder", "connection": 5}),
+        ("agent.update", {"id": "coder", "fallback_connection": 5}),
     ],
 )
 async def test_agent_rpc_rejects_malformed_mutable_payloads(

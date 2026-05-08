@@ -3,11 +3,28 @@
   "name": "OpenAI",
   "adapter": "openai_compatible",
   "base_url": "https://api.openai.com/v1",
-  "auth": {
-    "header": "Authorization",
-    "prefix": "Bearer ",
-    "credential_key": "OPENAI_API_KEY"
-  },
+  "connections": [
+    {
+      "id": "oauth",
+      "type": "oauth",
+      "label": "OAuth",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "OPENAI_OAUTH_TOKEN"
+      }
+    },
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "OPENAI_API_KEY"
+      }
+    }
+  ],
   "defaults": {
     "max_tokens": 4096,
     "temperature": 0.7

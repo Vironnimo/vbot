@@ -1,7 +1,7 @@
 """Tests for ProviderConfig dataclass and ProviderRegistry.
 
 Verifies loading from JSON fixtures, lookup by provider ID, immutability,
-missing-provider errors, caching behaviour, and correct parsing of auth
+missing-provider errors, caching behaviour, and correct parsing of connection
 fields, extra_headers, defaults, and models_endpoint.
 """
 
@@ -9,58 +9,92 @@ import json
 from collections.abc import Generator
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.providers.providers import (
     AuthConfig,
+    ConnectionConfig,
     ProviderConfig,
     ProviderRegistry,
     _registry_cache,
 )
+from core.utils.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-OPENAI_DATA = {
+OPENAI_DATA: dict[str, Any] = {
     "id": "openai",
     "name": "OpenAI",
     "adapter": "openai_compatible",
     "base_url": "https://api.openai.com/v1",
-    "auth": {
-        "header": "Authorization",
-        "prefix": "Bearer ",
-        "credential_key": "OPENAI_API_KEY",
-    },
+    "connections": [
+        {
+            "id": "oauth",
+            "type": "oauth",
+            "label": "OAuth",
+            "auth": {
+                "header": "Authorization",
+                "prefix": "Bearer ",
+                "credential_key": "OPENAI_OAUTH_TOKEN",
+            },
+        },
+        {
+            "id": "api-key",
+            "type": "api_key",
+            "label": "API Key",
+            "auth": {
+                "header": "Authorization",
+                "prefix": "Bearer ",
+                "credential_key": "OPENAI_API_KEY",
+            },
+        },
+    ],
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
 }
 
-OPENROUTER_DATA = {
+OPENROUTER_DATA: dict[str, Any] = {
     "id": "openrouter",
     "name": "OpenRouter",
     "adapter": "openai_compatible",
     "base_url": "https://openrouter.ai/api/v1",
-    "auth": {
-        "header": "Authorization",
-        "prefix": "Bearer ",
-        "credential_key": "OPENROUTER_API_KEY",
-    },
+    "connections": [
+        {
+            "id": "api-key",
+            "type": "api_key",
+            "label": "API Key",
+            "auth": {
+                "header": "Authorization",
+                "prefix": "Bearer ",
+                "credential_key": "OPENROUTER_API_KEY",
+            },
+        }
+    ],
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
     "extra_headers": {"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
     "models_endpoint": "/models",
 }
 
-ANTHROPIC_DATA = {
+ANTHROPIC_DATA: dict[str, Any] = {
     "id": "anthropic",
     "name": "Anthropic",
     "adapter": "anthropic",
     "base_url": "https://api.anthropic.com/v1",
-    "auth": {
-        "header": "x-api-key",
-        "prefix": "",
-        "credential_key": "ANTHROPIC_API_KEY",
-    },
+    "connections": [
+        {
+            "id": "api-key",
+            "type": "api_key",
+            "label": "API Key",
+            "auth": {
+                "header": "x-api-key",
+                "prefix": "",
+                "credential_key": "ANTHROPIC_API_KEY",
+            },
+        }
+    ],
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
 }
 
@@ -103,11 +137,18 @@ class TestProviderConfig:
             name="Test",
             adapter="openai_compatible",
             base_url="https://example.com/v1",
-            auth=AuthConfig(
-                header="Authorization",
-                prefix="Bearer ",
-                credential_key="TEST_KEY",
-            ),
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="TEST_KEY",
+                    ),
+                )
+            ],
         )
 
         # Act / Assert
@@ -143,17 +184,41 @@ class TestProviderConfig:
         assert field_names == ["header", "prefix", "credential_key"]
         assert not hasattr(auth, "env_key")
 
+    def test_connection_config_creation_and_immutability(self) -> None:
+        """ConnectionConfig stores auth metadata and is immutable."""
+        # Arrange
+        connection = ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="TEST_KEY",
+            ),
+            base_url="https://enterprise.example.com/v1",
+        )
+
+        # Act / Assert
+        assert connection.id == "api-key"
+        assert connection.type == "api_key"
+        assert connection.label == "API Key"
+        assert connection.auth.credential_key == "TEST_KEY"
+        assert connection.base_url == "https://enterprise.example.com/v1"
+        with pytest.raises(FrozenInstanceError):
+            connection.label = "Changed"  # type: ignore[misc]
+
 
 # ---------------------------------------------------------------------------
-# Auth parsing
+# Connection parsing
 # ---------------------------------------------------------------------------
 
 
-class TestAuthParsing:
-    """Tests for correct parsing of auth fields from JSON data."""
+class TestConnectionParsing:
+    """Tests for correct parsing of connection fields from JSON data."""
 
-    def test_openai_auth_fields(self, providers_dir: Path) -> None:
-        """OpenAI auth fields parse correctly from JSON."""
+    def test_openai_connections_fields(self, providers_dir: Path) -> None:
+        """OpenAI connection fields parse correctly from JSON."""
         # Arrange
         registry = ProviderRegistry.load(providers_dir)
 
@@ -161,12 +226,17 @@ class TestAuthParsing:
         config = registry.get("openai")
 
         # Assert
-        assert config.auth.header == "Authorization"
-        assert config.auth.prefix == "Bearer "
-        assert config.auth.credential_key == "OPENAI_API_KEY"
+        assert [connection.id for connection in config.connections] == ["oauth", "api-key"]
+        assert config.connections[0].type == "oauth"
+        assert config.connections[0].label == "OAuth"
+        assert config.connections[0].auth.credential_key == "OPENAI_OAUTH_TOKEN"
+        assert config.connections[1].type == "api_key"
+        assert config.connections[1].auth.header == "Authorization"
+        assert config.connections[1].auth.prefix == "Bearer "
+        assert config.connections[1].auth.credential_key == "OPENAI_API_KEY"
 
-    def test_anthropic_auth_fields(self, providers_dir: Path) -> None:
-        """Anthropic x-api-key auth fields parse correctly from JSON."""
+    def test_anthropic_connection_fields(self, providers_dir: Path) -> None:
+        """Anthropic x-api-key connection fields parse correctly from JSON."""
         # Arrange
         registry = ProviderRegistry.load(providers_dir)
 
@@ -174,12 +244,15 @@ class TestAuthParsing:
         config = registry.get("anthropic")
 
         # Assert
-        assert config.auth.header == "x-api-key"
-        assert config.auth.prefix == ""
-        assert config.auth.credential_key == "ANTHROPIC_API_KEY"
+        connection = config.connections[0]
+        assert connection.id == "api-key"
+        assert connection.type == "api_key"
+        assert connection.auth.header == "x-api-key"
+        assert connection.auth.prefix == ""
+        assert connection.auth.credential_key == "ANTHROPIC_API_KEY"
 
-    def test_openrouter_auth_fields(self, providers_dir: Path) -> None:
-        """OpenRouter auth fields parse correctly from JSON."""
+    def test_openrouter_connection_fields(self, providers_dir: Path) -> None:
+        """OpenRouter connection fields parse correctly from JSON."""
         # Arrange
         registry = ProviderRegistry.load(providers_dir)
 
@@ -187,9 +260,53 @@ class TestAuthParsing:
         config = registry.get("openrouter")
 
         # Assert
-        assert config.auth.header == "Authorization"
-        assert config.auth.prefix == "Bearer "
-        assert config.auth.credential_key == "OPENROUTER_API_KEY"
+        connection = config.connections[0]
+        assert connection.id == "api-key"
+        assert connection.type == "api_key"
+        assert connection.auth.header == "Authorization"
+        assert connection.auth.prefix == "Bearer "
+        assert connection.auth.credential_key == "OPENROUTER_API_KEY"
+
+    def test_get_connection_returns_matching_local_id(self, providers_dir: Path) -> None:
+        """ProviderConfig.get_connection() returns the matching local ID."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+        config = registry.get("openai")
+
+        # Act
+        connection = config.get_connection("api-key")
+
+        # Assert
+        assert connection.label == "API Key"
+        assert connection.auth.credential_key == "OPENAI_API_KEY"
+
+    def test_get_connection_unknown_local_id_raises_key_error(self, providers_dir: Path) -> None:
+        """ProviderConfig.get_connection() raises KeyError for an unknown local ID."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+        config = registry.get("openai")
+
+        # Act / Assert
+        with pytest.raises(KeyError, match="missing"):
+            config.get_connection("missing")
+
+    def test_connection_base_url_override_parses_from_json(self, tmp_path: Path) -> None:
+        """Connection base_url overrides parse from provider JSON."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        connection["base_url"] = "https://enterprise.example.com/v1"
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        config = registry.get("openai")
+
+        # Assert
+        assert config.get_connection("api-key").base_url == "https://enterprise.example.com/v1"
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +565,84 @@ class TestProviderRegistryDuplicates:
         # Act / Assert
         with pytest.raises(KeyError, match="Duplicate provider id"):
             ProviderRegistry.load(tmp_path)
+
+    def test_duplicate_connection_local_id_raises_key_error(self, tmp_path: Path) -> None:
+        """Duplicate connection local IDs within one provider raise KeyError."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        data["connections"] = [
+            dict(OPENAI_DATA["connections"][0]),
+            dict(OPENAI_DATA["connections"][0]),
+        ]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(KeyError, match="Duplicate connection id"):
+            ProviderRegistry.load(tmp_path)
+
+
+class TestProviderRegistryRequiredFields:
+    """Tests for clear provider config errors on missing required fields."""
+
+    def test_missing_connections_field_raises_config_error(self, tmp_path: Path) -> None:
+        """A provider JSON without connections raises a clear ConfigError."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        data.pop("connections")
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="missing required field 'connections'"):
+            ProviderRegistry.load(tmp_path)
+
+
+class TestProviderRegistryConnectionTypes:
+    """Tests for connection type validation."""
+
+    @pytest.mark.parametrize("connection_type", ["bearer", "oidc"])
+    def test_unknown_connection_type_raises_config_error(
+        self, tmp_path: Path, connection_type: str
+    ) -> None:
+        """Unknown connection types are rejected at config load time."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][0])
+        connection["type"] = connection_type
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="Unknown connection type"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_duplicate_connection_types_are_allowed(self, tmp_path: Path) -> None:
+        """Multiple connections with the same type are allowed if local IDs differ."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        first = dict(OPENAI_DATA["connections"][1])
+        second = dict(OPENAI_DATA["connections"][1])
+        first["id"] = "primary-key"
+        second["id"] = "secondary-key"
+        data["connections"] = [first, second]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        config = registry.get("openai")
+
+        # Assert
+        assert [connection.type for connection in config.connections] == [
+            "api_key",
+            "api_key",
+        ]
 
 
 # ---------------------------------------------------------------------------

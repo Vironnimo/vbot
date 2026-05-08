@@ -10,11 +10,17 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.providers import AuthConfig, ProviderConfig, ProviderRegistry
+from core.providers.providers import (
+    AuthConfig,
+    ConnectionConfig,
+    ProviderConfig,
+    ProviderRegistry,
+)
 
 __all__ = [
     "AnthropicAdapter",
     "AuthConfig",
+    "ConnectionConfig",
     "OpenAICompatibleAdapter",
     "ProviderCredentialResolver",
     "ProviderAdapter",

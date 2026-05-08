@@ -51,12 +51,15 @@ and Settings.
   displayed from Agent data but omitted from public create/update payloads in
   Phase 4.
 - `webui/src/components/AgentsView.svelte`
-  - Loads `agent.list` plus the backend catalogs from `model.list` and
-    `tool.list` on mount.
+  - Loads `agent.list` plus the backend catalogs from `model.list`,
+    `connection.list`, and `tool.list` on mount.
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
-  - Model and fallback-model selects display the canonical public model ID
-    string from `model.list` (for example `openrouter/anthropic/claude-sonnet-4`).
+  - Model and fallback-model selects store both the canonical public model ID and
+    selected connection. If a provider has one usable connection, the label stays
+    as the model ID (for example `openrouter/anthropic/claude-sonnet-4`). If a
+    provider has multiple usable connections, the label adds the connection
+    label suffix (for example `openai/gpt-5.4 (OAuth)`).
 - `webui/src/lib/settingsView.js`
   - Normalizes Settings provider metadata that now uses credential-centric
     fields (`credential_key`, `credentials_configured`) rather than env/API-key

@@ -73,6 +73,8 @@ async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
 
 async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonObject:
     match method:
+        case "connection.list":
+            return _list_connections(state, params)
         case "model.list":
             return _list_models(state, params)
         case "tool.list":
@@ -128,6 +130,21 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}
+
+
+def _list_connections(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "connection.list does not accept params")
+    try:
+        runtime = state.runtime
+        connections = [
+            _connection_response(runtime, provider_id, connection)
+            for provider_id in runtime.providers.list_ids()
+            for connection in runtime.providers.get(provider_id).connections
+        ]
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"connections": connections}
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
@@ -357,13 +374,15 @@ def _server_bind_response(state: Any) -> JsonObject:
 
 def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
     provider = runtime.providers.get(provider_id)
-    credential_key = provider.auth.credential_key
     credentials_configured = _provider_has_credentials(runtime, provider_id)
     return {
         "id": provider.id,
         "name": provider.name,
         "base_url": provider.base_url,
-        "credential_key": credential_key,
+        "connections": [
+            _provider_settings_connection(runtime, provider.id, connection)
+            for connection in provider.connections
+        ],
         "credentials_configured": credentials_configured,
         "status": "configured" if credentials_configured else "missing_credentials",
         "model_count": len(runtime.models.list_for_provider(provider_id)),
@@ -374,6 +393,31 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
 
 def _provider_has_credentials(runtime: Any, provider_id: str) -> bool:
     return bool(runtime.has_provider_credentials(provider_id))
+
+
+def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: str) -> bool:
+    return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
+
+
+def _connection_response(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
+    connection_id = f"{provider_id}:{connection.id}"
+    return {
+        "id": connection_id,
+        "provider_id": provider_id,
+        "type": connection.type,
+        "label": connection.label,
+        "usable": _connection_has_credentials(runtime, provider_id, connection_id),
+    }
+
+
+def _provider_settings_connection(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
+    connection_id = f"{provider_id}:{connection.id}"
+    return {
+        "id": connection_id,
+        "type": connection.type,
+        "label": connection.label,
+        "configured": _connection_has_credentials(runtime, provider_id, connection_id),
+    }
 
 
 def _optional_string(params: JsonObject, key: str) -> str | None:
@@ -397,6 +441,8 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "name",
         "model",
         "fallback_model",
+        "connection",
+        "fallback_connection",
         "temperature",
         "thinking_effort",
         "allowed_tools",
@@ -425,7 +471,7 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
         return value
-    if key in {"model", "fallback_model"}:
+    if key in {"model", "fallback_model", "connection", "fallback_connection"}:
         if not isinstance(value, str):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
         return value
@@ -516,6 +562,8 @@ def _agent_response(agent: Any) -> JsonObject:
         "name": agent.name,
         "model": agent.model,
         "fallback_model": agent.fallback_model,
+        "connection": agent.connection,
+        "fallback_connection": agent.fallback_connection,
         "workspace": agent.workspace,
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,

@@ -1,5 +1,7 @@
 # Providers
 
+Last updated: 2026-05-08 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object.
+
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
 ## Data Model
@@ -14,6 +16,20 @@ class AuthConfig:
     credential_key: str  # Credential identifier used to resolve provider credentials
 ```
 
+### ConnectionConfig
+
+```python
+@dataclass(frozen=True)
+class ConnectionConfig:
+    id: str                  # Provider-local connection slug, e.g. "api-key" or "oauth"
+    type: str                # Supported values: "api_key" or "oauth"
+    label: str               # Human-readable display label
+    auth: AuthConfig         # Credential lookup and auth header metadata
+    base_url: str | None     # Optional base URL override for this connection
+```
+
+Connection IDs exposed outside provider config are compositional: `<provider_id>:<connection.id>` (for example, `openai:api-key`). The local `id` only needs to be unique within one provider. Multiple connections may share the same `type`; only duplicate local IDs are rejected.
+
 ### ProviderConfig
 
 ```python
@@ -23,10 +39,12 @@ class ProviderConfig:
     name: str                            # Human-readable name
     adapter: str                         # Adapter class selector: "openai_compatible" or "anthropic"
     base_url: str                        # Base URL for the provider API
-    auth: AuthConfig                     # Authentication config
+    connections: list[ConnectionConfig]  # Authentication connections in display/preference order
     defaults: dict[str, Any] | None      # Default request params (max_tokens, temperature)
     extra_headers: dict[str, str] | None # Provider-specific HTTP headers
     models_endpoint: str | None          # Path to models listing endpoint (future use)
+
+    def get_connection(local_id: str) -> ConnectionConfig: ...
 ```
 
 Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
@@ -36,10 +54,9 @@ Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
 
-**Auth field** drives HTTP header construction. Each provider has its own
-`credential_key` — runtime credential resolution uses that identifier to obtain
-the provider credential from the central credential path. Missing credential →
-`ConfigError`.
+**Connections field** replaces the old single provider-level auth field. Each connection owns its auth metadata and credential key. Unknown connection `type` values are rejected with `ConfigError` during provider config load. Connection array order is display order and preference order when a caller needs the first usable connection.
+
+**Auth field compatibility:** adapters still read auth header metadata from provider config until the adapter factory becomes fully connection-aware. Provider JSON files use only `connections`; old `auth` JSON is not supported.
 
 **defaults** are merged into the request payload with lower priority than caller-supplied kwargs. Applied via `dict.setdefault` so caller values always win.
 
@@ -237,20 +254,30 @@ runtime.start()
 config = runtime.providers.get("openai")      # → ProviderConfig
 ids = runtime.providers.list_ids()              # → ["anthropic", "openai", "openrouter"]
 
-# Adapter factory — resolves provider credentials centrally, instantiates adapter
-adapter = runtime.get_adapter("openai")        # → OpenAICompatibleAdapter instance
-adapter = runtime.get_adapter("anthropic")      # → AnthropicAdapter instance
+# Adapter factory — resolves connection credentials centrally, instantiates adapter
+adapter = runtime.get_adapter("openai", "openai:api-key")        # → OpenAICompatibleAdapter instance
+adapter = runtime.get_adapter("anthropic", "anthropic:api-key")  # → AnthropicAdapter instance
 
 # Model lookup convenience
 model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Model
 ```
 
-**`runtime.get_adapter(provider_id)`** flow:
+**`runtime.get_adapter(provider_id, connection_id)`** flow:
 1. Looks up `ProviderConfig` from registry
-2. Resolves provider credentials through the central provider credential resolver — missing credential → `ConfigError`
-3. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
-4. Instantiates adapter with `(provider_config, credential_value)`
-5. Returns wired `ProviderAdapter` instance
+2. Validates that `connection_id` has the same provider prefix and maps to a known provider-local connection ID
+3. Resolves connection credentials through the central provider credential resolver — missing credential → `ConfigError`
+4. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
+5. Instantiates adapter with `(provider_config, credential_value, connection.base_url)`; adapters use the provider base URL unless the connection overrides it
+6. Returns wired `ProviderAdapter` instance
+
+`ProviderCredentialResolver` supports both provider-level and connection-level calls:
+
+```python
+has_credentials(provider_id: str, connection_id: str | None = None) -> bool
+get_credentials(provider_id: str, connection_id: str | None = None) -> str
+```
+
+When `connection_id` is supplied it must use the compositional `<provider_id>:<local_id>` form and the credential is resolved from that specific connection's `AuthConfig.credential_key`. Unknown connection IDs raise `ConfigError`.
 
 Protocol interface: `ProviderRegistryProtocol` in `core/runtime/interfaces.py`.
 
@@ -261,6 +288,8 @@ Source: `core/runtime/runtime.py`.
 - **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
 - **Credential resolution happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called. Process environment currently has precedence over the data-dir `.env` fallback snapshot. If the credential is empty or missing, `ConfigError` is raised. Credentials are not stored on the `ProviderConfig`.
+
+- **`get_adapter()` requires a connection ID.** There is no runtime fallback to the first usable connection. The chat loop or RPC caller is responsible for selecting a connection before adapter creation.
 
 - **Auth header construction differs per provider.** OpenAI and OpenRouter use `Authorization: Bearer <key>`. Anthropic uses `x-api-key: <key>` (no prefix). This is controlled by `AuthConfig.header` and `AuthConfig.prefix`.
 

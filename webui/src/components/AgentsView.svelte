@@ -12,6 +12,7 @@
   import { t } from '$lib/i18n.js';
 
   const EMPTY_VALUE = '—';
+  const MODEL_CONNECTION_VALUE_SEPARATOR = '\u001f';
   const WILDCARD_ACCESS = '*';
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
@@ -41,7 +42,10 @@
   let errorMessage = $state('');
   let statusMessage = $state('');
   let availableModels = $state([]);
+  let availableConnections = $state([]);
   let availableTools = $state([]);
+  let modelSelectValue = $state('');
+  let fallbackModelSelectValue = $state('');
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -63,10 +67,28 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
-  let modelOptions = $derived(selectModelOptions(formValues.model));
-  let fallbackModelOptions = $derived(
-    selectModelOptions(formValues.fallback_model),
+  let modelOptions = $derived(
+    selectModelOptions(formValues.model, formValues.connection),
   );
+  let fallbackModelOptions = $derived(
+    selectModelOptions(
+      formValues.fallback_model,
+      formValues.fallback_connection,
+    ),
+  );
+
+  $effect(() => {
+    modelSelectValue = selectModelValue(
+      formValues.model,
+      formValues.connection,
+      modelOptions,
+    );
+    fallbackModelSelectValue = selectModelValue(
+      formValues.fallback_model,
+      formValues.fallback_connection,
+      fallbackModelOptions,
+    );
+  });
 
   $effect(() => {
     if (
@@ -85,13 +107,17 @@
 
   async function loadCatalogs() {
     try {
-      const [modelsResult, toolsResult] = await Promise.all([
+      const [modelsResult, connectionsResult, toolsResult] = await Promise.all([
         rpc('model.list'),
+        rpc('connection.list'),
         rpc('tool.list'),
       ]);
 
       availableModels = Array.isArray(modelsResult?.models)
         ? modelsResult.models
+        : [];
+      availableConnections = Array.isArray(connectionsResult?.connections)
+        ? connectionsResult.connections
         : [];
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
@@ -132,7 +158,7 @@
 
     if (agent) {
       formMode = AGENT_FORM_MODE_EDIT;
-      formValues = createAgentFormValues(agent);
+      formValues = createConnectionAgentFormValues(agent);
       onAgentSelected?.(agent);
     } else {
       startCreate();
@@ -144,7 +170,7 @@
   function startCreate() {
     selectedAgentId = '';
     formMode = AGENT_FORM_MODE_CREATE;
-    formValues = createAgentFormValues();
+    formValues = createConnectionAgentFormValues();
     formErrors = {};
     statusMessage = '';
   }
@@ -163,6 +189,11 @@
       );
       return;
     }
+
+    result.payload.connection = asText(formValues.connection).trim();
+    result.payload.fallback_connection = asText(
+      formValues.fallback_connection,
+    ).trim();
 
     isSaving = true;
     try {
@@ -319,16 +350,30 @@
     }));
   }
 
-  function modelOptionLabel(model) {
-    return model.id;
+  function createConnectionAgentFormValues(agent = {}) {
+    const values = createAgentFormValues(agent);
+    values.connection = asText(agent.connection);
+    values.fallback_connection = asText(agent.fallback_connection);
+
+    return values;
   }
 
-  function selectModelOptions(selectedValue) {
-    const catalogOptions = availableModels.map((model) => ({
-      value: model.id,
-      label: modelOptionLabel(model),
-      isUnavailable: false,
-    }));
+  function selectModelOptions(selectedModel, selectedConnection) {
+    const connectionsByProvider = usableConnectionsByProvider();
+    const selectedValue = modelSelectionValue(
+      selectedModel,
+      selectedConnection,
+    );
+    const catalogOptions = availableModels.flatMap((model) => {
+      const providerConnections =
+        connectionsByProvider[model.provider_id] ?? [];
+
+      return providerConnections.map((connection) => ({
+        value: modelSelectionValue(model.id, connection.id),
+        label: modelOptionLabel(model, connection, providerConnections.length),
+        isUnavailable: false,
+      }));
+    });
 
     if (
       !selectedValue ||
@@ -340,15 +385,123 @@
     return [
       {
         value: selectedValue,
-        label: t(
-          'agents.form.modelUnavailableOption',
-          'Unavailable / custom: {model}',
-          { model: selectedValue },
-        ),
+        label: unavailableModelOptionLabel(selectedModel, selectedConnection),
         isUnavailable: true,
       },
       ...catalogOptions,
     ];
+  }
+
+  function usableConnectionsByProvider() {
+    const connectionsByProvider = {};
+
+    for (const connection of availableConnections) {
+      if (!connection?.usable || !connection.provider_id) {
+        continue;
+      }
+
+      if (!connectionsByProvider[connection.provider_id]) {
+        connectionsByProvider[connection.provider_id] = [];
+      }
+
+      connectionsByProvider[connection.provider_id].push(connection);
+    }
+
+    return connectionsByProvider;
+  }
+
+  function modelOptionLabel(model, connection, providerConnectionCount) {
+    if (providerConnectionCount <= 1) {
+      return model.id;
+    }
+
+    return `${model.id} (${connection.label})`;
+  }
+
+  function unavailableModelOptionLabel(model, connection) {
+    if (!connection) {
+      return t(
+        'agents.form.modelUnavailableOption',
+        'Unavailable / custom: {model}',
+        {
+          model,
+        },
+      );
+    }
+
+    return t(
+      'agents.form.modelUnavailableConnectionOption',
+      'Unavailable / custom: {model} ({connection})',
+      {
+        connection: connectionDisplayLabel(connection),
+        model,
+      },
+    );
+  }
+
+  function connectionDisplayLabel(connectionId) {
+    const connection = availableConnections.find(
+      (item) => item.id === connectionId,
+    );
+
+    return connection?.label || connectionId;
+  }
+
+  function updateModelSelection(
+    modelFieldName,
+    connectionFieldName,
+    selectedValue,
+  ) {
+    const selection = parseModelSelectionValue(selectedValue);
+    formValues[modelFieldName] = selection.model;
+    formValues[connectionFieldName] = selection.connection;
+  }
+
+  function selectModelValue(model, connection, options) {
+    if (!model) {
+      return '';
+    }
+
+    const exactValue = modelSelectionValue(model, connection);
+
+    if (options.some((option) => option.value === exactValue)) {
+      return exactValue;
+    }
+
+    if (connection) {
+      return exactValue;
+    }
+
+    return model;
+  }
+
+  function modelSelectionValue(model, connection) {
+    if (!model) {
+      return '';
+    }
+
+    return `${model}${MODEL_CONNECTION_VALUE_SEPARATOR}${connection || ''}`;
+  }
+
+  function parseModelSelectionValue(selectedValue) {
+    if (!selectedValue) {
+      return { model: '', connection: '' };
+    }
+
+    const separatorIndex = selectedValue.indexOf(
+      MODEL_CONNECTION_VALUE_SEPARATOR,
+    );
+
+    if (separatorIndex === -1) {
+      return { model: selectedValue, connection: '' };
+    }
+
+    return {
+      model: selectedValue.slice(0, separatorIndex),
+      connection: selectedValue.slice(
+        separatorIndex + MODEL_CONNECTION_VALUE_SEPARATOR.length,
+      ),
+    };
   }
 
   function thinkingEffortLabel(option) {
@@ -380,6 +533,10 @@
 
   function displayValue(value) {
     return value || EMPTY_VALUE;
+  }
+
+  function asText(value) {
+    return value === null || value === undefined ? '' : String(value);
   }
 
   function viewErrorMessage(error, fallback) {
@@ -585,7 +742,13 @@
               <div class="agents-view__select-wrap">
                 <select
                   class="s-input agents-view__select"
-                  bind:value={formValues.model}
+                  bind:value={modelSelectValue}
+                  onchange={() =>
+                    updateModelSelection(
+                      'model',
+                      'connection',
+                      modelSelectValue,
+                    )}
                 >
                   <option value="">
                     {t(
@@ -617,7 +780,13 @@
               <div class="agents-view__select-wrap">
                 <select
                   class="s-input agents-view__select"
-                  bind:value={formValues.fallback_model}
+                  bind:value={fallbackModelSelectValue}
+                  onchange={() =>
+                    updateModelSelection(
+                      'fallback_model',
+                      'fallback_connection',
+                      fallbackModelSelectValue,
+                    )}
                 >
                   <option value="">
                     {t('agents.form.fallbackModelPlaceholder', 'None')}

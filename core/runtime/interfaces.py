@@ -76,12 +76,12 @@ class ProviderRegistryProtocol(Protocol):
 class ProviderCredentialResolverProtocol(Protocol):
     """Protocol for centralized provider credential access."""
 
-    def has_credentials(self, provider_id: str) -> bool:
-        """Return whether *provider_id* has a non-empty credential."""
+    def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether *provider_id* or *connection_id* has a non-empty credential."""
         ...
 
-    def get_credentials(self, provider_id: str) -> str:
-        """Return the credential value for *provider_id*."""
+    def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
+        """Return the credential value for *provider_id* or *connection_id*."""
         ...
 
 
