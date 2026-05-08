@@ -105,8 +105,8 @@ One JSON file per provider at `resources/models/<provider>.json`:
   `ModelRegistry.load()` ignores those fields and reads only `provider_id` and
   `models`.
 
-Optional override files live beside generated model files as
-`resources/models/<provider>.overrides.json`:
+Optional override files live outside the registry-loaded models directory as
+`resources/model-overrides/<provider>.json`:
 
 ```json
 {

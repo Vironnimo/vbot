@@ -17,6 +17,7 @@ import pytest
 import server.delegates as delegates
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
@@ -264,12 +265,33 @@ def openrouter_provider() -> SimpleNamespace:
     )
 
 
+def openrouter_provider_with_secondary_connection() -> SimpleNamespace:
+    provider = openrouter_provider()
+    provider.connections = [
+        SimpleNamespace(
+            id="oauth",
+            type="oauth",
+            label="OAuth",
+            auth=SimpleNamespace(credential_key="OPENROUTER_OAUTH_TOKEN"),
+        ),
+        SimpleNamespace(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=SimpleNamespace(credential_key="OPENROUTER_API_KEY"),
+        ),
+    ]
+    return provider
+
+
 async def fake_refresh_models(
     provider_config: Any,
     credential_value: str,
     resources_dir: Path,
+    **kwargs: Any,
 ) -> JsonObject:
     FAKE_REFRESH_MODEL_CALLS.append(credential_value)
+    FAKE_REFRESH_MODEL_KWARGS.append(kwargs)
     models_dir = resources_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     models_dir.joinpath(f"{provider_config.id}.json").write_text(
@@ -304,6 +326,7 @@ async def fake_refresh_models(
 
 
 FAKE_REFRESH_MODEL_CALLS: list[str] = []
+FAKE_REFRESH_MODEL_KWARGS: list[JsonObject] = []
 
 
 class StubStorage:
@@ -804,6 +827,7 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
     FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
     state = make_state(tmp_path, StubAdapter())
     state.runtime.providers.add(openrouter_provider())
 
@@ -823,6 +847,52 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
     refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
     assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_passes_first_usable_connection_to_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider_with_secondary_connection())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response["ok"] is True
+    assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
+    assert FAKE_REFRESH_MODEL_KWARGS[0]["credential_connection"].id == "api-key"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_maps_discovery_failures_to_rpc_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_refresh_models(*_args: Any, **_kwargs: Any) -> JsonObject:
+        raise ModelDiscoveryError("Model discovery failed for provider 'openrouter': bad JSON")
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", failing_refresh_models)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "bad JSON" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

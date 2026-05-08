@@ -170,9 +170,18 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
                 f"provider '{provider_id}' does not support model refresh",
             )
 
-        credential_value = _first_usable_provider_credential(runtime, provider_id, provider)
+        credential_connection, credential_value = _first_usable_provider_credential(
+            runtime,
+            provider_id,
+            provider,
+        )
         resources_dir = _runtime_resources_dir(runtime)
-        result = await refresh_models(provider, credential_value, resources_dir)
+        result = await refresh_models(
+            provider,
+            credential_value,
+            resources_dir,
+            credential_connection=credential_connection,
+        )
         runtime._models = ModelRegistry.load(resources_dir)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -432,11 +441,16 @@ def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: s
     return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
 
 
-def _first_usable_provider_credential(runtime: Any, provider_id: str, provider: Any) -> str:
+def _first_usable_provider_credential(
+    runtime: Any,
+    provider_id: str,
+    provider: Any,
+) -> tuple[Any, str]:
     for connection in provider.connections:
         connection_id = f"{provider_id}:{connection.id}"
         if runtime.provider_credentials.has_credentials(provider_id, connection_id):
-            return str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
+            credential = runtime.provider_credentials.get_credentials(provider_id, connection_id)
+            return connection, str(credential)
     raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
 
 
