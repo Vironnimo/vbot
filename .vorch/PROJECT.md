@@ -151,6 +151,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   The WS channel broadcasts server events; it does not accept client commands.
 - **WebSocket reconnect uses `after_sequence` replay.** Clients send the last
   sequence number they saw, and the server replays missed events.
+- **Provider usability for model selection is config-based, not health-based.**
+  A provider is considered usable when its configured auth environment variable
+  exists and is non-empty. Missing or empty values mean the provider is ignored
+  by model-selection UI. This applies to local providers too (for example,
+  Ollama or LM Studio): no special-casing, no runtime reachability checks.
 
 ## Specs
 
