@@ -11,7 +11,7 @@ Provider configuration, registry, and adapters. Translates vBot requests into pr
 class AuthConfig:
     header: str       # HTTP header name for API key (e.g. "Authorization", "x-api-key")
     prefix: str       # Value prefix prepended to the key (e.g. "Bearer ", "" for Anthropic)
-    env_key: str      # Environment variable name holding the API key
+    credential_key: str  # Credential identifier used to resolve provider credentials
 ```
 
 ### ProviderConfig
@@ -36,7 +36,10 @@ Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
 
-**Auth field** drives HTTP header construction. Each provider has its own `env_key` — the runtime reads `os.environ[provider_config.auth.env_key]` to resolve the API key. Missing key → `ConfigError`.
+**Auth field** drives HTTP header construction. Each provider has its own
+`credential_key` — runtime credential resolution uses that identifier to obtain
+the provider credential from the central credential path. Missing credential →
+`ConfigError`.
 
 **defaults** are merged into the request payload with lower priority than caller-supplied kwargs. Applied via `dict.setdefault` so caller values always win.
 

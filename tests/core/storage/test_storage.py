@@ -54,9 +54,10 @@ def test_load_environment_reads_data_dir_env_file(
     storage = StorageManager(tmp_path)
     (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
 
-    storage.load_environment()
+    loaded = storage.load_environment()
 
-    assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-data-dir"
+    assert loaded == {"OPENROUTER_API_KEY": "sk-or-from-data-dir"}
+    assert "OPENROUTER_API_KEY" not in os.environ
 
 
 def test_load_environment_does_not_overwrite_existing_environment(
@@ -67,9 +68,30 @@ def test_load_environment_does_not_overwrite_existing_environment(
     storage = StorageManager(tmp_path)
     (tmp_path / ".env").write_text("OPENROUTER_API_KEY=sk-or-from-data-dir\n", encoding="utf-8")
 
-    storage.load_environment()
+    loaded = storage.load_environment()
 
+    assert loaded == {"OPENROUTER_API_KEY": "sk-or-from-data-dir"}
     assert os.environ["OPENROUTER_API_KEY"] == "sk-or-from-process"
+
+
+def test_build_environment_snapshot_prefers_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-process")
+    monkeypatch.setenv("PROCESS_ONLY", "from-process")
+    monkeypatch.delenv("DATA_ONLY", raising=False)
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text(
+        "OPENROUTER_API_KEY=sk-or-from-data-dir\nDATA_ONLY=from-data-dir\n",
+        encoding="utf-8",
+    )
+
+    snapshot = storage.build_environment_snapshot()
+
+    assert snapshot["OPENROUTER_API_KEY"] == "sk-or-from-process"
+    assert snapshot["PROCESS_ONLY"] == "from-process"
+    assert snapshot["DATA_ONLY"] == "from-data-dir"
 
 
 def test_resolves_data_dir_from_config_attribute(tmp_path: Path) -> None:

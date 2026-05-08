@@ -37,8 +37,10 @@ via providers, models, tools, agents) → external APIs. Agentic-only — no
 separate non-agentic streaming path.
 
 **Configuration:** `settings.json` for application settings, `.env` for API keys
-and bot tokens (belongs to the user, loaded at startup). Both live in the data
-directory (`~/.vbot`).
+and bot tokens (belongs to the user, read at startup as fallback credential
+source). Both live in the data directory (`~/.vbot`). Process environment keeps
+higher precedence than the data-dir `.env`; vBot does not rewrite `os.environ`
+from `.env` values.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
@@ -151,11 +153,16 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   The WS channel broadcasts server events; it does not accept client commands.
 - **WebSocket reconnect uses `after_sequence` replay.** Clients send the last
   sequence number they saw, and the server replays missed events.
-- **Provider usability for model selection is config-based, not health-based.**
-  A provider is considered usable when its configured auth environment variable
-  exists and is non-empty. Missing or empty values mean the provider is ignored
-  by model-selection UI. This applies to local providers too (for example,
-  Ollama or LM Studio): no special-casing, no runtime reachability checks.
+- **Provider usability for model selection is credential-based, not
+  health-based.** A provider is considered usable when its configured
+  credential is present and non-empty. Missing or empty credentials mean the
+  provider is ignored by model-selection UI. This applies to local providers
+  too (for example, Ollama or LM Studio): no special-casing, no runtime
+  reachability checks.
+- **Provider credentials are source-agnostic.** Process environment currently
+  has higher precedence than the data-dir `.env`, but backend code should ask a
+  central provider-credential path whether credentials exist and what value to
+  use, rather than reading `os.environ` directly.
 
 ## Specs
 

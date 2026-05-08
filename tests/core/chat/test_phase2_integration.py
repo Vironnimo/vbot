@@ -277,7 +277,7 @@ def _write_provider_resource(resources: Path) -> None:
                 "auth": {
                     "header": "Authorization",
                     "prefix": "Bearer ",
-                    "env_key": "FAKE_API_KEY",
+                    "credential_key": "FAKE_API_KEY",
                 },
             }
         ),
