@@ -142,6 +142,54 @@ def test_get_adapter_connection_base_url_override_uses_override(
     assert str(adapter._client.base_url) == "https://enterprise.example.com/v1/"  # type: ignore[attr-defined]
 
 
+def test_get_adapter_passes_selected_connection_auth_metadata(runtime: Runtime) -> None:
+    """Runtime passes the requested connection's auth metadata to the adapter."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_API_KEY",
+                ),
+            ),
+            ConnectionConfig(
+                id="service-account",
+                type="api_key",
+                label="Service Account",
+                auth=AuthConfig(
+                    header="x-service-token",
+                    prefix="Token ",
+                    credential_key="OPENAI_SERVICE_TOKEN",
+                ),
+            ),
+        ],
+    )
+    registry = ProviderRegistry({"openai": provider_config})
+    runtime._providers = registry  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        registry,
+        process_env={"OPENAI_SERVICE_TOKEN": "service-token"},
+    )
+
+    # Act
+    adapter = runtime.get_adapter("openai", "openai:service-account")
+
+    # Assert
+    assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert adapter._api_key == "service-token"  # type: ignore[attr-defined]
+    assert adapter._auth_config.header == "x-service-token"  # type: ignore[attr-defined]
+    assert adapter._auth_config.prefix == "Token "  # type: ignore[attr-defined]
+
+
 def test_runtime_start_loads_data_dir_env_for_provider_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
