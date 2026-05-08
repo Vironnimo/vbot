@@ -65,9 +65,9 @@ def runtime_with_openrouter_key(monkeypatch: pytest.MonkeyPatch, config: Config)
 def test_get_adapter_openai_returns_wired_adapter(
     runtime_with_openai_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('openai') returns a wired OpenAICompatibleAdapter."""
+    """Runtime.get_adapter('openai', 'openai:api-key') returns a wired adapter."""
     # Act
-    adapter = runtime_with_openai_key.get_adapter("openai")
+    adapter = runtime_with_openai_key.get_adapter("openai", "openai:api-key")
 
     # Assert — type check + provider config wiring
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -78,9 +78,9 @@ def test_get_adapter_openai_returns_wired_adapter(
 def test_get_adapter_anthropic_returns_wired_adapter(
     runtime_with_anthropic_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('anthropic') returns a wired AnthropicAdapter."""
+    """Runtime.get_adapter('anthropic', 'anthropic:api-key') returns a wired adapter."""
     # Act
-    adapter = runtime_with_anthropic_key.get_adapter("anthropic")
+    adapter = runtime_with_anthropic_key.get_adapter("anthropic", "anthropic:api-key")
 
     # Assert — type check + provider config wiring
     assert isinstance(adapter, AnthropicAdapter)
@@ -91,9 +91,9 @@ def test_get_adapter_anthropic_returns_wired_adapter(
 def test_get_adapter_openrouter_returns_wired_adapter(
     runtime_with_openrouter_key: Runtime,
 ) -> None:
-    """Runtime.get_adapter('openrouter') returns a wired OpenAICompatibleAdapter."""
+    """Runtime.get_adapter('openrouter', 'openrouter:api-key') returns a wired adapter."""
     # Act
-    adapter = runtime_with_openrouter_key.get_adapter("openrouter")
+    adapter = runtime_with_openrouter_key.get_adapter("openrouter", "openrouter:api-key")
 
     # Assert — type check + extra_headers wiring
     assert isinstance(adapter, OpenAICompatibleAdapter)
@@ -118,7 +118,7 @@ def test_runtime_start_loads_data_dir_env_for_provider_auth(
     runtime.start()
 
     # Act
-    adapter = runtime.get_adapter("openrouter")
+    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
 
     # Assert
     assert runtime.has_provider_credentials("openrouter") is True
@@ -143,7 +143,7 @@ def test_runtime_start_does_not_overwrite_existing_provider_environment(
     runtime.start()
 
     # Act
-    adapter = runtime.get_adapter("openrouter")
+    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
 
     # Assert
     assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
@@ -190,7 +190,7 @@ def test_runtime_empty_process_credential_overrides_data_dir_fallback(
 
     assert runtime.has_provider_credentials("openrouter") is False
     with pytest.raises(ConfigError, match="Provider credentials not found"):
-        runtime.get_adapter("openrouter")
+        runtime.get_adapter("openrouter", "openrouter:api-key")
 
 
 def test_runtime_provider_credentials_report_missing_when_unconfigured(
@@ -204,6 +204,20 @@ def test_runtime_provider_credentials_report_missing_when_unconfigured(
     runtime.start()
 
     assert runtime.has_provider_credentials("openai") is False
+
+
+def test_runtime_provider_credentials_work_when_any_connection_is_usable(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """Runtime provider credential status is true when one connection is usable."""
+
+    monkeypatch.delenv("OPENAI_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key")
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert runtime.has_provider_credentials("openai") is True
 
 
 # ------------------------------------------------------------------
@@ -272,7 +286,7 @@ def test_get_adapter_nonexistent_raises_key_error(runtime: Runtime) -> None:
     """Runtime.get_adapter('nonexistent') raises KeyError."""
     # Act & Assert
     with pytest.raises(KeyError, match="nonexistent"):
-        runtime.get_adapter("nonexistent")
+        runtime.get_adapter("nonexistent", "nonexistent:api-key")
 
 
 def test_get_model_nonexistent_raises_key_error(runtime: Runtime) -> None:
@@ -294,7 +308,16 @@ def test_get_adapter_missing_api_key_raises_config_error(
 
     # Act & Assert
     with pytest.raises(ConfigError, match="Provider credentials not found"):
-        runtime.get_adapter("openai")
+        runtime.get_adapter("openai", "openai:api-key")
+
+
+def test_get_adapter_unknown_connection_id_raises_config_error(
+    runtime_with_openai_key: Runtime,
+) -> None:
+    """Runtime.get_adapter() raises ConfigError for an unknown connection ID."""
+
+    with pytest.raises(ConfigError, match="Unknown connection id"):
+        runtime_with_openai_key.get_adapter("openai", "openai:missing")
 
 
 def test_get_adapter_unknown_adapter_type_raises_config_error(
@@ -318,7 +341,7 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
     try:
         # Act & Assert
         with pytest.raises(ConfigError, match="Unknown adapter type"):
-            runtime.get_adapter("openai")
+            runtime.get_adapter("openai", "openai:api-key")
     finally:
         # Restore the original map
         runtime.get_adapter.__globals__["_ADAPTER_MAP"].update(original_map)
@@ -336,7 +359,7 @@ def test_get_adapter_before_start_raises_runtime_error(config: Config) -> None:
 
     # Act & Assert
     with pytest.raises(RuntimeError, match="not started"):
-        runtime.get_adapter("openai")
+        runtime.get_adapter("openai", "openai:api-key")
 
 
 def test_provider_credential_access_before_start_raises_runtime_error(config: Config) -> None:
