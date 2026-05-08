@@ -95,12 +95,6 @@ class ProviderConfig:
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
 
-    @property
-    def auth(self) -> AuthConfig:
-        """Return the first connection's auth config for adapter compatibility."""
-
-        return self.connections[0].auth
-
     def get_connection(self, local_id: str) -> ConnectionConfig:
         """Return a connection by its local provider-scoped ID."""
 

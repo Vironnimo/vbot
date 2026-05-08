@@ -42,7 +42,7 @@
   let errorMessage = $state('');
   let statusMessage = $state('');
   let availableModels = $state([]);
-  let availableConnections = $state(null);
+  let availableConnections = $state([]);
   let availableTools = $state([]);
   let modelSelectValue = $state('');
   let fallbackModelSelectValue = $state('');
@@ -107,34 +107,18 @@
 
   async function loadCatalogs() {
     try {
-      const [modelsRequest, connectionsRequest, toolsRequest] =
-        await Promise.allSettled([
-          rpc('model.list'),
-          rpc('connection.list'),
-          rpc('tool.list'),
-        ]);
-
-      if (modelsRequest.status === 'rejected') {
-        throw modelsRequest.reason;
-      }
-
-      if (toolsRequest.status === 'rejected') {
-        throw toolsRequest.reason;
-      }
-
-      const modelsResult = modelsRequest.value;
-      const connectionsResult =
-        connectionsRequest.status === 'fulfilled'
-          ? connectionsRequest.value
-          : null;
-      const toolsResult = toolsRequest.value;
+      const [modelsResult, connectionsResult, toolsResult] = await Promise.all([
+        rpc('model.list'),
+        rpc('connection.list'),
+        rpc('tool.list'),
+      ]);
 
       availableModels = Array.isArray(modelsResult?.models)
         ? modelsResult.models
         : [];
       availableConnections = Array.isArray(connectionsResult?.connections)
         ? connectionsResult.connections
-        : null;
+        : [];
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
         : [];
@@ -375,10 +359,6 @@
   }
 
   function selectModelOptions(selectedModel, selectedConnection) {
-    if (availableConnections === null) {
-      return selectModelOptionsWithoutConnections(selectedModel);
-    }
-
     const connectionsByProvider = usableConnectionsByProvider();
     const selectedValue = modelSelectionValue(
       selectedModel,
@@ -406,30 +386,6 @@
       {
         value: selectedValue,
         label: unavailableModelOptionLabel(selectedModel, selectedConnection),
-        isUnavailable: true,
-      },
-      ...catalogOptions,
-    ];
-  }
-
-  function selectModelOptionsWithoutConnections(selectedModel) {
-    const catalogOptions = availableModels.map((model) => ({
-      value: model.id,
-      label: model.id,
-      isUnavailable: false,
-    }));
-
-    if (
-      !selectedModel ||
-      catalogOptions.some((option) => option.value === selectedModel)
-    ) {
-      return catalogOptions;
-    }
-
-    return [
-      {
-        value: selectedModel,
-        label: unavailableModelOptionLabel(selectedModel, ''),
         isUnavailable: true,
       },
       ...catalogOptions,

@@ -15,7 +15,7 @@ from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -47,7 +47,9 @@ _DEFAULT_APP_VERSION = "0.1.0"
 # Adapter factory mapping
 # ---------------------------------------------------------------------------
 
-_ADAPTER_MAP: dict[str, Callable[[ProviderConfig, str, str | None], ProviderAdapter]] = {
+_ADAPTER_MAP: dict[
+    str, Callable[[ProviderConfig, str, str | None, AuthConfig], ProviderAdapter]
+] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "anthropic": AnthropicAdapter,
 }
@@ -305,7 +307,7 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        return adapter_class(provider_config, api_key, connection.base_url)
+        return adapter_class(provider_config, api_key, connection.base_url, connection.auth)
 
     def _get_connection_config(
         self,
