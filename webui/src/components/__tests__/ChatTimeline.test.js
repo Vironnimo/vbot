@@ -7,6 +7,8 @@ import {
   appendRunEvent,
   createChatState,
   ensureSessionState,
+  loadHistory,
+  startRun,
 } from '../../lib/chatState.js';
 import { init } from '../../lib/i18n.js';
 
@@ -1018,6 +1020,377 @@ describe('ChatTimeline', () => {
     expect(renderedChildren[1].textContent).toContain('read');
     expect(renderedChildren[2].classList.contains('msg-body-text')).toBe(true);
     expect(renderedChildren[2].textContent).toContain('Second answer');
+  });
+
+  it('renders one visible assistant block when persisted history overlaps an active run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-overlap',
+    );
+
+    sessionState.status = 'running';
+    sessionState.currentRun = {
+      runId: 'run-overlap',
+      sseUrl: '/api/runs/run-overlap/events',
+      status: 'running',
+    };
+    sessionState.messages = [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ];
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-overlap',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-overlap',
+      sequence: 2,
+      payload: {
+        reasoning_delta: 'Checking',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-overlap',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-overlap',
+      sequence: 4,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const assistantRuns = document.querySelectorAll('.assistant-run');
+    expect(assistantRuns).toHaveLength(1);
+    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(1);
+    expect(document.body.textContent).toContain('The file says A.');
+    expect(document.body.textContent).toContain('Checking');
+  });
+
+  it('drops still-working indicators after the active run becomes terminal history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-terminal-overlap',
+    );
+
+    sessionState.messages = [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ];
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-terminal-overlap',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-terminal-overlap',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-terminal-overlap',
+      sequence: 3,
+      payload: {
+        status: 'completed',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
+  });
+
+  it('renders one assistant block when terminal events arrive after overlapping history refresh', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-terminal-history-refresh',
+    );
+
+    sessionState.currentRun = {
+      runId: 'run-terminal-history-refresh',
+      sseUrl: '/api/runs/run-terminal-history-refresh/events',
+      status: 'running',
+    };
+    sessionState.status = 'completed';
+    sessionState.messages = [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ];
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-terminal-history-refresh',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-terminal-history-refresh',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-terminal-history-refresh',
+      sequence: 3,
+      payload: {
+        status: 'completed',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
+    expect(document.body.textContent.match(/The file says A\./g)).toHaveLength(
+      1,
+    );
+  });
+
+  it('keeps persisted assistant content visible when replay resumes with only later live events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-ahead',
+    );
+
+    startRun(sessionState, {
+      run_id: 'run-history-ahead',
+      sse_url: '/api/runs/run-history-ahead/events',
+      status: 'running',
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-history-ahead',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-history-ahead',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-history-ahead',
+      sequence: 3,
+      payload: {
+        status: 'completed',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
+    expect(document.body.textContent.match(/The file says A\./g)).toHaveLength(
+      1,
+    );
+    expect(document.body.textContent).toContain('read');
+  });
+
+  it('keeps persisted overlap suffix rows inside the single assistant block during handoff', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-suffix',
+    );
+
+    startRun(sessionState, {
+      run_id: 'run-history-suffix',
+      sse_url: '/api/runs/run-history-suffix/events',
+      status: 'running',
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-tools',
+        role: 'assistant',
+        reasoning: 'Need to read it.',
+        tool_calls: [
+          {
+            id: 'call-one',
+            name: 'read',
+            arguments: { path: 'a.txt' },
+          },
+        ],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-one',
+        name: 'read',
+        content: '{"ok": true, "content": "A"}',
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-history-suffix',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-history-suffix',
+      sequence: 2,
+      payload: {
+        status: 'completed',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const assistantRuns = document.querySelectorAll('.assistant-run');
+    expect(assistantRuns).toHaveLength(1);
+    expect(document.body.textContent).toContain('Need to read it.');
+    expect(document.body.textContent).toContain('The file says A.');
+    expect(document.body.textContent).toContain('read');
+    expect(document.body.textContent.match(/The file says A\./g)).toHaveLength(
+      1,
+    );
   });
 
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
