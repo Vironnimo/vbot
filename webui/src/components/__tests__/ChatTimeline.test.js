@@ -1022,6 +1022,97 @@ describe('ChatTimeline', () => {
     expect(renderedChildren[2].textContent).toContain('Second answer');
   });
 
+  it('renders reported persisted multi-step session as one assistant block', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-multistep',
+    );
+
+    loadHistory(sessionState, [
+      {
+        id: 'user-reported',
+        role: 'user',
+        content: 'Investigate the duplicated chat UI.',
+      },
+      {
+        id: 'assistant-glob',
+        role: 'assistant',
+        content: 'I will inspect the UI state helpers.',
+        reasoning: 'Find candidate files.',
+        tool_calls: [
+          {
+            id: 'call-glob',
+            name: 'glob',
+            arguments: { pattern: 'webui/src/**/*.js' },
+          },
+        ],
+      },
+      {
+        id: 'tool-glob',
+        role: 'tool',
+        tool_call_id: 'call-glob',
+        name: 'glob',
+        content: '{"ok":true,"data":{"content":"webui/src/lib/chatState.js"}}',
+      },
+      {
+        id: 'assistant-read',
+        role: 'assistant',
+        content: 'I found the timeline helper; now I will read it.',
+        reasoning: 'Read the selected file.',
+        tool_calls: [
+          {
+            id: 'call-read',
+            name: 'read',
+            arguments: { path: 'webui/src/lib/chatState.js' },
+          },
+        ],
+      },
+      {
+        id: 'tool-read',
+        role: 'tool',
+        tool_call_id: 'call-read',
+        name: 'read',
+        content: '{"ok":true,"data":{"content":"timeline code"}}',
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The timeline is in chatState.js.',
+        reasoning: 'Summarize the result.',
+      },
+    ]);
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.run-tool-event')).toHaveLength(2);
+    expect(document.querySelectorAll('.reasoning-block')).toHaveLength(3);
+    expect(
+      Array.from(document.querySelectorAll('.te-fn')).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(['glob', 'read']);
+    expect(
+      document.body.textContent.match(/I will inspect the UI state helpers\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(
+        /I found the timeline helper; now I will read it\./g,
+      ),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/The timeline is in chatState\.js\./g),
+    ).toHaveLength(1);
+  });
+
   it('renders one visible assistant block when persisted history overlaps an active run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -1154,6 +1245,11 @@ describe('ChatTimeline', () => {
         status: 'completed',
       },
     });
+    sessionState.currentRun = {
+      runId: 'run-terminal-overlap',
+      sseUrl: '/api/runs/run-terminal-overlap/events',
+      status: 'completed',
+    };
 
     mountedComponent = mount(ChatTimeline, {
       target: document.body,
@@ -1239,7 +1335,7 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('keeps persisted assistant content visible when replay resumes with only later live events', () => {
+  it('uses completed persisted history when replay resumes with only later live events', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -1309,10 +1405,10 @@ describe('ChatTimeline', () => {
     expect(document.body.textContent.match(/The file says A\./g)).toHaveLength(
       1,
     );
-    expect(document.body.textContent).toContain('read');
+    expect(document.body.textContent).not.toContain('read');
   });
 
-  it('keeps persisted overlap suffix rows inside the single assistant block during handoff', () => {
+  it('uses persisted overlap suffix rows as the single assistant block during handoff', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',

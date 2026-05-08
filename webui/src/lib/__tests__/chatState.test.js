@@ -190,6 +190,45 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('groups reported persisted multi-step tool history into one assistant run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-history',
+    );
+
+    loadHistory(sessionState, reportedMultiStepMessages());
+
+    const timelineItems = visibleTimelineItems(sessionState);
+    const assistantRun = timelineItems[1];
+
+    expect(timelineItems).toHaveLength(2);
+    expect(timelineItems[0]).toEqual(
+      expect.objectContaining({ id: 'user-reported', type: 'message' }),
+    );
+    expect(assistantRun).toEqual(
+      expect.objectContaining({ type: 'assistant_run', source: 'history' }),
+    );
+    expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Find candidate files.',
+      'Read the selected file.',
+      'Summarize the result.',
+    ]);
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'I will inspect the UI state helpers.',
+      'I found the timeline helper; now I will read it.',
+      'The timeline is in chatState.js.',
+    ]);
+    expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual([
+      'call-glob',
+      'call-read',
+    ]);
+    expect(assistantRun.tools.map((tool) => tool.name)).toEqual([
+      'glob',
+      'read',
+    ]);
+  });
+
   it('keeps one assistant run when SSE replay overlaps with persisted active run history', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -258,7 +297,7 @@ describe('chat state helpers', () => {
     );
   });
 
-  it('merges persisted overlap history when resumed live events only contain later tool and terminal events', () => {
+  it('uses persisted history after completed overlap instead of merging later live events', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -314,21 +353,16 @@ describe('chat state helpers', () => {
     expect(visibleTimelineItems(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
-        id: 'assistant-run-run-one',
+        id: 'history-run-assistant-one',
         type: 'assistant_run',
         status: CHAT_STATUS_COMPLETED,
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
-        tools: [
-          expect.objectContaining({
-            toolCallId: 'call-one',
-            status: CHAT_STATUS_RUNNING,
-          }),
-        ],
+        tools: [],
       }),
     ]);
   });
 
-  it('reconciles overlapping persisted suffix items into the live assistant run instead of dropping them', () => {
+  it('uses persisted suffix history only when terminal live events overlap the same turn', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -392,7 +426,7 @@ describe('chat state helpers', () => {
     expect(timelineItems).toHaveLength(2);
     expect(timelineItems[1]).toEqual(
       expect.objectContaining({
-        id: 'assistant-run-run-one',
+        id: 'history-run-assistant-tools',
         type: 'assistant_run',
         status: CHAT_STATUS_COMPLETED,
       }),
@@ -471,7 +505,7 @@ describe('chat state helpers', () => {
     expect(visibleTimelineItems(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
-        id: 'assistant-run-run-one',
+        id: 'history-run-assistant-one',
         type: 'assistant_run',
         status: CHAT_STATUS_COMPLETED,
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
@@ -978,6 +1012,54 @@ describe('chat state helpers', () => {
         status: CHAT_STATUS_RUNNING,
       }),
     ]);
+  });
+
+  it('renders a separate live run after non-overlapping persisted history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-non-overlap',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'First request' },
+      { id: 'assistant-one', role: 'assistant', content: 'First answer' },
+    ]);
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/api/runs/run-two/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: {
+        message: { id: 'user-two', role: 'user', content: 'Second request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-two',
+      sequence: 2,
+      payload: { content_delta: 'Second answer' },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.type)).toEqual([
+      'message',
+      'assistant_run',
+      'event',
+      'assistant_run',
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'First answer' }),
+    ]);
+    expect(timelineItems[2].event.payload.message.id).toBe('user-two');
+    expect(timelineItems[3]).toEqual(
+      expect.objectContaining({ runId: 'run-two', type: 'assistant_run' }),
+    );
   });
 
   it('orders each live run user event before its assistant block using run arrival', () => {
@@ -1516,3 +1598,65 @@ describe('chat state helpers', () => {
     expect(highestRunEventSequence(sessionState)).toBe(3);
   });
 });
+
+function reportedMultiStepMessages() {
+  return [
+    {
+      id: 'user-reported',
+      role: 'user',
+      content: 'Investigate the duplicated chat UI.',
+      timestamp: '2026-05-08T10:00:00Z',
+    },
+    {
+      id: 'assistant-glob',
+      role: 'assistant',
+      content: 'I will inspect the UI state helpers.',
+      reasoning: 'Find candidate files.',
+      timestamp: '2026-05-08T10:00:01Z',
+      tool_calls: [
+        {
+          id: 'call-glob',
+          name: 'glob',
+          arguments: { pattern: 'webui/src/**/*.js' },
+        },
+      ],
+    },
+    {
+      id: 'tool-glob',
+      role: 'tool',
+      tool_call_id: 'call-glob',
+      name: 'glob',
+      content: '{"ok":true,"data":{"content":"webui/src/lib/chatState.js"}}',
+      timestamp: '2026-05-08T10:00:02Z',
+    },
+    {
+      id: 'assistant-read',
+      role: 'assistant',
+      content: 'I found the timeline helper; now I will read it.',
+      reasoning: 'Read the selected file.',
+      timestamp: '2026-05-08T10:00:03Z',
+      tool_calls: [
+        {
+          id: 'call-read',
+          name: 'read',
+          arguments: { path: 'webui/src/lib/chatState.js' },
+        },
+      ],
+    },
+    {
+      id: 'tool-read',
+      role: 'tool',
+      tool_call_id: 'call-read',
+      name: 'read',
+      content: '{"ok":true,"data":{"content":"timeline code"}}',
+      timestamp: '2026-05-08T10:00:04Z',
+    },
+    {
+      id: 'assistant-final',
+      role: 'assistant',
+      content: 'The timeline is in chatState.js.',
+      reasoning: 'Summarize the result.',
+      timestamp: '2026-05-08T10:00:05Z',
+    },
+  ];
+}
