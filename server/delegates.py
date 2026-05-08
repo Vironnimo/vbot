@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from pathlib import Path
 from typing import Any, cast
 
 from core.agents import AgentError
@@ -31,6 +32,8 @@ from core.chat import (
     RunEvent,
     RunNotFoundError,
 )
+from core.models.discovery import refresh_models
+from core.models.models import ModelRegistry
 from core.utils.errors import ConfigError, VBotError
 
 JsonObject = dict[str, Any]
@@ -77,6 +80,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _list_connections(state, params)
         case "model.list":
             return _list_models(state, params)
+        case "model.refresh_db":
+            return await _refresh_model_db(state, params)
         case "tool.list":
             return _list_tools(state, params)
         case "agent.list":
@@ -145,6 +150,42 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"connections": connections}
+
+
+async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
+    provider_id = _required_string(params, "provider_id")
+    unsupported_fields = sorted(set(params) - {"provider_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported model refresh fields: {', '.join(unsupported_fields)}",
+        )
+
+    try:
+        runtime = state.runtime
+        provider = runtime.providers.get(provider_id)
+        if not getattr(provider, "models_endpoint", None):
+            raise RpcError(
+                RPC_ERROR_DOMAIN,
+                f"provider '{provider_id}' does not support model refresh",
+            )
+
+        credential_connection, credential_value = _first_usable_provider_credential(
+            runtime,
+            provider_id,
+            provider,
+        )
+        resources_dir = _runtime_resources_dir(runtime)
+        result = await refresh_models(
+            provider,
+            credential_value,
+            resources_dir,
+            credential_connection=credential_connection,
+        )
+        runtime._models = ModelRegistry.load(resources_dir)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return result
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
@@ -379,6 +420,7 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         "id": provider.id,
         "name": provider.name,
         "base_url": provider.base_url,
+        "models_endpoint": getattr(provider, "models_endpoint", None),
         "connections": [
             _provider_settings_connection(runtime, provider.id, connection)
             for connection in provider.connections
@@ -397,6 +439,29 @@ def _provider_has_credentials(runtime: Any, provider_id: str) -> bool:
 
 def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: str) -> bool:
     return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
+
+
+def _first_usable_provider_credential(
+    runtime: Any,
+    provider_id: str,
+    provider: Any,
+) -> tuple[Any, str]:
+    for connection in provider.connections:
+        connection_id = f"{provider_id}:{connection.id}"
+        if runtime.provider_credentials.has_credentials(provider_id, connection_id):
+            credential = runtime.provider_credentials.get_credentials(provider_id, connection_id)
+            return connection, str(credential)
+    raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
+
+
+def _runtime_resources_dir(runtime: Any) -> Path:
+    resolve_resources_path = getattr(runtime, "_resolve_resources_path", None)
+    if callable(resolve_resources_path):
+        return Path(resolve_resources_path())
+    resources_dir = getattr(runtime, "resources_dir", None)
+    if resources_dir is not None:
+        return Path(resources_dir)
+    raise ConfigError("Runtime resources directory is not available")
 
 
 def _connection_response(runtime: Any, provider_id: str, connection: Any) -> JsonObject:

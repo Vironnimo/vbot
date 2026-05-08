@@ -163,6 +163,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   has higher precedence than the data-dir `.env`, but backend code should ask a
   central provider-credential path whether credentials exist and what value to
   use, rather than reading `os.environ` directly.
+- **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
+  provider model files under `resources/models/` and may include `source` and
+  `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional
+  `resources/model-overrides/<provider>.json` files patch or supplement
+  discovered models.
 
 ## Specs
 

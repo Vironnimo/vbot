@@ -57,6 +57,9 @@
   let saveNotice = $state('');
   let saving = $state(false);
   let selectedLanguageId = $state('en');
+  let refreshingProviderId = $state('');
+  let providerRefreshMessages = $state({});
+  let providerRefreshErrors = $state({});
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -140,6 +143,82 @@
     selectedLanguageId = event.currentTarget.value;
     saveError = '';
     saveNotice = '';
+  }
+
+  function canRefreshProviderModels(provider) {
+    return (
+      typeof provider?.models_endpoint === 'string' &&
+      provider.models_endpoint.length > 0
+    );
+  }
+
+  function clearProviderRefreshMessage(providerId) {
+    providerRefreshMessages = withoutProviderMessage(
+      providerRefreshMessages,
+      providerId,
+    );
+    providerRefreshErrors = withoutProviderMessage(
+      providerRefreshErrors,
+      providerId,
+    );
+  }
+
+  async function refreshProviderModels(provider) {
+    if (!canRefreshProviderModels(provider) || refreshingProviderId) {
+      return;
+    }
+
+    const providerId = provider.id;
+    refreshingProviderId = providerId;
+    clearProviderRefreshMessage(providerId);
+
+    try {
+      const result = await rpc('model.refresh_db', { provider_id: providerId });
+      await rpc('model.list');
+      applyProviderRefreshResult(result);
+      providerRefreshMessages = {
+        ...providerRefreshMessages,
+        [providerId]: t(
+          'settings.providers.refreshSuccess',
+          'Model DB updated: {count} models available.',
+          { count: result.model_count ?? 0 },
+        ),
+      };
+    } catch (error) {
+      providerRefreshErrors = {
+        ...providerRefreshErrors,
+        [providerId]: `${t(
+          'settings.providers.refreshError',
+          'Model DB could not be updated.',
+        )} ${error.message}`,
+      };
+    } finally {
+      refreshingProviderId = '';
+    }
+  }
+
+  function applyProviderRefreshResult(result) {
+    if (!settings?.providers?.items || !result?.provider_id) {
+      return;
+    }
+
+    settings = {
+      ...settings,
+      providers: {
+        ...settings.providers,
+        items: settings.providers.items.map((provider) =>
+          provider.id === result.provider_id
+            ? { ...provider, model_count: result.model_count }
+            : provider,
+        ),
+      },
+    };
+  }
+
+  function withoutProviderMessage(messages, providerId) {
+    const nextMessages = { ...messages };
+    delete nextMessages[providerId];
+    return nextMessages;
   }
 </script>
 
@@ -249,10 +328,39 @@
                   <div class="s-row-desc">{describeProvider(provider, t)}</div>
                 </div>
                 <div class="s-row-control">
-                  <span class={`chip ${providerStatusClass(provider)}`}
-                    >{providerStatusLabel(provider, t)}</span
-                  >
+                  <div class="s-row-actions s-row-actions--provider">
+                    <span class={`chip ${providerStatusClass(provider)}`}
+                      >{providerStatusLabel(provider, t)}</span
+                    >
+                    {#if canRefreshProviderModels(provider)}
+                      <button
+                        class="btn-outline s-refresh-button"
+                        type="button"
+                        disabled={refreshingProviderId.length > 0}
+                        onclick={() => refreshProviderModels(provider)}
+                      >
+                        {refreshingProviderId === provider.id
+                          ? t(
+                              'settings.providers.refreshingModels',
+                              'Updating…',
+                            )
+                          : t(
+                              'settings.providers.refreshModels',
+                              'Update Model DB',
+                            )}
+                      </button>
+                    {/if}
+                  </div>
                 </div>
+                {#if providerRefreshMessages[provider.id]}
+                  <div class="s-row-note s-row-note--success">
+                    {providerRefreshMessages[provider.id]}
+                  </div>
+                {:else if providerRefreshErrors[provider.id]}
+                  <div class="s-row-note s-row-note--error">
+                    {providerRefreshErrors[provider.id]}
+                  </div>
+                {/if}
               </div>
             {/each}
           {/if}
@@ -465,6 +573,7 @@
   .s-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     justify-content: space-between;
     gap: 16px;
     padding: 14px 0;
@@ -553,6 +662,30 @@
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .s-row-actions--provider {
+    justify-content: flex-end;
+  }
+
+  .s-refresh-button {
+    white-space: nowrap;
+  }
+
+  .s-row-note {
+    width: 100%;
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.4;
+  }
+
+  .s-row-note--success {
+    color: var(--green);
+  }
+
+  .s-row-note--error {
+    color: var(--red);
   }
 
   .s-save-button {
