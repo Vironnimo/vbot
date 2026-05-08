@@ -114,6 +114,25 @@ def test_provider_credential_resolver_get_connection_missing_credentials(
         resolver.get_credentials("openai", "openai:api-key")
 
 
+def test_provider_credential_resolver_connection_missing_from_env_and_fallback(
+    tmp_path: Path,
+) -> None:
+    """A credential absent from process env and fallback is not usable."""
+    # Arrange
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    resolver = ProviderCredentialResolver(
+        runtime.providers,
+        process_env={},
+        fallback_credentials={"OTHER_KEY": "other-value"},
+    )
+
+    # Act / Assert
+    assert resolver.has_credentials("openai", "openai:api-key") is False
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        resolver.get_credentials("openai", "openai:api-key")
+
+
 def test_provider_credential_resolver_provider_level_delegates_to_first_usable(
     tmp_path: Path,
 ) -> None:

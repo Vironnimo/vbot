@@ -21,7 +21,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -32,7 +32,14 @@ ANTHROPIC_CONFIG = ProviderConfig(
     name="Anthropic",
     adapter="anthropic",
     base_url="https://api.anthropic.com/v1",
-    auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
+        )
+    ],
     defaults={"max_tokens": 4096},
 )
 
@@ -41,11 +48,18 @@ CUSTOM_CONFIG = ProviderConfig(
     name="Anthropic Custom",
     adapter="anthropic",
     base_url="https://custom.anthropic.example/v1",
-    auth=AuthConfig(
-        header="x-api-key",
-        prefix="",
-        credential_key="CUSTOM_ANTHROPIC_API_KEY",
-    ),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="x-api-key",
+                prefix="",
+                credential_key="CUSTOM_ANTHROPIC_API_KEY",
+            ),
+        )
+    ],
     defaults={"max_tokens": 8192, "temperature": 0.7},
     extra_headers={"X-Custom-Header": "custom-value"},
 )
@@ -55,11 +69,18 @@ NO_DEFAULTS_CONFIG = ProviderConfig(
     name="Anthropic Minimal",
     adapter="anthropic",
     base_url="https://minimal.anthropic.example/v1",
-    auth=AuthConfig(
-        header="x-api-key",
-        prefix="",
-        credential_key="MINIMAL_ANTHROPIC_API_KEY",
-    ),
+    connections=[
+        ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="x-api-key",
+                prefix="",
+                credential_key="MINIMAL_ANTHROPIC_API_KEY",
+            ),
+        )
+    ],
 )
 
 API_KEY = "test-anthropic-key-12345"

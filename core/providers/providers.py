@@ -236,6 +236,9 @@ class ProviderRegistry:
         connections: list[ConnectionConfig] = []
         seen_ids: set[str] = set()
 
+        if "connections" not in data:
+            raise ConfigError(f"Provider '{provider_id}' is missing required field 'connections'")
+
         for connection_data in data["connections"]:
             local_id = connection_data["id"]
             if local_id in seen_ids:

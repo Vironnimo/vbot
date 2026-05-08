@@ -290,6 +290,24 @@ class TestConnectionParsing:
         with pytest.raises(KeyError, match="missing"):
             config.get_connection("missing")
 
+    def test_connection_base_url_override_parses_from_json(self, tmp_path: Path) -> None:
+        """Connection base_url overrides parse from provider JSON."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        connection["base_url"] = "https://enterprise.example.com/v1"
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        config = registry.get("openai")
+
+        # Assert
+        assert config.get_connection("api-key").base_url == "https://enterprise.example.com/v1"
+
 
 # ---------------------------------------------------------------------------
 # Defaults, extra_headers, models_endpoint
@@ -562,6 +580,23 @@ class TestProviderRegistryDuplicates:
 
         # Act / Assert
         with pytest.raises(KeyError, match="Duplicate connection id"):
+            ProviderRegistry.load(tmp_path)
+
+
+class TestProviderRegistryRequiredFields:
+    """Tests for clear provider config errors on missing required fields."""
+
+    def test_missing_connections_field_raises_config_error(self, tmp_path: Path) -> None:
+        """A provider JSON without connections raises a clear ConfigError."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        data.pop("connections")
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="missing required field 'connections'"):
             ProviderRegistry.load(tmp_path)
 
 

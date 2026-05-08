@@ -1137,6 +1137,26 @@ async def test_chat_loop_empty_connection_falls_back_to_first_usable(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_chat_loop_empty_connection_prefers_first_usable_in_provider_order(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        connection="",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.provider_credentials = StubProviderCredentials({"openai:oauth", "openai:api-key"})
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert runtime.adapter_provider_id == "openai"
+    assert runtime.adapter_connection_id == "openai:oauth"
+
+
+@pytest.mark.asyncio
 async def test_missing_provider_raises_chat_error_before_adapter_request(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="missing/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])

@@ -10,7 +10,9 @@ import os
 import pytest
 
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -99,6 +101,45 @@ def test_get_adapter_openrouter_returns_wired_adapter(
     assert isinstance(adapter, OpenAICompatibleAdapter)
     assert adapter._config.extra_headers is not None  # type: ignore[attr-defined]
     assert "HTTP-Referer" in adapter._config.extra_headers  # type: ignore[attr-defined]
+
+
+def test_get_adapter_connection_base_url_override_uses_override(
+    runtime: Runtime,
+) -> None:
+    """Runtime.get_adapter() passes connection base_url override into the adapter."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="enterprise",
+                type="api_key",
+                label="Enterprise",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_ENTERPRISE_KEY",
+                ),
+                base_url="https://enterprise.example.com/v1",
+            )
+        ],
+    )
+    registry = ProviderRegistry({"openai": provider_config})
+    runtime._providers = registry  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        registry,
+        process_env={"OPENAI_ENTERPRISE_KEY": "sk-enterprise"},
+    )
+
+    # Act
+    adapter = runtime.get_adapter("openai", "openai:enterprise")
+
+    # Assert
+    assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert str(adapter._client.base_url) == "https://enterprise.example.com/v1/"  # type: ignore[attr-defined]
 
 
 def test_runtime_start_loads_data_dir_env_for_provider_auth(
