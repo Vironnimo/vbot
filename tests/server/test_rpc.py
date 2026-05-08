@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from contextlib import suppress
 from copy import deepcopy
@@ -13,10 +14,13 @@ from typing import Any, cast
 
 import pytest
 
+import server.delegates as delegates
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import ModelRegistry
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
+from core.utils.errors import ConfigError
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
@@ -102,7 +106,7 @@ class InstrumentedAgentDeleteLock:
 
 class StubProviders:
     def __init__(self) -> None:
-        self._providers = {
+        self._providers: dict[str, Any] = {
             "anthropic": SimpleNamespace(
                 id="anthropic",
                 name="Anthropic",
@@ -119,7 +123,11 @@ class StubProviders:
             "openai": SimpleNamespace(
                 id="openai",
                 name="OpenAI",
+                adapter="openai_compatible",
                 base_url="https://api.openai.com/v1",
+                defaults={"max_tokens": 4096},
+                extra_headers={},
+                models_endpoint=None,
                 connections=[
                     SimpleNamespace(
                         id="oauth",
@@ -138,7 +146,11 @@ class StubProviders:
             "ollama": SimpleNamespace(
                 id="ollama",
                 name="Ollama",
+                adapter="openai_compatible",
                 base_url="",
+                defaults={"max_tokens": 4096},
+                extra_headers={},
+                models_endpoint=None,
                 connections=[
                     SimpleNamespace(
                         id="api-key",
@@ -154,6 +166,9 @@ class StubProviders:
         if provider_id not in self._providers:
             raise KeyError(provider_id)
         return self._providers[provider_id]
+
+    def add(self, provider: object) -> None:
+        self._providers[cast(Any, provider).id] = provider
 
     def list_ids(self) -> list[str]:
         return sorted(self._providers)
@@ -220,6 +235,68 @@ class StubModels:
 
     def list_for_provider(self, provider_id: str) -> list[object]:
         return list(self._models[provider_id])
+
+
+def openrouter_provider() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="openrouter",
+        name="OpenRouter",
+        adapter="openai_compatible",
+        base_url="https://openrouter.ai/api/v1",
+        defaults={"max_tokens": 8192},
+        extra_headers={"X-Title": "vBot"},
+        models_endpoint="/models",
+        connections=[
+            SimpleNamespace(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=SimpleNamespace(credential_key="OPENROUTER_API_KEY"),
+            )
+        ],
+    )
+
+
+async def fake_refresh_models(
+    provider_config: Any,
+    credential_value: str,
+    resources_dir: Path,
+) -> JsonObject:
+    FAKE_REFRESH_MODEL_CALLS.append(credential_value)
+    models_dir = resources_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.joinpath(f"{provider_config.id}.json").write_text(
+        json.dumps(
+            {
+                "provider_id": provider_config.id,
+                "source": "discovery",
+                "fetched_at": "2026-05-08T19:08:00+00:00",
+                "models": {
+                    "fresh-model": {
+                        "name": "Fresh Model",
+                        "capabilities": {
+                            "vision": True,
+                            "tools": True,
+                            "json_mode": True,
+                            "reasoning": {"supported": True},
+                        },
+                        "context_window": 128000,
+                        "max_output_tokens": 8192,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    ModelRegistry.invalidate(resources_dir)
+    return {
+        "provider_id": provider_config.id,
+        "model_count": 1,
+        "fetched_at": "2026-05-08T19:08:00+00:00",
+    }
+
+
+FAKE_REFRESH_MODEL_CALLS: list[str] = []
 
 
 class StubStorage:
@@ -303,12 +380,13 @@ class StubAdapter:
 
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
+        self.resources_dir = tmp_path / "resources"
         self.agents = StubAgents(StubAgent(id="coder", allowed_tools=["*"]))
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
         self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
-        self.models = StubModels()
+        self._models = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
@@ -321,6 +399,10 @@ class StubRuntime:
 
     def get_adapter(self, _provider_id: str, _connection_id: str) -> StubAdapter:
         return self.adapter
+
+    @property
+    def models(self) -> Any:
+        return self._models
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))
@@ -344,7 +426,29 @@ class StubRuntime:
                 )
                 return bool(os.environ.get(connection.auth.credential_key))
 
+            def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
+                provider = cast(Any, runtime.providers.get(provider_id))
+                if connection_id is None:
+                    for connection in provider.connections:
+                        credential = os.environ.get(connection.auth.credential_key, "")
+                        if credential:
+                            return credential
+                    raise ConfigError(
+                        f"Provider credentials not found for provider '{provider_id}'"
+                    )
+                local_id = connection_id.removeprefix(f"{provider_id}:")
+                connection = next(
+                    connection for connection in provider.connections if connection.id == local_id
+                )
+                credential = os.environ.get(connection.auth.credential_key, "")
+                if credential:
+                    return credential
+                raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
+
         return CredentialResolver()
+
+    def _resolve_resources_path(self) -> Path:
+        return self.resources_dir
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
@@ -662,6 +766,86 @@ async def test_model_list_filters_by_connection_usability(
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "provider_id": "openrouter",
+            "model_count": 1,
+            "fetched_at": "2026-05-08T19:08:00+00:00",
+        },
+    }
+    assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
+    refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
+    assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_rejects_provider_without_models_endpoint(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "provider 'openai' does not support model refresh" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_rejects_missing_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert (
+        "Provider credentials not found for provider 'openrouter'" in response["error"]["message"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_rejects_unknown_provider(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "missing"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "missing" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
