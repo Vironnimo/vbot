@@ -245,15 +245,16 @@ export const englishCatalog = Object.freeze({
     'Data directory placeholder, not a detected runtime value',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
-    'API-key presence and endpoint metadata for available providers.',
+    'Credential status and endpoint metadata for available providers.',
   'settings.providers.empty': 'No providers are available.',
-  'settings.providers.description.apiKey': 'Env key: {envKey}.',
+  'settings.providers.description.credentialKey':
+    'Credential key: {credentialKey}.',
   'settings.providers.description.baseUrl': 'Endpoint: {baseUrl}.',
   'settings.providers.description.modelCount': '{count} models available.',
   'settings.providers.description.none':
     'Provider metadata is not available yet.',
   'settings.providers.status.configured': 'Configured',
-  'settings.providers.status.missingApiKey': 'Missing API key',
+  'settings.providers.status.missingCredentials': 'Missing credentials',
   'settings.providers.status.placeholder': 'Placeholder',
   'settings.providers.customEndpoint': 'Custom endpoint',
   'settings.providers.customEndpointDescription':
