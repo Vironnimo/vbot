@@ -191,6 +191,60 @@ class TestModelRegistryLoad:
         registry_second = ModelRegistry.load(FIXTURES_DIR)
         assert registry_first is registry_second
 
+    def test_invalidate_removes_cache_entry_and_next_load_reads_disk(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        model_file = models_dir / "test_provider.json"
+        model_file.write_text(
+            """
+            {
+              "provider_id": "test_provider",
+              "models": {
+                "model-a": {
+                  "name": "Original",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": false,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 1000,
+                  "max_output_tokens": 100
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+        registry_first = ModelRegistry.load(tmp_path)
+        model_file.write_text(
+            """
+            {
+              "provider_id": "test_provider",
+              "models": {
+                "model-a": {
+                  "name": "Updated",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": false,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 1000,
+                  "max_output_tokens": 100
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        ModelRegistry.invalidate(tmp_path)
+        registry_second = ModelRegistry.load(tmp_path)
+
+        assert registry_second is not registry_first
+        assert registry_second.get("test_provider", "model-a").name == "Updated"
+
 
 # ---------------------------------------------------------------------------
 # ModelRegistry — get()
