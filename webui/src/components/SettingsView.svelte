@@ -57,9 +57,9 @@
   let saveNotice = $state('');
   let saving = $state(false);
   let selectedLanguageId = $state('en');
-  let refreshingProviderId = $state('');
-  let providerRefreshMessages = $state({});
-  let providerRefreshErrors = $state({});
+  let refreshingModels = $state(false);
+  let modelRefreshMessage = $state('');
+  let modelRefreshError = $state('');
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -69,6 +69,9 @@
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
   let providerItems = $derived(getProviderItems(settings));
+  let hasRefreshEligibleProvider = $derived(
+    providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
+  );
   let availableLanguageOptions = $derived(
     buildLanguageOptions(settings?.appearance),
   );
@@ -145,80 +148,100 @@
     saveNotice = '';
   }
 
-  function canRefreshProviderModels(provider) {
+  function providerAppearsRefreshEligible(provider) {
     return (
       typeof provider?.models_endpoint === 'string' &&
-      provider.models_endpoint.length > 0
+      provider.models_endpoint.length > 0 &&
+      (provider.credentials_configured === true ||
+        provider.status === 'configured')
     );
   }
 
-  function clearProviderRefreshMessage(providerId) {
-    providerRefreshMessages = withoutProviderMessage(
-      providerRefreshMessages,
-      providerId,
-    );
-    providerRefreshErrors = withoutProviderMessage(
-      providerRefreshErrors,
-      providerId,
-    );
-  }
-
-  async function refreshProviderModels(provider) {
-    if (!canRefreshProviderModels(provider) || refreshingProviderId) {
+  async function refreshModelDatabase() {
+    if (!hasRefreshEligibleProvider || refreshingModels) {
       return;
     }
 
-    const providerId = provider.id;
-    refreshingProviderId = providerId;
-    clearProviderRefreshMessage(providerId);
+    refreshingModels = true;
+    modelRefreshMessage = '';
+    modelRefreshError = '';
 
     try {
-      const result = await rpc('model.refresh_db', { provider_id: providerId });
-      await rpc('model.list');
+      const result = await rpc('model.refresh_db');
       applyProviderRefreshResult(result);
-      providerRefreshMessages = {
-        ...providerRefreshMessages,
-        [providerId]: t(
-          'settings.providers.refreshSuccess',
-          'Model DB updated: {count} models available.',
-          { count: result.model_count ?? 0 },
-        ),
-      };
+      await rpc('model.list');
+      modelRefreshMessage = t(
+        'settings.providers.refreshSuccess',
+        'Model DB updated: {providerCount} providers, {count} models available.',
+        refreshSummaryValues(result),
+      );
     } catch (error) {
-      providerRefreshErrors = {
-        ...providerRefreshErrors,
-        [providerId]: `${t(
-          'settings.providers.refreshError',
-          'Model DB could not be updated.',
-        )} ${error.message}`,
-      };
+      modelRefreshError = `${t(
+        'settings.providers.refreshError',
+        'Model DB could not be updated.',
+      )} ${error.message}`;
     } finally {
-      refreshingProviderId = '';
+      refreshingModels = false;
     }
   }
 
   function applyProviderRefreshResult(result) {
-    if (!settings?.providers?.items || !result?.provider_id) {
+    if (!settings?.providers?.items) {
       return;
     }
+
+    const refreshedProviders = getRefreshedProviders(result);
+
+    if (refreshedProviders.length === 0) {
+      return;
+    }
+
+    const modelCounts = new Map(
+      refreshedProviders
+        .filter((provider) => typeof provider?.provider_id === 'string')
+        .map((provider) => [provider.provider_id, provider.model_count]),
+    );
 
     settings = {
       ...settings,
       providers: {
         ...settings.providers,
         items: settings.providers.items.map((provider) =>
-          provider.id === result.provider_id
-            ? { ...provider, model_count: result.model_count }
+          modelCounts.has(provider.id)
+            ? { ...provider, model_count: modelCounts.get(provider.id) }
             : provider,
         ),
       },
     };
   }
 
-  function withoutProviderMessage(messages, providerId) {
-    const nextMessages = { ...messages };
-    delete nextMessages[providerId];
-    return nextMessages;
+  function getRefreshedProviders(result) {
+    if (Array.isArray(result?.providers)) {
+      return result.providers;
+    }
+
+    if (typeof result?.provider_id === 'string') {
+      return [result];
+    }
+
+    return [];
+  }
+
+  function refreshSummaryValues(result) {
+    const refreshedProviders = getRefreshedProviders(result);
+    const modelCount = Number.isFinite(result?.model_count)
+      ? result.model_count
+      : refreshedProviders.reduce(
+          (total, provider) =>
+            total +
+            (Number.isFinite(provider?.model_count) ? provider.model_count : 0),
+          0,
+        );
+
+    return {
+      providerCount: result?.refreshed_count ?? refreshedProviders.length,
+      count: modelCount,
+    };
   }
 </script>
 
@@ -261,6 +284,17 @@
           >
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </button>
+        {:else if activePanelId === 'providers' && !loading && !loadError && hasRefreshEligibleProvider}
+          <button
+            class="btn-primary s-refresh-button"
+            type="button"
+            disabled={refreshingModels}
+            onclick={refreshModelDatabase}
+          >
+            {refreshingModels
+              ? t('settings.providers.refreshingModels', 'Updating…')
+              : t('settings.providers.refreshModels', 'Update Model DB')}
+          </button>
         {/if}
       </div>
 
@@ -280,6 +314,14 @@
           <div class="s-feedback s-feedback--error">{saveError}</div>
         {:else if saveNotice}
           <div class="s-feedback s-feedback--success">{saveNotice}</div>
+        {/if}
+
+        {#if activePanelId === 'providers' && modelRefreshError}
+          <div class="s-feedback s-feedback--error">{modelRefreshError}</div>
+        {:else if activePanelId === 'providers' && modelRefreshMessage}
+          <div class="s-feedback s-feedback--success">
+            {modelRefreshMessage}
+          </div>
         {/if}
 
         {#if activePanelId === 'general'}
@@ -332,35 +374,8 @@
                     <span class={`chip ${providerStatusClass(provider)}`}
                       >{providerStatusLabel(provider, t)}</span
                     >
-                    {#if canRefreshProviderModels(provider)}
-                      <button
-                        class="btn-outline s-refresh-button"
-                        type="button"
-                        disabled={refreshingProviderId.length > 0}
-                        onclick={() => refreshProviderModels(provider)}
-                      >
-                        {refreshingProviderId === provider.id
-                          ? t(
-                              'settings.providers.refreshingModels',
-                              'Updating…',
-                            )
-                          : t(
-                              'settings.providers.refreshModels',
-                              'Update Model DB',
-                            )}
-                      </button>
-                    {/if}
                   </div>
                 </div>
-                {#if providerRefreshMessages[provider.id]}
-                  <div class="s-row-note s-row-note--success">
-                    {providerRefreshMessages[provider.id]}
-                  </div>
-                {:else if providerRefreshErrors[provider.id]}
-                  <div class="s-row-note s-row-note--error">
-                    {providerRefreshErrors[provider.id]}
-                  </div>
-                {/if}
               </div>
             {/each}
           {/if}
@@ -670,22 +685,6 @@
 
   .s-refresh-button {
     white-space: nowrap;
-  }
-
-  .s-row-note {
-    width: 100%;
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    line-height: 1.4;
-  }
-
-  .s-row-note--success {
-    color: var(--green);
-  }
-
-  .s-row-note--error {
-    color: var(--red);
   }
 
   .s-save-button {

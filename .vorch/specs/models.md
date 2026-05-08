@@ -105,8 +105,8 @@ One JSON file per provider at `resources/models/<provider>.json`:
   `ModelRegistry.load()` ignores those fields and reads only `provider_id` and
   `models`.
 
-Optional override files live outside the registry-loaded models directory as
-`resources/model-overrides/<provider>.json`:
+Optional override files live beside generated model files as
+`resources/models/<provider>.overrides.json`:
 
 ```json
 {
@@ -122,6 +122,8 @@ Optional override files live outside the registry-loaded models directory as
 Override fields replace fetched model fields at the top level. Nested objects are
 replaced wholesale rather than deep-merged. Override-only models are included in
 the generated output and must provide the full `Model` shape.
+`ModelRegistry.load()` skips `*.overrides.json` files so overrides are never
+parsed as model catalogs.
 
 Current provider files: `openai.json`, `openrouter.json`, `anthropic.json`.
 
