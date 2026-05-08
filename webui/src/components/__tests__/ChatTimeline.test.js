@@ -1038,7 +1038,6 @@ describe('ChatTimeline', () => {
       {
         id: 'assistant-glob',
         role: 'assistant',
-        content: 'I will inspect the UI state helpers.',
         reasoning: 'Find candidate files.',
         tool_calls: [
           {
@@ -1100,9 +1099,9 @@ describe('ChatTimeline', () => {
         (element) => element.textContent,
       ),
     ).toEqual(['glob', 'read']);
-    expect(
-      document.body.textContent.match(/I will inspect the UI state helpers\./g),
-    ).toHaveLength(1);
+    expect(document.body.textContent).not.toContain(
+      'I will inspect the UI state helpers.',
+    );
     expect(
       document.body.textContent.match(
         /I found the timeline helper; now I will read it\./g,
@@ -1110,6 +1109,101 @@ describe('ChatTimeline', () => {
     ).toHaveLength(1);
     expect(
       document.body.textContent.match(/The timeline is in chatState\.js\./g),
+    ).toHaveLength(1);
+  });
+
+  it('renders reported live multi-step run content and thinking once', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-live',
+    );
+
+    appendReportedLiveRunEvents(sessionState, 'run-reported-live');
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.run-tool-event')).toHaveLength(2);
+    expect(
+      Array.from(document.querySelectorAll('.te-fn')).map(
+        (element) => element.textContent,
+      ),
+    ).toEqual(['glob', 'read']);
+    expect(
+      document.body.textContent.match(
+        /I found the timeline helper; now I will read it\./g,
+      ),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/The timeline is in chatState\.js\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Find candidate files\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Read the selected file\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Summarize the result\./g),
+    ).toHaveLength(1);
+  });
+
+  it('renders one assistant block when reported history overlaps live events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-overlap',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reported-overlap',
+      sse_url: '/api/runs/run-reported-overlap/events',
+      status: 'running',
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-reported-overlap',
+      sequence: 1,
+      payload: { message: reportedMultiStepMessages()[0] },
+    });
+    appendReportedLiveRunEvents(sessionState, 'run-reported-overlap', 2);
+    loadHistory(sessionState, reportedMultiStepMessages());
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(1);
+    expect(document.querySelectorAll('.run-tool-event')).toHaveLength(2);
+    expect(
+      document.body.textContent.match(
+        /I found the timeline helper; now I will read it\./g,
+      ),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/The timeline is in chatState\.js\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Find candidate files\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Read the selected file\./g),
+    ).toHaveLength(1);
+    expect(
+      document.body.textContent.match(/Summarize the result\./g),
     ).toHaveLength(1);
   });
 
@@ -1534,3 +1628,172 @@ describe('ChatTimeline', () => {
     expect(chevron.style.transform).toBe('rotate(180deg)');
   });
 });
+
+function reportedMultiStepMessages() {
+  return [
+    {
+      id: 'user-reported',
+      role: 'user',
+      content: 'Investigate the duplicated chat UI.',
+    },
+    {
+      id: 'assistant-glob',
+      role: 'assistant',
+      reasoning: 'Find candidate files.',
+      tool_calls: [
+        {
+          id: 'call-glob',
+          name: 'glob',
+          arguments: { pattern: 'webui/src/**/*.js' },
+        },
+      ],
+    },
+    {
+      id: 'tool-glob',
+      role: 'tool',
+      tool_call_id: 'call-glob',
+      name: 'glob',
+      content: '{"ok":true,"data":{"content":"webui/src/lib/chatState.js"}}',
+    },
+    {
+      id: 'assistant-read',
+      role: 'assistant',
+      content: 'I found the timeline helper; now I will read it.',
+      reasoning: 'Read the selected file.',
+      tool_calls: [
+        {
+          id: 'call-read',
+          name: 'read',
+          arguments: { path: 'webui/src/lib/chatState.js' },
+        },
+      ],
+    },
+    {
+      id: 'tool-read',
+      role: 'tool',
+      tool_call_id: 'call-read',
+      name: 'read',
+      content: '{"ok":true,"data":{"content":"timeline code"}}',
+    },
+    {
+      id: 'assistant-final',
+      role: 'assistant',
+      content: 'The timeline is in chatState.js.',
+      reasoning: 'Summarize the result.',
+    },
+  ];
+}
+
+function appendReportedLiveRunEvents(sessionState, runId, startSequence = 1) {
+  const sequence = (offset) => startSequence + offset;
+
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(0),
+    payload: { reasoning_delta: 'Find candidate files.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_started',
+    run_id: runId,
+    sequence: sequence(1),
+    payload: {
+      tool_call: {
+        id: 'call-glob',
+        index: 0,
+        name: 'glob',
+        arguments: { pattern: 'webui/src/**/*.js' },
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_result',
+    run_id: runId,
+    sequence: sequence(2),
+    payload: {
+      tool_call: { id: 'call-glob', index: 0, name: 'glob' },
+      result: { ok: true, data: { content: 'webui/src/lib/chatState.js' } },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(3),
+    payload: { reasoning_delta: 'Read the selected file.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output_delta',
+    run_id: runId,
+    sequence: sequence(4),
+    payload: {
+      content_delta: 'I found the timeline helper; now I will read it.',
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_started',
+    run_id: runId,
+    sequence: sequence(5),
+    payload: {
+      tool_call: {
+        id: 'call-read',
+        index: 0,
+        name: 'read',
+        arguments: { path: 'webui/src/lib/chatState.js' },
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_result',
+    run_id: runId,
+    sequence: sequence(6),
+    payload: {
+      tool_call: { id: 'call-read', index: 0, name: 'read' },
+      result: { ok: true, data: { content: 'timeline code' } },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output',
+    run_id: runId,
+    sequence: sequence(7),
+    payload: {
+      message: {
+        id: 'assistant-read',
+        role: 'assistant',
+        content: 'I found the timeline helper; now I will read it.',
+        reasoning: 'Read the selected file.',
+        tool_calls: [
+          {
+            id: 'call-read',
+            name: 'read',
+            arguments: { path: 'webui/src/lib/chatState.js' },
+          },
+        ],
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(8),
+    payload: { reasoning_delta: 'Summarize the result.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output_delta',
+    run_id: runId,
+    sequence: sequence(9),
+    payload: { content_delta: 'The timeline is in chatState.js.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output',
+    run_id: runId,
+    sequence: sequence(10),
+    payload: {
+      message: {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The timeline is in chatState.js.',
+        reasoning: 'Summarize the result.',
+      },
+    },
+  });
+}

@@ -215,7 +215,6 @@ describe('chat state helpers', () => {
       'Summarize the result.',
     ]);
     expect(assistantRun.outputs.map((item) => item.content)).toEqual([
-      'I will inspect the UI state helpers.',
       'I found the timeline helper; now I will read it.',
       'The timeline is in chatState.js.',
     ]);
@@ -1492,6 +1491,153 @@ describe('chat state helpers', () => {
     );
   });
 
+  it('replaces streamed assistant content before a completed tool row with the final authoritative message', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-draft-tool-final',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-draft-tool-final',
+      sequence: 1,
+      payload: { content_delta: 'I will inspect the UI state helpers.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-draft-tool-final',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-glob',
+          index: 0,
+          name: 'glob',
+          arguments: { pattern: 'webui/src/**/*.js' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-draft-tool-final',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-glob', index: 0, name: 'glob' },
+        result: {
+          ok: true,
+          data: { content: 'webui/src/lib/chatState.js' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-draft-tool-final',
+      sequence: 4,
+      payload: {
+        message: {
+          id: 'assistant-glob',
+          role: 'assistant',
+          content: 'I will inspect the UI state helpers.',
+          tool_calls: [
+            {
+              id: 'call-glob',
+              name: 'glob',
+              arguments: { pattern: 'webui/src/**/*.js' },
+            },
+          ],
+        },
+      },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'assistant_output',
+      'tool_call',
+    ]);
+    expect(assistantRun.outputs).toEqual([
+      expect.objectContaining({
+        content: 'I will inspect the UI state helpers.',
+        streaming: false,
+      }),
+    ]);
+    expect(assistantRun.tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-glob', status: 'success' }),
+    ]);
+  });
+
+  it('keeps reported live multi-step tool run content and thinking visible once', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-live',
+    );
+
+    appendReportedLiveRunEvents(sessionState, 'run-reported-live');
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-reported-live',
+        type: 'assistant_run',
+      }),
+    );
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'I found the timeline helper; now I will read it.',
+      'The timeline is in chatState.js.',
+    ]);
+    expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Find candidate files.',
+      'Read the selected file.',
+      'Summarize the result.',
+    ]);
+    expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual([
+      'call-glob',
+      'call-read',
+    ]);
+  });
+
+  it('keeps reported active-overlap content and thinking visible once', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reported-overlap',
+    );
+    startRun(sessionState, {
+      run_id: 'run-reported-overlap',
+      sse_url: '/api/runs/run-reported-overlap/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-reported-overlap',
+      sequence: 1,
+      payload: { message: reportedMultiStepMessages()[0] },
+    });
+    appendReportedLiveRunEvents(sessionState, 'run-reported-overlap', 2);
+    loadHistory(sessionState, reportedMultiStepMessages());
+
+    const timelineItems = visibleTimelineItems(sessionState);
+    const assistantRun = timelineItems[1];
+
+    expect(timelineItems).toHaveLength(2);
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'I found the timeline helper; now I will read it.',
+      'The timeline is in chatState.js.',
+    ]);
+    expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Find candidate files.',
+      'Read the selected file.',
+      'Summarize the result.',
+    ]);
+    expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual([
+      'call-glob',
+      'call-read',
+    ]);
+  });
+
   it('groups persisted assistant, tool, and final assistant messages best-effort', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -1610,7 +1756,6 @@ function reportedMultiStepMessages() {
     {
       id: 'assistant-glob',
       role: 'assistant',
-      content: 'I will inspect the UI state helpers.',
       reasoning: 'Find candidate files.',
       timestamp: '2026-05-08T10:00:01Z',
       tool_calls: [
@@ -1659,4 +1804,121 @@ function reportedMultiStepMessages() {
       timestamp: '2026-05-08T10:00:05Z',
     },
   ];
+}
+
+function appendReportedLiveRunEvents(sessionState, runId, startSequence = 1) {
+  const sequence = (offset) => startSequence + offset;
+
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(0),
+    payload: { reasoning_delta: 'Find candidate files.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_started',
+    run_id: runId,
+    sequence: sequence(1),
+    payload: {
+      tool_call: {
+        id: 'call-glob',
+        index: 0,
+        name: 'glob',
+        arguments: { pattern: 'webui/src/**/*.js' },
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_result',
+    run_id: runId,
+    sequence: sequence(2),
+    payload: {
+      tool_call: { id: 'call-glob', index: 0, name: 'glob' },
+      result: {
+        ok: true,
+        data: { content: 'webui/src/lib/chatState.js' },
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(3),
+    payload: { reasoning_delta: 'Read the selected file.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output_delta',
+    run_id: runId,
+    sequence: sequence(4),
+    payload: {
+      content_delta: 'I found the timeline helper; now I will read it.',
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_started',
+    run_id: runId,
+    sequence: sequence(5),
+    payload: {
+      tool_call: {
+        id: 'call-read',
+        index: 0,
+        name: 'read',
+        arguments: { path: 'webui/src/lib/chatState.js' },
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'tool_call_result',
+    run_id: runId,
+    sequence: sequence(6),
+    payload: {
+      tool_call: { id: 'call-read', index: 0, name: 'read' },
+      result: { ok: true, data: { content: 'timeline code' } },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output',
+    run_id: runId,
+    sequence: sequence(7),
+    payload: {
+      message: {
+        id: 'assistant-read',
+        role: 'assistant',
+        content: 'I found the timeline helper; now I will read it.',
+        reasoning: 'Read the selected file.',
+        tool_calls: [
+          {
+            id: 'call-read',
+            name: 'read',
+            arguments: { path: 'webui/src/lib/chatState.js' },
+          },
+        ],
+      },
+    },
+  });
+  appendRunEvent(sessionState, {
+    type: 'reasoning_delta',
+    run_id: runId,
+    sequence: sequence(8),
+    payload: { reasoning_delta: 'Summarize the result.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output_delta',
+    run_id: runId,
+    sequence: sequence(9),
+    payload: { content_delta: 'The timeline is in chatState.js.' },
+  });
+  appendRunEvent(sessionState, {
+    type: 'assistant_output',
+    run_id: runId,
+    sequence: sequence(10),
+    payload: {
+      message: {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The timeline is in chatState.js.',
+        reasoning: 'Summarize the result.',
+      },
+    },
+  });
 }
