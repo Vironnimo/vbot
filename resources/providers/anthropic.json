@@ -6,7 +6,7 @@
   "auth": {
     "header": "x-api-key",
     "prefix": "",
-    "env_key": "ANTHROPIC_API_KEY"
+    "credential_key": "ANTHROPIC_API_KEY"
   },
   "defaults": {
     "max_tokens": 4096,

@@ -7,7 +7,7 @@ fields, extra_headers, defaults, and models_endpoint.
 
 import json
 from collections.abc import Generator
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
 import pytest
@@ -31,7 +31,7 @@ OPENAI_DATA = {
     "auth": {
         "header": "Authorization",
         "prefix": "Bearer ",
-        "env_key": "OPENAI_API_KEY",
+        "credential_key": "OPENAI_API_KEY",
     },
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
 }
@@ -44,7 +44,7 @@ OPENROUTER_DATA = {
     "auth": {
         "header": "Authorization",
         "prefix": "Bearer ",
-        "env_key": "OPENROUTER_API_KEY",
+        "credential_key": "OPENROUTER_API_KEY",
     },
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
     "extra_headers": {"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
@@ -59,7 +59,7 @@ ANTHROPIC_DATA = {
     "auth": {
         "header": "x-api-key",
         "prefix": "",
-        "env_key": "ANTHROPIC_API_KEY",
+        "credential_key": "ANTHROPIC_API_KEY",
     },
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
 }
@@ -103,7 +103,11 @@ class TestProviderConfig:
             name="Test",
             adapter="openai_compatible",
             base_url="https://example.com/v1",
-            auth=AuthConfig(header="Authorization", prefix="Bearer ", env_key="TEST_KEY"),
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="TEST_KEY",
+            ),
         )
 
         # Act / Assert
@@ -113,11 +117,31 @@ class TestProviderConfig:
     def test_frozen_raises_on_nested_auth_assignment(self) -> None:
         """Assigning to a field on the nested AuthConfig also raises FrozenInstanceError."""
         # Arrange
-        auth = AuthConfig(header="Authorization", prefix="Bearer ", env_key="TEST_KEY")
+        auth = AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="TEST_KEY",
+        )
 
         # Act / Assert
         with pytest.raises(FrozenInstanceError):
-            auth.env_key = "CHANGED"  # type: ignore[misc]
+            auth.credential_key = "CHANGED"  # type: ignore[misc]
+
+    def test_auth_config_surface_is_credential_centric_only(self) -> None:
+        """AuthConfig exposes only credential-centric fields and no env-key shim."""
+        # Arrange
+        auth = AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="TEST_KEY",
+        )
+
+        # Act
+        field_names = [field.name for field in fields(AuthConfig)]
+
+        # Assert
+        assert field_names == ["header", "prefix", "credential_key"]
+        assert not hasattr(auth, "env_key")
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +163,7 @@ class TestAuthParsing:
         # Assert
         assert config.auth.header == "Authorization"
         assert config.auth.prefix == "Bearer "
-        assert config.auth.env_key == "OPENAI_API_KEY"
+        assert config.auth.credential_key == "OPENAI_API_KEY"
 
     def test_anthropic_auth_fields(self, providers_dir: Path) -> None:
         """Anthropic x-api-key auth fields parse correctly from JSON."""
@@ -152,7 +176,7 @@ class TestAuthParsing:
         # Assert
         assert config.auth.header == "x-api-key"
         assert config.auth.prefix == ""
-        assert config.auth.env_key == "ANTHROPIC_API_KEY"
+        assert config.auth.credential_key == "ANTHROPIC_API_KEY"
 
     def test_openrouter_auth_fields(self, providers_dir: Path) -> None:
         """OpenRouter auth fields parse correctly from JSON."""
@@ -165,7 +189,7 @@ class TestAuthParsing:
         # Assert
         assert config.auth.header == "Authorization"
         assert config.auth.prefix == "Bearer "
-        assert config.auth.env_key == "OPENROUTER_API_KEY"
+        assert config.auth.credential_key == "OPENROUTER_API_KEY"
 
 
 # ---------------------------------------------------------------------------

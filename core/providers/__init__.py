@@ -2,6 +2,7 @@
 
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
@@ -15,6 +16,7 @@ __all__ = [
     "AnthropicAdapter",
     "AuthConfig",
     "OpenAICompatibleAdapter",
+    "ProviderCredentialResolver",
     "ProviderAdapter",
     "ProviderAuthError",
     "ProviderConfig",

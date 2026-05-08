@@ -6,7 +6,7 @@
   "auth": {
     "header": "Authorization",
     "prefix": "Bearer ",
-    "env_key": "OPENROUTER_API_KEY"
+    "credential_key": "OPENROUTER_API_KEY"
   },
   "defaults": {
     "max_tokens": 4096,

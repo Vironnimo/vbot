@@ -71,11 +71,18 @@ export function createLanguageUpdatePayload(languageId) {
 export function describeProvider(provider, translate) {
   const fragments = [];
 
-  if (typeof provider?.env_key === 'string' && provider.env_key.length > 0) {
+  if (
+    typeof provider?.credential_key === 'string' &&
+    provider.credential_key.length > 0
+  ) {
     fragments.push(
-      translate('settings.providers.description.apiKey', 'Env key: {envKey}.', {
-        envKey: provider.env_key,
-      }),
+      translate(
+        'settings.providers.description.credentialKey',
+        'Credential key: {credentialKey}.',
+        {
+          credentialKey: provider.credential_key,
+        },
+      ),
     );
   }
 
@@ -117,12 +124,15 @@ export function providerStatusKey(provider) {
     return provider.status;
   }
 
-  if (provider?.api_key_configured === true) {
+  if (provider?.credentials_configured === true) {
     return 'configured';
   }
 
-  if (typeof provider?.env_key === 'string' && provider.env_key.length > 0) {
-    return 'missing_api_key';
+  if (
+    typeof provider?.credential_key === 'string' &&
+    provider.credential_key.length > 0
+  ) {
+    return 'missing_credentials';
   }
 
   return 'placeholder';
@@ -135,7 +145,7 @@ export function providerStatusClass(provider) {
     return 'chip-green';
   }
 
-  if (status === 'missing_api_key') {
+  if (status === 'missing_credentials') {
     return 'chip-amber';
   }
 
@@ -149,10 +159,10 @@ export function providerStatusLabel(provider, translate) {
     return translate('settings.providers.status.configured', 'Configured');
   }
 
-  if (status === 'missing_api_key') {
+  if (status === 'missing_credentials') {
     return translate(
-      'settings.providers.status.missingApiKey',
-      'Missing API key',
+      'settings.providers.status.missingCredentials',
+      'Missing credentials',
     );
   }
 

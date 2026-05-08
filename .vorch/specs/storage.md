@@ -12,15 +12,20 @@ Phase 2 creates these directories under `data_dir`: `.tmp`, `agents`, `archive`,
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `skills.md`.
 
-`<data_dir>/.env` stores user-owned secrets such as provider API keys.
+`<data_dir>/.env` stores user-owned secrets such as provider API keys and acts
+as a read-only fallback credential source.
 
 ## Interfaces
 
 - `core/storage/__init__.py` exports `StorageManager`, `StorageError`, data-dir constants, and the storage config protocol.
 - `StorageManager(data_dir=None, config=None, resources_dir=None)`
 - `ensure_directories()` — creates the Phase 2 directory structure.
-- `load_environment()` — loads `<data_dir>/.env` into `os.environ` without
-  overwriting existing process environment variables.
+- `load_environment() -> dict[str, str]` — returns a read-only snapshot of
+  credentials from `<data_dir>/.env` without mutating `os.environ`.
+- `load_data_dir_credentials() -> dict[str, str]` — reads `<data_dir>/.env`
+  as a fallback credential source.
+- `build_environment_snapshot() -> dict[str, str]` — returns a merged
+  process-env-over-data-dir credential snapshot without mutating process state.
 - `load_settings() -> dict` — returns `{}` when `settings.json` does not exist.
 - `save_settings(settings)` — atomically writes sorted, indented JSON.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
@@ -32,6 +37,8 @@ Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`
 - `.env` parsing is conservative: `KEY=VALUE`, blank/comment lines ignored,
   matching single/double quotes stripped, no expansion or command substitution.
 - Do not log secret values from `.env`.
+- `.env` values must not be copied back into `os.environ`; callers receive
+  snapshots instead.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
 

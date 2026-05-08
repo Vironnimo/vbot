@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatLoop, ChatRunManager, ChatSessionManager
+from core.models import Capabilities, Model, ReasoningCapabilities
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.delegates import dispatch_rpc
@@ -40,10 +41,90 @@ class IntegrationAgents:
 
 
 class IntegrationProviders:
+    def __init__(self) -> None:
+        self._providers = {
+            "anthropic": IntegrationProvider(
+                id="anthropic",
+                name="Anthropic",
+                base_url="https://api.anthropic.com/v1",
+                auth=IntegrationAuth(credential_key="ANTHROPIC_API_KEY"),
+            ),
+            "openai": IntegrationProvider(
+                id="openai",
+                name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                auth=IntegrationAuth(credential_key="OPENAI_API_KEY"),
+            ),
+        }
+
     def get(self, provider_id: str) -> object:
-        if provider_id != "openai":
+        if provider_id not in self._providers:
             raise KeyError(provider_id)
-        return object()
+        return self._providers[provider_id]
+
+    def list_ids(self) -> list[str]:
+        return sorted(self._providers)
+
+
+@dataclass(frozen=True)
+class IntegrationAuth:
+    credential_key: str
+
+
+@dataclass(frozen=True)
+class IntegrationProvider:
+    id: str
+    name: str
+    base_url: str
+    auth: IntegrationAuth
+
+
+class IntegrationModels:
+    def __init__(self) -> None:
+        self._models = {
+            "anthropic": [
+                Model(
+                    model_id="claude-sonnet-4-20250219",
+                    name="Claude Sonnet 4",
+                    capabilities=Capabilities(
+                        vision=True,
+                        tools=True,
+                        json_mode=False,
+                        reasoning=ReasoningCapabilities(supported=True),
+                    ),
+                    context_window=200000,
+                    max_output_tokens=64000,
+                )
+            ],
+            "openai": [
+                Model(
+                    model_id="gpt-5.2",
+                    name="GPT-5.2",
+                    capabilities=Capabilities(
+                        vision=True,
+                        tools=True,
+                        json_mode=True,
+                        reasoning=ReasoningCapabilities(supported=True),
+                    ),
+                    context_window=256000,
+                    max_output_tokens=32000,
+                )
+            ],
+        }
+
+    def list_for_provider(self, provider_id: str) -> list[Model]:
+        return list(self._models[provider_id])
+
+
+class IntegrationStorage:
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+
+    def load_appearance_settings(self) -> JsonObject:
+        return {"language": "en"}
+
+    def supported_appearance_languages(self) -> list[str]:
+        return ["en"]
 
 
 class IntegrationPrompts:
@@ -123,16 +204,21 @@ class IntegrationRuntime:
         self,
         tmp_path: Path,
         adapters: SequencedAdapter | list[SequencedAdapter],
+        *,
+        configured_provider_ids: set[str] | None = None,
     ) -> None:
         self.tools = ToolRegistry()
         self.agents = IntegrationAgents(
             IntegrationAgent(id="coder", allowed_tools=["lookup", "slow_tool"])
         )
         self.chat_sessions = ChatSessionManager(tmp_path)
+        self.storage = IntegrationStorage(tmp_path)
         self.system_prompts = IntegrationPrompts(self.tools)
         self.providers = IntegrationProviders()
+        self.models = IntegrationModels()
         adapter_list = adapters if isinstance(adapters, list) else [adapters]
         self._adapter_pool = AdapterPool(adapter_list)
+        self._configured_provider_ids = configured_provider_ids or {"openai"}
         self.chat_runs: ChatRunManager | None = None
         self.started = False
         self.stopped = False
@@ -145,6 +231,83 @@ class IntegrationRuntime:
 
     def get_adapter(self, _provider_id: str) -> SequencedAdapter:
         return self._adapter_pool.next()
+
+    def has_provider_credentials(self, provider_id: str) -> bool:
+        return provider_id in self._configured_provider_ids
+
+
+def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) -> None:
+    runtime = IntegrationRuntime(tmp_path, SequencedAdapter(), configured_provider_ids={"openai"})
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        model_response = client.post("/api/rpc", json={"method": "model.list", "params": {}})
+        settings_response = client.post("/api/rpc", json={"method": "settings.get", "params": {}})
+
+    assert model_response.json() == {
+        "ok": True,
+        "result": {
+            "models": [
+                {
+                    "id": "openai/gpt-5.2",
+                    "provider_id": "openai",
+                    "model_id": "gpt-5.2",
+                    "name": "GPT-5.2",
+                    "capabilities": {
+                        "vision": True,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": True},
+                    },
+                    "context_window": 256000,
+                    "max_output_tokens": 32000,
+                }
+            ]
+        },
+    }
+    assert settings_response.json() == {
+        "ok": True,
+        "result": {
+            "general": {
+                "server": {
+                    "listen_host": "127.0.0.1",
+                    "listen_port": 8420,
+                    "port_source": "default",
+                },
+                "data_directory": str(tmp_path),
+            },
+            "providers": {
+                "items": [
+                    {
+                        "id": "anthropic",
+                        "name": "Anthropic",
+                        "base_url": "https://api.anthropic.com/v1",
+                        "credential_key": "ANTHROPIC_API_KEY",
+                        "credentials_configured": False,
+                        "status": "missing_credentials",
+                        "model_count": 1,
+                        "kind": "remote",
+                        "editable": False,
+                    },
+                    {
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "base_url": "https://api.openai.com/v1",
+                        "credential_key": "OPENAI_API_KEY",
+                        "credentials_configured": True,
+                        "status": "configured",
+                        "model_count": 1,
+                        "kind": "remote",
+                        "editable": False,
+                    },
+                ],
+                "custom_endpoints": {"supported": False, "items": []},
+            },
+            "appearance": {"language": "en", "available_languages": ["en"]},
+        },
+    }
+    assert "env_key" not in json.dumps(settings_response.json())
+    assert "missing_api_key" not in json.dumps(settings_response.json())
 
 
 def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> None:
