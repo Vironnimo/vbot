@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
-from core.providers.providers import ProviderRegistry
+from core.providers.providers import ConnectionConfig, ProviderRegistry
 from core.utils.errors import ConfigError
 
 
@@ -23,18 +23,46 @@ class ProviderCredentialResolver:
         self._fallback_credentials = dict(fallback_credentials or {})
         self._process_env = os.environ if process_env is None else process_env
 
-    def has_credentials(self, provider_id: str) -> bool:
-        """Return whether the provider has a non-empty configured credential."""
+    def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
+        """Return whether a provider or connection has configured credentials."""
 
         provider_config = self._provider_registry.get(provider_id)
-        credential_value = self._resolve_credential_value(provider_config.auth.credential_key)
-        return bool(credential_value)
+        if connection_id is not None:
+            connection = self._get_connection(provider_id, connection_id)
+            credential_value = self._resolve_credential_value(connection.auth.credential_key)
+            return bool(credential_value)
 
-    def get_credentials(self, provider_id: str) -> str:
-        """Return the configured credential value for *provider_id*."""
+        for connection in provider_config.connections:
+            credential_value = self._resolve_credential_value(connection.auth.credential_key)
+            if credential_value:
+                return True
+        return False
+
+    def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
+        """Return the configured credential value for a provider or connection."""
 
         provider_config = self._provider_registry.get(provider_id)
-        credential_key = provider_config.auth.credential_key
+        if connection_id is not None:
+            connection = self._get_connection(provider_id, connection_id)
+            return self._get_connection_credentials(provider_id, connection.id)
+
+        for connection in provider_config.connections:
+            credential_value = self._resolve_credential_value(connection.auth.credential_key)
+            if credential_value:
+                return credential_value
+
+        credential_names = ", ".join(
+            connection.auth.credential_key for connection in provider_config.connections
+        )
+        raise ConfigError(
+            f"Provider credentials not found for provider '{provider_id}': "
+            f"credentials '{credential_names}' are not set"
+        )
+
+    def _get_connection_credentials(self, provider_id: str, local_id: str) -> str:
+        provider_config = self._provider_registry.get(provider_id)
+        connection = provider_config.get_connection(local_id)
+        credential_key = connection.auth.credential_key
         credential_value = self._resolve_credential_value(credential_key)
         if credential_value:
             return credential_value
@@ -43,6 +71,22 @@ class ProviderCredentialResolver:
             f"Provider credentials not found for provider '{provider_id}': "
             f"credential '{credential_key}' is not set"
         )
+
+    def _get_connection(self, provider_id: str, connection_id: str) -> ConnectionConfig:
+        provider_config = self._provider_registry.get(provider_id)
+        expected_prefix = f"{provider_id}:"
+        if not connection_id.startswith(expected_prefix):
+            raise ConfigError(
+                f"Unknown connection id '{connection_id}' for provider '{provider_id}'"
+            )
+
+        local_id = connection_id.removeprefix(expected_prefix)
+        try:
+            return provider_config.get_connection(local_id)
+        except KeyError as error:
+            raise ConfigError(
+                f"Unknown connection id '{connection_id}' for provider '{provider_id}'"
+            ) from error
 
     def _resolve_credential_value(self, credential_key: str) -> str:
         if credential_key in self._process_env:
