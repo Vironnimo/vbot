@@ -263,6 +263,11 @@ export const englishCatalog = Object.freeze({
     'OpenAI-compatible custom endpoints remain placeholder-only in this phase.',
   'settings.providers.customEndpointStatus': 'Placeholder',
   'settings.providers.configure': 'Configure…',
+  'settings.providers.refreshModels': 'Update Model DB',
+  'settings.providers.refreshingModels': 'Updating…',
+  'settings.providers.refreshSuccess':
+    'Model DB updated: {count} models available.',
+  'settings.providers.refreshError': 'Model DB could not be updated.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.subtitle': 'Language preference.',
   'settings.appearance.language': 'Language',

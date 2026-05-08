@@ -62,7 +62,9 @@ Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
 
 **extra_headers** are merged into every request after auth headers. OpenRouter uses `HTTP-Referer` and `X-Title`; OpenAI sends none.
 
-**models_endpoint** is reserved for future dynamic model refresh. Not used in Phase 1.
+**models_endpoint** is used by dynamic model refresh to fetch the provider's
+catalog endpoint. Providers without a configured endpoint do not support manual
+model refresh.
 
 ### ProviderRegistry
 

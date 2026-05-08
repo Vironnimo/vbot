@@ -321,6 +321,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "id": "anthropic",
                         "name": "Anthropic",
                         "base_url": "https://api.anthropic.com/v1",
+                        "models_endpoint": None,
                         "connections": [
                             {
                                 "id": "anthropic:api-key",
@@ -339,6 +340,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "id": "openai",
                         "name": "OpenAI",
                         "base_url": "https://api.openai.com/v1",
+                        "models_endpoint": None,
                         "connections": [
                             {
                                 "id": "openai:oauth",
