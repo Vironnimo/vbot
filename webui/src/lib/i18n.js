@@ -174,9 +174,16 @@ export const englishCatalog = Object.freeze({
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.idHelp': 'Agent IDs are immutable after creation.',
   'agents.form.listHelp': 'Enter one item per line.',
-  'agents.form.modelPlaceholder': 'No model selected',
-  'agents.form.modelManualHelp':
-    'Model discovery is not available yet; enter the existing model ID manually.',
+  'agents.form.modelPlaceholder': 'Default (no model selected)',
+  'agents.form.fallbackModelPlaceholder': 'None',
+  'agents.form.thinkingEffortDefault': 'Default',
+  'agents.form.thinkingEffortOption.none': 'none',
+  'agents.form.thinkingEffortOption.minimal': 'minimal',
+  'agents.form.thinkingEffortOption.low': 'low',
+  'agents.form.thinkingEffortOption.medium': 'medium',
+  'agents.form.thinkingEffortOption.high': 'high',
+  'agents.form.thinkingEffortOption.xhigh': 'xhigh',
+  'agents.form.thinkingEffortOption.max': 'max',
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
   'agents.form.workspaceReadOnly': 'Workspace is read-only in this WebUI.',
@@ -199,8 +206,7 @@ export const englishCatalog = Object.freeze({
   'agents.access.allOff': 'all off',
   'agents.access.toggleTool': 'Toggle tool {name}',
   'agents.access.toggleSkill': 'Toggle skill {name}',
-  'agents.access.noTools':
-    'No backend tool catalog is available; add tool names below.',
+  'agents.access.descriptionLabel': '{description}',
   'agents.access.noSkills':
     'No backend skill catalog is available; add skill names below.',
 

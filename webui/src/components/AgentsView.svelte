@@ -13,6 +13,16 @@
 
   const EMPTY_VALUE = '—';
   const WILDCARD_ACCESS = '*';
+  const THINKING_EFFORT_OPTIONS = Object.freeze([
+    '',
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]);
 
   let {
     sharedSelectedAgentId = '',
@@ -30,6 +40,8 @@
   let isDeleting = $state(false);
   let errorMessage = $state('');
   let statusMessage = $state('');
+  let availableModels = $state([]);
+  let availableTools = $state([]);
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -49,14 +61,8 @@
           id: selectedAgent?.id ?? formValues.id,
         }),
   );
-  let visibleToolItems = $derived(accessItems(formValues.allowed_tools));
+  let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
-  let modelPlaceholderLabel = $derived(
-    formValues.model || t('agents.form.modelPlaceholder', 'No model selected'),
-  );
-
-  const modelInputId = 'agent-model-input';
-  const modelHelpId = 'agent-model-help';
 
   $effect(() => {
     if (
@@ -69,8 +75,27 @@
   });
 
   onMount(() => {
+    loadCatalogs();
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
   });
+
+  async function loadCatalogs() {
+    try {
+      const [modelsResult, toolsResult] = await Promise.all([
+        rpc('model.list'),
+        rpc('tool.list'),
+      ]);
+
+      availableModels = Array.isArray(modelsResult?.models)
+        ? modelsResult.models
+        : [];
+      availableTools = Array.isArray(toolsResult?.tools)
+        ? toolsResult.tools
+        : [];
+    } catch (error) {
+      errorMessage = viewErrorMessage(error, t('agents.loadError'));
+    }
+  }
 
   async function loadAgents(options = {}) {
     isLoading = true;
@@ -183,6 +208,11 @@
   }
 
   function updateAccessItem(fieldName, itemName, isAllowed) {
+    if (fieldName === 'allowed_tools') {
+      updateToolAccessItem(itemName, isAllowed);
+      return;
+    }
+
     const currentItems = textToList(formValues[fieldName]);
     const nextItems = currentItems.filter((item) => item !== WILDCARD_ACCESS);
     const existingIndex = nextItems.indexOf(itemName);
@@ -199,9 +229,59 @@
   }
 
   function setAccessItems(fieldName, items, isAllowed) {
+    if (fieldName === 'allowed_tools') {
+      formValues.allowed_tools = isAllowed ? [WILDCARD_ACCESS] : [];
+      return;
+    }
+
     formValues[fieldName] = isAllowed
       ? items.map((item) => item.name).join('\n')
       : '';
+  }
+
+  function updateToolAccessItem(itemName, isAllowed) {
+    const allToolNames = availableTools.map((tool) => tool.name);
+
+    if (allToolNames.length === 0) {
+      formValues.allowed_tools = [];
+      return;
+    }
+
+    const currentItems = Array.isArray(formValues.allowed_tools)
+      ? [...formValues.allowed_tools]
+      : [];
+
+    if (currentItems.includes(WILDCARD_ACCESS)) {
+      if (isAllowed) {
+        formValues.allowed_tools = [WILDCARD_ACCESS];
+        return;
+      }
+
+      formValues.allowed_tools = allToolNames.filter(
+        (name) => name !== itemName,
+      );
+      return;
+    }
+
+    const nextItems = currentItems.filter((item) =>
+      allToolNames.includes(item),
+    );
+    const existingIndex = nextItems.indexOf(itemName);
+
+    if (isAllowed && existingIndex === -1) {
+      nextItems.push(itemName);
+    }
+
+    if (!isAllowed && existingIndex !== -1) {
+      nextItems.splice(existingIndex, 1);
+    }
+
+    if (allToolNames.every((name) => nextItems.includes(name))) {
+      formValues.allowed_tools = [WILDCARD_ACCESS];
+      return;
+    }
+
+    formValues.allowed_tools = nextItems;
   }
 
   function accessItems(text) {
@@ -220,6 +300,31 @@
       isAllowed: true,
       isWildcard: false,
     }));
+  }
+
+  function toolAccessItems() {
+    const currentItems = Array.isArray(formValues.allowed_tools)
+      ? formValues.allowed_tools
+      : [];
+    const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
+    const allowedItems = hasWildcard ? [] : currentItems;
+
+    return availableTools.map((tool) => ({
+      ...tool,
+      isAllowed: hasWildcard || allowedItems.includes(tool.name),
+    }));
+  }
+
+  function modelOptionLabel(model) {
+    return `${model.provider_id} / ${model.name}`;
+  }
+
+  function thinkingEffortLabel(option) {
+    if (option === '') {
+      return t('agents.form.thinkingEffortDefault', 'Default');
+    }
+
+    return t(`agents.form.thinkingEffortOption.${option}`, option);
   }
 
   function notifyAgentsChanged() {
@@ -443,73 +548,90 @@
             {t('agents.detail.model', 'Model')}
           </div>
           <div class="detail-fields">
-            <div class="f wide">
-              <label class="f-label" for={modelInputId}
-                >{t('agents.form.model', 'Model')}</label
-              >
-              <div
-                class="s-dropdown agents-view__disabled-dropdown"
-                aria-hidden="true"
-              >
-                <div
-                  class="s-dropdown-trigger agents-view__disabled-dropdown-trigger"
+            <label class="f wide">
+              <span class="f-label">{t('agents.form.model', 'Model')}</span>
+              <div class="agents-view__select-wrap">
+                <select
+                  class="s-input agents-view__select"
+                  bind:value={formValues.model}
                 >
-                  <span class="agents-view__disabled-dropdown-label">
-                    {modelPlaceholderLabel}
-                  </span>
-                  <span
-                    class="agents-view__disabled-dropdown-icon"
-                    aria-hidden="true"
+                  <option value="">
+                    {t(
+                      'agents.form.modelPlaceholder',
+                      'Default (no model selected)',
+                    )}
+                  </option>
+                  {#each availableModels as model (model.id)}
+                    <option value={model.id}>{modelOptionLabel(model)}</option>
+                  {/each}
+                </select>
+                <span class="agents-view__select-icon" aria-hidden="true">
+                  <svg
+                    class="dropdown-chevron"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
                   >
-                    <svg
-                      class="dropdown-chevron agents-view__disabled-chevron"
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      aria-hidden="true"
-                    >
-                      <path d="M2 4l4 4 4-4" />
-                    </svg>
-                  </span>
-                </div>
+                    <path d="M2 4l4 4 4-4" />
+                  </svg>
+                </span>
               </div>
-              <input
-                id={modelInputId}
-                class="s-input agents-view__model-input"
-                type="text"
-                bind:value={formValues.model}
-                aria-describedby={modelHelpId}
-              />
-              <small id={modelHelpId} class="agents-view__field-help">
-                {t(
-                  'agents.form.modelManualHelp',
-                  'Model discovery is not available yet; enter the existing model ID manually.',
-                )}
-              </small>
-            </div>
+            </label>
 
             <label class="f">
               <span class="f-label"
                 >{t('agents.form.fallbackModel', 'Fallback model')}</span
               >
-              <input
-                class="s-input"
-                type="text"
-                bind:value={formValues.fallback_model}
-                placeholder={t('common.optional', 'Optional')}
-              />
+              <div class="agents-view__select-wrap">
+                <select
+                  class="s-input agents-view__select"
+                  bind:value={formValues.fallback_model}
+                >
+                  <option value="">
+                    {t('agents.form.fallbackModelPlaceholder', 'None')}
+                  </option>
+                  {#each availableModels as model (model.id)}
+                    <option value={model.id}>{modelOptionLabel(model)}</option>
+                  {/each}
+                </select>
+                <span class="agents-view__select-icon" aria-hidden="true">
+                  <svg
+                    class="dropdown-chevron"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                  >
+                    <path d="M2 4l4 4 4-4" />
+                  </svg>
+                </span>
+              </div>
             </label>
 
             <label class="f">
               <span class="f-label"
                 >{t('agents.form.thinkingEffort', 'Thinking effort')}</span
               >
-              <input
-                class="s-input"
-                type="text"
-                bind:value={formValues.thinking_effort}
-                placeholder={t('common.optional', 'Optional')}
-              />
+              <div class="agents-view__select-wrap">
+                <select
+                  class="s-input agents-view__select"
+                  bind:value={formValues.thinking_effort}
+                >
+                  {#each THINKING_EFFORT_OPTIONS as option (option)}
+                    <option value={option}>{thinkingEffortLabel(option)}</option
+                    >
+                  {/each}
+                </select>
+                <span class="agents-view__select-icon" aria-hidden="true">
+                  <svg
+                    class="dropdown-chevron"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                  >
+                    <path d="M2 4l4 4 4-4" />
+                  </svg>
+                </span>
+              </div>
             </label>
 
             <label class="f">
@@ -594,7 +716,18 @@
               <div class="tl-items">
                 {#each visibleToolItems as item (item.name)}
                   <div class="tl-item">
-                    <span class="tl-item-name">{item.name}</span>
+                    <div class="agents-view__access-copy">
+                      <span class="tl-item-name">{item.name}</span>
+                      {#if item.description}
+                        <span class="agents-view__access-description">
+                          {t(
+                            'agents.access.descriptionLabel',
+                            '{description}',
+                            { description: item.description },
+                          )}
+                        </span>
+                      {/if}
+                    </div>
                     <button
                       class="tl-toggle"
                       class:on={item.isAllowed}
@@ -621,22 +754,7 @@
                   </div>
                 {/each}
               </div>
-            {:else}
-              <p class="agents-view__placeholder-row">
-                {t(
-                  'agents.access.noTools',
-                  'No backend tool catalog is available; add tool names below.',
-                )}
-              </p>
             {/if}
-            <label class="agents-view__access-editor">
-              <span>{t('agents.form.allowedTools', 'Allowed tools')}</span>
-              <textarea rows="4" bind:value={formValues.allowed_tools}
-              ></textarea>
-              <small
-                >{t('agents.form.listHelp', 'Enter one item per line.')}</small
-              >
-            </label>
           </div>
 
           <div class="tl-section">
@@ -1039,6 +1157,20 @@
     font-size: 12px;
   }
 
+  .agents-view__access-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .agents-view__access-description {
+    color: var(--text-lo);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .agents-view__access-editor {
     display: flex;
     flex-direction: column;
@@ -1056,26 +1188,22 @@
     border-top: 1px solid var(--border);
   }
 
-  .agents-view__disabled-dropdown {
+  .agents-view__select-wrap {
+    position: relative;
     width: 100%;
   }
 
-  .agents-view__disabled-dropdown-trigger {
+  .agents-view__select {
     width: 100%;
-    padding-right: 10px;
-    cursor: not-allowed;
-    opacity: 0.78;
+    padding-right: 34px;
+    appearance: none;
+    cursor: pointer;
   }
 
-  .agents-view__disabled-dropdown-label {
-    min-width: 0;
-    overflow: hidden;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .agents-view__disabled-dropdown-icon {
+  .agents-view__select-icon {
+    position: absolute;
+    top: 50%;
+    right: 11px;
     display: inline-flex;
     width: 16px;
     height: 16px;
@@ -1083,17 +1211,8 @@
     align-items: center;
     justify-content: center;
     color: var(--text-lo);
-  }
-
-  .agents-view__disabled-chevron {
-    width: 12px;
-    height: 12px;
-    opacity: 0.72;
-    stroke-width: 1.7;
-  }
-
-  .agents-view__model-input {
-    margin-top: 4px;
+    pointer-events: none;
+    transform: translateY(-50%);
   }
 
   .agents-view__notice,

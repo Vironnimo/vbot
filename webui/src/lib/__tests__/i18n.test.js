@@ -104,8 +104,6 @@ describe('i18n t()', () => {
       'agents.detail.session',
       'agents.detail.idValue',
       'agents.form.modelPlaceholder',
-      'agents.form.modelManualHelp',
-      'agents.access.noTools',
       'agents.access.noSkills',
       'agents.access.toggleTool',
       'agents.access.toggleSkill',
