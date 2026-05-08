@@ -64,9 +64,10 @@ and Settings.
   - Normalizes Settings provider metadata that now uses credential-centric
     fields (`credential_key`, `credentials_configured`) rather than env/API-key
     wording.
-  - Settings provider metadata includes `models_endpoint`; providers with a
-    non-empty endpoint show a manual model database refresh control that calls
-    `model.refresh_db` and then re-requests `model.list` after success.
+  - Settings provider metadata includes `models_endpoint`; when at least one
+    provider is refresh-capable and credential-configured, the Providers panel
+    shows one global model database refresh control. It calls `model.refresh_db`
+    without `provider_id` and then re-requests `model.list` after success.
   - Skills remain textarea-based until a backend skill catalog exists.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between

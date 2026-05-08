@@ -82,6 +82,9 @@ class ModelRegistry:
         models: dict[tuple[str, str], Model] = {}
 
         for json_file in sorted(models_dir.glob("*.json")):
+            if json_file.name.endswith(".overrides.json"):
+                continue
+
             data = json.loads(json_file.read_text(encoding="utf-8"))
             provider_id = data["provider_id"]
             for model_id, model_data in data["models"].items():

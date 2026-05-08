@@ -36,27 +36,46 @@ describe('SettingsView', () => {
     document.body.innerHTML = '';
   });
 
-  it('shows refresh buttons only for providers with a models endpoint', async () => {
-    rpcMock.mockImplementation(createSettingsRpcMock());
+  it('shows one global refresh button when any provider appears refresh-eligible', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settings: settingsPayload({ includeSecondEligibleProvider: true }),
+      }),
+    );
 
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await openProvidersPanel();
 
-    const openrouterRow = providerRow('OpenRouter');
-    const openaiRow = providerRow('OpenAI');
-
-    expect(openrouterRow.textContent).toContain('Update Model DB');
-    expect(openaiRow.textContent).not.toContain('Update Model DB');
+    expect(buttonsByText('Update Model DB')).toHaveLength(1);
+    expect(providerRow('OpenRouter').textContent).not.toContain(
+      'Update Model DB',
+    );
+    expect(providerRow('Groq').textContent).not.toContain('Update Model DB');
   });
 
-  it('refreshes provider models, shows loading and success, and reloads model list', async () => {
+  it('hides the global refresh button when no provider appears refresh-eligible', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settings: settingsPayload({ eligibleProvider: false }),
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openProvidersPanel();
+
+    expect(buttonsByText('Update Model DB')).toHaveLength(0);
+  });
+
+  it('refreshes the global model database, shows loading and success, and reloads model list', async () => {
     let resolveRefresh;
     const refreshPromise = new Promise((resolve) => {
       resolveRefresh = resolve;
     });
     rpcMock.mockImplementation(
       createSettingsRpcMock({
+        settings: settingsPayload({ includeSecondEligibleProvider: true }),
         refreshResult: refreshPromise,
       }),
     );
@@ -69,21 +88,67 @@ describe('SettingsView', () => {
     flushSync();
 
     expect(buttonByText('Updating…')).toBeTruthy();
-    expect(rpcMock).toHaveBeenCalledWith('model.refresh_db', {
-      provider_id: 'openrouter',
-    });
+    expect(rpcMock).toHaveBeenCalledWith('model.refresh_db');
+    expect(
+      rpcMock.mock.calls.some(
+        (call) => call[0] === 'model.refresh_db' && call[1]?.provider_id,
+      ),
+    ).toBe(false);
 
     resolveRefresh({
-      provider_id: 'openrouter',
-      model_count: 2,
-      fetched_at: '2026-05-08T19:08:00+00:00',
+      providers: [
+        {
+          provider_id: 'openrouter',
+          model_count: 2,
+          fetched_at: '2026-05-08T19:08:00+00:00',
+        },
+        {
+          provider_id: 'groq',
+          model_count: 3,
+          fetched_at: '2026-05-08T19:08:00+00:00',
+        },
+      ],
+      refreshed_count: 2,
+      model_count: 5,
     });
+    await waitForCondition(() =>
+      document.body.textContent.includes('5 models'),
+    );
+
+    expect(document.body.textContent).toContain(
+      'Model DB updated: 2 providers, 5 models available.',
+    );
+    expect(providerRow('OpenRouter').textContent).toContain(
+      '2 models available.',
+    );
+    expect(providerRow('Groq').textContent).toContain('3 models available.');
+    expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
+      true,
+    );
+  });
+
+  it('updates provider counts from the compatible single-provider refresh shape', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        refreshResult: {
+          provider_id: 'openrouter',
+          model_count: 2,
+          fetched_at: '2026-05-08T19:08:00+00:00',
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openProvidersPanel();
+
+    buttonByText('Update Model DB').click();
     await waitForCondition(() =>
       document.body.textContent.includes('2 models'),
     );
 
     expect(document.body.textContent).toContain(
-      'Model DB updated: 2 models available.',
+      'Model DB updated: 1 providers, 2 models available.',
     );
     expect(rpcMock.mock.calls.some((call) => call[0] === 'model.list')).toBe(
       true,
@@ -137,10 +202,16 @@ function buttonByText(label) {
   );
 }
 
+function buttonsByText(label) {
+  return Array.from(document.body.querySelectorAll('button')).filter(
+    (button) => button.textContent.trim() === label,
+  );
+}
+
 function createSettingsRpcMock(options = {}) {
   return async (method) => {
     if (method === 'settings.get') {
-      return settingsPayload();
+      return options.settings ?? settingsPayload();
     }
 
     if (method === 'model.refresh_db') {
@@ -159,7 +230,20 @@ function createSettingsRpcMock(options = {}) {
   };
 }
 
-function settingsPayload() {
+function settingsPayload(options = {}) {
+  const openrouter = provider('openrouter', 'OpenRouter', '/models');
+
+  if (options.eligibleProvider === false) {
+    openrouter.credentials_configured = false;
+    openrouter.status = 'missing_credentials';
+  }
+
+  const providers = [openrouter, provider('openai', 'OpenAI', null)];
+
+  if (options.includeSecondEligibleProvider) {
+    providers.push(provider('groq', 'Groq', '/models'));
+  }
+
   return {
     general: {
       server: {
@@ -170,10 +254,7 @@ function settingsPayload() {
       data_directory: 'C:/data',
     },
     providers: {
-      items: [
-        provider('openrouter', 'OpenRouter', '/models'),
-        provider('openai', 'OpenAI', null),
-      ],
+      items: providers,
       custom_endpoints: { supported: false, items: [] },
     },
     appearance: {
@@ -200,9 +281,15 @@ function provider(id, name, modelsEndpoint) {
 
 function refreshResult() {
   return {
-    provider_id: 'openrouter',
+    providers: [
+      {
+        provider_id: 'openrouter',
+        model_count: 2,
+        fetched_at: '2026-05-08T19:08:00+00:00',
+      },
+    ],
+    refreshed_count: 1,
     model_count: 2,
-    fetched_at: '2026-05-08T19:08:00+00:00',
   };
 }
 
