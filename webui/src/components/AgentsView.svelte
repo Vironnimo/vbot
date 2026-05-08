@@ -320,7 +320,7 @@
   }
 
   function modelOptionLabel(model) {
-    return `${model.provider_id} / ${model.name}`;
+    return model.id;
   }
 
   function selectModelOptions(selectedValue) {

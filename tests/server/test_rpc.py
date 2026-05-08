@@ -112,6 +112,12 @@ class StubProviders:
                 base_url="https://api.openai.com/v1",
                 auth=SimpleNamespace(env_key="OPENAI_API_KEY"),
             ),
+            "ollama": SimpleNamespace(
+                id="ollama",
+                name="Ollama",
+                base_url="",
+                auth=SimpleNamespace(env_key="OLLAMA_API_KEY"),
+            ),
         }
 
     def get(self, provider_id: str) -> object:
@@ -165,6 +171,20 @@ class StubModels:
                     context_window=256000,
                     max_output_tokens=32000,
                 ),
+            ],
+            "ollama": [
+                Model(
+                    model_id="llama3.2",
+                    name="Llama 3.2",
+                    capabilities=Capabilities(
+                        vision=False,
+                        tools=True,
+                        json_mode=False,
+                        reasoning=ReasoningCapabilities(supported=False),
+                    ),
+                    context_window=128000,
+                    max_output_tokens=8192,
+                )
             ],
         }
 
@@ -327,6 +347,17 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "editable": False,
                 },
                 {
+                    "id": "ollama",
+                    "name": "Ollama",
+                    "base_url": "",
+                    "env_key": "OLLAMA_API_KEY",
+                    "api_key_configured": False,
+                    "status": "missing_api_key",
+                    "model_count": 1,
+                    "kind": "local",
+                    "editable": False,
+                },
+                {
                     "id": "openai",
                     "name": "OpenAI",
                     "base_url": "https://api.openai.com/v1",
@@ -362,8 +393,15 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
     state = make_state(tmp_path, StubAdapter())
-    monkeypatch.setattr(state.runtime.providers, "list_ids", lambda: ["openai", "anthropic"])
+    monkeypatch.setattr(
+        state.runtime.providers,
+        "list_ids",
+        lambda: ["openai", "anthropic", "ollama"],
+    )
     state.runtime.models._models["openai"] = [
         state.runtime.models._models["openai"][1],
         state.runtime.models._models["openai"][0],
@@ -389,6 +427,69 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "context_window": 200000,
                     "max_output_tokens": 64000,
                 },
+                {
+                    "id": "ollama/llama3.2",
+                    "provider_id": "ollama",
+                    "model_id": "llama3.2",
+                    "name": "Llama 3.2",
+                    "capabilities": {
+                        "vision": False,
+                        "tools": True,
+                        "json_mode": False,
+                        "reasoning": {"supported": False},
+                    },
+                    "context_window": 128000,
+                    "max_output_tokens": 8192,
+                },
+                {
+                    "id": "openai/gpt-4.1-mini",
+                    "provider_id": "openai",
+                    "model_id": "gpt-4.1-mini",
+                    "name": "GPT-4.1 mini",
+                    "capabilities": {
+                        "vision": False,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": False},
+                    },
+                    "context_window": 128000,
+                    "max_output_tokens": 16000,
+                },
+                {
+                    "id": "openai/gpt-5.2",
+                    "provider_id": "openai",
+                    "model_id": "gpt-5.2",
+                    "name": "GPT-5.2",
+                    "capabilities": {
+                        "vision": True,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": True},
+                    },
+                    "context_window": 256000,
+                    "max_output_tokens": 32000,
+                },
+            ]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_list_filters_out_providers_with_missing_or_empty_auth_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "models": [
                 {
                     "id": "openai/gpt-4.1-mini",
                     "provider_id": "openai",

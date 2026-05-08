@@ -19,10 +19,11 @@ Clients call the vBot server contract; provider wire details stay behind
 - WebUI-facing RPC methods include `model.list`, `tool.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `chat.history`, `chat.send`, `chat.stream`, and `chat.cancel`.
-- `model.list` returns all registered models across all providers as
+- `model.list` returns models only for usable providers as
   `{ id, provider_id, model_id, name, capabilities, context_window,
   max_output_tokens }`, where `id` uses the user-facing
-  `<provider>/<model-id-at-provider>` format.
+  `<provider>/<model-id-at-provider>` format. A provider is usable when its
+  configured auth environment variable exists and is non-empty.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name.
 - `agent.delete` rejects deletion when it would leave zero Agents.
