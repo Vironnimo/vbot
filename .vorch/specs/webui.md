@@ -55,6 +55,8 @@ and Settings.
     `tool.list` on mount.
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
+  - Model and fallback-model selects display the canonical public model ID
+    string from `model.list` (for example `openrouter/anthropic/claude-sonnet-4`).
   - Skills remain textarea-based until a backend skill catalog exists.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
