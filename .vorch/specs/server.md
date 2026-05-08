@@ -16,13 +16,17 @@ Clients call the vBot server contract; provider wire details stay behind
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional
   `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false,
   "error": { "code": ..., "message": ... } }`.
-- WebUI-facing RPC methods include `connection.list`, `model.list`, `tool.list`, `agent.list`,
+- WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `chat.history`, `chat.send`, `chat.stream`, and `chat.cancel`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
   `<provider>/<model-id-at-provider>` format.
+- `model.refresh_db` accepts `{ provider_id }`, requires the provider to have a
+  configured `models_endpoint` and a usable connection credential, refreshes that
+  provider's model file through the discovery pipeline, reloads the runtime model
+  registry reference, and returns `{ provider_id, model_count, fetched_at }`.
 - `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name.
