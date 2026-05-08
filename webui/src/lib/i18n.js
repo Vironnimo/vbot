@@ -176,6 +176,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.listHelp': 'Enter one item per line.',
   'agents.form.modelPlaceholder': 'Default (no model selected)',
   'agents.form.fallbackModelPlaceholder': 'None',
+  'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.thinkingEffortDefault': 'Default',
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',

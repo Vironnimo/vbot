@@ -117,11 +117,14 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "model.list does not accept params")
     try:
         runtime = state.runtime
-        models = [
-            _model_response(provider_id, model)
-            for provider_id in sorted(runtime.providers.list_ids())
-            for model in runtime.models.list_for_provider(provider_id)
-        ]
+        models = sorted(
+            (
+                _model_response(provider_id, model)
+                for provider_id in runtime.providers.list_ids()
+                for model in runtime.models.list_for_provider(provider_id)
+            ),
+            key=lambda model: (model["provider_id"], model["model_id"]),
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}

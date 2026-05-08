@@ -63,6 +63,10 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
+  let modelOptions = $derived(selectModelOptions(formValues.model));
+  let fallbackModelOptions = $derived(
+    selectModelOptions(formValues.fallback_model),
+  );
 
   $effect(() => {
     if (
@@ -319,6 +323,34 @@
     return `${model.provider_id} / ${model.name}`;
   }
 
+  function selectModelOptions(selectedValue) {
+    const catalogOptions = availableModels.map((model) => ({
+      value: model.id,
+      label: modelOptionLabel(model),
+      isUnavailable: false,
+    }));
+
+    if (
+      !selectedValue ||
+      catalogOptions.some((option) => option.value === selectedValue)
+    ) {
+      return catalogOptions;
+    }
+
+    return [
+      {
+        value: selectedValue,
+        label: t(
+          'agents.form.modelUnavailableOption',
+          'Unavailable / custom: {model}',
+          { model: selectedValue },
+        ),
+        isUnavailable: true,
+      },
+      ...catalogOptions,
+    ];
+  }
+
   function thinkingEffortLabel(option) {
     if (option === '') {
       return t('agents.form.thinkingEffortDefault', 'Default');
@@ -561,8 +593,8 @@
                       'Default (no model selected)',
                     )}
                   </option>
-                  {#each availableModels as model (model.id)}
-                    <option value={model.id}>{modelOptionLabel(model)}</option>
+                  {#each modelOptions as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
                   {/each}
                 </select>
                 <span class="agents-view__select-icon" aria-hidden="true">
@@ -590,8 +622,8 @@
                   <option value="">
                     {t('agents.form.fallbackModelPlaceholder', 'None')}
                   </option>
-                  {#each availableModels as model (model.id)}
-                    <option value={model.id}>{modelOptionLabel(model)}</option>
+                  {#each fallbackModelOptions as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
                   {/each}
                 </select>
                 <span class="agents-view__select-icon" aria-hidden="true">

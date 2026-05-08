@@ -104,6 +104,7 @@ describe('i18n t()', () => {
       'agents.detail.session',
       'agents.detail.idValue',
       'agents.form.modelPlaceholder',
+      'agents.form.modelUnavailableOption',
       'agents.access.noSkills',
       'agents.access.toggleTool',
       'agents.access.toggleSkill',
@@ -113,6 +114,11 @@ describe('i18n t()', () => {
     expect(t('agents.detail.idValue', undefined, { id: 'alpha' })).toBe(
       'id: alpha',
     );
+    expect(
+      t('agents.form.modelUnavailableOption', undefined, {
+        model: 'custom/provider-model',
+      }),
+    ).toBe('Unavailable / custom: custom/provider-model');
   });
 
   it('contains Toasted design labels for Settings sections', () => {
