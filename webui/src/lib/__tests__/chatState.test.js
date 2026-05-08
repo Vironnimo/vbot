@@ -109,6 +109,376 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps one assistant run when history refresh persists the active run output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      expect.objectContaining({
+        id: 'user-one',
+        type: 'message',
+      }),
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        outputs: [
+          expect.objectContaining({
+            content: 'The file says A.',
+          }),
+        ],
+        tools: [
+          expect.objectContaining({
+            toolCallId: 'call-one',
+            status: CHAT_STATUS_RUNNING,
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('keeps one assistant run when SSE replay overlaps with persisted active run history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { reasoning_delta: 'Checking' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems).toHaveLength(2);
+    expect(timelineItems[0]).toEqual(
+      expect.objectContaining({ id: 'user-one', type: 'message' }),
+    );
+    expect(timelineItems[1]).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        reasoning: [expect.objectContaining({ content: 'Checking' })],
+        outputs: [expect.objectContaining({ content: 'The file says A.' })],
+      }),
+    );
+  });
+
+  it('merges persisted overlap history when resumed live events only contain later tool and terminal events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      expect.objectContaining({ id: 'user-one', type: 'message' }),
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        status: CHAT_STATUS_COMPLETED,
+        outputs: [expect.objectContaining({ content: 'The file says A.' })],
+        tools: [
+          expect.objectContaining({
+            toolCallId: 'call-one',
+            status: CHAT_STATUS_RUNNING,
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('reconciles overlapping persisted suffix items into the live assistant run instead of dropping them', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-tools',
+        role: 'assistant',
+        reasoning: 'Need to read it.',
+        tool_calls: [
+          {
+            id: 'call-one',
+            name: 'read',
+            arguments: { path: 'a.txt' },
+          },
+        ],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-one',
+        name: 'read',
+        content: '{"ok": true, "content": "A"}',
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems).toHaveLength(2);
+    expect(timelineItems[1]).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        status: CHAT_STATUS_COMPLETED,
+      }),
+    );
+    expect(timelineItems[1].items.map((item) => item.type)).toEqual([
+      'reasoning',
+      'tool_call',
+      'assistant_output',
+    ]);
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'read',
+        result: '{"ok": true, "content": "A"}',
+        status: 'success',
+      }),
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'The file says A.' }),
+    ]);
+  });
+
+  it('keeps one assistant run when terminal events arrive after history already overlaps the run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the file' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'The file says A.',
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Inspect the file',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'The file says A.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(sessionState.status).toBe(CHAT_STATUS_COMPLETED);
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      expect.objectContaining({ id: 'user-one', type: 'message' }),
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        status: CHAT_STATUS_COMPLETED,
+        outputs: [expect.objectContaining({ content: 'The file says A.' })],
+      }),
+    ]);
+  });
+
   it('preserves active streaming items when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
