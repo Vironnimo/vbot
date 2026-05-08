@@ -229,14 +229,14 @@ export function visibleTimelineItems(sessionState) {
 
   const historyItems = historyTimelineItems(sessionState.messages);
   const liveItems = liveTimelineItems(sessionState.runEvents);
-  const reconciledItems = shouldReconcileTrackedRunTimeline(sessionState)
-    ? reconcileActiveRunTimeline(sessionState, historyItems, liveItems)
+  const reconciledItems = shouldSelectTrackedRunSource(sessionState)
+    ? selectTrackedRunTimelineSource(sessionState, historyItems, liveItems)
     : [...historyItems, ...liveItems];
 
   return reconciledItems.map((item) => stripTimelineSequence(item));
 }
 
-function shouldReconcileTrackedRunTimeline(sessionState) {
+function shouldSelectTrackedRunSource(sessionState) {
   return (
     Boolean(sessionState?.currentRun?.runId) &&
     Array.isArray(sessionState?.runEvents) &&
@@ -288,7 +288,10 @@ function historyTimelineItems(messages) {
     }
 
     if (message?.role === 'assistant') {
-      if (!activeAssistantRun && hasToolCalls(message)) {
+      if (
+        !activeAssistantRun &&
+        (hasToolCalls(message) || previousTimelineItemIsUser(timelineItems))
+      ) {
         activeAssistantRun = createAssistantRunItem({
           id: `history-run-${message.id ?? message.timestamp ?? timelineItems.length}`,
           runId: null,
@@ -321,7 +324,7 @@ function historyTimelineItems(messages) {
   return timelineItems;
 }
 
-function reconcileActiveRunTimeline(sessionState, historyItems, liveItems) {
+function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {
   const activeRunId = sessionState.currentRun?.runId ?? null;
   const liveAssistantRun = liveItems.find(
     (item) =>
@@ -347,41 +350,46 @@ function reconcileActiveRunTimeline(sessionState, historyItems, liveItems) {
     return [...historyItems, ...liveItems];
   }
 
-  const prefixMessages = sessionState.messages.slice(0, currentUserIndex + 1);
-  const { overlapMessages, trailingMessages } = splitHistoryAfterActiveUser(
-    sessionState.messages,
-    currentUserIndex,
+  const { prefixMessages, currentTurnMessages, trailingMessages } =
+    splitHistoryAroundActiveUser(sessionState.messages, currentUserIndex);
+  const remainingLiveItems = liveItems.filter(
+    (item) => !matchesActiveRunTimelineItem(item, activeRunId),
+  );
+
+  if (
+    isTrackedRunTerminal(sessionState, liveAssistantRun) &&
+    hasPersistedAssistantTurn(currentTurnMessages)
+  ) {
+    return [...historyItems, ...remainingLiveItems];
+  }
+
+  const activeUserItem = historyMessageItem(
+    sessionState.messages[currentUserIndex],
   );
   const prefixHistoryItems = historyTimelineItems(prefixMessages);
   const trailingHistoryItems = historyTimelineItems(trailingMessages);
-  const mergedAssistantRun = mergeReconciledAssistantRun({
-    overlapMessages,
-    liveAssistantRun,
-    activeRunId,
-  });
-
-  const remainingLiveItems = liveItems.filter((item) => {
-    if (item === liveAssistantRun) {
-      return false;
-    }
-    return !matchesActiveUserEventItem(item, activeUserEvent.payload.message);
-  });
 
   return [
     ...prefixHistoryItems,
-    ...(mergedAssistantRun ? [mergedAssistantRun] : []),
+    activeUserItem,
+    liveAssistantRun,
     ...trailingHistoryItems,
     ...remainingLiveItems,
   ];
 }
 
-function splitHistoryAfterActiveUser(messages, activeUserIndex) {
-  const overlapMessages = [];
+function splitHistoryAroundActiveUser(messages, activeUserIndex) {
+  const prefixMessages = (messages ?? []).slice(0, activeUserIndex);
+  const currentTurnMessages = [];
   const trailingMessages = [];
   let foundTrailingBoundary = false;
 
-  for (const message of (messages ?? []).slice(activeUserIndex + 1)) {
-    if (!foundTrailingBoundary && message?.role === 'user') {
+  for (const message of (messages ?? []).slice(activeUserIndex)) {
+    if (
+      currentTurnMessages.length > 0 &&
+      !foundTrailingBoundary &&
+      message?.role === 'user'
+    ) {
       foundTrailingBoundary = true;
     }
 
@@ -390,72 +398,42 @@ function splitHistoryAfterActiveUser(messages, activeUserIndex) {
       continue;
     }
 
-    overlapMessages.push(message);
+    currentTurnMessages.push(message);
   }
 
   return {
-    overlapMessages,
+    prefixMessages,
+    currentTurnMessages,
     trailingMessages,
   };
 }
 
-function mergeReconciledAssistantRun({
-  overlapMessages,
-  liveAssistantRun,
-  activeRunId,
-}) {
-  const firstOverlapTimestamp = (overlapMessages ?? []).find(
-    (message) => message?.timestamp,
-  )?.timestamp;
-  const mergedAssistantRun = createAssistantRunItem({
-    id: liveAssistantRun.id,
-    runId: activeRunId ?? liveAssistantRun.runId,
-    source: liveAssistantRun.source,
-    sequence: liveAssistantRun.sequence ?? 0,
-    timestamp: firstOverlapTimestamp ?? liveAssistantRun.timestamp,
-  });
-
-  for (const event of liveAssistantRun.events ?? []) {
-    appendLiveRunEvent(mergedAssistantRun, event);
-  }
-
-  for (const message of overlapMessages ?? []) {
-    if (message?.role === 'assistant') {
-      appendHistoryAssistantMessage(mergedAssistantRun, message);
-      continue;
-    }
-
-    if (message?.role === 'tool') {
-      appendHistoryToolResult(mergedAssistantRun, message);
-    }
-  }
-
-  mergedAssistantRun.events = liveAssistantRun.events ?? [];
-  mergedAssistantRun.startTimestamp =
-    liveAssistantRun.startTimestamp ?? mergedAssistantRun.startTimestamp;
-  mergedAssistantRun.endTimestamp =
-    liveAssistantRun.endTimestamp ?? mergedAssistantRun.endTimestamp;
-  mergedAssistantRun.status =
-    liveAssistantRun.status ?? mergedAssistantRun.status;
-  mergedAssistantRun.terminalEvent =
-    liveAssistantRun.terminalEvent ?? mergedAssistantRun.terminalEvent;
-
-  syncAssistantRunCollections(mergedAssistantRun);
-  return hasVisibleAssistantRunContent(mergedAssistantRun)
-    ? mergedAssistantRun
-    : null;
+function isTrackedRunTerminal(sessionState, liveAssistantRun) {
+  return (
+    !isRunActive(sessionState) ||
+    TERMINAL_RUN_EVENTS.has(liveAssistantRun.terminalEvent?.type) ||
+    [CHAT_STATUS_COMPLETED, CHAT_STATUS_FAILED, CHAT_STATUS_CANCELLED].includes(
+      sessionState.currentRun?.status,
+    )
+  );
 }
 
-function hasVisibleAssistantRunContent(assistantRun) {
-  return (
-    (assistantRun.items ?? []).some((item) => {
-      if (item.type === 'tool_call') {
-        return Boolean(item.name || item.toolCallId || item.startedEvent);
-      }
-
-      return Boolean(item.content);
-    }) || Boolean(assistantRun.terminalEvent)
+function hasPersistedAssistantTurn(messages) {
+  return (messages ?? []).some((message) =>
+    ['assistant', 'tool'].includes(message?.role),
   );
+}
+
+function matchesActiveRunTimelineItem(item, activeRunId) {
+  if (item?.type === 'assistant_run') {
+    return matchesRunId(item.runId, activeRunId);
+  }
+
+  if (item?.type === 'event') {
+    return matchesRunId(item.event?.run_id, activeRunId);
+  }
+
+  return false;
 }
 
 function activeRunUserEvent(runEvents, activeRunId) {
@@ -490,23 +468,6 @@ function findMatchingHistoryUserIndex(messages, userMessage) {
       message.content === messageContent &&
       (!userMessage.timestamp || message.timestamp === userMessage.timestamp),
   );
-}
-
-function matchesActiveUserEventItem(item, activeUserMessage) {
-  if (item?.type !== 'event' || item.event?.type !== 'user_message_persisted') {
-    return false;
-  }
-
-  const itemMessage = item.event.payload?.message;
-  if (!itemMessage || itemMessage.role !== 'user') {
-    return false;
-  }
-
-  if (activeUserMessage?.id && itemMessage.id) {
-    return itemMessage.id === activeUserMessage.id;
-  }
-
-  return itemMessage.content === activeUserMessage?.content;
 }
 
 function matchesRunId(candidateRunId, activeRunId) {
@@ -980,6 +941,13 @@ function hasToolCalls(message) {
   return Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
 }
 
+function previousTimelineItemIsUser(timelineItems) {
+  const previousItem = timelineItems.at(-1);
+  return (
+    previousItem?.type === 'message' && previousItem.message?.role === 'user'
+  );
+}
+
 function textFromRunEventMessage(event, key) {
   const message = event.payload?.message;
   if (message?.[key]) {
@@ -1006,7 +974,11 @@ function toolMatchesCall(tool, toolCall) {
   if (toolCall?.id && tool.toolCallId === toolCall.id) {
     return true;
   }
-  return toolCall?.index !== undefined && tool.index === toolCall.index;
+  return (
+    !tool.toolCallId &&
+    toolCall?.index !== undefined &&
+    tool.index === toolCall.index
+  );
 }
 
 function moreStableToolKey(existingKey, candidateKey) {
