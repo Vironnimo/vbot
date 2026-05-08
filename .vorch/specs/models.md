@@ -57,7 +57,8 @@ Class-level cache (`_cache: ClassVar[dict[Path, ModelRegistry]]`) keyed by resol
 
 Index key: `(provider_id, model_id)` tuple. Lookup by provider ID + model ID.
 
-Source: `core/models/models.py`.
+Source: `core/models/models.py`. Dynamic refresh helpers live in
+`core/models/discovery.py`.
 
 ## Model ID Convention
 
@@ -100,6 +101,27 @@ One JSON file per provider at `resources/models/<provider>.json`:
 - Keys in `models` are the exact model IDs sent in API requests
 - `capabilities` are provider-specific — not canonical claims
 - `reasoning.supported` is a boolean: can this model reason through this provider, yes or no
+- Generated files may include top-level `source` and `fetched_at` metadata.
+  `ModelRegistry.load()` ignores those fields and reads only `provider_id` and
+  `models`.
+
+Optional override files live beside generated model files as
+`resources/models/<provider>.overrides.json`:
+
+```json
+{
+  "provider_id": "openrouter",
+  "models": {
+    "anthropic/claude-sonnet-4": {
+      "name": "Claude Sonnet 4"
+    }
+  }
+}
+```
+
+Override fields replace fetched model fields at the top level. Nested objects are
+replaced wholesale rather than deep-merged. Override-only models are included in
+the generated output and must provide the full `Model` shape.
 
 Current provider files: `openai.json`, `openrouter.json`, `anthropic.json`.
 
@@ -154,6 +176,10 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
 
 - **Registry is keyed by `(provider_id, model_id)` tuple.** To look up a model you must know both the provider and the model ID at that provider. There is no cross-provider search.
 
-- **Dynamic model refresh is planned but not implemented.** The `models_endpoint` field on `ProviderConfig` is reserved for future use. Phase 1 works with static JSON files only. The architecture supports it: the loader reads from JSON, and a future refresh command would write to the same JSON.
+- **Dynamic model refresh writes the same JSON format the registry already
+  reads.** `core/models/discovery.py` fetches provider catalogs, normalizes them,
+  applies optional overrides, writes `resources/models/<provider>.json`, and
+  invalidates the registry cache. The registry remains the read path and does not
+  know about provider APIs.
 
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.

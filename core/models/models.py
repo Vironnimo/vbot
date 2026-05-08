@@ -108,6 +108,12 @@ class ModelRegistry:
         cls._cache[resolved] = registry
         return registry
 
+    @classmethod
+    def invalidate(cls, resources_dir: Path) -> None:
+        """Remove the cached registry for ``resources_dir`` if present."""
+
+        cls._cache.pop(resources_dir.resolve(), None)
+
     def get(self, provider_id: str, model_id: str) -> Model:
         """Look up a model by provider ID and model ID.
 
