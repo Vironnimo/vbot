@@ -284,15 +284,16 @@ class TestRefreshModels:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_refresh_models_reads_overrides_outside_model_registry_glob(
+    async def test_refresh_models_reads_colocated_overrides_without_writing_override_catalog(
         self,
         tmp_path: Path,
         openrouter_config: ProviderConfig,
     ):
         resources_dir = tmp_path / "resources"
-        overrides_dir = resources_dir / "model-overrides"
-        overrides_dir.mkdir(parents=True)
-        overrides_dir.joinpath("openrouter.json").write_text(
+        models_dir = resources_dir / "models"
+        models_dir.mkdir(parents=True)
+        overrides_path = models_dir / "openrouter.overrides.json"
+        overrides_path.write_text(
             json.dumps(
                 {
                     "provider_id": "openrouter",
@@ -313,8 +314,12 @@ class TestRefreshModels:
 
         result = await refresh_models(openrouter_config, API_KEY, resources_dir)
 
+        output_path = models_dir / "openrouter.json"
         registry = ModelRegistry.load(resources_dir)
         assert result["model_count"] == 2
+        assert output_path.exists()
+        assert overrides_path.exists()
+        assert not (resources_dir / "model-overrides" / "openrouter.json").exists()
         assert registry.get("openrouter", "model-a").name == "Corrected Model A"
         assert registry.get("openrouter", "override-only").name == "Override Only"
 
