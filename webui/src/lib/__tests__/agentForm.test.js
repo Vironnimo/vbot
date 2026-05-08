@@ -18,12 +18,12 @@ describe('agent form helpers', () => {
       workspace: '',
       temperature: '0.1',
       thinking_effort: '',
-      allowed_tools: '*',
+      allowed_tools: ['*'],
       allowed_skills: '*',
     });
   });
 
-  it('maps an agent into editable form values', () => {
+  it('maps an agent into editable form values with allowed tools as an array', () => {
     const values = createAgentFormValues({
       id: 'coder',
       name: 'Coder',
@@ -36,12 +36,12 @@ describe('agent form helpers', () => {
       allowed_skills: ['debugging'],
     });
 
-    expect(values.allowed_tools).toBe('read\nwrite');
+    expect(values.allowed_tools).toEqual(['read', 'write']);
     expect(values.allowed_skills).toBe('debugging');
     expect(values.temperature).toBe('0.2');
   });
 
-  it('normalizes create payloads with trimmed scalar fields and list fields', () => {
+  it('normalizes create payloads with trimmed scalar fields and array-based allowed tools', () => {
     const result = normalizeAgentForm({
       id: ' coder ',
       name: ' Coder ',
@@ -50,7 +50,7 @@ describe('agent form helpers', () => {
       workspace: ' C:/workspace-coder ',
       temperature: '0.25',
       thinking_effort: ' low ',
-      allowed_tools: 'read\n\nwrite ',
+      allowed_tools: [' read ', '', 'write '],
       allowed_skills: ' debugging ',
     });
 
@@ -68,13 +68,51 @@ describe('agent form helpers', () => {
     expect(result.payload).not.toHaveProperty('workspace');
   });
 
+  it('round-trips all-tools access with the wildcard array', () => {
+    const formValues = createAgentFormValues({
+      allowed_tools: ['*'],
+    });
+
+    expect(formValues.allowed_tools).toEqual(['*']);
+
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: formValues.allowed_tools,
+      allowed_skills: '*',
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_tools).toEqual(['*']);
+  });
+
+  it('round-trips no-tools access with an empty array', () => {
+    const formValues = createAgentFormValues({
+      allowed_tools: [],
+    });
+
+    expect(formValues.allowed_tools).toEqual([]);
+
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: formValues.allowed_tools,
+      allowed_skills: '*',
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_tools).toEqual([]);
+  });
+
   it('omits blank workspace from create payloads', () => {
     const result = normalizeAgentForm({
       id: 'coder',
       name: 'Coder',
       workspace: ' ',
       temperature: '0.1',
-      allowed_tools: '*',
+      allowed_tools: ['*'],
       allowed_skills: '*',
     });
 
@@ -88,7 +126,7 @@ describe('agent form helpers', () => {
       name: 'Coder',
       workspace: 'C:/workspace-coder',
       temperature: '0.1',
-      allowed_tools: '*',
+      allowed_tools: ['*'],
       allowed_skills: '*',
     });
 
@@ -103,7 +141,7 @@ describe('agent form helpers', () => {
         name: 'Coder Prime',
         workspace: 'C:/workspace-coder',
         temperature: '0.1',
-        allowed_tools: '*',
+        allowed_tools: ['*'],
         allowed_skills: '*',
       },
       { mode: AGENT_FORM_MODE_EDIT },
