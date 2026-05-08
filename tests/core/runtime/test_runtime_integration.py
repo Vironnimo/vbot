@@ -5,6 +5,8 @@ with proper wiring, that ``Runtime.get_model()`` returns the correct model
 data, and that appropriate errors are raised for invalid lookups.
 """
 
+import os
+
 import pytest
 
 from core.providers.anthropic import AnthropicAdapter
@@ -103,7 +105,7 @@ def test_runtime_start_loads_data_dir_env_for_provider_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    """Runtime.start() loads API keys from the active data-directory .env."""
+    """Runtime resolves provider credentials from the active data-directory .env."""
     # Arrange
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     data_dir = tmp_path / "data"
@@ -119,6 +121,8 @@ def test_runtime_start_loads_data_dir_env_for_provider_auth(
     adapter = runtime.get_adapter("openrouter")
 
     # Assert
+    assert runtime.has_provider_credentials("openrouter") is True
+    assert runtime.get_provider_credentials("openrouter") == "sk-or-from-data-dir"
     assert adapter._api_key == "sk-or-from-data-dir"  # type: ignore[attr-defined]
 
 
@@ -142,7 +146,64 @@ def test_runtime_start_does_not_overwrite_existing_provider_environment(
     adapter = runtime.get_adapter("openrouter")
 
     # Assert
+    assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
     assert adapter._api_key == "sk-or-from-process"  # type: ignore[attr-defined]
+
+
+def test_runtime_start_does_not_mutate_process_environment_when_loading_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Runtime.start() keeps data-dir credentials out of the live process env."""
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.joinpath(".env").write_text(
+        "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
+        encoding="utf-8",
+    )
+
+    runtime = Runtime(Config(data_dir=data_dir))
+
+    runtime.start()
+
+    assert "OPENROUTER_API_KEY" not in os.environ
+
+
+def test_runtime_empty_process_credential_overrides_data_dir_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """An empty process credential still wins over the data-dir fallback value."""
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    data_dir.joinpath(".env").write_text(
+        "OPENROUTER_API_KEY=sk-or-from-data-dir\n",
+        encoding="utf-8",
+    )
+
+    runtime = Runtime(Config(data_dir=data_dir))
+    runtime.start()
+
+    assert runtime.has_provider_credentials("openrouter") is False
+    with pytest.raises(ConfigError, match="Provider credentials not found"):
+        runtime.get_adapter("openrouter")
+
+
+def test_runtime_provider_credentials_report_missing_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """Runtime reports missing provider credentials when neither source has a value."""
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert runtime.has_provider_credentials("openai") is False
 
 
 # ------------------------------------------------------------------
@@ -225,14 +286,14 @@ def test_get_adapter_missing_api_key_raises_config_error(
     monkeypatch: pytest.MonkeyPatch,
     config: Config,
 ) -> None:
-    """Runtime.get_adapter() raises ConfigError when the API key is not set."""
+    """Runtime.get_adapter() raises ConfigError when credentials are not set."""
     # Arrange — ensure OPENAI_API_KEY is absent from the environment
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     runtime = Runtime(config)
     runtime.start()
 
     # Act & Assert
-    with pytest.raises(ConfigError, match="API key not found"):
+    with pytest.raises(ConfigError, match="Provider credentials not found"):
         runtime.get_adapter("openai")
 
 
@@ -276,6 +337,18 @@ def test_get_adapter_before_start_raises_runtime_error(config: Config) -> None:
     # Act & Assert
     with pytest.raises(RuntimeError, match="not started"):
         runtime.get_adapter("openai")
+
+
+def test_provider_credential_access_before_start_raises_runtime_error(config: Config) -> None:
+    """Runtime provider credential access before start() raises RuntimeError."""
+
+    runtime = Runtime(config)
+
+    with pytest.raises(RuntimeError, match="not started"):
+        runtime.has_provider_credentials("openai")
+
+    with pytest.raises(RuntimeError, match="not started"):
+        runtime.get_provider_credentials("openai")
 
 
 def test_get_model_before_start_raises_runtime_error(config: Config) -> None:
