@@ -10,6 +10,7 @@ import pytest
 import respx
 
 from core.models.discovery import (
+    ModelDiscoveryError,
     PassthroughModelFilter,
     PassthroughRawFilter,
     apply_overrides,
@@ -203,6 +204,21 @@ class TestApplyOverrides:
         merged = apply_overrides({"model-c": model_data("Original")}, overrides_path)
         assert merged["model-c"] == full_override
 
+    def test_existing_model_override_is_validated_after_nested_replacement(self, tmp_path: Path):
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        overrides_path.write_text(
+            json.dumps(
+                {
+                    "provider_id": "openrouter",
+                    "models": {"model-a": {"capabilities": {"vision": True}}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="Invalid override for model 'model-a'"):
+            apply_overrides({"model-a": model_data("Original")}, overrides_path)
+
 
 class TestPassthroughFilters:
     def test_raw_filter_accepts_everything(self):
@@ -265,3 +281,95 @@ class TestRefreshModels:
         assert model_b.max_output_tokens == 8192
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["X-Title"] == "vBot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_reads_overrides_outside_model_registry_glob(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        resources_dir = tmp_path / "resources"
+        overrides_dir = resources_dir / "model-overrides"
+        overrides_dir.mkdir(parents=True)
+        overrides_dir.joinpath("openrouter.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "openrouter",
+                    "models": {
+                        "model-a": {"name": "Corrected Model A"},
+                        "override-only": model_data("Override Only"),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [raw_openrouter_model(model_id="model-a", name="Model A")]},
+            )
+        )
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        registry = ModelRegistry.load(resources_dir)
+        assert result["model_count"] == 2
+        assert registry.get("openrouter", "model-a").name == "Corrected Model A"
+        assert registry.get("openrouter", "override-only").name == "Override Only"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_uses_selected_connection_auth_headers(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        selected_connection = ConnectionConfig(
+            id="secondary",
+            type="api_key",
+            label="Secondary",
+            auth=AuthConfig(
+                header="x-api-key",
+                prefix="Token ",
+                credential_key="SECONDARY_KEY",
+            ),
+        )
+        provider_config = ProviderConfig(
+            id=openrouter_config.id,
+            name=openrouter_config.name,
+            adapter=openrouter_config.adapter,
+            base_url=openrouter_config.base_url,
+            connections=[openrouter_config.connections[0], selected_connection],
+            defaults=openrouter_config.defaults,
+            extra_headers=openrouter_config.extra_headers,
+            models_endpoint=openrouter_config.models_endpoint,
+        )
+        route = respx.get(OPENROUTER_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [raw_openrouter_model(model_id="model-a", name="Model A")]},
+            )
+        )
+
+        await refresh_models(
+            provider_config,
+            API_KEY,
+            tmp_path / "resources",
+            credential_connection=selected_connection,
+        )
+
+        assert route.calls.last.request.headers["x-api-key"] == f"Token {API_KEY}"
+        assert "Authorization" not in route.calls.last.request.headers
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_maps_invalid_json_response_to_discovery_error(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        respx.get(OPENROUTER_MODELS_URL).mock(return_value=httpx.Response(200, text="not-json"))
+
+        with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
+            await refresh_models(openrouter_config, API_KEY, tmp_path / "resources")

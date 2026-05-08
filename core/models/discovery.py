@@ -17,9 +17,15 @@ from typing import Any, Protocol
 import httpx
 
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
-from core.providers.providers import ProviderConfig
+from core.providers.providers import ConnectionConfig, ProviderConfig
+from core.utils.errors import VBotError
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
+OVERRIDES_DIR_NAME = "model-overrides"
+
+
+class ModelDiscoveryError(VBotError):
+    """Expected model discovery failure safe to return through RPC."""
 
 
 class RawModelFilter(Protocol):
@@ -92,46 +98,59 @@ async def refresh_models(
     resources_dir: Path,
     raw_filter: RawModelFilter | None = None,
     model_filter: ModelFilter | None = None,
+    credential_connection: ConnectionConfig | None = None,
 ) -> dict[str, Any]:
     """Fetch, normalize, override-merge, write, and invalidate one provider catalog."""
 
     if not provider_config.models_endpoint:
         raise ValueError(f"Provider '{provider_config.id}' does not define a models_endpoint")
 
-    normalizer = _NORMALIZER_MAP.get(provider_config.adapter)
-    if normalizer is None:
-        raise ValueError(f"No model normalizer registered for adapter '{provider_config.adapter}'")
-
     raw_filter = raw_filter or PassthroughRawFilter()
     model_filter = model_filter or PassthroughModelFilter()
 
     fetched_at = datetime.now(UTC).isoformat()
     url = _join_url(provider_config.base_url, provider_config.models_endpoint)
-    raw_models = await _fetch_raw_models(url, provider_config, credential_value)
+    try:
+        normalizer = _NORMALIZER_MAP.get(provider_config.adapter)
+        if normalizer is None:
+            raise ValueError(
+                f"No model normalizer registered for adapter '{provider_config.adapter}'"
+            )
 
-    normalized_models: dict[str, Model] = {}
-    for raw_model in raw_models:
-        if not raw_filter.accepts(raw_model):
-            continue
-        model = normalizer(raw_model, provider_config.defaults)
-        if model_filter.accepts(model):
-            normalized_models[model.model_id] = model
+        raw_models = await _fetch_raw_models(
+            url,
+            provider_config,
+            credential_value,
+            credential_connection,
+        )
 
-    overrides_path = resources_dir / "models" / f"{provider_config.id}.overrides.json"
-    merged_models = apply_overrides(normalized_models, overrides_path)
+        normalized_models: dict[str, Model] = {}
+        for raw_model in raw_models:
+            if not raw_filter.accepts(raw_model):
+                continue
+            model = normalizer(raw_model, provider_config.defaults)
+            if model_filter.accepts(model):
+                normalized_models[model.model_id] = model
 
-    models_dir = resources_dir / "models"
-    models_dir.mkdir(parents=True, exist_ok=True)
-    output_path = models_dir / f"{provider_config.id}.json"
-    output_data = {
-        "provider_id": provider_config.id,
-        "source": "discovery",
-        "fetched_at": fetched_at,
-        "models": merged_models,
-    }
-    output_path.write_text(
-        json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+        overrides_path = _overrides_path(resources_dir, provider_config.id)
+        merged_models = apply_overrides(normalized_models, overrides_path)
+
+        models_dir = resources_dir / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        output_path = models_dir / f"{provider_config.id}.json"
+        output_data = {
+            "provider_id": provider_config.id,
+            "source": "discovery",
+            "fetched_at": fetched_at,
+            "models": merged_models,
+        }
+        output_path.write_text(
+            json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+        raise ModelDiscoveryError(
+            f"Model discovery failed for provider '{provider_config.id}': {exc}"
+        ) from exc
 
     ModelRegistry.invalidate(resources_dir)
 
@@ -163,8 +182,9 @@ def apply_overrides(
         if model_id in merged:
             merged[model_id] = {**merged[model_id], **model_override}
         else:
-            _validate_model_data(model_id, model_override)
             merged[model_id] = dict(model_override)
+
+        _validate_override_model_data(model_id, merged[model_id], overrides_path)
 
     return merged
 
@@ -173,8 +193,9 @@ async def _fetch_raw_models(
     url: str,
     provider_config: ProviderConfig,
     credential_value: str,
+    credential_connection: ConnectionConfig | None = None,
 ) -> list[Mapping[str, Any]]:
-    headers = _build_headers(provider_config, credential_value)
+    headers = _build_headers(provider_config, credential_value, credential_connection)
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
@@ -190,10 +211,15 @@ async def _fetch_raw_models(
     return raw_models
 
 
-def _build_headers(provider_config: ProviderConfig, credential_value: str) -> dict[str, str]:
+def _build_headers(
+    provider_config: ProviderConfig,
+    credential_value: str,
+    credential_connection: ConnectionConfig | None = None,
+) -> dict[str, str]:
     headers = dict(provider_config.extra_headers or {})
-    if provider_config.connections:
-        auth = provider_config.connections[0].auth
+    connection = credential_connection or next(iter(provider_config.connections), None)
+    if connection is not None:
+        auth = connection.auth
         headers[auth.header] = f"{auth.prefix}{credential_value}"
     return headers
 
@@ -208,6 +234,23 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
         data.pop("model_id")
         return data
     return dict(model)
+
+
+def _overrides_path(resources_dir: Path, provider_id: str) -> Path:
+    return resources_dir / OVERRIDES_DIR_NAME / f"{provider_id}.json"
+
+
+def _validate_override_model_data(
+    model_id: str,
+    model_data: Mapping[str, Any],
+    overrides_path: Path,
+) -> None:
+    try:
+        _validate_model_data(model_id, model_data)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid override for model '{model_id}' in '{overrides_path}': {exc}"
+        ) from exc
 
 
 def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
