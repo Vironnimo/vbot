@@ -55,7 +55,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert openai_config.name == "OpenAI"
     assert openai_config.adapter == "openai_compatible"
     assert openai_config.base_url == "https://api.openai.com/v1"
-    assert openai_config.auth.env_key == "OPENAI_API_KEY"
+    assert openai_config.auth.credential_key == "OPENAI_API_KEY"
 
 
 # ------------------------------------------------------------------

@@ -57,6 +57,10 @@ and Settings.
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
   - Model and fallback-model selects display the canonical public model ID
     string from `model.list` (for example `openrouter/anthropic/claude-sonnet-4`).
+- `webui/src/lib/settingsView.js`
+  - Normalizes Settings provider metadata that now uses credential-centric
+    fields (`credential_key`, `credentials_configured`) rather than env/API-key
+    wording.
   - Skills remain textarea-based until a backend skill catalog exists.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between

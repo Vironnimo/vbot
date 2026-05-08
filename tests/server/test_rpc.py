@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
@@ -104,19 +105,19 @@ class StubProviders:
                 id="anthropic",
                 name="Anthropic",
                 base_url="https://api.anthropic.com/v1",
-                auth=SimpleNamespace(env_key="ANTHROPIC_API_KEY"),
+                auth=SimpleNamespace(credential_key="ANTHROPIC_API_KEY"),
             ),
             "openai": SimpleNamespace(
                 id="openai",
                 name="OpenAI",
                 base_url="https://api.openai.com/v1",
-                auth=SimpleNamespace(env_key="OPENAI_API_KEY"),
+                auth=SimpleNamespace(credential_key="OPENAI_API_KEY"),
             ),
             "ollama": SimpleNamespace(
                 id="ollama",
                 name="Ollama",
                 base_url="",
-                auth=SimpleNamespace(env_key="OLLAMA_API_KEY"),
+                auth=SimpleNamespace(credential_key="OLLAMA_API_KEY"),
             ),
         }
 
@@ -292,6 +293,13 @@ class StubRuntime:
     def get_adapter(self, _provider_id: str) -> StubAdapter:
         return self.adapter
 
+    def has_provider_credentials(self, provider_id: str) -> bool:
+        provider = cast(Any, self.providers.get(provider_id))
+        credential_key = provider.auth.credential_key
+        if not credential_key:
+            return False
+        return bool(os.environ.get(credential_key))
+
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
     runtime = StubRuntime(tmp_path, adapter)
@@ -339,9 +347,9 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "anthropic",
                     "name": "Anthropic",
                     "base_url": "https://api.anthropic.com/v1",
-                    "env_key": "ANTHROPIC_API_KEY",
-                    "api_key_configured": False,
-                    "status": "missing_api_key",
+                    "credential_key": "ANTHROPIC_API_KEY",
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
                     "model_count": 1,
                     "kind": "remote",
                     "editable": False,
@@ -350,9 +358,9 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "ollama",
                     "name": "Ollama",
                     "base_url": "",
-                    "env_key": "OLLAMA_API_KEY",
-                    "api_key_configured": False,
-                    "status": "missing_api_key",
+                    "credential_key": "OLLAMA_API_KEY",
+                    "credentials_configured": False,
+                    "status": "missing_credentials",
                     "model_count": 1,
                     "kind": "local",
                     "editable": False,
@@ -361,8 +369,8 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "id": "openai",
                     "name": "OpenAI",
                     "base_url": "https://api.openai.com/v1",
-                    "env_key": "OPENAI_API_KEY",
-                    "api_key_configured": True,
+                    "credential_key": "OPENAI_API_KEY",
+                    "credentials_configured": True,
                     "status": "configured",
                     "model_count": 2,
                     "kind": "remote",
@@ -475,7 +483,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
 
 
 @pytest.mark.asyncio
-async def test_model_list_filters_out_providers_with_missing_or_empty_auth_env_vars(
+async def test_model_list_filters_out_providers_with_missing_or_empty_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

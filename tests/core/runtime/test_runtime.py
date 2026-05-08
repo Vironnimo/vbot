@@ -11,6 +11,7 @@ import pytest
 
 from core.agents.agents import AgentStore, SystemPromptManager
 from core.chat.chat import ChatSessionManager
+from core.providers.credentials import ProviderCredentialResolver
 from core.runtime.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
@@ -90,6 +91,7 @@ def test_phase_two_services_available_after_start(config: Config):
 
     assert isinstance(runtime.storage, StorageManager)
     assert isinstance(runtime.agents, AgentStore)
+    assert isinstance(runtime.provider_credentials, ProviderCredentialResolver)
     assert isinstance(runtime.tools, ToolRegistry)
     assert isinstance(runtime.skills, SkillRegistry)
     assert isinstance(runtime.chat_sessions, ChatSessionManager)
@@ -142,6 +144,7 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
     for attribute_name in (
         "storage",
         "agents",
+        "provider_credentials",
         "tools",
         "skills",
         "chat_sessions",
@@ -196,3 +199,5 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
 
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.storage
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.provider_credentials

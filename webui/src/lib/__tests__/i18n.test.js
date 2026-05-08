@@ -140,12 +140,12 @@ describe('i18n t()', () => {
       'settings.providers.title',
       'settings.providers.subtitle',
       'settings.providers.empty',
-      'settings.providers.description.apiKey',
+      'settings.providers.description.credentialKey',
       'settings.providers.description.baseUrl',
       'settings.providers.description.modelCount',
       'settings.providers.description.none',
       'settings.providers.status.configured',
-      'settings.providers.status.missingApiKey',
+      'settings.providers.status.missingCredentials',
       'settings.providers.status.placeholder',
       'settings.providers.customEndpoint',
       'settings.providers.customEndpointDescription',
@@ -173,10 +173,10 @@ describe('i18n t()', () => {
     ).toBeUndefined();
     expect(englishCatalog['settings.language.de']).toBeUndefined();
     expect(
-      t('settings.providers.description.apiKey', undefined, {
-        envKey: 'OPENAI_API_KEY',
+      t('settings.providers.description.credentialKey', undefined, {
+        credentialKey: 'OPENAI_API_KEY',
       }),
-    ).toBe('Env key: OPENAI_API_KEY.');
+    ).toBe('Credential key: OPENAI_API_KEY.');
     expect(
       t('settings.providers.description.baseUrl', undefined, {
         baseUrl: 'https://api.example.com/v1',
@@ -187,6 +187,12 @@ describe('i18n t()', () => {
         count: 3,
       }),
     ).toBe('3 models available.');
+    expect(t('settings.providers.subtitle')).toBe(
+      'Credential status and endpoint metadata for available providers.',
+    );
+    expect(t('settings.providers.status.missingCredentials')).toBe(
+      'Missing credentials',
+    );
   });
 
   it('does not expose Components showcase labels in the live catalog', () => {

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from core.utils.config import load_env_file_into_environment
+from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
@@ -79,14 +79,27 @@ class StorageManager:
         for directory_name in PHASE_TWO_DIRECTORIES:
             (self.data_dir / directory_name).mkdir(parents=True, exist_ok=True)
 
-    def load_environment(self) -> None:
-        """Load ``<data_dir>/.env`` into the process environment.
+    def load_environment(self) -> dict[str, str]:
+        """Return a read-only snapshot of credentials from ``<data_dir>/.env``.
 
-        Existing process environment variables stay authoritative so users can
-        override data-directory secrets from their shell or service manager.
+        The returned mapping is suitable for later merging with the live
+        process environment, but this method never mutates ``os.environ``.
         """
 
-        load_env_file_into_environment(self.data_dir / ".env")
+        return self.load_data_dir_credentials()
+
+    def load_data_dir_credentials(self) -> dict[str, str]:
+        """Read ``<data_dir>/.env`` as a credential fallback snapshot."""
+
+        return read_env_file(self.data_dir / ".env")
+
+    def build_environment_snapshot(self) -> dict[str, str]:
+        """Return process-env-over-data-dir merged credentials without mutation."""
+
+        return build_environment_snapshot(
+            process_env=os.environ,
+            fallback_env=self.load_data_dir_credentials(),
+        )
 
     def load_settings(self) -> dict[str, Any]:
         """Load ``settings.json`` or return an empty mapping when it does not exist."""

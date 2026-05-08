@@ -101,6 +101,8 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
         assert assistant.content == "Phase 2 works"
+        assert runtime.has_provider_credentials("fake-provider") is True
+        assert runtime.get_provider_credentials("fake-provider") == "test-key"
         assert [message.role for message in messages] == ["user", "assistant"]
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
@@ -277,7 +279,7 @@ def _write_provider_resource(resources: Path) -> None:
                 "auth": {
                     "header": "Authorization",
                     "prefix": "Bearer ",
-                    "env_key": "FAKE_API_KEY",
+                    "credential_key": "FAKE_API_KEY",
                 },
             }
         ),
