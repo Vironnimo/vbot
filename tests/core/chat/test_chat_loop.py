@@ -44,10 +44,18 @@ JsonObject = dict[str, Any]
 class StubAgent:
     id: str
     model: str
+    connection: str | None = None
+    fallback_connection: str = ""
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
     workspace: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.connection is not None:
+            return
+        provider_id = self.model.split("/", 1)[0] if self.model else "openai"
+        object.__setattr__(self, "connection", f"{provider_id}:api-key")
 
 
 class StubAgents:
@@ -66,7 +74,17 @@ class StubProviders:
     def get(self, provider_id: str) -> object:
         if provider_id not in self._provider_ids:
             raise KeyError(provider_id)
-        return object()
+        return StubProviderConfig([StubConnection("oauth"), StubConnection("api-key")])
+
+
+@dataclass(frozen=True)
+class StubConnection:
+    id: str
+
+
+@dataclass(frozen=True)
+class StubProviderConfig:
+    connections: list[StubConnection]
 
 
 class LegacyDispatchToolRegistry:
@@ -225,12 +243,25 @@ class StubRuntime:
         self.tools = tools or ToolRegistry()
         self.chat_runs = ChatRunManager()
         self.providers = StubProviders(provider_ids or {agent.model.split("/", 1)[0]})
+        self.provider_credentials = StubProviderCredentials(
+            {f"{agent.model.split('/', 1)[0]}:api-key"}
+        )
         self.adapter = adapter
         self.adapter_provider_id: str | None = None
+        self.adapter_connection_id: str | None = None
 
-    def get_adapter(self, provider_id: str) -> StubAdapter:
+    def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
         self.adapter_provider_id = provider_id
+        self.adapter_connection_id = connection_id
         return self.adapter
+
+
+class StubProviderCredentials:
+    def __init__(self, usable_connection_ids: set[str]) -> None:
+        self._usable_connection_ids = usable_connection_ids
+
+    def has_credentials(self, _provider_id: str, connection_id: str | None = None) -> bool:
+        return connection_id in self._usable_connection_ids
 
 
 @pytest.mark.asyncio
@@ -248,6 +279,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     assert messages[0].content == "Hi"
     assert messages[1].content == "Hello"
     assert runtime.adapter_provider_id == "openrouter"
+    assert runtime.adapter_connection_id == "openrouter:api-key"
     assert adapter.requests[0]["model_id"] == "anthropic/claude-sonnet-4"
     assert adapter.requests[0]["kwargs"] == {
         "temperature": 0.1,
@@ -660,7 +692,7 @@ async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> N
     second_adapter = StubAdapter([{"content": "Second", "tool_calls": None}])
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     adapters = [first_adapter, second_adapter]
-    runtime.get_adapter = lambda provider_id: adapters.pop(0)  # type: ignore[method-assign]
+    runtime.get_adapter = lambda provider_id, connection_id: adapters.pop(0)  # type: ignore[method-assign]
     runtime.chat_sessions.create("coder", session_id="session-one")
     runtime.chat_sessions.create("coder", session_id="session-two")
 
@@ -1044,7 +1076,64 @@ async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: P
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.chat_sessions.list("coder") == []
-    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_chat_loop_uses_connection_from_agent(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        connection="openai:oauth",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert runtime.adapter_provider_id == "openai"
+    assert runtime.adapter_connection_id == "openai:oauth"
+
+
+@pytest.mark.asyncio
+async def test_chat_loop_provider_comes_from_connection_id(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        connection="openrouter:api-key",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        provider_ids={"openai", "openrouter"},
+    )
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert runtime.adapter_provider_id == "openrouter"
+    assert runtime.adapter_connection_id == "openrouter:api-key"
+    assert adapter.requests[0]["model_id"] == "gpt-5.2"
+
+
+@pytest.mark.asyncio
+async def test_chat_loop_empty_connection_falls_back_to_first_usable(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        connection="",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.provider_credentials = StubProviderCredentials({"openai:api-key"})
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert runtime.adapter_provider_id == "openai"
+    assert runtime.adapter_connection_id == "openai:api-key"
 
 
 @pytest.mark.asyncio

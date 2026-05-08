@@ -15,7 +15,7 @@ from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.providers import ProviderConfig, ProviderRegistry
+from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -47,7 +47,7 @@ _DEFAULT_APP_VERSION = "0.1.0"
 # Adapter factory mapping
 # ---------------------------------------------------------------------------
 
-_ADAPTER_MAP: dict[str, Callable[[ProviderConfig, str], ProviderAdapter]] = {
+_ADAPTER_MAP: dict[str, Callable[[ProviderConfig, str, str | None], ProviderAdapter]] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "anthropic": AnthropicAdapter,
 }
@@ -271,7 +271,7 @@ class Runtime:
     # Adapter factory
     # ------------------------------------------------------------------
 
-    def get_adapter(self, provider_id: str) -> ProviderAdapter:
+    def get_adapter(self, provider_id: str, connection_id: str) -> ProviderAdapter:
         """Return a wired adapter instance for the given provider.
 
         Looks up the provider config from the registry, resolves the
@@ -280,6 +280,8 @@ class Runtime:
 
         Args:
             provider_id: Unique provider identifier (e.g. ``"openai"``).
+            connection_id: Compositional connection identifier
+                (e.g. ``"openai:api-key"``).
 
         Returns:
             A ``ProviderAdapter`` instance ready to make API calls.
@@ -294,7 +296,8 @@ class Runtime:
             raise RuntimeError("Runtime not started — call start() first")
 
         provider_config = self.providers.get(provider_id)
-        api_key = self.get_provider_credentials(provider_id)
+        connection = self._get_connection_config(provider_config, connection_id)
+        api_key = self.provider_credentials.get_credentials(provider_id, connection_id)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
         if adapter_class is None:
@@ -302,7 +305,24 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        return adapter_class(provider_config, api_key)
+        return adapter_class(provider_config, api_key, connection.base_url)
+
+    def _get_connection_config(
+        self,
+        provider_config: ProviderConfig,
+        connection_id: str,
+    ) -> ConnectionConfig:
+        parts = connection_id.split(":", 1)
+        if len(parts) != 2 or parts[0] != provider_config.id or not parts[1]:
+            raise ConfigError(
+                f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
+            )
+        try:
+            return provider_config.get_connection(parts[1])
+        except KeyError as error:
+            raise ConfigError(
+                f"Unknown connection id '{connection_id}' for provider '{provider_config.id}'"
+            ) from error
 
     def has_provider_credentials(self, provider_id: str) -> bool:
         """Return whether *provider_id* has usable configured credentials."""

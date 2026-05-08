@@ -516,6 +516,8 @@ def _agent_response(agent: Any) -> JsonObject:
         "name": agent.name,
         "model": agent.model,
         "fallback_model": agent.fallback_model,
+        "connection": agent.connection,
+        "fallback_connection": agent.fallback_connection,
         "workspace": agent.workspace,
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,

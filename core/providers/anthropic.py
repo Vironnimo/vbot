@@ -71,11 +71,11 @@ class AnthropicAdapter(ProviderAdapter):
         api_key: API key for authentication (sent via the header from config).
     """
 
-    def __init__(self, config: ProviderConfig, api_key: str) -> None:
+    def __init__(self, config: ProviderConfig, api_key: str, base_url: str | None = None) -> None:
         self._config = config
         self._api_key = api_key
         self._client = httpx.AsyncClient(
-            base_url=config.base_url,
+            base_url=base_url or config.base_url,
             timeout=60.0,
         )
 

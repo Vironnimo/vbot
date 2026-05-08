@@ -476,7 +476,7 @@ class ChatLoop:
         create_missing: bool,
     ) -> Run:
         agent = self._runtime.agents.get(agent_id)
-        provider_id, _model_id = _split_agent_model(agent.model)
+        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(agent_id, session_id, create_missing=create_missing)
         manager = _runtime_run_manager(self._runtime)
@@ -488,9 +488,10 @@ class ChatLoop:
 
     async def _execute_run(self, run: Run, content: str) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
-        provider_id, model_id = _split_agent_model(agent.model)
+        _model_provider_id, model_id = _split_agent_model(agent.model)
+        provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
-        adapter = self._runtime.get_adapter(provider_id)
+        adapter = self._runtime.get_adapter(provider_id, connection_id)
         run.add_cancel_callback(lambda: _close_adapter(adapter))
         session = cast(ChatSessionManager, self._runtime.chat_sessions).get(
             run.agent_id,
@@ -846,6 +847,36 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     if not separator or not provider_id or not model_id:
         raise ChatError("agent model must use <provider>/<model-id>")
     return provider_id, model_id
+
+
+def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
+    model_provider_id, _model_id = _split_agent_model(agent.model)
+    connection_id = getattr(agent, "connection", "")
+    if connection_id:
+        provider_id, separator, local_id = connection_id.partition(":")
+        if not separator or not provider_id or not local_id:
+            raise ChatError("agent connection must use <provider>:<connection-id>")
+        return provider_id, connection_id
+
+    return model_provider_id, _first_usable_connection_id(runtime, model_provider_id)
+
+
+def _first_usable_connection_id(runtime: Any, provider_id: str) -> str:
+    try:
+        provider_config = runtime.providers.get(provider_id)
+    except KeyError as exc:
+        raise ChatError(f"provider not found: {provider_id}") from exc
+
+    credential_resolver = getattr(runtime, "provider_credentials", None)
+    if credential_resolver is None:
+        raise ChatError(f"agent has no connection set for provider: {provider_id}")
+
+    for connection in provider_config.connections:
+        connection_id = f"{provider_id}:{connection.id}"
+        if credential_resolver.has_credentials(provider_id, connection_id):
+            return connection_id
+
+    raise ChatError(f"provider has no usable connections: {provider_id}")
 
 
 def _ensure_provider_exists(providers: Any, provider_id: str) -> None:
