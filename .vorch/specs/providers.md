@@ -237,7 +237,7 @@ runtime.start()
 config = runtime.providers.get("openai")      # → ProviderConfig
 ids = runtime.providers.list_ids()              # → ["anthropic", "openai", "openrouter"]
 
-# Adapter factory — resolves API key from env, instantiates adapter
+# Adapter factory — resolves provider credentials centrally, instantiates adapter
 adapter = runtime.get_adapter("openai")        # → OpenAICompatibleAdapter instance
 adapter = runtime.get_adapter("anthropic")      # → AnthropicAdapter instance
 
@@ -247,9 +247,9 @@ model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Mode
 
 **`runtime.get_adapter(provider_id)`** flow:
 1. Looks up `ProviderConfig` from registry
-2. Resolves API key: `os.environ[provider_config.auth.env_key]` — missing key → `ConfigError`
+2. Resolves provider credentials through the central provider credential resolver — missing credential → `ConfigError`
 3. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
-4. Instantiates adapter with `(provider_config, api_key)`
+4. Instantiates adapter with `(provider_config, credential_value)`
 5. Returns wired `ProviderAdapter` instance
 
 Protocol interface: `ProviderRegistryProtocol` in `core/runtime/interfaces.py`.
@@ -260,7 +260,7 @@ Source: `core/runtime/runtime.py`.
 
 - **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
-- **API key resolution happens at adapter creation.** The runtime reads `os.environ[config.auth.env_key]` when `get_adapter()` is called. If the env var is empty or missing, `ConfigError` is raised. Keys are not stored on the `ProviderConfig`.
+- **Credential resolution happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called. Process environment currently has precedence over the data-dir `.env` fallback snapshot. If the credential is empty or missing, `ConfigError` is raised. Credentials are not stored on the `ProviderConfig`.
 
 - **Auth header construction differs per provider.** OpenAI and OpenRouter use `Authorization: Bearer <key>`. Anthropic uses `x-api-key: <key>` (no prefix). This is controlled by `AuthConfig.header` and `AuthConfig.prefix`.
 

@@ -37,17 +37,6 @@ class AuthConfig:
     prefix: str
     credential_key: str
 
-    @property
-    def env_key(self) -> str:
-        """Return the configured credential identifier.
-
-        Runtime and server credential-source migration lands in later phases.
-        Until then, existing callers still reading ``auth.env_key`` resolve the
-        same identifier value through this compatibility property.
-        """
-
-        return self.credential_key
-
 
 # ---------------------------------------------------------------------------
 # Provider configuration

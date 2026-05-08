@@ -7,7 +7,7 @@ fields, extra_headers, defaults, and models_endpoint.
 
 import json
 from collections.abc import Generator
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 
 import pytest
@@ -126,6 +126,22 @@ class TestProviderConfig:
         # Act / Assert
         with pytest.raises(FrozenInstanceError):
             auth.credential_key = "CHANGED"  # type: ignore[misc]
+
+    def test_auth_config_surface_is_credential_centric_only(self) -> None:
+        """AuthConfig exposes only credential-centric fields and no env-key shim."""
+        # Arrange
+        auth = AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="TEST_KEY",
+        )
+
+        # Act
+        field_names = [field.name for field in fields(AuthConfig)]
+
+        # Assert
+        assert field_names == ["header", "prefix", "credential_key"]
+        assert not hasattr(auth, "env_key")
 
 
 # ---------------------------------------------------------------------------
