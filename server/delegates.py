@@ -121,6 +121,7 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
             (
                 _model_response(provider_id, model)
                 for provider_id in runtime.providers.list_ids()
+                if _provider_is_usable(runtime.providers.get(provider_id))
                 for model in runtime.models.list_for_provider(provider_id)
             ),
             key=lambda model: (model["provider_id"], model["model_id"]),
@@ -358,7 +359,7 @@ def _server_bind_response(state: Any) -> JsonObject:
 def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
     provider = runtime.providers.get(provider_id)
     env_key = provider.auth.env_key
-    api_key_configured = bool(os.environ.get(env_key)) if env_key else False
+    api_key_configured = _provider_is_usable(provider)
     return {
         "id": provider.id,
         "name": provider.name,
@@ -370,6 +371,11 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         "kind": "remote" if provider.base_url else "local",
         "editable": False,
     }
+
+
+def _provider_is_usable(provider: Any) -> bool:
+    env_key = provider.auth.env_key
+    return bool(os.environ.get(env_key)) if env_key else False
 
 
 def _optional_string(params: JsonObject, key: str) -> str | None:
