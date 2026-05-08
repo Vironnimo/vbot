@@ -3,6 +3,9 @@ export const AGENT_FORM_MODE_EDIT = 'edit';
 
 export const DEFAULT_AGENT_TEMPERATURE = '0.1';
 export const DEFAULT_AGENT_ALLOWED_LIST = '*';
+export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
+  DEFAULT_AGENT_ALLOWED_LIST,
+]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const EMPTY_TEXT = '';
@@ -18,7 +21,10 @@ export function createAgentFormValues(agent = {}) {
       ? String(agent.temperature)
       : DEFAULT_AGENT_TEMPERATURE,
     thinking_effort: asText(agent.thinking_effort),
-    allowed_tools: listToText(agent.allowed_tools, DEFAULT_AGENT_ALLOWED_LIST),
+    allowed_tools: normalizeList(
+      agent.allowed_tools,
+      DEFAULT_AGENT_ALLOWED_TOOLS,
+    ),
     allowed_skills: listToText(
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_LIST,
@@ -50,7 +56,7 @@ export function normalizeAgentForm(values, options = {}) {
     fallback_model: normalized.fallback_model,
     temperature,
     thinking_effort: normalized.thinking_effort,
-    allowed_tools: textToList(normalized.allowed_tools),
+    allowed_tools: normalized.allowed_tools,
     allowed_skills: textToList(normalized.allowed_skills),
   };
 
@@ -96,9 +102,23 @@ function normalizeValues(values = {}) {
     workspace: asText(values.workspace).trim(),
     temperature: asText(values.temperature).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
-    allowed_tools: asText(values.allowed_tools),
+    allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: asText(values.allowed_skills),
   };
+}
+
+function normalizeList(items, fallback = []) {
+  if (typeof items === 'string') {
+    return textToList(items);
+  }
+
+  if (!Array.isArray(items)) {
+    return [...fallback];
+  }
+
+  return items
+    .map((item) => asText(item).trim())
+    .filter((item) => item.length > 0);
 }
 
 function validateAgentId(agentId, errors) {

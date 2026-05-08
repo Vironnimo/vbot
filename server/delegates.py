@@ -74,6 +74,10 @@ async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
 
 async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonObject:
     match method:
+        case "model.list":
+            return _list_models(state, params)
+        case "tool.list":
+            return _list_tools(state, params)
         case "agent.list":
             return _list_agents(state)
         case "agent.create":
@@ -106,6 +110,34 @@ def _list_agents(state: Any) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"agents": [_agent_response(agent) for agent in agents]}
+
+
+def _list_models(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "model.list does not accept params")
+    try:
+        runtime = state.runtime
+        models = sorted(
+            (
+                _model_response(provider_id, model)
+                for provider_id in runtime.providers.list_ids()
+                for model in runtime.models.list_for_provider(provider_id)
+            ),
+            key=lambda model: (model["provider_id"], model["model_id"]),
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"models": models}
+
+
+def _list_tools(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "tool.list does not accept params")
+    try:
+        tools = state.runtime.tools.list_tools()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"tools": [_tool_response(tool) for tool in tools]}
 
 
 def _create_agent(state: Any, params: JsonObject) -> JsonObject:
@@ -488,6 +520,32 @@ def _agent_response(agent: Any) -> JsonObject:
         "current_session_id": agent.current_session_id,
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
+    }
+
+
+def _model_response(provider_id: str, model: Any) -> JsonObject:
+    return {
+        "id": f"{provider_id}/{model.model_id}",
+        "provider_id": provider_id,
+        "model_id": model.model_id,
+        "name": model.name,
+        "capabilities": {
+            "vision": model.capabilities.vision,
+            "tools": model.capabilities.tools,
+            "json_mode": model.capabilities.json_mode,
+            "reasoning": {
+                "supported": model.capabilities.reasoning.supported,
+            },
+        },
+        "context_window": model.context_window,
+        "max_output_tokens": model.max_output_tokens,
+    }
+
+
+def _tool_response(tool: Any) -> JsonObject:
+    return {
+        "name": tool.name,
+        "description": tool.description,
     }
 
 
