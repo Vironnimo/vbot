@@ -358,8 +358,16 @@ async def test_settings_get_rejects_params(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_list_returns_all_models_across_providers_with_full_ids(tmp_path: Path) -> None:
+async def test_model_list_returns_all_models_across_providers_with_full_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     state = make_state(tmp_path, StubAdapter())
+    monkeypatch.setattr(state.runtime.providers, "list_ids", lambda: ["openai", "anthropic"])
+    state.runtime.models._models["openai"] = [
+        state.runtime.models._models["openai"][1],
+        state.runtime.models._models["openai"][0],
+    ]
 
     response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
 
