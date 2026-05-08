@@ -411,6 +411,7 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         "id": provider.id,
         "name": provider.name,
         "base_url": provider.base_url,
+        "models_endpoint": getattr(provider, "models_endpoint", None),
         "connections": [
             _provider_settings_connection(runtime, provider.id, connection)
             for connection in provider.connections
