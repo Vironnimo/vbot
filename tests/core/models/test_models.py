@@ -245,6 +245,49 @@ class TestModelRegistryLoad:
         assert registry_second is not registry_first
         assert registry_second.get("test_provider", "model-a").name == "Updated"
 
+    def test_load_ignores_colocated_override_files(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("openrouter.json").write_text(
+            """
+            {
+              "provider_id": "openrouter",
+              "models": {
+                "model-a": {
+                  "name": "Model A",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": false,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 1000,
+                  "max_output_tokens": 100
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+        models_dir.joinpath("openrouter.overrides.json").write_text(
+            """
+            {
+              "provider_id": "openrouter",
+              "models": {
+                "model-a": {"name": "Corrected Model A"},
+                "override-only": {"name": "Override Only"}
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("openrouter", "model-a").name == "Model A"
+        with pytest.raises(KeyError):
+            registry.get("openrouter", "override-only")
+
 
 # ---------------------------------------------------------------------------
 # ModelRegistry — get()

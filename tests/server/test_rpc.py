@@ -290,6 +290,7 @@ async def fake_refresh_models(
     resources_dir: Path,
     **kwargs: Any,
 ) -> JsonObject:
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.append(provider_config.id)
     FAKE_REFRESH_MODEL_CALLS.append(credential_value)
     FAKE_REFRESH_MODEL_KWARGS.append(kwargs)
     models_dir = resources_dir / "models"
@@ -327,6 +328,7 @@ async def fake_refresh_models(
 
 FAKE_REFRESH_MODEL_CALLS: list[str] = []
 FAKE_REFRESH_MODEL_KWARGS: list[JsonObject] = []
+FAKE_REFRESH_MODEL_PROVIDER_IDS: list[str] = []
 
 
 class StubStorage:
@@ -826,6 +828,7 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
     FAKE_REFRESH_MODEL_CALLS.clear()
     FAKE_REFRESH_MODEL_KWARGS.clear()
     state = make_state(tmp_path, StubAdapter())
@@ -844,9 +847,113 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
             "fetched_at": "2026-05-08T19:08:00+00:00",
         },
     }
+    assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openrouter"]
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
     refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
     assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_without_params_refreshes_only_eligible_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("OPENROUTER_SECONDARY_API_KEY", "secondary-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="refreshable-missing-credentials",
+            name="Refreshable Missing Credentials",
+            adapter="openai_compatible",
+            base_url="https://missing.example/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint="/models",
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=SimpleNamespace(credential_key="MISSING_REFRESH_API_KEY"),
+                )
+            ],
+        )
+    )
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="refreshable-secondary",
+            name="Refreshable Secondary",
+            adapter="openai_compatible",
+            base_url="https://secondary.example/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint="/models",
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=SimpleNamespace(credential_key="OPENROUTER_SECONDARY_API_KEY"),
+                )
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db"})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "providers": [
+                {
+                    "provider_id": "openrouter",
+                    "model_count": 1,
+                    "fetched_at": "2026-05-08T19:08:00+00:00",
+                },
+                {
+                    "provider_id": "refreshable-secondary",
+                    "model_count": 1,
+                    "fetched_at": "2026-05-08T19:08:00+00:00",
+                },
+            ],
+            "refreshed_count": 2,
+            "model_count": 2,
+        },
+    }
+    assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openrouter", "refreshable-secondary"]
+    assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key", "secondary-key"]
+    assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
+    assert state.runtime.models.get("refreshable-secondary", "fresh-model").name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_empty_params_reloads_runtime_registry_after_global_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    previous_models = state.runtime.models
+
+    response = await dispatch_rpc(state, {"method": "model.refresh_db", "params": {}})
+
+    assert response["ok"] is True
+    assert state.runtime.models is not previous_models
+    assert state.runtime.models.get("openrouter", "fresh-model").name == "Fresh Model"
 
 
 @pytest.mark.asyncio
@@ -944,6 +1051,20 @@ async def test_model_refresh_db_rejects_unknown_provider(tmp_path: Path) -> None
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
     assert "missing" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_rejects_unsupported_fields(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter", "extra": True}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert response["error"]["message"] == "unsupported model refresh fields: extra"
 
 
 @pytest.mark.asyncio

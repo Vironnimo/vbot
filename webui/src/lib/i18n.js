@@ -266,7 +266,7 @@ export const englishCatalog = Object.freeze({
   'settings.providers.refreshModels': 'Update Model DB',
   'settings.providers.refreshingModels': 'Updating…',
   'settings.providers.refreshSuccess':
-    'Model DB updated: {count} models available.',
+    'Model DB updated: {providerCount} providers, {count} models available.',
   'settings.providers.refreshError': 'Model DB could not be updated.',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.subtitle': 'Language preference.',

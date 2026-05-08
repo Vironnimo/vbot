@@ -153,7 +153,6 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
-    provider_id = _required_string(params, "provider_id")
     unsupported_fields = sorted(set(params) - {"provider_id"})
     if unsupported_fields:
         raise RpcError(
@@ -163,29 +162,86 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         runtime = state.runtime
+        resources_dir = _runtime_resources_dir(runtime)
+        if "provider_id" in params:
+            provider_id = _required_string(params, "provider_id")
+            return await _refresh_provider_model_db(runtime, provider_id, resources_dir)
+
+        result = await _refresh_global_model_db(runtime, resources_dir)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return result
+
+
+async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
+    refreshed_providers: list[JsonObject] = []
+    for provider_id in runtime.providers.list_ids():
         provider = runtime.providers.get(provider_id)
         if not getattr(provider, "models_endpoint", None):
-            raise RpcError(
-                RPC_ERROR_DOMAIN,
-                f"provider '{provider_id}' does not support model refresh",
-            )
+            continue
 
-        credential_connection, credential_value = _first_usable_provider_credential(
-            runtime,
-            provider_id,
-            provider,
-        )
-        resources_dir = _runtime_resources_dir(runtime)
+        try:
+            credential_connection, credential_value = _first_usable_provider_credential(
+                runtime,
+                provider_id,
+                provider,
+            )
+        except ConfigError:
+            continue
+
         result = await refresh_models(
             provider,
             credential_value,
             resources_dir,
             credential_connection=credential_connection,
         )
-        runtime._models = ModelRegistry.load(resources_dir)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
+        refreshed_providers.append(result)
+
+    _reload_runtime_model_registry(runtime, resources_dir)
+    return {
+        "providers": refreshed_providers,
+        "refreshed_count": len(refreshed_providers),
+        "model_count": sum(_model_count(result) for result in refreshed_providers),
+    }
+
+
+async def _refresh_provider_model_db(
+    runtime: Any,
+    provider_id: str,
+    resources_dir: Path,
+) -> JsonObject:
+    provider = runtime.providers.get(provider_id)
+    if not getattr(provider, "models_endpoint", None):
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            f"provider '{provider_id}' does not support model refresh",
+        )
+
+    credential_connection, credential_value = _first_usable_provider_credential(
+        runtime,
+        provider_id,
+        provider,
+    )
+    result = await refresh_models(
+        provider,
+        credential_value,
+        resources_dir,
+        credential_connection=credential_connection,
+    )
+    _reload_runtime_model_registry(runtime, resources_dir)
     return result
+
+
+def _reload_runtime_model_registry(runtime: Any, resources_dir: Path) -> None:
+    ModelRegistry.invalidate(resources_dir)
+    runtime._models = ModelRegistry.load(resources_dir)
+
+
+def _model_count(result: JsonObject) -> int:
+    model_count = result.get("model_count", 0)
+    if isinstance(model_count, bool) or not isinstance(model_count, int):
+        return 0
+    return int(model_count)
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:

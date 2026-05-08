@@ -166,8 +166,9 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 - **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
   provider model files under `resources/models/` and may include `source` and
   `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional
-  `resources/model-overrides/<provider>.json` files patch or supplement
-  discovered models.
+  `resources/models/<provider>.overrides.json` files patch or supplement
+  discovered models, and the registry skips those override files when loading
+  catalogs.
 
 ## Specs
 

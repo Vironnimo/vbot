@@ -21,7 +21,7 @@ from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.utils.errors import VBotError
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
-OVERRIDES_DIR_NAME = "model-overrides"
+OVERRIDE_FILE_SUFFIX = ".overrides.json"
 
 
 class ModelDiscoveryError(VBotError):
@@ -237,7 +237,7 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _overrides_path(resources_dir: Path, provider_id: str) -> Path:
-    return resources_dir / OVERRIDES_DIR_NAME / f"{provider_id}.json"
+    return resources_dir / "models" / f"{provider_id}{OVERRIDE_FILE_SUFFIX}"
 
 
 def _validate_override_model_data(

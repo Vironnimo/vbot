@@ -23,10 +23,12 @@ Clients call the vBot server contract; provider wire details stay behind
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
   `<provider>/<model-id-at-provider>` format.
-- `model.refresh_db` accepts `{ provider_id }`, requires the provider to have a
-  configured `models_endpoint` and a usable connection credential, refreshes that
-  provider's model file through the discovery pipeline, reloads the runtime model
-  registry reference, and returns `{ provider_id, model_count, fetched_at }`.
+- `model.refresh_db` accepts optional `{ provider_id }`. With a provider ID it
+  refreshes that provider only and returns `{ provider_id, model_count,
+  fetched_at }`. With no params or `{}` it refreshes every provider that has a
+  configured `models_endpoint` and a usable connection credential, skips
+  ineligible providers, reloads the runtime model registry reference once, and
+  returns `{ providers, refreshed_count, model_count }`.
 - `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name.
