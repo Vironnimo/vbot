@@ -846,6 +846,18 @@ async def test_agent_crud_accepts_and_returns_connection_fields(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_agent_list_response_includes_connection_fields(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["connection"] == "openai:api-key"
+    assert agent["fallback_connection"] == ""
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params"),
     [
