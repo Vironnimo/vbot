@@ -32,7 +32,7 @@ ANTHROPIC_CONFIG = ProviderConfig(
     name="Anthropic",
     adapter="anthropic",
     base_url="https://api.anthropic.com/v1",
-    auth=AuthConfig(header="x-api-key", prefix="", env_key="ANTHROPIC_API_KEY"),
+    auth=AuthConfig(header="x-api-key", prefix="", credential_key="ANTHROPIC_API_KEY"),
     defaults={"max_tokens": 4096},
 )
 
@@ -44,7 +44,7 @@ CUSTOM_CONFIG = ProviderConfig(
     auth=AuthConfig(
         header="x-api-key",
         prefix="",
-        env_key="CUSTOM_ANTHROPIC_API_KEY",
+        credential_key="CUSTOM_ANTHROPIC_API_KEY",
     ),
     defaults={"max_tokens": 8192, "temperature": 0.7},
     extra_headers={"X-Custom-Header": "custom-value"},
@@ -58,7 +58,7 @@ NO_DEFAULTS_CONFIG = ProviderConfig(
     auth=AuthConfig(
         header="x-api-key",
         prefix="",
-        env_key="MINIMAL_ANTHROPIC_API_KEY",
+        credential_key="MINIMAL_ANTHROPIC_API_KEY",
     ),
 )
 

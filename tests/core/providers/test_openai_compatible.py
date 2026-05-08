@@ -32,7 +32,11 @@ OPENAI_CONFIG = ProviderConfig(
     name="OpenAI",
     adapter="openai_compatible",
     base_url="https://api.openai.com/v1",
-    auth=AuthConfig(header="Authorization", prefix="Bearer ", env_key="OPENAI_API_KEY"),
+    auth=AuthConfig(
+        header="Authorization",
+        prefix="Bearer ",
+        credential_key="OPENAI_API_KEY",
+    ),
     defaults={"max_tokens": 4096, "temperature": 0.7},
 )
 
@@ -41,7 +45,11 @@ OPENROUTER_CONFIG = ProviderConfig(
     name="OpenRouter",
     adapter="openai_compatible",
     base_url="https://openrouter.ai/api/v1",
-    auth=AuthConfig(header="Authorization", prefix="Bearer ", env_key="OPENROUTER_API_KEY"),
+    auth=AuthConfig(
+        header="Authorization",
+        prefix="Bearer ",
+        credential_key="OPENROUTER_API_KEY",
+    ),
     defaults={"max_tokens": 4096},
     extra_headers={"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
 )
@@ -51,7 +59,7 @@ NO_DEFAULTS_CONFIG = ProviderConfig(
     name="Minimal Provider",
     adapter="openai_compatible",
     base_url="https://api.minimal.example/v1",
-    auth=AuthConfig(header="x-api-key", prefix="", env_key="MINIMAL_API_KEY"),
+    auth=AuthConfig(header="x-api-key", prefix="", credential_key="MINIMAL_API_KEY"),
 )
 
 API_KEY = "test-api-key-12345"

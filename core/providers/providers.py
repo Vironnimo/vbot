@@ -30,12 +30,23 @@ class AuthConfig:
     Attributes:
         header: HTTP header name for the API key (e.g. ``"Authorization"``).
         prefix: Value prefix prepended to the key (e.g. ``"Bearer "``).
-        env_key: Environment variable name holding the API key.
+        credential_key: Credential identifier used to look up the API key.
     """
 
     header: str
     prefix: str
-    env_key: str
+    credential_key: str
+
+    @property
+    def env_key(self) -> str:
+        """Return the configured credential identifier.
+
+        Runtime and server credential-source migration lands in later phases.
+        Until then, existing callers still reading ``auth.env_key`` resolve the
+        same identifier value through this compatibility property.
+        """
+
+        return self.credential_key
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +192,7 @@ class ProviderRegistry:
         auth = AuthConfig(
             header=auth_data["header"],
             prefix=auth_data["prefix"],
-            env_key=auth_data["env_key"],
+            credential_key=auth_data["credential_key"],
         )
         return ProviderConfig(
             id=data["id"],

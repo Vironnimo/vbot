@@ -17,10 +17,12 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 ```
 
-- `start()` — idempotent. Creates `vbot.core` logger via `LogManager`, loads provider/model registries, prepares data directories, loads `<data_dir>/.env` into the process environment without overwriting existing env vars, copies prompt fragments, wires services, registers built-in tools, and ensures a usable default Agent exists. Writes "Runtime started" at info level. Second call is no-op (debug log) and preserves service instances.
+- `start()` — idempotent. Creates `vbot.core` logger via `LogManager`, loads provider/model registries, prepares data directories, reads `<data_dir>/.env` as a fallback credential snapshot without mutating `os.environ`, copies prompt fragments, wires services, registers built-in tools, and ensures a usable default Agent exists. Writes "Runtime started" at info level. Second call is no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Resets started state and clears service references. Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
+- `provider credentials` — resolved centrally with process environment taking
+  precedence over the data-dir `.env` fallback snapshot.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
 - `tools` — runtime `ToolRegistry` with built-in tools registered at startup; currently includes `edit`, `glob`, `grep`, `read`, and `write`.

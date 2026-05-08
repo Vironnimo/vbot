@@ -7,7 +7,7 @@ environment variables take highest priority and are always available.
 
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -60,16 +60,23 @@ def read_env_file(env_path: str | Path) -> dict[str, str]:
     return parse_env_lines(raw.splitlines())
 
 
-def load_env_file_into_environment(env_path: str | Path, *, override: bool = False) -> None:
-    """Load a dotenv-style file into ``os.environ``.
+def build_environment_snapshot(
+    *,
+    process_env: Mapping[str, str] | None = None,
+    fallback_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a merged environment snapshot without mutating ``os.environ``.
 
-    Existing process environment values are preserved unless ``override`` is
-    explicitly enabled. Secret values are never logged or returned.
+    ``process_env`` wins over ``fallback_env`` so callers can layer data-dir
+    dotenv values under the live process environment.
     """
 
-    for key, value in read_env_file(env_path).items():
-        if override or key not in os.environ:
-            os.environ[key] = value
+    snapshot: dict[str, str] = {}
+    if fallback_env is not None:
+        snapshot.update(fallback_env)
+    if process_env is not None:
+        snapshot.update(process_env)
+    return snapshot
 
 
 class Config:
