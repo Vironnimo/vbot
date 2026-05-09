@@ -1193,6 +1193,13 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
     session = runtime.chat_sessions.get("coder", "session-one")
     persisted = session.load()
     assert persisted[1].usage == {"input_tokens": 150, "output_tokens": 12}
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload == {
+        "status": "completed",
+        "usage": {"input_tokens": 150, "output_tokens": 12},
+    }
 
 
 @pytest.mark.asyncio
@@ -1221,6 +1228,13 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
     session = runtime.chat_sessions.get("coder", "session-one")
     persisted = session.load()
     assert persisted[1].usage == {"input_tokens": 200, "output_tokens": 25}
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload == {
+        "status": "completed",
+        "usage": {"input_tokens": 200, "output_tokens": 25},
+    }
 
 
 @pytest.mark.asyncio
@@ -1245,6 +1259,10 @@ async def test_response_without_usage_applies_estimation(
     persisted = session.load()
     assert persisted[1].usage is not None
     assert persisted[1].usage["estimated"] is True
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["usage"]["estimated"] is True
 
 
 @pytest.mark.asyncio
@@ -1325,6 +1343,10 @@ async def test_streaming_without_usage_applies_estimation(
     assert assistant.usage["estimated"] is True
     assert isinstance(assistant.usage["input_tokens"], int)
     assert isinstance(assistant.usage["output_tokens"], int)
+    run = next(iter(runtime.chat_runs._runs.values()))
+    completed = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed) == 1
+    assert completed[0].payload["usage"]["estimated"] is True
 
 
 @pytest.mark.asyncio

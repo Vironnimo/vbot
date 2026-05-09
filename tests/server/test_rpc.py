@@ -234,6 +234,12 @@ class StubModels:
             ],
         }
 
+    def get(self, provider_id: str, model_id: str) -> Model:
+        for model in self._models.get(provider_id, []):
+            if model.model_id == model_id:
+                return model
+        raise KeyError(f"Model not found: {provider_id}/{model_id}")
+
     def list_for_provider(self, provider_id: str) -> list[object]:
         return list(self._models[provider_id])
 
@@ -1261,6 +1267,46 @@ async def test_agent_list_response_includes_connection_fields(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_agent_list_includes_context_window_for_known_model(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["model"] == "openai/gpt-5.2"
+    assert agent["context_window"] == 256000
+
+
+@pytest.mark.asyncio
+async def test_agent_list_includes_null_context_window_for_unknown_model(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", model="unknown/missing-model")
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["model"] == "unknown/missing-model"
+    assert agent["context_window"] is None
+
+
+@pytest.mark.asyncio
+async def test_agent_list_includes_null_context_window_for_model_without_provider_prefix(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", model="bare-model-id")
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["model"] == "bare-model-id"
+    assert agent["context_window"] is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params"),
     [
@@ -1401,6 +1447,48 @@ async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_
     assert response["result"]["session_id"] == "current-one"
     assert response["result"]["messages"][0]["reasoning"] == "visible"
     assert "reasoning_meta" not in response["result"]["messages"][0]
+
+
+@pytest.mark.asyncio
+async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="usage-session")
+    state.runtime.agents.update("coder", current_session_id="usage-session")
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+            usage={"input_tokens": 150, "output_tokens": 42},
+        )
+    )
+    session.append(
+        ChatMessage.user(content="Follow-up"),
+    )
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="World",
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    messages = response["result"]["messages"]
+    assert len(messages) == 3
+
+    # Assistant message with usage includes it in the response
+    assert messages[0]["usage"] == {"input_tokens": 150, "output_tokens": 42}
+    assert messages[0]["content"] == "Hello"
+
+    # User message does not carry usage
+    assert "usage" not in messages[1]
+
+    # Assistant message without usage has no usage key
+    assert "usage" not in messages[2]
 
 
 @pytest.mark.asyncio
@@ -1728,3 +1816,212 @@ async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path)
     )
 
     assert response["ok"] is True
+
+
+class TestRemoveOpaqueProviderMetadata:
+    """Tests for _remove_opaque_provider_metadata preserving canonical fields."""
+
+    def test_strips_reasoning_meta(self) -> None:
+        result = delegates._remove_opaque_provider_metadata(
+            {"role": "assistant", "reasoning_meta": {"secret": "opaque"}}
+        )
+        assert result == {"role": "assistant"}
+
+    def test_preserves_usage(self) -> None:
+        result = delegates._remove_opaque_provider_metadata(
+            {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
+        )
+        assert result == {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
+
+    def test_preserves_usage_and_strips_reasoning_meta(self) -> None:
+        result = delegates._remove_opaque_provider_metadata(
+            {
+                "role": "assistant",
+                "content": "Hello",
+                "reasoning": "thinking",
+                "reasoning_meta": {"secret": "opaque"},
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        )
+        assert result == {
+            "role": "assistant",
+            "content": "Hello",
+            "reasoning": "thinking",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }
+
+    def test_strips_nested_reasoning_meta(self) -> None:
+        result = delegates._remove_opaque_provider_metadata(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "read",
+                        "arguments": {"path": "file.txt"},
+                        "reasoning_meta": {"secret": "nested"},
+                    }
+                ],
+            }
+        )
+        assert result == {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "read",
+                    "arguments": {"path": "file.txt"},
+                }
+            ],
+        }
+
+    def test_preserves_usage_nested_in_dict(self) -> None:
+        result = delegates._remove_opaque_provider_metadata(
+            {
+                "role": "assistant",
+                "content": "file contents",
+                "usage": {"input_tokens": 10},
+            }
+        )
+        assert result == {
+            "role": "assistant",
+            "content": "file contents",
+            "usage": {"input_tokens": 10},
+        }
+
+
+class TestVisibleMessage:
+    """Tests for _visible_message preserving usage and stripping reasoning_meta."""
+
+    def test_visible_message_includes_usage_on_assistant(self) -> None:
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+            usage={"input_tokens": 200, "output_tokens": 30},
+        )
+        result = delegates._visible_message(message)
+        assert result["usage"] == {"input_tokens": 200, "output_tokens": 30}
+
+    def test_visible_message_strips_reasoning_meta(self) -> None:
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+            reasoning_meta={"secret": "opaque"},
+        )
+        result = delegates._visible_message(message)
+        assert "reasoning_meta" not in result
+
+    def test_visible_message_preserves_usage_and_strips_reasoning_meta(self) -> None:
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+            reasoning="visible thinking",
+            reasoning_meta={"secret": "opaque"},
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+        result = delegates._visible_message(message)
+        assert result["usage"] == {"input_tokens": 100, "output_tokens": 50}
+        assert result["reasoning"] == "visible thinking"
+        assert "reasoning_meta" not in result
+
+    def test_visible_message_excludes_usage_when_none(self) -> None:
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Hello",
+        )
+        result = delegates._visible_message(message)
+        assert "usage" not in result
+
+
+class TestServerEventFromRunEvent:
+    """Tests for _server_event_from_run_event preserving usage in run_completed."""
+
+    def _make_event(
+        self,
+        event_type: str,
+        payload: JsonObject | None = None,
+        sequence: int = 1,
+    ) -> Any:
+        """Create a minimal RunEvent for testing."""
+        from core.chat.runs import RunEvent
+
+        return RunEvent(
+            sequence=sequence,
+            run_id="run-test",
+            agent_id="agent-test",
+            session_id="session-test",
+            type=event_type,
+            payload=payload or {},
+        )
+
+    def test_run_completed_includes_usage_when_present(self) -> None:
+        event = self._make_event(
+            delegates.RUN_COMPLETED_EVENT,
+            {"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 50}},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["payload"]["usage"] == {"input_tokens": 100, "output_tokens": 50}
+
+    def test_run_completed_omits_usage_when_absent(self) -> None:
+        event = self._make_event(
+            delegates.RUN_COMPLETED_EVENT,
+            {"status": "completed"},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert "usage" not in result["payload"]
+
+    def test_run_completed_strips_reasoning_meta_from_usage(self) -> None:
+        event = self._make_event(
+            delegates.RUN_COMPLETED_EVENT,
+            {
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "reasoning_meta": {"secret": "opaque"},
+                },
+            },
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["payload"]["usage"] == {"input_tokens": 100, "output_tokens": 50}
+        assert "reasoning_meta" not in result["payload"]["usage"]
+
+    def test_run_completed_preserves_usage_with_estimated_flag(self) -> None:
+        event = self._make_event(
+            delegates.RUN_COMPLETED_EVENT,
+            {
+                "status": "completed",
+                "usage": {"input_tokens": 100, "output_tokens": 50, "estimated": True},
+            },
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["payload"]["usage"] == {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "estimated": True,
+        }
+
+    def test_run_completed_includes_status_alongside_usage(self) -> None:
+        event = self._make_event(
+            delegates.RUN_COMPLETED_EVENT,
+            {"status": "completed", "usage": {"input_tokens": 200, "output_tokens": 30}},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["payload"]["status"] == "completed"
+        assert result["payload"]["usage"] == {"input_tokens": 200, "output_tokens": 30}
+
+    def test_non_completed_terminal_event_excludes_usage(self) -> None:
+        """run_failed and run_cancelled should not carry usage even if payload has it."""
+        event = self._make_event(
+            delegates.RUN_FAILED_EVENT,
+            {"status": "failed", "usage": {"input_tokens": 10}},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert "usage" not in result["payload"]
+        assert result["payload"]["status"] == "failed"
