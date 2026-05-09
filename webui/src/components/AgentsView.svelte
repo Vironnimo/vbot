@@ -70,12 +70,17 @@
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
   let modelOptions = $derived(
-    selectModelOptions(formValues.model, formValues.connection),
+    selectModelOptions(
+      formValues.model,
+      formValues.connection,
+      t('agents.form.modelPlaceholder', 'Default (no model selected)'),
+    ),
   );
   let fallbackModelOptions = $derived(
     selectModelOptions(
       formValues.fallback_model,
       formValues.fallback_connection,
+      t('agents.form.fallbackModelPlaceholder', 'None'),
     ),
   );
   let thinkingEffortOptions = $derived(
@@ -366,12 +371,17 @@
     return values;
   }
 
-  function selectModelOptions(selectedModel, selectedConnection) {
+  function selectModelOptions(selectedModel, selectedConnection, emptyLabel) {
     const connectionsByProvider = usableConnectionsByProvider();
     const selectedValue = modelSelectionValue(
       selectedModel,
       selectedConnection,
     );
+    const emptyOption = {
+      value: '',
+      label: emptyLabel,
+      isUnavailable: false,
+    };
     const catalogOptions = availableModels.flatMap((model) => {
       const providerConnections =
         connectionsByProvider[model.provider_id] ?? [];
@@ -387,10 +397,11 @@
       !selectedValue ||
       catalogOptions.some((option) => option.value === selectedValue)
     ) {
-      return catalogOptions;
+      return [emptyOption, ...catalogOptions];
     }
 
     return [
+      emptyOption,
       {
         value: selectedValue,
         label: unavailableModelOptionLabel(selectedModel, selectedConnection),

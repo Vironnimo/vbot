@@ -26,6 +26,7 @@
 
   let rootElement = $state();
   let triggerElement = $state();
+  let panelElement = $state();
   let searchInputElement = $state();
   let isOpen = $state(false);
   let searchQuery = $state('');
@@ -174,16 +175,27 @@
     close();
   }
 
+  function handleWindowScroll(event) {
+    if (!isOpen) {
+      return;
+    }
+
+    if (event.target instanceof Node && panelElement?.contains(event.target)) {
+      return;
+    }
+
+    close();
+  }
+
   $effect(() => {
     if (!isOpen) {
       return undefined;
     }
 
-    const closeOnScroll = () => close();
-    window.addEventListener('scroll', closeOnScroll, true);
+    window.addEventListener('scroll', handleWindowScroll, true);
 
     return () => {
-      window.removeEventListener('scroll', closeOnScroll, true);
+      window.removeEventListener('scroll', handleWindowScroll, true);
     };
   });
 </script>
@@ -228,6 +240,7 @@
   </button>
 
   <div
+    bind:this={panelElement}
     class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
     role="listbox"
     aria-hidden={!isOpen}
