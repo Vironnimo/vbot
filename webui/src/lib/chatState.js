@@ -73,6 +73,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       status: CHAT_STATUS_IDLE,
       error: null,
       streamStatus: CHAT_STATUS_IDLE,
+      usage: null,
     };
   }
   return state.sessions[key];
@@ -84,6 +85,11 @@ export function currentSessionState(state) {
     return null;
   }
   return state.sessions[sessionKey(agent.id, agent.current_session_id)] ?? null;
+}
+
+export function updateSessionUsage(sessionState, usage) {
+  sessionState.usage = usage;
+  return sessionState;
 }
 
 export function loadHistory(sessionState, messages) {
@@ -100,7 +106,20 @@ export function loadHistory(sessionState, messages) {
   if (!isRunActive(sessionState)) {
     sessionState.status = CHAT_STATUS_IDLE;
   }
+  const lastUsage = findLastUsage(sessionState.messages);
+  if (lastUsage) {
+    sessionState.usage = lastUsage;
+  }
   return sessionState;
+}
+
+function findLastUsage(messages) {
+  for (let i = (messages ?? []).length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'assistant' && messages[i]?.usage) {
+      return messages[i].usage;
+    }
+  }
+  return null;
 }
 
 export function startRun(sessionState, run) {
@@ -158,6 +177,9 @@ export function finishRun(sessionState, event) {
   sessionState.streamingItems = [];
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
+  }
+  if (type === 'run_completed' && event?.payload?.usage) {
+    updateSessionUsage(sessionState, event.payload.usage);
   }
   return sessionState;
 }

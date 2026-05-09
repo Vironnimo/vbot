@@ -18,6 +18,7 @@ import {
   selectedAgent,
   setAgents,
   startRun,
+  updateSessionUsage,
   visibleTimelineItems,
 } from '../chatState.js';
 
@@ -1925,6 +1926,230 @@ describe('chat state helpers', () => {
     });
 
     expect(highestRunEventSequence(sessionState)).toBe(3);
+  });
+
+  it('initializes usage as null in new session state', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    expect(sessionState.usage).toBeNull();
+  });
+
+  it('sets usage via updateSessionUsage', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    const usage = { input_tokens: 8432, output_tokens: 512 };
+
+    updateSessionUsage(sessionState, usage);
+
+    expect(sessionState.usage).toEqual(usage);
+  });
+
+  it('updates session usage when finishRun processes a run_completed event with usage', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        status: CHAT_STATUS_COMPLETED,
+        usage: { input_tokens: 8432, output_tokens: 512 },
+      },
+    });
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 8432,
+      output_tokens: 512,
+    });
+  });
+
+  it('does not update usage when finishRun processes a run_failed event', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { status: CHAT_STATUS_FAILED, error: 'Something went wrong' },
+    });
+
+    expect(sessionState.usage).toBeNull();
+  });
+
+  it('does not update usage when run_completed event has no usage payload', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(sessionState.usage).toBeNull();
+  });
+
+  it('preserves usage when run_completed event includes estimated flag', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        status: CHAT_STATUS_COMPLETED,
+        usage: { input_tokens: 500, output_tokens: 200, estimated: true },
+      },
+    });
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 500,
+      output_tokens: 200,
+      estimated: true,
+    });
+  });
+
+  it('sets usage from last assistant message when loading history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'Hello!',
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+    ]);
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+    });
+  });
+
+  it('picks the last assistant message usage when loading history with multiple assistant messages', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'Hello!',
+        usage: { input_tokens: 100, output_tokens: 50 },
+      },
+      { id: 'user-two', role: 'user', content: 'More' },
+      {
+        id: 'assistant-two',
+        role: 'assistant',
+        content: 'Sure!',
+        usage: { input_tokens: 200, output_tokens: 75 },
+      },
+    ]);
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 200,
+      output_tokens: 75,
+    });
+  });
+
+  it('does not set usage when loading history with no assistant messages that have usage', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      { id: 'assistant-one', role: 'assistant', content: 'Hello!' },
+    ]);
+
+    expect(sessionState.usage).toBeNull();
+  });
+
+  it('does not overwrite usage from run_completed when loading history without usage', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        status: CHAT_STATUS_COMPLETED,
+        usage: { input_tokens: 8432, output_tokens: 512 },
+      },
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      { id: 'assistant-one', role: 'assistant', content: 'Hello!' },
+    ]);
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 8432,
+      output_tokens: 512,
+    });
   });
 });
 
