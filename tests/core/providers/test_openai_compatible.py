@@ -1206,8 +1206,8 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_includes_stream_true_in_payload(self, openai_adapter):
-        """stream() sends stream=true in the request payload."""
+    async def test_stream_includes_stream_true_and_usage_request_in_payload(self, openai_adapter):
+        """stream() sends stream=true and requests usage in the payload."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
@@ -1225,6 +1225,30 @@ class TestStreamSSE:
         # Assert
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["stream"] is True
+        assert request_body["stream_options"] == {"include_usage": True}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openrouter_stream_requests_usage_in_payload(self, openrouter_adapter):
+        """OpenRouter stream payload explicitly requests usage reporting."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(OPENROUTER_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        async for _ in openrouter_adapter.stream(SAMPLE_MESSAGES, model_id="openai/gpt-5.2"):
+            pass
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["stream"] is True
+        assert request_body["stream_options"] == {"include_usage": True}
 
     @respx.mock
     @pytest.mark.asyncio

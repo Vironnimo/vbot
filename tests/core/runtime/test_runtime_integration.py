@@ -321,8 +321,8 @@ def test_get_model_openrouter_claude_sonnet(runtime: Runtime) -> None:
 
     # Assert
     assert model.model_id == "anthropic/claude-sonnet-4"
-    assert model.name == "Claude Sonnet 4"
-    assert model.context_window == 128000
+    assert model.name == "Anthropic: Claude Sonnet 4"
+    assert model.context_window == 1000000
     assert model.max_output_tokens == 64000
     assert model.capabilities.vision is True
     assert model.capabilities.tools is True
@@ -336,9 +336,41 @@ def test_get_model_openrouter_claude_haiku(runtime: Runtime) -> None:
 
     # Assert
     assert model.model_id == "anthropic/claude-haiku-4.5"
-    assert model.name == "Claude Haiku 4.5"
+    assert model.name == "Anthropic: Claude Haiku 4.5"
     assert model.context_window == 200000
     assert model.max_output_tokens == 64000
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.json_mode is True
+    assert model.capabilities.reasoning.supported is True
+
+
+def test_get_model_openrouter_gpt55(runtime: Runtime) -> None:
+    """Runtime.get_model('openrouter', 'openai/gpt-5.5') returns committed catalog data."""
+    # Act
+    model = runtime.get_model("openrouter", "openai/gpt-5.5")
+
+    # Assert
+    assert model.model_id == "openai/gpt-5.5"
+    assert model.name == "OpenAI: GPT-5.5"
+    assert model.context_window == 1050000
+    assert model.max_output_tokens == 128000
+    assert model.capabilities.vision is True
+    assert model.capabilities.tools is True
+    assert model.capabilities.json_mode is True
+    assert model.capabilities.reasoning.supported is True
+
+
+def test_get_model_openrouter_claude_opus_47(runtime: Runtime) -> None:
+    """Runtime.get_model for OpenRouter Opus 4.7 matches committed catalog data."""
+    # Act
+    model = runtime.get_model("openrouter", "anthropic/claude-opus-4.7")
+
+    # Assert
+    assert model.model_id == "anthropic/claude-opus-4.7"
+    assert model.name == "Anthropic: Claude Opus 4.7"
+    assert model.context_window == 1000000
+    assert model.max_output_tokens == 128000
     assert model.capabilities.vision is True
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is True
