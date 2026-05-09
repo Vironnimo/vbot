@@ -682,7 +682,7 @@
           <p class="agents-view__notice" role="status">{statusMessage}</p>
         {/if}
 
-        <div class="detail-group agents-view__model-group">
+        <div class="detail-group">
           <div class="detail-group-title">
             {t('agents.detail.identity', 'Identity')}
           </div>
@@ -751,7 +751,7 @@
           </div>
         </div>
 
-        <div class="detail-group">
+        <div class="detail-group agents-view__model-group">
           <div class="detail-group-title">
             {t('agents.detail.model', 'Model')}
           </div>
