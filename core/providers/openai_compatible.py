@@ -94,13 +94,17 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Normalize an OpenAI-compatible response to canonical assistant fields."""
         message = _first_choice_message(response)
         content = message.get("content")
-        return {
+        normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
             "reasoning": _extract_openai_reasoning(message),
             "reasoning_meta": _extract_openai_reasoning_meta(message),
             "tool_calls": _extract_openai_tool_calls(message),
         }
+        usage = _extract_openai_usage(response)
+        if usage is not None:
+            normalized["usage"] = usage
+        return normalized
 
     def _build_payload(
         self,
@@ -287,6 +291,13 @@ def _normalize_openai_stream_chunk(
                     ),
                 }
             )
+
+    # OpenAI streaming includes usage only in the final chunk when
+    # stream_options.include_usage is set. Extract token usage when present.
+    usage_delta = _extract_stream_usage(chunk)
+    if usage_delta is not None:
+        normalized_deltas.append(usage_delta)
+
     return normalized_deltas
 
 
@@ -521,3 +532,51 @@ def _apply_openai_reasoning_meta(
     for key in OPENAI_REASONING_META_KEYS:
         if key in reasoning_meta:
             message[key] = reasoning_meta[key]
+
+
+def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
+    """Extract token usage from an OpenAI-compatible response.
+
+    Maps ``prompt_tokens`` → ``input_tokens`` and
+    ``completion_tokens`` → ``output_tokens``.  Returns ``None`` when
+    the response has no usable usage data.
+    """
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    has_input = isinstance(prompt_tokens, int)
+    has_output = isinstance(completion_tokens, int)
+    if not has_input and not has_output:
+        return None
+    return {
+        "input_tokens": prompt_tokens if isinstance(prompt_tokens, int) else 0,
+        "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
+    }
+
+
+def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract token usage from an OpenAI-compatible streaming chunk.
+
+    Yields a usage delta only when the chunk contains a ``usage`` dict
+    with at least ``prompt_tokens`` (as int).  Maps
+    ``prompt_tokens`` → ``input_tokens`` and
+    ``completion_tokens`` → ``output_tokens`` (defaulting to ``0`` if
+    absent or not an int).
+
+    Returns ``None`` when the chunk has no usable usage data, so that
+    callers can skip yielding anything.
+    """
+    usage = chunk.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("prompt_tokens")
+    if not isinstance(prompt_tokens, int):
+        return None
+    completion_tokens = usage.get("completion_tokens")
+    return {
+        "type": "usage",
+        "input_tokens": prompt_tokens,
+        "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
+    }

@@ -43,32 +43,48 @@
   let actionError = $state('');
   const activeSubscriptions = {};
 
-  function estimateTokens(messages) {
-    const characterCount = messages.reduce(
-      (total, message) =>
-        total +
-        String(message.content ?? '').length +
-        String(message.reasoning ?? '').length,
-      0,
-    );
-    return Math.ceil(characterCount / 4);
-  }
-
-  function formatTokenEstimate(tokenCount) {
-    return t('chat.tokenBadge', '{count} tok', {
-      count: new Intl.NumberFormat(undefined).format(tokenCount),
-    });
-  }
-
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(currentSessionState(chatState));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || loadingHistory);
   let lastSharedSelectedAgentId = $state('');
   let lastAgentsRefreshToken = $state(null);
-  let currentTokenEstimate = $derived(
-    estimateTokens(activeSessionState?.messages ?? []),
-  );
+  let tokenBadgeText = $derived.by(() => {
+    const usage = activeSessionState?.usage;
+    const contextWindow = activeAgent?.context_window;
+    const numberFormat = new Intl.NumberFormat();
+
+    if (usage) {
+      const inputFormatted = numberFormat.format(usage.input_tokens);
+      const estimated = usage.estimated === true;
+
+      if (contextWindow != null) {
+        const contextFormatted = numberFormat.format(contextWindow);
+        return estimated
+          ? t('chat.tokenBadgeEstimated', '~{input} / {context} tok', {
+              input: inputFormatted,
+              context: contextFormatted,
+            })
+          : t('chat.tokenBadge', '{input} / {context} tok', {
+              input: inputFormatted,
+              context: contextFormatted,
+            });
+      }
+      return estimated
+        ? t('chat.tokenBadgeEstimatedNoContext', '~{input} tok', {
+            input: inputFormatted,
+          })
+        : t('chat.tokenBadgeNoContext', '{input} tok', {
+            input: inputFormatted,
+          });
+    }
+    if (contextWindow != null) {
+      return t('chat.tokenBadgeNoUsage', '— / {context} tok', {
+        context: numberFormat.format(contextWindow),
+      });
+    }
+    return '';
+  });
 
   $effect(() => {
     if (sharedAgents.length > 0) {
@@ -329,9 +345,9 @@
       {/if}
     </div>
     <div class="header-right">
-      <span class="token-badge"
-        >{formatTokenEstimate(currentTokenEstimate)}</span
-      >
+      {#if tokenBadgeText}
+        <span class="token-badge">{tokenBadgeText}</span>
+      {/if}
       <button
         type="button"
         class="btn-outline chat-refresh"

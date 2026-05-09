@@ -115,7 +115,7 @@ def _list_agents(state: Any) -> JsonObject:
         agents = sorted(state.runtime.agents.list(), key=lambda agent: agent.id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"agents": [_agent_response(agent) for agent in agents]}
+    return {"agents": [_agent_response(state, agent) for agent in agents]}
 
 
 def _list_models(state: Any, params: JsonObject) -> JsonObject:
@@ -263,7 +263,7 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    response = _agent_response(agent)
+    response = _agent_response(state, agent)
     _publish_agent_event(state, "agent.created", response)
     return response
 
@@ -276,7 +276,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    response = _agent_response(agent)
+    response = _agent_response(state, agent)
     _publish_agent_event(state, "agent.updated", response)
     return response
 
@@ -295,7 +295,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
     result = {
         "agent_id": agent_id,
-        "remaining_agents": [_agent_response(agent) for agent in remaining_agents],
+        "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
     }
     _publish_agent_event(state, "agent.deleted", result)
     return result
@@ -677,7 +677,24 @@ def _visible_message(message: ChatMessage) -> JsonObject:
     return cast(JsonObject, _remove_opaque_provider_metadata(message.to_dict()))
 
 
-def _agent_response(agent: Any) -> JsonObject:
+def _resolve_context_window(state: Any, model: str) -> int | None:
+    """Resolve a model string (provider/model-id) to its context_window from the registry.
+
+    Returns None if the model format is invalid or the model is not found.
+    """
+    if "/" not in model:
+        return None
+    provider_id, _, model_id = model.partition("/")
+    if not provider_id or not model_id:
+        return None
+    try:
+        model_entry = state.runtime.models.get(provider_id, model_id)
+    except (KeyError, AttributeError):
+        return None
+    return int(model_entry.context_window)
+
+
+def _agent_response(state: Any, agent: Any) -> JsonObject:
     return {
         "id": agent.id,
         "name": agent.name,
@@ -691,6 +708,7 @@ def _agent_response(agent: Any) -> JsonObject:
         "allowed_tools": list(agent.allowed_tools),
         "allowed_skills": list(agent.allowed_skills),
         "current_session_id": agent.current_session_id,
+        "context_window": _resolve_context_window(state, agent.model),
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
@@ -767,6 +785,8 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         payload["output"] = _remove_opaque_provider_metadata(event.payload)
     if event.type in RUN_TERMINAL_EVENT_TYPES:
         payload["status"] = event.payload.get("status")
+    if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
+        payload["usage"] = _remove_opaque_provider_metadata(event.payload["usage"])
     return {"type": SERVER_EVENT_TYPES.get(event.type, "run_output"), "payload": payload}
 
 

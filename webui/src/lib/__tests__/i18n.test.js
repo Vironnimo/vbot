@@ -71,6 +71,10 @@ describe('i18n t()', () => {
       'app.serverStatus',
       'app.statusPlaceholder',
       'chat.tokenBadge',
+      'chat.tokenBadgeEstimated',
+      'chat.tokenBadgeNoContext',
+      'chat.tokenBadgeEstimatedNoContext',
+      'chat.tokenBadgeNoUsage',
       'chat.runIterations',
       'chat.runDurationSeconds',
       'chat.attachPlaceholder',
@@ -92,6 +96,21 @@ describe('i18n t()', () => {
     expect(t('chat.runIterations', undefined, { count: 2 })).toBe('2 iter');
     expect(t('chat.runDurationSeconds', undefined, { seconds: '1.5' })).toBe(
       '1.5s',
+    );
+    expect(
+      t('chat.tokenBadge', undefined, { input: 1200, context: 8000 }),
+    ).toBe('1200 / 8000 tok');
+    expect(
+      t('chat.tokenBadgeEstimated', undefined, { input: 1200, context: 8000 }),
+    ).toBe('~1200 / 8000 tok');
+    expect(t('chat.tokenBadgeNoContext', undefined, { input: 1200 })).toBe(
+      '1200 tok',
+    );
+    expect(
+      t('chat.tokenBadgeEstimatedNoContext', undefined, { input: 1200 }),
+    ).toBe('~1200 tok');
+    expect(t('chat.tokenBadgeNoUsage', undefined, { context: 8000 })).toBe(
+      '— / 8000 tok',
     );
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });

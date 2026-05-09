@@ -179,6 +179,7 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   `resources/models/<provider>.overrides.json` files patch or supplement
   discovered models, and the registry skips those override files when loading
   catalogs.
+- **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
 
 ## Specs
 
