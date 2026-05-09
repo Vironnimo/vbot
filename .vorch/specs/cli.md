@@ -7,7 +7,7 @@ does not own server business logic.
 ## Overview
 
 `cli/` is the local process-management entrypoint used by both human users and
-agents. In Phase 5 it owns `server start`, `server stop`, `server restart`, and
+agents. It owns `server start`, `server stop`, `server restart`, and
 `server status`. The CLI is non-interactive and automation-safe: it never opens
 the browser and instead prints the resolved server URL and status information.
 It manages local vBot server reachability around the existing `server/main.py`

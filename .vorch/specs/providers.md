@@ -102,7 +102,7 @@ class ProviderAdapter(ABC):
 
 - `send()` — non-streaming request, returns parsed response dict
 - `stream()` — streaming request, yields normalized provider-agnostic delta dicts (`content_delta`, `reasoning_delta`, `tool_call_delta`, internal-only `reasoning_meta`, `finish`), never raw provider SSE chunks
-- `messages` is a list of dicts (not typed — Phase 2 defines the chat layer's types)
+- `messages` is a list of dicts — the chat layer serializes `ChatMessage` objects via `.to_dict()` before passing them to the adapter
 - `model_id` is the exact string sent to the provider API (no remapping)
 - `**kwargs` carries provider-specific overrides (temperature, max_tokens, thinking config, etc.)
 - `normalize_response()` converts provider raw responses into canonical assistant fields: `content`, `reasoning`, `reasoning_meta`, and `tool_calls`.
