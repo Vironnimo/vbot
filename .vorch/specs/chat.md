@@ -1,7 +1,7 @@
 # Chat
 
 Canonical backend chat messages, append-only JSONL sessions, and the chat run
-execution model that Phase 3 will expose through the server layer.
+execution model exposed through the server layer.
 
 ## Overview
 

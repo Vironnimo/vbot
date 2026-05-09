@@ -138,6 +138,16 @@ python scripts/quality.py core/utils/config.py core/utils/errors.py   # multiple
 ```
 Frontend script works the same way.
 
+## Live Testing
+
+Live testing means starting the running app and verifying behavior via CLI,
+API, and browser — not writing unit or integration tests (that is the Builder's
+job with pytest/Vitest). The Tester agent owns live testing.
+
+All project-specific live testing instructions — startup, health check,
+browser strategy, which features need API credentials, shutdown — live in
+**`.vorch/TESTER.md`**. The Tester agent reads this file on every session.
+
 ## Context
 
 Use this section only for important strategic decisions, unusual global
