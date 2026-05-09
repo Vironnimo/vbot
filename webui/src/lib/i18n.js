@@ -128,7 +128,11 @@ export const englishCatalog = Object.freeze({
   'chat.toolNoData': '—',
   'chat.runIterations': '{count} iter',
   'chat.runDurationSeconds': '{seconds}s',
-  'chat.tokenBadge': '{count} tok',
+  'chat.tokenBadge': '{input} / {context} tok',
+  'chat.tokenBadgeEstimated': '~{input} / {context} tok',
+  'chat.tokenBadgeNoContext': '{input} tok',
+  'chat.tokenBadgeEstimatedNoContext': '~{input} tok',
+  'chat.tokenBadgeNoUsage': '— / {context} tok',
 
   'queue.title': 'Queued messages',
   'queue.empty': 'No queued messages.',

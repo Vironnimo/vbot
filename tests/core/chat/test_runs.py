@@ -168,3 +168,119 @@ async def test_failed_run_releases_session_lock() -> None:
     next_run = await manager.start(agent_id="coder", session_id="session-one", executor=succeed)
 
     assert await next_run.wait() == "ok"
+
+
+async def test_mark_completed_includes_payload_extras_when_provided() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.mark_completed(
+        "result",
+        payload_extras={"usage": {"input_tokens": 150, "output_tokens": 12}},
+    )
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {
+        "status": "completed",
+        "usage": {"input_tokens": 150, "output_tokens": 12},
+    }
+
+
+async def test_mark_completed_omits_payload_extras_when_not_provided() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.mark_completed("result")
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {"status": "completed"}
+
+
+async def test_mark_completed_omits_payload_extras_when_empty() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.mark_completed("result", payload_extras=None)
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {"status": "completed"}
+
+
+async def test_mark_failed_includes_payload_extras_when_provided() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.mark_failed(RuntimeError("oops"), payload_extras={"detail": "extra"})
+
+    failed_events = [event for event in run.events if event.type == "run_failed"]
+    assert len(failed_events) == 1
+    assert failed_events[0].payload == {
+        "status": "failed",
+        "error": "oops",
+        "detail": "extra",
+    }
+
+
+async def test_mark_failed_omits_payload_extras_when_not_provided() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    run.mark_failed(RuntimeError("oops"))
+
+    failed_events = [event for event in run.events if event.type == "run_failed"]
+    assert len(failed_events) == 1
+    assert failed_events[0].payload == {"status": "failed", "error": "oops"}
+
+
+async def test_run_completed_includes_usage_from_result_object() -> None:
+    """Usage attribute on executor result appears in run_completed payload."""
+
+    class FakeResult:
+        usage = {"input_tokens": 200, "output_tokens": 30}
+
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> FakeResult:
+        return FakeResult()
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await run.wait()
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {
+        "status": "completed",
+        "usage": {"input_tokens": 200, "output_tokens": 30},
+    }
+
+
+async def test_run_completed_omits_usage_when_result_has_no_usage() -> None:
+    """When the executor returns a plain string, no usage key appears in run_completed."""
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> str:
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await run.wait()
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {"status": "completed"}
+
+
+async def test_run_completed_omits_usage_when_usage_is_none() -> None:
+    """When the result has usage=None, no usage key appears in run_completed."""
+
+    class ResultWithNoneUsage:
+        usage = None
+
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> ResultWithNoneUsage:
+        return ResultWithNoneUsage()
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await run.wait()
+
+    completed_events = [event for event in run.events if event.type == "run_completed"]
+    assert len(completed_events) == 1
+    assert completed_events[0].payload == {"status": "completed"}

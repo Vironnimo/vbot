@@ -82,6 +82,14 @@ container; a Run is one active execution inside that session.
 - `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
 - Runtime target resolution uses both `agent.model` and `agent.connection`: provider comes from `connection` (`<provider>:<connection-id>`), while adapter `model_id` still comes from the part after `/` in `model`. If `connection` is empty, the chat loop falls back to the first usable connection for the model provider in provider-config order.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
+
+## Token Usage
+
+- Provider adapters extract token usage from responses: OpenAI maps `prompt_tokens`/`completion_tokens` to canonical `input_tokens`/`output_tokens`; Anthropic maps directly from `usage.input_tokens`/`usage.output_tokens`. If a provider doesn't supply usage (e.g., local providers without usage reporting), the backend falls back to a 4-chars-per-token estimation via `estimate_tokens()` in `core/utils/tokens.py` and marks the result with `"estimated": true`.
+- `ChatMessage.assistant()` accepts an optional `usage: JsonObject | None` field (canonical keys: `input_tokens`, `output_tokens`; optional `estimated` boolean). Usage is only valid on assistant messages and is rejected on other roles by `from_dict()`.
+- `_message_to_request_dict()` strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before they are sent to provider APIs. Usage is vBot-internal metadata and must not leak into provider request payloads.
+- The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal events for failed or cancelled runs do not include usage.
+- In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
 - Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
 - Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.
 
