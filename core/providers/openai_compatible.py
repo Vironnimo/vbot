@@ -33,6 +33,7 @@ OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
+STREAM_USAGE_PROVIDER_IDS = {"openai", "openrouter"}
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -218,6 +219,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         headers = self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
+        _apply_openai_stream_options(payload, self._config.id)
 
         async def _connect_stream() -> httpx.Response:
             request = self._client.build_request(
@@ -467,6 +469,16 @@ def _apply_openai_reasoning(
         return
     if thinking_effort in OPENAI_REASONING_EFFORTS:
         payload["reasoning_effort"] = thinking_effort
+
+
+def _apply_openai_stream_options(payload: dict[str, Any], provider_id: str) -> None:
+    if provider_id not in STREAM_USAGE_PROVIDER_IDS:
+        return
+    stream_options = payload.get("stream_options")
+    if isinstance(stream_options, dict):
+        payload["stream_options"] = {**stream_options, "include_usage": True}
+        return
+    payload["stream_options"] = {"include_usage": True}
 
 
 def _first_choice_message(response: dict[str, Any]) -> dict[str, Any]:
