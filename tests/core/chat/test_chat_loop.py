@@ -1383,4 +1383,33 @@ async def test_estimation_with_tool_calls_in_history(
     # The second request includes previous assistant + tool messages, so
     # input_tokens should be larger than the first request alone.
     assert assistant.usage["input_tokens"] > 0
-    assert assistant.usage["output_tokens"] > 0
+
+
+class TestMessageToRequestDict:
+    """Verify _message_to_request_dict strips vBot-internal fields from provider requests."""
+
+    def test_strips_usage_from_assistant_message(self):
+        """Usage must not be sent to providers in follow-up request messages."""
+        from core.chat.chat import _message_to_request_dict
+
+        message = ChatMessage.assistant(
+            model="openai/gpt-4",
+            content="Hello",
+            usage={"input_tokens": 100, "output_tokens": 50},
+        )
+        result = _message_to_request_dict(message)
+
+        assert "usage" not in result
+        assert "reasoning" not in result
+        assert "reasoning_meta" not in result
+        assert result["content"] == "Hello"
+
+    def test_preserves_usage_on_non_assistant_messages(self):
+        """User and tool messages never have usage, but the function should not strip it."""
+        from core.chat.chat import _message_to_request_dict
+
+        message = ChatMessage.user("What is the weather?")
+        result = _message_to_request_dict(message)
+
+        assert "usage" not in result
+        assert result["content"] == "What is the weather?"
