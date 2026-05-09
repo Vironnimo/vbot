@@ -49,33 +49,44 @@
   let composerDisabled = $derived(!activeAgent || loadingHistory);
   let lastSharedSelectedAgentId = $state('');
   let lastAgentsRefreshToken = $state(null);
+
+  const usageTotalTokens = (usage) => {
+    const inputTokens = Number.isFinite(usage?.input_tokens)
+      ? usage.input_tokens
+      : 0;
+    const outputTokens = Number.isFinite(usage?.output_tokens)
+      ? usage.output_tokens
+      : 0;
+    return inputTokens + outputTokens;
+  };
+
   let tokenBadgeText = $derived.by(() => {
     const usage = activeSessionState?.usage;
     const contextWindow = activeAgent?.context_window;
     const numberFormat = new Intl.NumberFormat();
 
     if (usage) {
-      const inputFormatted = numberFormat.format(usage.input_tokens);
+      const tokensFormatted = numberFormat.format(usageTotalTokens(usage));
       const estimated = usage.estimated === true;
 
       if (contextWindow != null) {
         const contextFormatted = numberFormat.format(contextWindow);
         return estimated
-          ? t('chat.tokenBadgeEstimated', '~{input} / {context} tok', {
-              input: inputFormatted,
+          ? t('chat.tokenBadgeEstimated', '~{tokens} / {context} tok', {
+              tokens: tokensFormatted,
               context: contextFormatted,
             })
-          : t('chat.tokenBadge', '{input} / {context} tok', {
-              input: inputFormatted,
+          : t('chat.tokenBadge', '{tokens} / {context} tok', {
+              tokens: tokensFormatted,
               context: contextFormatted,
             });
       }
       return estimated
-        ? t('chat.tokenBadgeEstimatedNoContext', '~{input} tok', {
-            input: inputFormatted,
+        ? t('chat.tokenBadgeEstimatedNoContext', '~{tokens} tok', {
+            tokens: tokensFormatted,
           })
-        : t('chat.tokenBadgeNoContext', '{input} tok', {
-            input: inputFormatted,
+        : t('chat.tokenBadgeNoContext', '{tokens} tok', {
+            tokens: tokensFormatted,
           });
     }
     if (contextWindow != null) {
