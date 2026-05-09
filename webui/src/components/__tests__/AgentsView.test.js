@@ -6,8 +6,6 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
-const MODEL_CONNECTION_VALUE_SEPARATOR = '\u001f';
-
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
@@ -26,6 +24,8 @@ describe('AgentsView', () => {
     init('en');
     rpcMock.mockReset();
     mountedComponent = null;
+    window.innerWidth = 1280;
+    window.innerHeight = 900;
   });
 
   afterEach(async () => {
@@ -100,27 +100,16 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => {
-      const [modelSelect, fallbackModelSelect] = getSelects();
-
-      return (
-        Array.from(modelSelect?.options ?? []).some(
-          (option) => option.textContent === 'openai/gpt-5.2',
-        ) &&
-        Array.from(fallbackModelSelect?.options ?? []).some(
-          (option) =>
-            option.textContent === 'anthropic/claude-sonnet-4-20250219',
-        )
-      );
-    }, 100);
-
-    const [modelSelect, fallbackModelSelect] = getSelects();
-    const modelOptionLabels = Array.from(modelSelect.options).map(
-      (option) => option.textContent,
+    await waitForCondition(
+      () => modelTriggerLabel() === 'openai/gpt-5.2' && fallbackTriggerLabel(),
+      100,
     );
-    const fallbackOptionLabels = Array.from(fallbackModelSelect.options).map(
-      (option) => option.textContent,
-    );
+
+    await openSearchableDropdown('agent-model');
+    const modelOptionLabels = searchableOptionLabels('agent-model');
+
+    await openSearchableDropdown('agent-fallback-model');
+    const fallbackOptionLabels = searchableOptionLabels('agent-fallback-model');
 
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
     expect(modelOptionLabels).toContain('anthropic/claude-sonnet-4-20250219');
@@ -132,7 +121,7 @@ describe('AgentsView', () => {
     );
   });
 
-  it('preserves a saved unavailable model value in the dropdown', async () => {
+  it('preserves a saved unavailable model value in the searchable dropdown', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'model.list') {
         return {
@@ -189,22 +178,15 @@ describe('AgentsView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        getSelects()[0]?.value ===
-          modelConnectionValue('legacy/custom-model', '') &&
-        Array.from(getSelects()[0]?.options ?? []).some(
-          (option) => option.textContent === 'openai/gpt-5.2',
-        ),
+      () => modelTriggerLabel() === 'Unavailable / custom: legacy/custom-model',
       100,
     );
 
-    const [modelSelect] = getSelects();
-    const modelOptionLabels = Array.from(modelSelect.options).map(
-      (option) => option.textContent,
-    );
+    await openSearchableDropdown('agent-model');
+    const modelOptionLabels = searchableOptionLabels('agent-model');
 
-    expect(modelSelect.value).toBe(
-      modelConnectionValue('legacy/custom-model', ''),
+    expect(modelTriggerLabel()).toBe(
+      'Unavailable / custom: legacy/custom-model',
     );
     expect(modelOptionLabels).toContain(
       'Unavailable / custom: legacy/custom-model',
@@ -222,12 +204,10 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(
-      () => optionLabels(getSelects()[0]).includes('openai/gpt-5.2'),
-      100,
-    );
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+    await openSearchableDropdown('agent-model');
 
-    const labels = optionLabels(getSelects()[0]);
+    const labels = searchableOptionLabels('agent-model');
     expect(labels).toContain('openai/gpt-5.2');
     expect(labels).not.toContain('openai/gpt-5.2 (API Key)');
   });
@@ -246,13 +226,135 @@ describe('AgentsView', () => {
     flushSync();
 
     await waitForCondition(
-      () => optionLabels(getSelects()[0]).includes('openai/gpt-5.2 (OAuth)'),
+      () => modelTriggerLabel() === 'openai/gpt-5.2 (API Key)',
+      100,
+    );
+    await openSearchableDropdown('agent-model');
+
+    const labels = searchableOptionLabels('agent-model');
+    expect(labels).toContain('openai/gpt-5.2 (OAuth)');
+    expect(labels).toContain('openai/gpt-5.2 (API Key)');
+  });
+
+  it('filters searchable options and updates trigger labels on selection', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        connections: [
+          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+          usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel(), 100);
+
+    await openSearchableDropdown('agent-model');
+    setSearchableFilter('agent-model', 'oauth');
+
+    await waitForCondition(
+      () => searchableOptionLabels('agent-model').length === 1,
       100,
     );
 
-    const labels = optionLabels(getSelects()[0]);
-    expect(labels).toContain('openai/gpt-5.2 (OAuth)');
-    expect(labels).toContain('openai/gpt-5.2 (API Key)');
+    expect(searchableOptionLabels('agent-model')).toEqual([
+      'openai/gpt-5.2 (OAuth)',
+    ]);
+
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+    await waitForCondition(
+      () => modelTriggerLabel() === 'openai/gpt-5.2 (OAuth)',
+      100,
+    );
+
+    await openSearchableDropdown('agent-fallback-model');
+    setSearchableFilter('agent-fallback-model', 'anthropic');
+    selectSearchableOption(
+      'agent-fallback-model',
+      'anthropic/claude-sonnet-4-20250219',
+    );
+
+    await waitForCondition(
+      () => fallbackTriggerLabel() === 'anthropic/claude-sonnet-4-20250219',
+      100,
+    );
+  });
+
+  it('updates thinking effort through the custom simple dropdown', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => thinkingTriggerLabel() === 'Default', 100);
+
+    openSimpleDropdown('agent-thinking-effort');
+    expect(simpleOptionLabels('agent-thinking-effort')).toContain('high');
+
+    selectSimpleOption('agent-thinking-effort', 'high');
+    await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
+    expect(document.body.textContent).toContain('high');
+  });
+
+  it('allows clearing model and fallback selections back to empty values', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            fallback_model: 'anthropic/claude-sonnet-4-20250219',
+            fallback_connection: 'anthropic:api-key',
+          },
+        ],
+        connections: [
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+          usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        modelTriggerLabel() === 'openai/gpt-5.2' &&
+        fallbackTriggerLabel() === 'anthropic/claude-sonnet-4-20250219',
+      100,
+    );
+
+    await openSearchableDropdown('agent-model');
+    selectSearchableOption('agent-model', 'Default (no model selected)');
+    await waitForCondition(
+      () => modelTriggerLabel() === 'Default (no model selected)',
+      100,
+    );
+
+    await openSearchableDropdown('agent-fallback-model');
+    selectSearchableOption('agent-fallback-model', 'None');
+    await waitForCondition(() => fallbackTriggerLabel() === 'None', 100);
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1]).toMatchObject({
+      id: 'alpha',
+      model: '',
+      connection: '',
+      fallback_model: '',
+      fallback_connection: '',
+    });
   });
 
   it('sends selected create payload with connection and fallback_connection', async () => {
@@ -270,12 +372,19 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => getSelects()[0]?.options.length > 1, 100);
+    await waitForCondition(() => searchableOptionCountReady(), 100);
 
-    setInputValue('input:not([disabled])', 'bravo');
-    setInputValue('label:nth-of-type(2) input', 'Bravo');
-    selectOptionByLabel(getSelects()[0], 'openai/gpt-5.2 (API Key)');
-    selectOptionByLabel(getSelects()[1], 'anthropic/claude-sonnet-4-20250219');
+    setTextInputValue(0, 'bravo');
+    setTextInputValue(1, 'Bravo');
+
+    await openSearchableDropdown('agent-model');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (API Key)');
+
+    await openSearchableDropdown('agent-fallback-model');
+    selectSearchableOption(
+      'agent-fallback-model',
+      'anthropic/claude-sonnet-4-20250219',
+    );
 
     document.body
       .querySelector('form')
@@ -313,10 +422,16 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => getSelects()[0]?.options.length > 1, 100);
+    await waitForCondition(() => searchableOptionCountReady(), 100);
 
-    selectOptionByLabel(getSelects()[0], 'openai/gpt-5.2 (OAuth)');
-    selectOptionByLabel(getSelects()[1], 'anthropic/claude-sonnet-4-20250219');
+    await openSearchableDropdown('agent-model');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+
+    await openSearchableDropdown('agent-fallback-model');
+    selectSearchableOption(
+      'agent-fallback-model',
+      'anthropic/claude-sonnet-4-20250219',
+    );
 
     document.body
       .querySelector('form')
@@ -336,6 +451,82 @@ describe('AgentsView', () => {
       fallback_model: 'anthropic/claude-sonnet-4-20250219',
       fallback_connection: 'anthropic:api-key',
     });
+  });
+
+  it('matches dropdown open and close interaction expected by the design artifact', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel(), 100);
+
+    const searchableRoot = await openSearchableDropdown('agent-model', {
+      left: 120,
+      top: 180,
+      bottom: 212,
+      width: 344,
+      height: 32,
+      right: 464,
+    });
+    const searchablePanel = getSearchablePanel('agent-model');
+
+    expect(searchableRoot.classList.contains('open')).toBe(true);
+    expect(searchableRoot.dataset.state).toBe('open');
+    expect(
+      getSearchableTrigger('agent-model').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(searchablePanel.getAttribute('aria-hidden')).toBe('false');
+    expect(searchablePanel.dataset.positioning).toBe('fixed');
+    expect(searchablePanel.dataset.placement).toBe('bottom');
+    expect(searchablePanel.getAttribute('style')).toContain('width: 344px');
+    expect(searchableRoot.querySelector('.dropdown-chevron')).toBeTruthy();
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    await waitForCondition(
+      () => getSearchableRoot('agent-model').dataset.state === 'closed',
+      100,
+    );
+
+    expect(getSearchablePanel('agent-model').getAttribute('aria-hidden')).toBe(
+      'true',
+    );
+
+    await openSearchableDropdown('agent-model');
+    getSearchableOptionsContainer('agent-model').dispatchEvent(
+      new Event('scroll'),
+    );
+    flushSync();
+    expect(getSearchableRoot('agent-model').dataset.state).toBe('open');
+
+    window.dispatchEvent(new Event('scroll'));
+    flushSync();
+    await waitForCondition(
+      () => getSearchableRoot('agent-model').dataset.state === 'closed',
+      100,
+    );
+
+    const simpleRoot = openSimpleDropdown('agent-thinking-effort');
+    const simpleList = getSimpleList('agent-thinking-effort');
+
+    expect(simpleRoot.classList.contains('open')).toBe(true);
+    expect(simpleRoot.dataset.state).toBe('open');
+    expect(
+      getSimpleTrigger('agent-thinking-effort').getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+    expect(simpleRoot.querySelector('.dropdown-chevron')).toBeTruthy();
+
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    flushSync();
+    await waitForCondition(
+      () => getSimpleRoot('agent-thinking-effort').dataset.state === 'closed',
+      100,
+    );
+    expect(
+      getSimpleList('agent-thinking-effort').getAttribute('aria-hidden'),
+    ).toBe('true');
   });
 
   it('treats connection.list failure as a catalog load error', async () => {
@@ -368,34 +559,162 @@ describe('AgentsView', () => {
     );
 
     expect(document.body.textContent).toContain('connection catalog failed');
-    expect(optionLabels(getSelects()[0])).not.toContain('openai/gpt-5.2');
+    expect(searchableOptionLabels('agent-model')).not.toContain(
+      'openai/gpt-5.2',
+    );
   });
 });
 
-function getSelects() {
-  return Array.from(document.body.querySelectorAll('select'));
+function modelTriggerLabel() {
+  return triggerTextContent(getSearchableTrigger('agent-model'));
 }
 
-function optionLabels(select) {
-  return Array.from(select?.options ?? []).map((option) => option.textContent);
+function fallbackTriggerLabel() {
+  return triggerTextContent(getSearchableTrigger('agent-fallback-model'));
 }
 
-function modelConnectionValue(model, connection) {
-  return `${model}${MODEL_CONNECTION_VALUE_SEPARATOR}${connection || ''}`;
+function thinkingTriggerLabel() {
+  return triggerTextContent(getSimpleTrigger('agent-thinking-effort'));
 }
 
-function selectOptionByLabel(select, label) {
-  const option = Array.from(select.options).find(
-    (item) => item.textContent === label,
+function triggerTextContent(trigger) {
+  return (
+    trigger
+      ?.querySelector(
+        '.searchable-dropdown__trigger-label, .dropdown-primitive__trigger-label',
+      )
+      ?.textContent?.trim() ?? ''
   );
-  expect(option).toBeTruthy();
-  select.value = option.value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function searchableOptionCountReady() {
+  return (
+    getSearchablePanel('agent-model')?.querySelectorAll(
+      '.searchable-dropdown__option',
+    ).length > 0
+  );
+}
+
+async function openSearchableDropdown(id, rect = defaultTriggerRect()) {
+  const trigger = getSearchableTrigger(id);
+  stubTriggerRect(trigger, rect);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+
+  await waitForCondition(
+    () => getSearchableRoot(id).dataset.state === 'open',
+    100,
+  );
+  return getSearchableRoot(id);
+}
+
+function setSearchableFilter(id, value) {
+  const input = getSearchablePanel(id).querySelector('input');
+  expect(input).toBeTruthy();
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 }
 
-function setInputValue(selector, value) {
-  const input = document.body.querySelector(selector);
+function selectSearchableOption(id, label) {
+  const option = Array.from(
+    getSearchablePanel(id).querySelectorAll('.searchable-dropdown__option'),
+  ).find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function searchableOptionLabels(id) {
+  return Array.from(
+    getSearchablePanel(id)?.querySelectorAll('.searchable-dropdown__option') ??
+      [],
+  ).map((option) => option.textContent.trim());
+}
+
+function getSearchableRoot(id) {
+  return getSearchableTrigger(id)?.closest('.searchable-dropdown');
+}
+
+function getSearchableTrigger(id) {
+  const trigger = document.body.querySelector(`button#${id}`);
+  expect(trigger).toBeTruthy();
+  return trigger;
+}
+
+function getSearchablePanel(id) {
+  return getSearchableRoot(id)?.querySelector('.searchable-dropdown__panel');
+}
+
+function getSearchableOptionsContainer(id) {
+  return getSearchablePanel(id)?.querySelector('.searchable-dropdown__options');
+}
+
+function openSimpleDropdown(id) {
+  const trigger = getSimpleTrigger(id);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+  return getSimpleRoot(id);
+}
+
+function selectSimpleOption(id, label) {
+  const option = Array.from(
+    getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
+  ).find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function simpleOptionLabels(id) {
+  return Array.from(
+    getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
+  ).map((option) => option.textContent.trim());
+}
+
+function getSimpleRoot(id) {
+  return getSimpleTrigger(id)?.closest('.dropdown-primitive');
+}
+
+function getSimpleTrigger(id) {
+  const trigger = document.body.querySelector(`button#${id}`);
+  expect(trigger).toBeTruthy();
+  return trigger;
+}
+
+function getSimpleList(id) {
+  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
+}
+
+function stubTriggerRect(trigger, rect) {
+  trigger.getBoundingClientRect = () => ({
+    x: rect.left,
+    y: rect.top,
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+    toJSON: () => rect,
+  });
+}
+
+function defaultTriggerRect() {
+  return {
+    left: 96,
+    top: 144,
+    right: 416,
+    bottom: 176,
+    width: 320,
+    height: 32,
+  };
+}
+
+function setTextInputValue(index, value) {
+  const input = Array.from(
+    document.body.querySelectorAll('input.s-input[type="text"]'),
+  )[index];
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));

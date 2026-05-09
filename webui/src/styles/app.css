@@ -683,6 +683,12 @@ textarea::placeholder {
 .s-dropdown {
   position: relative;
   display: inline-block;
+
+  --dropdown-gap: 4px;
+  --dropdown-focus-border: rgba(232, 135, 10, 0.4);
+  --dropdown-focus-ring: 0 0 0 3px rgba(232, 135, 10, 0.06);
+  --dropdown-elevation: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --dropdown-elevation-strong: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 .s-dropdown {
@@ -692,6 +698,7 @@ textarea::placeholder {
 .dropdown-trigger,
 .s-dropdown-trigger {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -703,6 +710,11 @@ textarea::placeholder {
   transition: border-color 150ms ease;
   user-select: none;
   white-space: nowrap;
+}
+
+.dropdown-trigger:disabled,
+.s-dropdown-trigger:disabled {
+  opacity: 0.55;
 }
 
 .dropdown-trigger {
@@ -717,7 +729,7 @@ textarea::placeholder {
 
 .dropdown.open .dropdown-trigger,
 .s-dropdown.open .s-dropdown-trigger {
-  border-color: rgba(232, 135, 10, 0.4);
+  border-color: var(--dropdown-focus-border);
 }
 
 .dropdown-chevron {
@@ -737,13 +749,13 @@ textarea::placeholder {
   overflow: hidden;
   border-radius: var(--r-md);
   background: var(--surface-2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--dropdown-elevation);
   z-index: 100;
 }
 
 .dropdown-list {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + var(--dropdown-gap));
   right: 0;
   left: 0;
   border: 1px solid var(--border-2);
@@ -752,7 +764,7 @@ textarea::placeholder {
 .s-dropdown-panel {
   position: fixed;
   border: 1px solid rgba(232, 135, 10, 0.3);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--dropdown-elevation-strong);
   z-index: 200;
 }
 
@@ -763,11 +775,25 @@ textarea::placeholder {
 
 .dropdown-option,
 .s-dropdown-opt {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   padding: 8px 12px;
+  border: 0;
   color: var(--text-med);
+  background: transparent;
+  text-align: left;
   transition:
     background 100ms ease,
     color 100ms ease;
+}
+
+.dropdown-option:disabled,
+.s-dropdown-opt:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .dropdown-option {
@@ -783,6 +809,14 @@ textarea::placeholder {
 .s-dropdown-opt:hover {
   color: var(--text-hi);
   background: var(--surface-3);
+}
+
+.dropdown-option:focus-visible,
+.s-dropdown-opt:focus-visible,
+.dropdown-trigger:focus-visible,
+.s-dropdown-trigger:focus-visible,
+.s-dropdown-search input:focus-visible {
+  box-shadow: var(--dropdown-focus-ring);
 }
 
 .dropdown-option.selected,
@@ -801,6 +835,7 @@ textarea::placeholder {
 .s-dropdown-search input {
   flex: 1;
   border: 0;
+  padding: 0;
   color: var(--text-hi);
   background: transparent;
   font-family: var(--font-mono);
@@ -809,7 +844,7 @@ textarea::placeholder {
 }
 
 .s-dropdown-options {
-  max-height: 200px;
+  max-height: var(--searchable-dropdown-options-max-height, 200px);
   overflow-y: auto;
 }
 
@@ -818,6 +853,57 @@ textarea::placeholder {
   color: var(--text-lo);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+.dropdown-primitive,
+.searchable-dropdown {
+  min-width: 140px;
+}
+
+.dropdown-primitive__trigger,
+.searchable-dropdown__trigger {
+  min-height: 34px;
+}
+
+.dropdown-primitive__trigger-label,
+.searchable-dropdown__trigger-label,
+.dropdown-primitive__option-label,
+.searchable-dropdown__option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-primitive__trigger-label--placeholder,
+.searchable-dropdown__trigger-label--placeholder {
+  color: var(--text-lo);
+}
+
+.dropdown-primitive__option-meta,
+.searchable-dropdown__option-meta {
+  flex-shrink: 0;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.dropdown-primitive__list,
+.searchable-dropdown__panel {
+  isolation: isolate;
+}
+
+.searchable-dropdown__search svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  opacity: 0.4;
+}
+
+.searchable-dropdown__empty {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
 }
 
 .modal-overlay {
