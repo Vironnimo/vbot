@@ -481,6 +481,12 @@ describe('AgentsView', () => {
     expect(searchablePanel.dataset.placement).toBe('bottom');
     expect(searchablePanel.getAttribute('style')).toContain('width: 344px');
     expect(searchableRoot.querySelector('.dropdown-chevron')).toBeTruthy();
+    expect(
+      searchableRoot.querySelector('.dropdown-chevron')?.getAttribute('width'),
+    ).toBe('10');
+    expect(
+      searchableRoot.querySelector('.dropdown-chevron')?.getAttribute('height'),
+    ).toBe('10');
 
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     flushSync();
@@ -517,6 +523,12 @@ describe('AgentsView', () => {
     ).toBe('true');
     expect(simpleList.getAttribute('aria-hidden')).toBe('false');
     expect(simpleRoot.querySelector('.dropdown-chevron')).toBeTruthy();
+    expect(
+      simpleRoot.querySelector('.dropdown-chevron')?.getAttribute('width'),
+    ).toBe('10');
+    expect(
+      simpleRoot.querySelector('.dropdown-chevron')?.getAttribute('height'),
+    ).toBe('10');
 
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     flushSync();
