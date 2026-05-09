@@ -14,7 +14,9 @@ from core.chat.runs import (
 )
 from core.chat.streaming import (
     StreamingAccumulator,
+    StreamingAssistantFields,
     StreamingChunkTimeoutError,
+    StreamingDeltaError,
     iter_with_chunk_timeout,
 )
 
@@ -221,6 +223,85 @@ async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
     with pytest.raises(StreamingChunkTimeoutError, match="stalled"):
         await anext(iterator)
     assert closed is True
+
+
+async def test_assistant_fields_includes_usage_in_response_dict_when_set() -> None:
+    fields = StreamingAssistantFields(
+        content="hello",
+        reasoning=None,
+        reasoning_meta=None,
+        tool_calls=None,
+        finish_reason="stop",
+        usage={"input_tokens": 100, "output_tokens": 50},
+    )
+
+    result = fields.to_response_dict()
+
+    assert result["usage"] == {"input_tokens": 100, "output_tokens": 50}
+
+
+async def test_assistant_fields_omits_usage_from_response_dict_when_none() -> None:
+    fields = StreamingAssistantFields(
+        content="hello",
+        reasoning=None,
+        reasoning_meta=None,
+        tool_calls=None,
+        finish_reason="stop",
+        usage=None,
+    )
+
+    result = fields.to_response_dict()
+
+    assert "usage" not in result
+
+
+async def test_accumulator_accumulates_usage_delta() -> None:
+    accumulator = StreamingAccumulator()
+
+    visible = accumulator.add_delta({"type": "usage", "input_tokens": 250, "output_tokens": 80})
+
+    assert visible == []
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.usage == {"input_tokens": 250, "output_tokens": 80}
+
+
+async def test_finalize_assistant_fields_includes_usage_when_received_via_delta() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "content_delta", "text": "Hello"})
+    accumulator.add_delta({"type": "usage", "input_tokens": 500, "output_tokens": 200})
+    accumulator.add_delta({"type": "finish", "reason": "stop"})
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.content == "Hello"
+    assert fields.finish_reason == "stop"
+    assert fields.usage == {"input_tokens": 500, "output_tokens": 200}
+
+    response_dict = fields.to_response_dict()
+    assert response_dict["usage"] == {"input_tokens": 500, "output_tokens": 200}
+
+
+async def test_usage_delta_rejects_non_integer_tokens() -> None:
+    accumulator = StreamingAccumulator()
+
+    with pytest.raises(StreamingDeltaError, match="integer"):
+        accumulator.add_delta({"type": "usage", "input_tokens": "bad", "output_tokens": 10})
+
+    with pytest.raises(StreamingDeltaError, match="integer"):
+        accumulator.add_delta({"type": "usage", "input_tokens": 10, "output_tokens": "bad"})
+
+
+async def test_accumulator_usage_is_none_when_no_usage_delta() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "content_delta", "text": "Hi"})
+    accumulator.add_delta({"type": "finish", "reason": "stop"})
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.usage is None
+    assert "usage" not in fields.to_response_dict()
 
 
 AsyncIteratorForTest = Any

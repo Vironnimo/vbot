@@ -121,13 +121,17 @@ class AnthropicAdapter(ProviderAdapter):
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         """Normalize an Anthropic response to canonical assistant fields."""
         content_blocks = response.get("content", [])
-        return {
+        normalized: dict[str, Any] = {
             "role": "assistant",
             "content": _extract_anthropic_text(content_blocks),
             "reasoning": _extract_anthropic_reasoning(content_blocks),
             "reasoning_meta": _extract_anthropic_reasoning_meta(content_blocks),
             "tool_calls": _extract_anthropic_tool_calls(content_blocks),
         }
+        usage = _extract_anthropic_usage(response)
+        if usage is not None:
+            normalized["usage"] = usage
+        return normalized
 
     def _build_payload(
         self,
@@ -338,6 +342,7 @@ class AnthropicAdapter(ProviderAdapter):
         response = await retry_async(_connect_stream)
         content_blocks_by_index: dict[int, dict[str, Any]] = {}
         reasoning_meta_blocks: list[dict[str, Any]] = []
+        _usage_input_tokens: int | None = None
 
         try:
             async for line in response.aiter_lines():
@@ -361,6 +366,27 @@ class AnthropicAdapter(ProviderAdapter):
                     reasoning_meta_blocks,
                 ):
                     yield normalized_delta
+                event_type = parsed.get("type")
+                # Accumulate input tokens from message_start for later usage delta.
+                if event_type == "message_start":
+                    message = parsed.get("message", {})
+                    if isinstance(message, dict):
+                        usage = message.get("usage", {})
+                        if isinstance(usage, dict):
+                            input_tokens = usage.get("input_tokens")
+                            if isinstance(input_tokens, int):
+                                _usage_input_tokens = input_tokens
+                # Yield complete usage delta when both token counts are available.
+                elif event_type == "message_delta":
+                    delta_usage = parsed.get("usage", {})
+                    if isinstance(delta_usage, dict):
+                        output_tokens = delta_usage.get("output_tokens")
+                        if isinstance(output_tokens, int) and _usage_input_tokens is not None:
+                            yield {
+                                "type": "usage",
+                                "input_tokens": _usage_input_tokens,
+                                "output_tokens": output_tokens,
+                            }
                 if parsed.get("type") == "message_stop":
                     break
         finally:
@@ -723,6 +749,26 @@ def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] |
         if block.get("type") == "tool_use"
     ]
     return tool_calls or None
+
+
+def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract token usage from an Anthropic response.
+
+    Returns ``{"input_tokens": N, "output_tokens": N}`` when both
+    fields are present, ``{"input_tokens": N}`` when only input tokens
+    are available, or ``None`` when usage data is absent or incomplete.
+    """
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = usage.get("input_tokens")
+    if input_tokens is None:
+        return None
+    result: dict[str, Any] = {"input_tokens": input_tokens}
+    output_tokens = usage.get("output_tokens")
+    if output_tokens is not None:
+        result["output_tokens"] = output_tokens
+    return result
 
 
 def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:

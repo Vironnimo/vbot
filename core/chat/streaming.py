@@ -24,6 +24,7 @@ CONTENT_DELTA_TYPE = "content_delta"
 REASONING_DELTA_TYPE = "reasoning_delta"
 TOOL_CALL_DELTA_TYPE = "tool_call_delta"
 REASONING_META_TYPE = "reasoning_meta"
+USAGE_TYPE = "usage"
 FINISH_TYPE = "finish"
 
 
@@ -56,15 +57,19 @@ class StreamingAssistantFields:
     reasoning_meta: JsonObject | None
     tool_calls: list[JsonObject] | None
     finish_reason: str | None
+    usage: JsonObject | None = None
 
     def to_response_dict(self) -> JsonObject:
         """Return fields in the same shape as adapter response normalization."""
-        return {
+        result: JsonObject = {
             "content": self.content,
             "reasoning": self.reasoning,
             "reasoning_meta": self.reasoning_meta,
             "tool_calls": self.tool_calls,
         }
+        if self.usage is not None:
+            result["usage"] = self.usage
+        return result
 
 
 @dataclass
@@ -97,6 +102,7 @@ class StreamingAccumulator:
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
         self._visible_deltas: list[StreamingVisibleDelta] = []
         self._finish_reason: str | None = None
+        self._usage: JsonObject | None = None
 
     @property
     def visible_deltas(self) -> list[StreamingVisibleDelta]:
@@ -121,6 +127,9 @@ class StreamingAccumulator:
             case "reasoning_meta":
                 self._add_reasoning_meta(delta)
                 return []
+            case "usage":
+                self._add_usage(delta)
+                return []
             case "finish":
                 self._add_finish(delta)
                 return []
@@ -141,6 +150,7 @@ class StreamingAccumulator:
             reasoning_meta=dict(self._reasoning_meta) if self._reasoning_meta is not None else None,
             tool_calls=tool_calls or None,
             finish_reason=self._finish_reason,
+            usage=dict(self._usage) if self._usage is not None else None,
         )
 
     def _add_content_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
@@ -191,6 +201,15 @@ class StreamingAccumulator:
             self._reasoning_meta = dict(reasoning_meta)
             return
         self._reasoning_meta.update(reasoning_meta)
+
+    def _add_usage(self, delta: JsonObject) -> None:
+        input_tokens = delta.get("input_tokens")
+        output_tokens = delta.get("output_tokens")
+        if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+            raise StreamingDeltaError(
+                "usage delta must include integer input_tokens and output_tokens"
+            )
+        self._usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
     def _add_finish(self, delta: JsonObject) -> None:
         reason = delta.get("reason")

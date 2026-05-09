@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -38,6 +38,7 @@ from core.tools import (
     tool_failure,
 )
 from core.utils.errors import ProviderError, VBotError
+from core.utils.tokens import estimate_tokens
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 JsonObject = dict[str, Any]
@@ -100,6 +101,7 @@ class ChatMessage:
     model: str | None = None
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
+    usage: JsonObject | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -133,6 +135,7 @@ class ChatMessage:
         content: str | None,
         reasoning: str | None = None,
         reasoning_meta: JsonObject | None = None,
+        usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
@@ -145,6 +148,7 @@ class ChatMessage:
             content=content,
             reasoning=reasoning,
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            usage=dict(usage) if usage is not None else None,
             tool_calls=list(tool_calls) if tool_calls is not None else None,
         )
 
@@ -179,6 +183,7 @@ class ChatMessage:
         _add_if_not_none(message, "content", self.content)
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
+        _add_if_not_none(message, "usage", self.usage)
         if self.tool_calls is not None:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
@@ -193,6 +198,9 @@ class ChatMessage:
         reasoning_meta = data.get("reasoning_meta")
         if reasoning_meta is not None and not isinstance(reasoning_meta, dict):
             raise ChatMessageValidationError("reasoning_meta must be an object")
+        usage = data.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            raise ChatMessageValidationError("usage must be an object")
 
         message = cls(
             id=_require_string(data, "id"),
@@ -202,6 +210,7 @@ class ChatMessage:
             model=_optional_string(data, "model"),
             reasoning=_optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            usage=dict(usage) if usage is not None else None,
             tool_calls=tool_calls,
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
@@ -565,6 +574,8 @@ class ChatLoop:
                 run,
             )
             run.raise_if_cancelled()
+            if assistant_message.usage is None:
+                assistant_message = _apply_usage_estimation(assistant_message, messages)
             session.append(assistant_message)
             if not self._streaming:
                 _emit_assistant_events(run, assistant_message)
@@ -901,8 +912,30 @@ def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMe
         content=_nullable_response_string(response, "content"),
         reasoning=_nullable_response_string(response, "reasoning"),
         reasoning_meta=_response_reasoning_meta(response),
+        usage=response.get("usage"),
         tool_calls=tool_calls,
     )
+
+
+def _apply_usage_estimation(
+    message: ChatMessage,
+    request_messages: list[JsonObject],
+) -> ChatMessage:
+    """Estimate token usage when the provider doesn't supply usage data.
+
+    Uses the 4-chars/token heuristic from estimate_tokens to compute
+    approximate input and output token counts.  Marks the result with
+    ``"estimated": True`` so the frontend can display a tilde prefix.
+    """
+    input_text = "".join(msg.get("content", "") or "" for msg in request_messages)
+    estimated_input, _ = estimate_tokens(input_text)
+    estimated_output, _ = estimate_tokens(message.content or "")
+    usage: JsonObject = {
+        "input_tokens": estimated_input,
+        "output_tokens": estimated_output,
+        "estimated": True,
+    }
+    return replace(message, usage=usage)
 
 
 def _nullable_response_string(response: JsonObject, key: str) -> str | None:
@@ -1000,14 +1033,23 @@ def _validate_system_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("system messages require model")
     if message.content is None:
         raise ChatMessageValidationError("system messages require content")
-    _reject_fields(message, "reasoning", "reasoning_meta", "tool_calls", "tool_call_id", "name")
+    _reject_fields(
+        message, "reasoning", "reasoning_meta", "usage", "tool_calls", "tool_call_id", "name"
+    )
 
 
 def _validate_user_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("user messages require content")
     _reject_fields(
-        message, "model", "reasoning", "reasoning_meta", "tool_calls", "tool_call_id", "name"
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
     )
 
 
@@ -1017,6 +1059,8 @@ def _validate_assistant_message(message: ChatMessage) -> None:
     _reject_fields(message, "tool_call_id", "name")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
+    if message.usage is not None and not isinstance(message.usage, dict):
+        raise ChatMessageValidationError("usage must be an object")
 
 
 def _validate_tool_message(message: ChatMessage) -> None:
@@ -1026,7 +1070,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("tool messages require tool_call_id")
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
-    _reject_fields(message, "model", "reasoning", "reasoning_meta", "tool_calls")
+    _reject_fields(message, "model", "reasoning", "reasoning_meta", "usage", "tool_calls")
 
 
 def _reject_fields(message: ChatMessage, *fields: str) -> None:

@@ -97,6 +97,29 @@ class TestChatMessageFactories:
             "name": "get_weather",
         }
 
+    def test_assistant_message_with_usage(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="The answer is 42.",
+            usage={"input_tokens": 150, "output_tokens": 12},
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.usage == {"input_tokens": 150, "output_tokens": 12}
+        result = message.to_dict()
+        assert result["usage"] == {"input_tokens": 150, "output_tokens": 12}
+
+    def test_assistant_message_without_usage_defaults_to_none(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-4.1",
+            content="The answer is 42.",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.usage is None
+        result = message.to_dict()
+        assert "usage" not in result
+
     def test_naive_timestamp_is_rejected(self):
         with pytest.raises(ChatMessageValidationError, match="timezone"):
             ChatMessage.user("hello", timestamp=datetime(2026, 5, 3, 14, 30))
@@ -174,5 +197,99 @@ class TestChatMessageParsing:
                     "role": "tool",
                     "name": "get_weather",
                     "content": "{}",
+                }
+            )
+
+    def test_from_dict_reads_usage_on_assistant_message(self):
+        data = {
+            "id": "msg_usage_1",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "assistant",
+            "model": "openai/gpt-4.1",
+            "content": "Result.",
+            "usage": {"input_tokens": 200, "output_tokens": 30},
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.usage == {"input_tokens": 200, "output_tokens": 30}
+        assert message.to_dict() == data
+
+    def test_from_dict_omits_usage_when_absent(self):
+        data = {
+            "id": "msg_no_usage",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "assistant",
+            "model": "openai/gpt-4.1",
+            "content": "Result.",
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.usage is None
+        assert "usage" not in message.to_dict()
+
+    def test_from_dict_rejects_non_object_usage(self):
+        with pytest.raises(ChatMessageValidationError, match="usage must be an object"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_bad_usage",
+                    "timestamp": "2026-05-03T14:30:05+00:00",
+                    "role": "assistant",
+                    "model": "openai/gpt-4.1",
+                    "content": "Result.",
+                    "usage": "not a dict",
+                }
+            )
+
+    def test_from_dict_rejects_usage_on_user_message(self):
+        with pytest.raises(ChatMessageValidationError, match="usage"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_usage_user",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "user",
+                    "content": "Hello",
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                }
+            )
+
+    def test_from_dict_rejects_usage_on_system_message(self):
+        with pytest.raises(ChatMessageValidationError, match="usage"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_usage_sys",
+                    "timestamp": "2026-05-03T14:30:00+00:00",
+                    "role": "system",
+                    "model": "openai/gpt-4.1",
+                    "content": "You are helpful.",
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                }
+            )
+
+    def test_from_dict_rejects_usage_on_tool_message(self):
+        with pytest.raises(ChatMessageValidationError, match="usage"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_usage_tool",
+                    "timestamp": "2026-05-03T14:30:06+00:00",
+                    "role": "tool",
+                    "tool_call_id": "call_abc",
+                    "name": "get_weather",
+                    "content": "{}",
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                }
+            )
+
+    def test_from_dict_usage_as_array_is_rejected(self):
+        with pytest.raises(ChatMessageValidationError, match="usage must be an object"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_usage_arr",
+                    "timestamp": "2026-05-03T14:30:05+00:00",
+                    "role": "assistant",
+                    "model": "openai/gpt-4.1",
+                    "content": "Result.",
+                    "usage": [1, 2, 3],
                 }
             )
