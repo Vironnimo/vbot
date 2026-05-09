@@ -370,7 +370,7 @@ class TestModelRegistryRealResources:
         registry = ModelRegistry.load(RESOURCES_DIR)
 
         haiku = registry.get("openrouter", "anthropic/claude-haiku-4.5")
-        assert haiku.name == "Claude Haiku 4.5"
+        assert haiku.name == "Anthropic: Claude Haiku 4.5"
         assert haiku.context_window == 200000
         assert haiku.max_output_tokens == 64000
         assert haiku.capabilities.vision is True
@@ -379,13 +379,32 @@ class TestModelRegistryRealResources:
         assert haiku.capabilities.reasoning.supported is True
 
         claude = registry.get("openrouter", "anthropic/claude-sonnet-4")
-        assert claude.name == "Claude Sonnet 4"
-        assert claude.context_window == 128000
+        assert claude.name == "Anthropic: Claude Sonnet 4"
+        assert claude.context_window == 1000000
         assert claude.max_output_tokens == 64000
 
         gpt = registry.get("openrouter", "openai/gpt-5.2")
-        assert gpt.name == "GPT-5.2"
-        assert gpt.max_output_tokens == 16384
+        assert gpt.name == "OpenAI: GPT-5.2"
+        assert gpt.context_window == 400000
+        assert gpt.max_output_tokens == 128000
+
+        gpt_55 = registry.get("openrouter", "openai/gpt-5.5")
+        assert gpt_55.name == "OpenAI: GPT-5.5"
+        assert gpt_55.context_window == 1050000
+        assert gpt_55.max_output_tokens == 128000
+        assert gpt_55.capabilities.vision is True
+        assert gpt_55.capabilities.tools is True
+        assert gpt_55.capabilities.json_mode is True
+        assert gpt_55.capabilities.reasoning.supported is True
+
+        opus = registry.get("openrouter", "anthropic/claude-opus-4.7")
+        assert opus.name == "Anthropic: Claude Opus 4.7"
+        assert opus.context_window == 1000000
+        assert opus.max_output_tokens == 128000
+        assert opus.capabilities.vision is True
+        assert opus.capabilities.tools is True
+        assert opus.capabilities.json_mode is True
+        assert opus.capabilities.reasoning.supported is True
 
     def test_load_anthropic(self):
         registry = ModelRegistry.load(RESOURCES_DIR)
@@ -405,9 +424,18 @@ class TestModelRegistryRealResources:
 
         openai_models = registry.list_for_provider("openai")
         assert len(openai_models) == 1
+        assert [model.model_id for model in openai_models] == ["gpt-5.2"]
 
         openrouter_models = registry.list_for_provider("openrouter")
-        assert len(openrouter_models) == 3
+        openrouter_model_ids = {model.model_id for model in openrouter_models}
+        assert len(openrouter_models) > 100
+        assert "anthropic/claude-sonnet-4" in openrouter_model_ids
+        assert "anthropic/claude-opus-4.7" in openrouter_model_ids
+        assert "openai/gpt-5.5" in openrouter_model_ids
 
         anthropic_models = registry.list_for_provider("anthropic")
         assert len(anthropic_models) == 2
+        assert {model.model_id for model in anthropic_models} == {
+            "claude-sonnet-4-20250219",
+            "claude-opus-4-20250219",
+        }
