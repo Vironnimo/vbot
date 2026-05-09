@@ -754,9 +754,10 @@ def _extract_anthropic_tool_calls(content_blocks: Any) -> list[dict[str, Any]] |
 def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     """Extract token usage from an Anthropic response.
 
-    Returns ``{"input_tokens": N, "output_tokens": N}`` when both
-    fields are present, ``{"input_tokens": N}`` when only input tokens
-    are available, or ``None`` when usage data is absent or incomplete.
+    Returns ``{"input_tokens": N, "output_tokens": N}`` when usage data
+    is available, defaulting ``output_tokens`` to ``0`` when only
+    ``input_tokens`` is provided.  Returns ``None`` when usage data is
+    absent or incomplete.
     """
     usage = response.get("usage")
     if not isinstance(usage, dict):
@@ -764,11 +765,11 @@ def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     input_tokens = usage.get("input_tokens")
     if input_tokens is None:
         return None
-    result: dict[str, Any] = {"input_tokens": input_tokens}
     output_tokens = usage.get("output_tokens")
-    if output_tokens is not None:
-        result["output_tokens"] = output_tokens
-    return result
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens if output_tokens is not None else 0,
+    }
 
 
 def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:

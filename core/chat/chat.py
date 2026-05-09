@@ -902,6 +902,7 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
     if data.get("role") == "assistant":
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
+        data.pop("usage", None)
     return data
 
 
