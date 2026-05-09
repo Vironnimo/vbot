@@ -43,17 +43,17 @@ def build_frontend() -> int:
     npm = "npm"
     install_result = _run([npm, "install"], cwd=WEBUI_DIR)
     if install_result.returncode != 0:
-        print(f" FAILED")
+        print(" FAILED")
         print(install_result.stderr)
         return 1
 
     build_result = _run([npm, "run", "build"], cwd=WEBUI_DIR)
     if build_result.returncode != 0:
-        print(f" FAILED")
+        print(" FAILED")
         print(build_result.stderr)
         return 1
 
-    print(f" DONE")
+    print(" DONE")
     return 0
 
 
