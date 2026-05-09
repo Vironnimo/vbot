@@ -234,7 +234,13 @@
     >
       {triggerLabel}
     </span>
-    <svg class="dropdown-chevron" viewBox="0 0 12 12" aria-hidden="true">
+    <svg
+      class="dropdown-chevron"
+      viewBox="0 0 12 12"
+      width="10"
+      height="10"
+      aria-hidden="true"
+    >
       <path d="M2 4l4 4 4-4" />
     </svg>
   </button>
