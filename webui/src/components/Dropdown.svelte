@@ -99,6 +99,7 @@
   bind:this={rootElement}
   class="dropdown dropdown-primitive {triggerClass}"
   class:open={isOpen}
+  data-state={isOpen ? 'open' : 'closed'}
 >
   {#if name}
     <input type="hidden" {name} {value} />
@@ -128,6 +129,7 @@
   <div
     class="dropdown-list dropdown-primitive__list {listClass}"
     role="listbox"
+    aria-hidden={!isOpen}
   >
     {#each normalizedOptions as option (option.value)}
       <button
