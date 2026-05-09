@@ -190,22 +190,28 @@ class Run:
             raise self.error
         return self.result
 
-    def mark_completed(self, result: Any) -> None:
+    def mark_completed(self, result: Any, payload_extras: JsonObject | None = None) -> None:
         """Move the run to completed and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.result = result
         self.status = RunStatus.COMPLETED
-        self.emit(RUN_COMPLETED_EVENT, {"status": self.status.value})
+        payload: JsonObject = {"status": self.status.value}
+        if payload_extras:
+            payload.update(payload_extras)
+        self.emit(RUN_COMPLETED_EVENT, payload)
         self._done.set()
 
-    def mark_failed(self, error: BaseException) -> None:
+    def mark_failed(self, error: BaseException, payload_extras: JsonObject | None = None) -> None:
         """Move the run to failed and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.error = error
         self.status = RunStatus.FAILED
-        self.emit(RUN_FAILED_EVENT, {"status": self.status.value, "error": str(error)})
+        payload: JsonObject = {"status": self.status.value, "error": str(error)}
+        if payload_extras:
+            payload.update(payload_extras)
+        self.emit(RUN_FAILED_EVENT, payload)
         self._done.set()
 
     def mark_cancelled(self) -> None:
@@ -273,7 +279,9 @@ class ChatRunManager:
             if run.cancel_requested:
                 run.mark_cancelled()
                 return
-            run.mark_completed(result)
+            result_usage = getattr(result, "usage", None) if result is not None else None
+            payload_extras = {"usage": result_usage} if result_usage else None
+            run.mark_completed(result, payload_extras=payload_extras)
         except asyncio.CancelledError:
             run.mark_cancelled()
         except BaseException as exc:
