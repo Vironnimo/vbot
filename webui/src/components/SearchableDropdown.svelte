@@ -30,6 +30,7 @@
   let isOpen = $state(false);
   let searchQuery = $state('');
   let panelStyle = $state('');
+  let panelPlacement = $state('bottom');
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let filteredOptions = $derived(filterOptions(normalizedOptions, searchQuery));
@@ -95,6 +96,7 @@
     isOpen = false;
     searchQuery = '';
     panelStyle = '';
+    panelPlacement = 'bottom';
     onOpenChange(false);
   }
 
@@ -136,6 +138,7 @@
           rect.bottom + PANEL_OFFSET,
         );
 
+    panelPlacement = useAbove ? 'top' : 'bottom';
     panelStyle = [
       `left: ${left}px`,
       useAbove
@@ -196,6 +199,7 @@
   bind:this={rootElement}
   class="s-dropdown searchable-dropdown {triggerClass}"
   class:open={isOpen}
+  data-state={isOpen ? 'open' : 'closed'}
 >
   {#if name}
     <input type="hidden" {name} {value} />
@@ -226,6 +230,9 @@
   <div
     class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
     role="listbox"
+    aria-hidden={!isOpen}
+    data-placement={panelPlacement}
+    data-positioning="fixed"
     style={panelStyle}
   >
     <div class="s-dropdown-search searchable-dropdown__search">

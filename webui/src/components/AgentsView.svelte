@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Dropdown from './Dropdown.svelte';
+  import SearchableDropdown from './SearchableDropdown.svelte';
   import { rpc } from '$lib/api.js';
   import {
     AGENT_FORM_MODE_CREATE,
@@ -75,6 +77,12 @@
       formValues.fallback_model,
       formValues.fallback_connection,
     ),
+  );
+  let thinkingEffortOptions = $derived(
+    THINKING_EFFORT_OPTIONS.map((option) => ({
+      value: option,
+      label: thinkingEffortLabel(option),
+    })),
   );
 
   $effect(() => {
@@ -663,7 +671,7 @@
           <p class="agents-view__notice" role="status">{statusMessage}</p>
         {/if}
 
-        <div class="detail-group">
+        <div class="detail-group agents-view__model-group">
           <div class="detail-group-title">
             {t('agents.detail.identity', 'Identity')}
           </div>
@@ -736,103 +744,77 @@
           <div class="detail-group-title">
             {t('agents.detail.model', 'Model')}
           </div>
-          <div class="detail-fields">
+          <div class="detail-fields agents-view__model-fields">
             <label class="f wide">
               <span class="f-label">{t('agents.form.model', 'Model')}</span>
-              <div class="agents-view__select-wrap">
-                <select
-                  class="s-input agents-view__select"
-                  bind:value={modelSelectValue}
-                  onchange={() =>
-                    updateModelSelection(
-                      'model',
-                      'connection',
-                      modelSelectValue,
-                    )}
-                >
-                  <option value="">
-                    {t(
-                      'agents.form.modelPlaceholder',
-                      'Default (no model selected)',
-                    )}
-                  </option>
-                  {#each modelOptions as option (option.value)}
-                    <option value={option.value}>{option.label}</option>
-                  {/each}
-                </select>
-                <span class="agents-view__select-icon" aria-hidden="true">
-                  <svg
-                    class="dropdown-chevron"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                  >
-                    <path d="M2 4l4 4 4-4" />
-                  </svg>
-                </span>
-              </div>
+              <SearchableDropdown
+                id="agent-model"
+                value={modelSelectValue}
+                options={modelOptions}
+                placeholder={t(
+                  'agents.form.modelPlaceholder',
+                  'Default (no model selected)',
+                )}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t('agents.form.model', 'Model')}
+                triggerClass="agents-view__dropdown"
+                panelClass="agents-view__search-panel"
+                onValueChange={(selectedValue) =>
+                  updateModelSelection('model', 'connection', selectedValue)}
+              />
             </label>
 
             <label class="f">
               <span class="f-label"
                 >{t('agents.form.fallbackModel', 'Fallback model')}</span
               >
-              <div class="agents-view__select-wrap">
-                <select
-                  class="s-input agents-view__select"
-                  bind:value={fallbackModelSelectValue}
-                  onchange={() =>
-                    updateModelSelection(
-                      'fallback_model',
-                      'fallback_connection',
-                      fallbackModelSelectValue,
-                    )}
-                >
-                  <option value="">
-                    {t('agents.form.fallbackModelPlaceholder', 'None')}
-                  </option>
-                  {#each fallbackModelOptions as option (option.value)}
-                    <option value={option.value}>{option.label}</option>
-                  {/each}
-                </select>
-                <span class="agents-view__select-icon" aria-hidden="true">
-                  <svg
-                    class="dropdown-chevron"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                  >
-                    <path d="M2 4l4 4 4-4" />
-                  </svg>
-                </span>
-              </div>
+              <SearchableDropdown
+                id="agent-fallback-model"
+                value={fallbackModelSelectValue}
+                options={fallbackModelOptions}
+                placeholder={t('agents.form.fallbackModelPlaceholder', 'None')}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t('agents.form.fallbackModel', 'Fallback model')}
+                triggerClass="agents-view__dropdown"
+                panelClass="agents-view__search-panel"
+                onValueChange={(selectedValue) =>
+                  updateModelSelection(
+                    'fallback_model',
+                    'fallback_connection',
+                    selectedValue,
+                  )}
+              />
             </label>
 
-            <label class="f">
+            <label class="f agents-view__thinking-field">
               <span class="f-label"
                 >{t('agents.form.thinkingEffort', 'Thinking effort')}</span
               >
-              <div class="agents-view__select-wrap">
-                <select
-                  class="s-input agents-view__select"
-                  bind:value={formValues.thinking_effort}
-                >
-                  {#each THINKING_EFFORT_OPTIONS as option (option)}
-                    <option value={option}>{thinkingEffortLabel(option)}</option
-                    >
-                  {/each}
-                </select>
-                <span class="agents-view__select-icon" aria-hidden="true">
-                  <svg
-                    class="dropdown-chevron"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                  >
-                    <path d="M2 4l4 4 4-4" />
-                  </svg>
-                </span>
-              </div>
+              <Dropdown
+                id="agent-thinking-effort"
+                value={formValues.thinking_effort}
+                options={thinkingEffortOptions}
+                ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+                triggerClass="agents-view__dropdown"
+                listClass="agents-view__thinking-list"
+                onValueChange={(selectedValue) => {
+                  formValues.thinking_effort = selectedValue;
+                }}
+              />
             </label>
 
             <label class="f">
@@ -1260,6 +1242,16 @@
     border-radius: var(--r-lg);
   }
 
+  .agents-view__model-group,
+  .agents-view__model-fields {
+    position: relative;
+  }
+
+  .agents-view__model-group {
+    overflow: visible;
+    z-index: 1;
+  }
+
   .detail-group-title {
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
@@ -1389,31 +1381,26 @@
     border-top: 1px solid var(--border);
   }
 
-  .agents-view__select-wrap {
+  :global(.agents-view__dropdown) {
+    width: 100%;
+  }
+
+  :global(.agents-view__dropdown.open) {
+    z-index: 12;
+  }
+
+  :global(.agents-view__search-panel) {
+    z-index: 220;
+  }
+
+  .agents-view__thinking-field {
     position: relative;
-    width: 100%;
+    z-index: 2;
   }
 
-  .agents-view__select {
-    width: 100%;
-    padding-right: 34px;
-    appearance: none;
-    cursor: pointer;
-  }
-
-  .agents-view__select-icon {
-    position: absolute;
-    top: 50%;
-    right: 11px;
-    display: inline-flex;
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-lo);
-    pointer-events: none;
-    transform: translateY(-50%);
+  :global(.agents-view__thinking-list) {
+    max-height: 280px;
+    overflow-y: auto;
   }
 
   .agents-view__notice,
