@@ -550,6 +550,152 @@ class TestSendSuccess:
 
 
 # ---------------------------------------------------------------------------
+# normalize_response() — usage extraction
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeResponseUsage:
+    """Verify that normalize_response extracts token usage from OpenAI responses."""
+
+    def test_usage_included_when_both_token_fields_present(self, openai_adapter):
+        """usage is present when both prompt_tokens and completion_tokens are provided."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hi there",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "total_tokens": 55,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 42, "output_tokens": 13}
+
+    def test_usage_included_when_only_prompt_tokens_present(self, openai_adapter):
+        """usage is present with output_tokens defaulting to 0 when only prompt_tokens is given."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hi",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 100,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 100, "output_tokens": 0}
+
+    def test_usage_omitted_when_usage_absent(self, openai_adapter):
+        """No usage key in normalized response when response has no usage object."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                    }
+                }
+            ],
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert "usage" not in normalized
+
+    def test_usage_omitted_when_usage_is_none(self, openai_adapter):
+        """No usage key in normalized response when response.usage is null."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                    }
+                }
+            ],
+            "usage": None,
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert "usage" not in normalized
+
+    def test_usage_omitted_when_usage_fields_are_none(self, openai_adapter):
+        """No usage key when both token fields are None."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert "usage" not in normalized
+
+    def test_usage_included_with_zero_tokens(self, openai_adapter):
+        """usage is included when token counts are legitimately zero."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 0, "output_tokens": 0}
+
+    def test_usage_omitted_when_usage_is_wrong_type(self, openai_adapter):
+        """No usage key when usage is not a dict (e.g. a string)."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                    }
+                }
+            ],
+            "usage": "not-a-dict",
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert "usage" not in normalized
+
+
+# ---------------------------------------------------------------------------
 # send() — error classification
 # ---------------------------------------------------------------------------
 
@@ -1155,6 +1301,222 @@ class TestStreamSSE:
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass
+
+
+# ---------------------------------------------------------------------------
+# stream() — usage delta
+# ---------------------------------------------------------------------------
+
+
+class TestStreamUsageDelta:
+    """Verify that stream() yields usage deltas from streaming chunks with usage data."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_usage_delta_from_final_chunk(self, openai_adapter):
+        """A streaming chunk with a usage object containing prompt_tokens yields a usage delta."""
+        # Arrange — typical OpenAI final chunk with stream_options.include_usage
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":42,"completion_tokens":13,"total_tokens":55}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "content_delta", "text": "Hi"},
+            {"type": "finish", "reason": "stop"},
+            {"type": "usage", "input_tokens": 42, "output_tokens": 13},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_yields_usage_delta_with_zero_completion_tokens(self, openai_adapter):
+        """Usage with prompt_tokens but no completion_tokens defaults output_tokens to 0."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[],"usage":{"prompt_tokens":100}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "content_delta", "text": "Hi"},
+            {"type": "usage", "input_tokens": 100, "output_tokens": 0},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_no_usage_delta_when_usage_absent(self, openai_adapter):
+        """Chunks without a usage object do not yield usage deltas."""
+        # Arrange — standard stream without stream_options.include_usage
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert all(c["type"] != "usage" for c in chunks)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_no_usage_delta_when_usage_is_null(self, openai_adapter):
+        """A chunk with usage: null does not yield a usage delta."""
+        # Arrange — OpenAI sometimes sends usage: null when stream_options is not set
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1",'
+            '"choices":[{"delta":{},"finish_reason":"stop"}],"usage":null}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert all(c["type"] != "usage" for c in chunks)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_no_usage_delta_when_prompt_tokens_is_null(self, openai_adapter):
+        """A chunk with usage where prompt_tokens is null does not yield a usage delta."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[],'
+            '"usage":{"prompt_tokens":null,"completion_tokens":5}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert all(c["type"] != "usage" for c in chunks)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_no_usage_delta_when_prompt_tokens_missing(self, openai_adapter):
+        """A chunk with usage but no prompt_tokens field does not yield a usage delta."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[],'
+            '"usage":{"completion_tokens":5}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert all(c["type"] != "usage" for c in chunks)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_usage_delta_with_zero_tokens(self, openai_adapter):
+        """Usage with both prompt_tokens=0 and completion_tokens=0 is still emitted."""
+        # Arrange — legitimate zero-token usage
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":""}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":{"prompt_tokens":0,"completion_tokens":0}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        usage_deltas = [c for c in chunks if c["type"] == "usage"]
+        assert len(usage_deltas) == 1
+        assert usage_deltas[0] == {"type": "usage", "input_tokens": 0, "output_tokens": 0}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_no_usage_delta_when_usage_is_wrong_type(self, openai_adapter):
+        """A chunk with usage as a non-dict type (e.g. a string) does not yield a usage delta."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}],'
+            '"usage":"not-a-dict"}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert all(c["type"] != "usage" for c in chunks)
 
 
 # ---------------------------------------------------------------------------
