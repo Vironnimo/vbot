@@ -541,6 +541,39 @@ describe('AgentsView', () => {
     ).toBe('true');
   });
 
+  it('lets the simple thinking-effort dropdown escape the model card clipping', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => thinkingTriggerLabel() === 'Default', 100);
+
+    const modelCard = Array.from(
+      document.body.querySelectorAll('.detail-group.agents-view__model-group'),
+    ).find((group) => group.textContent.includes('Model'));
+    const identityCard = Array.from(
+      document.body.querySelectorAll('.detail-group'),
+    ).find((group) => group.textContent.includes('Identity'));
+    const simpleRoot = getSimpleRoot('agent-thinking-effort');
+
+    expect(modelCard).toBeTruthy();
+    expect(identityCard).toBeTruthy();
+    expect(identityCard.classList.contains('agents-view__model-group')).toBe(
+      false,
+    );
+    expect(simpleRoot.closest('.detail-group')).toBe(modelCard);
+
+    openSimpleDropdown('agent-thinking-effort');
+
+    const simpleList = getSimpleList('agent-thinking-effort');
+    expect(simpleList).toBeTruthy();
+    expect(simpleList.classList.contains('agents-view__thinking-list')).toBe(
+      true,
+    );
+    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+  });
+
   it('treats connection.list failure as a catalog load error', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'model.list') {
