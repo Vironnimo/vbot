@@ -98,16 +98,16 @@ describe('i18n t()', () => {
       '1.5s',
     );
     expect(
-      t('chat.tokenBadge', undefined, { input: 1200, context: 8000 }),
+      t('chat.tokenBadge', undefined, { tokens: 1200, context: 8000 }),
     ).toBe('1200 / 8000 tok');
     expect(
-      t('chat.tokenBadgeEstimated', undefined, { input: 1200, context: 8000 }),
+      t('chat.tokenBadgeEstimated', undefined, { tokens: 1200, context: 8000 }),
     ).toBe('~1200 / 8000 tok');
-    expect(t('chat.tokenBadgeNoContext', undefined, { input: 1200 })).toBe(
+    expect(t('chat.tokenBadgeNoContext', undefined, { tokens: 1200 })).toBe(
       '1200 tok',
     );
     expect(
-      t('chat.tokenBadgeEstimatedNoContext', undefined, { input: 1200 }),
+      t('chat.tokenBadgeEstimatedNoContext', undefined, { tokens: 1200 }),
     ).toBe('~1200 tok');
     expect(t('chat.tokenBadgeNoUsage', undefined, { context: 8000 })).toBe(
       '— / 8000 tok',
