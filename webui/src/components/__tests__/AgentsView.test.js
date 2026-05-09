@@ -299,6 +299,64 @@ describe('AgentsView', () => {
     expect(document.body.textContent).toContain('high');
   });
 
+  it('allows clearing model and fallback selections back to empty values', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            fallback_model: 'anthropic/claude-sonnet-4-20250219',
+            fallback_connection: 'anthropic:api-key',
+          },
+        ],
+        connections: [
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+          usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        modelTriggerLabel() === 'openai/gpt-5.2' &&
+        fallbackTriggerLabel() === 'anthropic/claude-sonnet-4-20250219',
+      100,
+    );
+
+    await openSearchableDropdown('agent-model');
+    selectSearchableOption('agent-model', 'Default (no model selected)');
+    await waitForCondition(
+      () => modelTriggerLabel() === 'Default (no model selected)',
+      100,
+    );
+
+    await openSearchableDropdown('agent-fallback-model');
+    selectSearchableOption('agent-fallback-model', 'None');
+    await waitForCondition(() => fallbackTriggerLabel() === 'None', 100);
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1]).toMatchObject({
+      id: 'alpha',
+      model: '',
+      connection: '',
+      fallback_model: '',
+      fallback_connection: '',
+    });
+  });
+
   it('sends selected create payload with connection and fallback_connection', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -436,6 +494,12 @@ describe('AgentsView', () => {
     );
 
     await openSearchableDropdown('agent-model');
+    getSearchableOptionsContainer('agent-model').dispatchEvent(
+      new Event('scroll'),
+    );
+    flushSync();
+    expect(getSearchableRoot('agent-model').dataset.state).toBe('open');
+
     window.dispatchEvent(new Event('scroll'));
     flushSync();
     await waitForCondition(
@@ -580,6 +644,10 @@ function getSearchableTrigger(id) {
 
 function getSearchablePanel(id) {
   return getSearchableRoot(id)?.querySelector('.searchable-dropdown__panel');
+}
+
+function getSearchableOptionsContainer(id) {
+  return getSearchablePanel(id)?.querySelector('.searchable-dropdown__options');
 }
 
 function openSimpleDropdown(id) {
