@@ -365,6 +365,12 @@ Two types:
   Has a filter input header with a search icon. Panel border uses accent tint
   `rgba(accent, 0.3)` to signal "elevated and interactive".
 
+### Inline SVG icons
+
+If we use inline SVGs without explicit `width` and `height`, they can suddenly
+render far too large because size falls back to browser/default layout behavior.
+To prevent that, always set SVG icon dimensions explicitly.
+
 ### Status chips
 
 Three semantic colors, pill shape (12px border-radius), mono font 11.5px:
