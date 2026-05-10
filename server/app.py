@@ -7,13 +7,14 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
 from core.runtime import Runtime
 from core.utils.config import Config
+from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
@@ -90,6 +91,7 @@ def create_app(
             yield
         finally:
             server_logger.info("Server application stopping")
+            await app.state.log_viewer.aclose()
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
@@ -129,6 +131,22 @@ def create_app(
         except WebSocketDisconnect:
             return
 
+    @app.websocket("/ws/logs")
+    async def websocket_logs(websocket: WebSocket) -> None:
+        await websocket.accept()
+        file_name = websocket.query_params.get("file")
+        try:
+            async with aclosing(
+                websocket.app.state.log_viewer.subscribe(file_name or "")
+            ) as stream:
+                await _stream_log_events(websocket, stream)
+        except ValueError as exc:
+            await websocket.close(code=1008, reason=str(exc))
+        except FileNotFoundError as exc:
+            await websocket.close(code=1008, reason=str(exc))
+        except WebSocketDisconnect:
+            return
+
     _mount_webui(app)
 
     return app
@@ -141,6 +159,7 @@ def _initialize_app_state(
     app.state.chat_runs = ChatRunManager()
     app.state.chat_loop = ChatLoop(runtime)
     app.state.event_bus = ServerEventBus()
+    app.state.log_viewer = LogViewer(runtime.storage.data_dir)
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
     _attach_run_manager(runtime, app.state.chat_runs)
@@ -249,6 +268,42 @@ def _mount_webui(app: FastAPIType) -> None:
 
 def _attach_run_manager(runtime: Any, run_manager: ChatRunManager) -> None:
     runtime.chat_runs = run_manager
+
+
+async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
+    stream_iter = stream.__aiter__()
+    disconnect_task = asyncio.create_task(websocket.receive())
+    try:
+        while True:
+            event_task = asyncio.create_task(stream_iter.__anext__())
+            done, _pending = await asyncio.wait(
+                {event_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if disconnect_task in done:
+                message = disconnect_task.result()
+                if message.get("type") == "websocket.disconnect":
+                    event_task.cancel()
+                    with suppress(asyncio.CancelledError, StopAsyncIteration):
+                        await event_task
+                    return
+                disconnect_task = asyncio.create_task(websocket.receive())
+
+            if event_task in done:
+                try:
+                    event = event_task.result()
+                except StopAsyncIteration:
+                    return
+                await websocket.send_json(event)
+            else:
+                event_task.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await event_task
+    finally:
+        disconnect_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnect_task
 
 
 def _is_reserved_server_path(path: str) -> bool:
