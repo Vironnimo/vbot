@@ -434,7 +434,7 @@
     </div>
   {:else}
     <div class="chat-view__surface">
-      {#if loadingHistory || historyError || actionError}
+      {#if loadingHistory || historyError || actionError || activeSessionState?.error}
         <div class="chat-view__notice-stack" aria-live="polite">
           {#if loadingHistory}
             <p class="chat-view__notice">
@@ -449,6 +449,12 @@
           {/if}
           {#if actionError}
             <p class="chat-view__error">{actionError}</p>
+          {/if}
+          {#if activeSessionState?.error}
+            <p class="chat-view__error">
+              {t('chat.runError', 'Run failed.')}
+              {activeSessionState.error}
+            </p>
           {/if}
         </div>
       {/if}
