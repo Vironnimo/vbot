@@ -39,7 +39,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   absolute file or directory paths are allowed.
 - Internal `skill` tool: flat name `skill`; schema includes required `name`.
   It loads an allowed skill's `SKILL.md` body, wraps it in `<skill_content>`,
-  lists activation-time resources, and stores the context in the current Session.
+  stores the context in the current Session, and returns only a minimal status
+  envelope with the skill name, activation status, message, and resource list.
   It is system-managed and not part of user-managed tool catalogs.
 
 ## Interfaces
@@ -69,6 +70,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - Provider-visible definitions include only `name`, `description`, and `parameters`; handlers and runtime context are internal.
 - Internal tools are hidden from normal `list_tools()`, `prompt_definitions()`, and `provider_definitions()` unless `include_internal=True` is explicitly requested by the system prompt manager.
 - The internal `skill` tool is governed by `allowed_skills`, not `allowed_tools`; normal tool allowlists must not block it. Normal tools remain blocked by `allowed_tools=[]`.
+- The internal `skill` tool result must not include the full `<skill_content>` payload or raw skill body. The session-scoped skill note is the single source of full instructions for the next provider request.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
 - Tool execution failures are represented as failure envelopes where possible.
 - `read` is the authoritative read-like tool. It is the vControl-derived
