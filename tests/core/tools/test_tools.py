@@ -136,6 +136,32 @@ class TestToolContext:
 
         assert context.is_cancelled() is False
 
+    def test_add_note_uses_hook_when_present(self) -> None:
+        notes: list[str] = []
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_call_index=0,
+            workspace=Path("workspace"),
+            app_root=Path("app"),
+            data_root=Path("data"),
+            note_hook=notes.append,
+        )
+
+        context.add_note("reminder")
+
+        assert notes == ["reminder"]
+
+    def test_add_note_without_hook_does_nothing(self) -> None:
+        context = make_context()
+
+        context.add_note("reminder")
+
+        assert context.note_hook is None
+
 
 class TestToolEnvelope:
     def test_success_envelope_shape_is_valid(self) -> None:

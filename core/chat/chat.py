@@ -614,7 +614,10 @@ class ChatLoop:
                 raise ChatError("maximum tool iterations exceeded")
 
             tool_messages = await self._dispatch_tool_calls(
-                agent, assistant_message.tool_calls, run
+                agent,
+                assistant_message.tool_calls,
+                session,
+                run,
             )
             for tool_message in tool_messages:
                 run.raise_if_cancelled()
@@ -718,6 +721,7 @@ class ChatLoop:
         self,
         agent: Any,
         tool_calls: list[ToolCall],
+        session: ChatSession,
         run: Run,
     ) -> list[ChatMessage]:
         run.raise_if_cancelled()
@@ -745,6 +749,7 @@ class ChatLoop:
                     payload,
                 ),
                 cancellation_hook=lambda: run.cancel_requested,
+                note_hook=session.add_note,
             ),
         )
         run.raise_if_cancelled()
