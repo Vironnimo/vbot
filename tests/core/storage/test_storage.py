@@ -324,3 +324,46 @@ def test_read_prompt_fragment_rejects_unknown_names(tmp_path: Path) -> None:
 
     with pytest.raises(StorageError, match="Unknown prompt fragment"):
         storage.read_prompt_fragment("other.md")
+
+
+def test_reset_prompt_fragment_overwrites_user_copy_with_bundled_content(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+    storage.ensure_directories()
+    (data_dir / "prompts" / "system.md").write_text("user modified content", encoding="utf-8")
+
+    written_path = storage.reset_prompt_fragment("system.md")
+
+    assert written_path == data_dir / "prompts" / "system.md"
+    assert written_path.read_text(encoding="utf-8") == "system.md bundled"
+
+
+def test_reset_prompt_fragment_rejects_unknown_name(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+
+    with pytest.raises(StorageError, match="Unknown prompt fragment"):
+        storage.reset_prompt_fragment("unknown.md")
+
+
+def test_write_prompt_fragment_writes_given_content(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+    storage.ensure_directories()
+
+    written_path = storage.write_prompt_fragment("tools.md", "custom tools content")
+
+    assert written_path == data_dir / "prompts" / "tools.md"
+    assert written_path.read_text(encoding="utf-8") == "custom tools content"
+
+
+def test_write_prompt_fragment_rejects_unknown_name(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path / "data")
+
+    with pytest.raises(StorageError, match="Unknown prompt fragment"):
+        storage.write_prompt_fragment("unknown.md", "content")

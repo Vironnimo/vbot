@@ -35,7 +35,9 @@ from core.chat import (
 )
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
+from core.storage.storage import PROMPT_FRAGMENT_NAMES
 from core.utils.errors import ConfigError, VBotError
+from core.utils.tokens import estimate_tokens
 from server.events import (
     AGENT_CREATED_EVENT,
     AGENT_DELETED_EVENT,
@@ -60,6 +62,35 @@ RPC_ERROR_ACTIVE_RUN = "active_run"
 RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
 RPC_ERROR_LAST_AGENT = "last_agent"
+
+PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
+    "system.md": [
+        {"placeholder": "{app_version}", "description": "Application version string"},
+        {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
+        {"placeholder": "{tools}", "description": "Rendered tools fragment"},
+        {"placeholder": "{skills}", "description": "Rendered skills fragment"},
+        {
+            "placeholder": "{include:filename}",
+            "description": "Include another fragment by filename",
+        },
+    ],
+    "runtime.md": [
+        {"placeholder": "{host}", "description": "Host machine name"},
+        {"placeholder": "{os}", "description": "Operating system name"},
+        {"placeholder": "{model}", "description": "Active model identifier"},
+        {"placeholder": "{agent_workspace}", "description": "Agent workspace directory path"},
+        {"placeholder": "{app_dir}", "description": "Application source directory path"},
+        {"placeholder": "{data_root}", "description": "Data root directory path"},
+        {"placeholder": "{thinking_effort}", "description": "Agent thinking effort setting"},
+        {"placeholder": "{current_date}", "description": "Current date in ISO 8601 format"},
+    ],
+    "tools.md": [
+        {"placeholder": "{tool_list}", "description": "List of available tools"},
+    ],
+    "skills.md": [
+        {"placeholder": "{skill_list}", "description": "List of available skills"},
+    ],
+}
 
 
 class RpcError(Exception):
@@ -119,6 +150,14 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _get_settings(state, params)
         case "settings.update":
             return _update_settings(state, params)
+        case "prompt.list":
+            return _list_prompts(state)
+        case "prompt.update":
+            return _update_prompt(state, params)
+        case "prompt.reset":
+            return _reset_prompt(state, params)
+        case "prompt.preview":
+            return await _preview_prompt(state, params)
         case _:
             raise RpcError(RPC_ERROR_METHOD_NOT_FOUND, f"unknown RPC method: {method}")
 
@@ -418,6 +457,69 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+
+def _list_prompts(state: Any) -> JsonObject:
+    fragment_order = ["system.md", "runtime.md", "tools.md", "skills.md"]
+    fragments: list[JsonObject] = []
+    for name in fragment_order:
+        try:
+            content = state.runtime.storage.read_prompt_fragment(name)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        is_modified = (state.runtime.storage.prompts_dir / name).exists()
+        fragments.append(
+            {
+                "name": name,
+                "content": content,
+                "is_modified": is_modified,
+                "variables": PROMPT_FRAGMENT_VARIABLES.get(name, []),
+            }
+        )
+    return {"fragments": fragments}
+
+
+def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
+    name = _required_string(params, "name")
+    if name not in PROMPT_FRAGMENT_NAMES:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown prompt fragment: {name}")
+    content = params.get("content")
+    if not isinstance(content, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
+    try:
+        state.runtime.storage.write_prompt_fragment(name, content)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"name": name, "content": content, "is_modified": True}
+
+
+def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
+    name = _required_string(params, "name")
+    if name not in PROMPT_FRAGMENT_NAMES:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown prompt fragment: {name}")
+    try:
+        state.runtime.storage.reset_prompt_fragment(name)
+        content = state.runtime.storage.read_prompt_fragment(name)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"name": name, "content": content}
+
+
+async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "agent_id")
+    try:
+        agent = state.runtime.agents.get(agent_id)
+    except KeyError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, f"agent not found: {agent_id}") from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    try:
+        prompt_manager = state.runtime.system_prompts
+        text = prompt_manager.build_system_prompt(agent)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    token_count, estimated = estimate_tokens(text)
+    return {"text": text, "tokens": token_count, "estimated": estimated}
 
 
 def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
