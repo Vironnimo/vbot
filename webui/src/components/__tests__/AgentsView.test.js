@@ -461,6 +461,87 @@ describe('AgentsView', () => {
     });
   });
 
+  it('keeps create mode after New when parent selection still points to an agent', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { sharedSelectedAgentId: 'alpha' },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
+    );
+
+    const newButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'New',
+    );
+    expect(newButton).toBeTruthy();
+
+    newButton.click();
+    flushSync();
+    await Promise.resolve();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Create Agent');
+    expect(document.body.textContent).toContain('Create agent');
+    expect(document.body.textContent).not.toContain('Delete Agent');
+    expect(document.body.querySelector('button.agent-item.active')).toBeNull();
+    expect(textInputValue(0)).toBe('');
+    expect(textInputValue(1)).toBe('');
+  });
+
+  it('still selects an existing agent after entering create mode', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { sharedSelectedAgentId: 'alpha' },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
+    );
+
+    const newButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'New',
+    );
+    expect(newButton).toBeTruthy();
+
+    newButton.click();
+    flushSync();
+    await Promise.resolve();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Create Agent');
+
+    const bravoButton = Array.from(
+      document.body.querySelectorAll('button.agent-item'),
+    ).find((button) => button.textContent.includes('Bravo'));
+    expect(bravoButton).toBeTruthy();
+
+    bravoButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: bravo'),
+      100,
+    );
+
+    expect(document.body.textContent).toContain('Save changes');
+    expect(document.body.textContent).toContain('Delete Agent');
+    expect(textInputValue(0)).toBe('bravo');
+    expect(textInputValue(1)).toBe('Bravo');
+  });
+
   it('matches dropdown open and close interaction expected by the design artifact', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
@@ -815,6 +896,14 @@ function setTextInputValue(index, value) {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
+}
+
+function textInputValue(index) {
+  const input = Array.from(
+    document.body.querySelectorAll('input.s-input[type="text"]'),
+  )[index];
+  expect(input).toBeTruthy();
+  return input.value;
 }
 
 function createAgentsRpcMock(options = {}) {
