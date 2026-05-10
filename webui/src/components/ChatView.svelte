@@ -41,6 +41,7 @@
   let cancellingRun = $state(false);
   let historyError = $state('');
   let actionError = $state('');
+  let availableSkills = $state([]);
   const activeSubscriptions = {};
 
   let activeAgent = $derived(selectedAgent(chatState));
@@ -128,8 +129,19 @@
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
+    loadSkills();
     return () => closeSubscriptions();
   });
+
+  const loadSkills = async () => {
+    try {
+      const result = await rpc('skill.list');
+      availableSkills = Array.isArray(result?.skills) ? result.skills : [];
+    } catch (error) {
+      actionError = `${t('chat.skillsLoadError', 'Skill suggestions could not be loaded.')} ${error.message}`;
+      availableSkills = [];
+    }
+  };
 
   const loadAgents = async (options = {}) => {
     chatState.loadingAgents = true;
@@ -454,6 +466,7 @@
         <ChatComposer
           disabled={composerDisabled}
           isRunning={isRunActive(activeSessionState)}
+          {availableSkills}
           onSendMessage={handleSendMessage}
         />
       </div>

@@ -44,6 +44,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
     queued messages. Visible timeline aggregation groups Run events into one
     `assistant_run` item per Run so thinking, tool lifecycle rows, and assistant
     output render together.
+- `webui/src/components/ChatView.svelte`
+  - Loads `skill.list` on mount and passes the loadable `skills` array (not `invalid_skills`) to the composer for skill-trigger suggestions.
+- `webui/src/components/ChatComposer.svelte`
+  - Supports `/skill-name` at the start of input and `$skill-name` inline autocomplete. Selection inserts only the trigger token and preserves the rest of the message text exactly; backend chat activation handles loading.
+- `webui/src/components/SkillAutocomplete.svelte`
+  - Renders loadable skill name/description suggestions for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
   displayed from Agent data but omitted from public create/update payloads in
@@ -98,6 +104,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - Visible chat history accepts only normal user, assistant, and tool messages;
   kernel-internal note/system-reminder entries must be filtered out if they ever
   arrive from a server response.
+- Skill trigger autocomplete is a composer aid only. It must not fetch or inject skill content directly; `/skill-name` and `$skill-name` text is sent unchanged for backend deterministic activation.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`
   event arrives.
