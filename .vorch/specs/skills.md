@@ -1,51 +1,64 @@
 # Skills
 
-Local skill metadata loading and prompt allowlist filtering.
+Local skill metadata loading, validation diagnostics, and prompt allowlist filtering.
 
 ## Overview
 
-`core/skills/` scans `<data_dir>/skills/<skill-id>/SKILL.md` files and exposes prompt metadata. Skills are playbooks, not tools: Phase 2 only filters which skills appear in the prompt. Unknown allowlist entries are ignored because skills are not hard execution gates.
+`core/skills/` scans bundled skills under `resources/skills/`, user skills under `<data_dir>/skills/`, and configured extra skill directories. A directory is considered a skill only when it contains `SKILL.md`.
+
+Skills are playbooks, not normal user-managed tools. The registry exposes prompt metadata and internal activation metadata; actual activation is handled by the chat/tool pipeline.
 
 ## Data Model
 
-- `SkillMetadata`: `name`, `description`, `path`.
-- Metadata is read from Markdown front matter in each `SKILL.md`.
-- The prompt-visible skill block is XML and follows the official
-  `agentskills.io` schema used by vBot:
+- `SkillMetadata`: `name`, `description`, internal `path`, optional `license`, `compatibility`, `metadata`, and `allowed_tools` parsed from YAML frontmatter.
+- `SkillDiagnostic`: `name`, `path`, `valid`, `warnings`, and `loadable` for both loadable skills with warnings and rejected skill directories.
+- YAML frontmatter is parsed with PyYAML. Validation is lenient: name/directory mismatch and names longer than 64 characters are warnings; missing required fields or invalid YAML make the skill non-loadable.
+- Resource paths are not stored in `SkillMetadata`; `scripts/` and `references/` are scanned at activation time.
+- Bundled `resources/skills/` contains tiny sample skills, including warning and broken examples, so UI diagnostics can be inspected manually.
+
+## Prompt Catalog
+
+Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatible catalog shape:
 
 ```xml
 <available_skills>
   <skill>
-    <name>agent-cli</name>
-    <description>Delegate coding tasks to an external AI coding agent CLI...</description>
-    <path>C:\Users\Viro\.vbot\skills\agent-cli\SKILL.md</path>
+    <name>poem-writer</name>
+    <description>Write a short, polished poem for a requested theme.</description>
   </skill>
 </available_skills>
 ```
 
 - `available_skills` is the root element.
-- Each `skill` element contains `name`, `description`, and `path`.
-- `path` is the absolute path to that skill's `SKILL.md`.
+- Each `skill` element contains only `name` and `description`.
+- Do not expose `path`, `location`, or other local filesystem details in the prompt catalog.
+- Skill values inserted into the XML block must be XML-escaped.
 
 ## Interfaces
 
-- `core/skills/__init__.py` exports `SkillMetadata`, `SkillRegistry`, and allowlist/front-matter constants.
-- `SkillRegistry.load(skills_dir) -> SkillRegistry` — missing root means empty registry.
+- `core/skills/__init__.py` exports `SkillMetadata`, `SkillRegistry`, and allowlist/frontmatter constants.
+- `SkillRegistry.load(skills_dir, extra_dirs=None) -> SkillRegistry` — missing roots mean an empty contribution.
 - `get(name) -> SkillMetadata`
 - `list_all() -> list[SkillMetadata]`
 - `filter_allowed(allowed_skills) -> list[SkillMetadata]`
+- `diagnostics() -> list[SkillDiagnostic]`
+- `invalid_diagnostics() -> list[SkillDiagnostic]`
+- `warnings_for(name) -> list[str]`
 
 ## Conventions
 
 - `allowed_skills=['*']` exposes all loaded skills.
 - `allowed_skills=[]` exposes none.
 - Explicit allowlists match exact skill names.
-- Prompt-facing skill metadata is XML, not JSON or Markdown.
-- `agentskills.io` is the canonical schema for the injected skill list block.
-- Skill values inserted into the XML block must be XML-escaped.
+- Unknown allowlist entries are ignored because skills are not hard execution gates.
+- Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
+
+## External Dependencies
+
+- `pyyaml` is a direct core dependency for `SKILL.md` YAML frontmatter parsing.
 
 ## Constraints & Gotchas
 
-- A directory is considered a skill only when it contains `SKILL.md`.
-- Duplicate skill names are rejected.
-- The registry currently reads simple front matter fields only; do not depend on full YAML semantics.
+- Local paths remain internal. The prompt catalog and user-facing skill list must not require agents to read files directly.
+- Non-loadable skill directories should be retained as diagnostics so the UI can explain invalid YAML, missing descriptions, or duplicate names.
+- The project forbids in-app legacy compatibility. Do not add automatic migrations for older `allowed_skills` formats; use explicit converter scripts if needed.

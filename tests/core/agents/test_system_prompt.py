@@ -14,7 +14,6 @@ from core.agents.agents import Agent, AgentError, SkillPromptMetadata, SystemPro
 class StubSkill:
     name: str
     description: str
-    path: Path
 
 
 class StubStorage:
@@ -121,8 +120,8 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     tools = StubTools()
     skills = StubSkills(
         [
-            StubSkill("agent-cli", "Delegate coding tasks", tmp_path / "agent-cli" / "SKILL.md"),
-            StubSkill("news", "Fetch news", tmp_path / "news" / "SKILL.md"),
+            StubSkill("agent-cli", "Delegate coding tasks"),
+            StubSkill("news", "Fetch news"),
         ]
     )
     manager = SystemPromptManager(
@@ -157,6 +156,8 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "shell" not in prompt
     assert "<name>agent-cli</name>" in prompt
     assert "<description>Delegate coding tasks</description>" in prompt
+    assert "<path>" not in prompt
+    assert "<location>" not in prompt
     assert "news" not in prompt
     assert "Soul text" in prompt
     assert "Identity text" in prompt
@@ -203,7 +204,7 @@ def test_empty_tool_and_skill_allowlists_emit_empty_sections(
     manager = SystemPromptManager(
         StubStorage(fragments),
         StubTools(),
-        StubSkills([StubSkill("agent-cli", "Delegate coding tasks", tmp_path / "SKILL.md")]),
+        StubSkills([StubSkill("agent-cli", "Delegate coding tasks")]),
         app_version="0.1.0",
         app_dir=tmp_path / "app",
         data_root=tmp_path / "data",
@@ -226,7 +227,7 @@ def test_skill_xml_escapes_metadata(
     manager = SystemPromptManager(
         StubStorage(fragments),
         StubTools(),
-        StubSkills([StubSkill("a&b", "Use <danger>", tmp_path / "skill&dir" / "SKILL.md")]),
+        StubSkills([StubSkill("a&b", "Use <danger>")]),
         app_version="0.1.0",
         app_dir=tmp_path / "app",
         data_root=tmp_path / "data",
