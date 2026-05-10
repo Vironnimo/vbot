@@ -45,7 +45,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `diagnostics() -> list[SkillDiagnostic]`
 - `invalid_diagnostics() -> list[SkillDiagnostic]`
 - `warnings_for(name) -> list[str]`
-- Activation helper behavior: read the skill body after YAML frontmatter, scan `scripts/` and `references/`, and return a tool success envelope with `content` and `resources`.
+- Activation helper behavior: read the skill body after YAML frontmatter, scan `scripts/` and `references/`, and build the full `<skill_content>` payload for session storage. The internal `skill` tool result returned to the model is only a minimal status envelope; it must not repeat the full skill body.
 
 ## Conventions
 
@@ -55,6 +55,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - Unknown allowlist entries are ignored because skills are not hard execution gates.
 - Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
 - The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
+- Full skill instructions have a single provider-visible source: the session-scoped injected `<skill_content>` note. Tool-call results for the internal `skill` tool must not include `content`, raw skill Markdown, or a `<skill_content>` block, otherwise the model sees duplicate instructions.
 - `/skill-name` and `$skill-name` triggers preserve the original user message. `allowed_skills=[]` exposes no skills; only a missing/`None` allowlist falls back to wildcard behavior in compatibility test stubs. Unknown or non-loadable triggers become internal system reminders.
 
 ## External Dependencies

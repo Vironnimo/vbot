@@ -14,6 +14,8 @@ SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
     "Load an allowed skill by name and add its instructions to session context."
 )
+SKILL_STATUS_LOADED = "loaded"
+SKILL_STATUS_ALREADY_ACTIVE = "already_active"
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -64,8 +66,8 @@ def make_skill_handler(skill_registry: SkillRegistry) -> Any:
 
         stored_result = context.activate_skill(skill_name, data)
         if stored_result is not None:
-            return stored_result
-        return tool_success(data)
+            return _skill_activation_result(skill_name, stored_result, data)
+        return _minimal_skill_result(skill_name, data, already_active=False)
 
     return skill_handler
 
@@ -86,6 +88,45 @@ def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
     body = _read_skill_body(skill_file)
     resources = _scan_skill_resources(skill_file.parent)
     return {"content": _wrap_skill_content(skill_name, body, resources), "resources": resources}
+
+
+def _skill_activation_result(
+    skill_name: str,
+    stored_result: JsonObject,
+    data: JsonObject,
+) -> JsonObject:
+    if stored_result.get("ok") is not True:
+        return stored_result
+
+    stored_data = stored_result.get("data")
+    already_active = isinstance(stored_data, dict) and stored_data.get("already_active") is True
+    return _minimal_skill_result(skill_name, data, already_active=already_active)
+
+
+def _minimal_skill_result(
+    skill_name: str,
+    data: JsonObject,
+    *,
+    already_active: bool,
+) -> JsonObject:
+    resources = data.get("resources", [])
+    if not isinstance(resources, list):
+        resources = []
+
+    status = SKILL_STATUS_ALREADY_ACTIVE if already_active else SKILL_STATUS_LOADED
+    message = (
+        f"Skill '{skill_name}' was already active in this session."
+        if already_active
+        else f"Skill '{skill_name}' loaded into session context."
+    )
+    return tool_success(
+        {
+            "name": skill_name,
+            "status": status,
+            "message": message,
+            "resources": list(resources),
+        }
+    )
 
 
 def _allowed_skill_names(
