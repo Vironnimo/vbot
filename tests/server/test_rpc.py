@@ -340,8 +340,15 @@ FAKE_REFRESH_MODEL_PROVIDER_IDS: list[str] = []
 class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
+        self.prompts_dir = tmp_path / "prompts"
         self._appearance = {"language": "en"}
         self._skill_directories: list[str] = []
+        self._prompt_fragments: dict[str, str] = {
+            "system.md": "# System\nDefault system prompt.",
+            "runtime.md": "# Runtime\nDefault runtime info.",
+            "tools.md": "# Tools\nDefault tools list.",
+            "skills.md": "# Skills\nDefault skills list.",
+        }
 
     def load_appearance_settings(self) -> JsonObject:
         return dict(self._appearance)
@@ -371,6 +378,26 @@ class StubStorage:
             raise StorageError("settings.skill_directories must be a list")
         self._skill_directories = list(directories)
         return list(self._skill_directories)
+
+    def read_prompt_fragment(self, name: str) -> str:
+        if name not in self._prompt_fragments:
+            raise StorageError(f"Unknown prompt fragment: {name}")
+        return self._prompt_fragments[name]
+
+    def write_prompt_fragment(self, name: str, content: str) -> None:
+        if name not in self._prompt_fragments:
+            raise StorageError(f"Unknown prompt fragment: {name}")
+        self._prompt_fragments[name] = content
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (self.prompts_dir / name).write_text(content, encoding="utf-8")
+
+    def reset_prompt_fragment(self, name: str) -> None:
+        if name not in self._prompt_fragments:
+            raise StorageError(f"Unknown prompt fragment: {name}")
+        default = f"# {name}\nDefault {name} content."
+        self._prompt_fragments[name] = default
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (self.prompts_dir / name).write_text(default, encoding="utf-8")
 
 
 class StubPrompts:
@@ -2232,3 +2259,165 @@ class TestServerEventFromRunEvent:
 
         assert "usage" not in result["payload"]
         assert result["payload"]["status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# prompt.* RPC handlers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_returns_all_four_fragments_in_order(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "prompt.list"})
+
+    assert response["ok"] is True
+    fragments = response["result"]["fragments"]
+    assert [f["name"] for f in fragments] == ["system.md", "runtime.md", "tools.md", "skills.md"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_includes_content_is_modified_and_variables(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "prompt.list"})
+
+    assert response["ok"] is True
+    fragments = {f["name"]: f for f in response["result"]["fragments"]}
+    system = fragments["system.md"]
+    assert system["content"] == "# System\nDefault system prompt."
+    assert system["is_modified"] is False
+    assert any(v["placeholder"] == "{app_version}" for v in system["variables"])
+    tools = fragments["tools.md"]
+    assert any(v["placeholder"] == "{tool_list}" for v in tools["variables"])
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_reflects_user_modified_fragment(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.write_prompt_fragment("runtime.md", "My custom runtime.")
+
+    response = await dispatch_rpc(state, {"method": "prompt.list"})
+
+    assert response["ok"] is True
+    fragments = {f["name"]: f for f in response["result"]["fragments"]}
+    assert fragments["runtime.md"]["is_modified"] is True
+    assert fragments["runtime.md"]["content"] == "My custom runtime."
+    assert fragments["system.md"]["is_modified"] is False
+
+
+@pytest.mark.asyncio
+async def test_prompt_update_writes_content_and_returns_is_modified_true(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.update", "params": {"name": "tools.md", "content": "# Custom tools"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"] == {
+        "name": "tools.md",
+        "content": "# Custom tools",
+        "is_modified": True,
+    }
+    assert state.runtime.storage.read_prompt_fragment("tools.md") == "# Custom tools"
+
+
+@pytest.mark.asyncio
+async def test_prompt_update_rejects_unknown_fragment_name(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.update", "params": {"name": "../../etc/passwd", "content": "bad"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_prompt_update_rejects_missing_name(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.update", "params": {"content": "no name here"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_prompt_reset_restores_default_and_returns_content(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.write_prompt_fragment("skills.md", "Modified skills")
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.reset", "params": {"name": "skills.md"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["name"] == "skills.md"
+    assert response["result"]["content"] == "# skills.md\nDefault skills.md content."
+
+
+@pytest.mark.asyncio
+async def test_prompt_reset_rejects_unknown_fragment_name(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.reset", "params": {"name": "unknown.md"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_returns_rendered_text_and_token_estimate(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["text"] == "System for coder"
+    assert isinstance(result["tokens"], int)
+    assert result["tokens"] > 0
+    assert result["estimated"] is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_rejects_unknown_agent_id(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "nobody"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "nobody" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_rejects_missing_agent_id(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
