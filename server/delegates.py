@@ -401,6 +401,9 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.storage.update_skill_directory_settings(
                 settings_update["skills"]["directories"]
             )
+            reload_skills = getattr(state.runtime, "reload_skills", None)
+            if callable(reload_skills):
+                reload_skills()
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

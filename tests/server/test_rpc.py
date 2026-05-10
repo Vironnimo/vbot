@@ -414,6 +414,22 @@ class StubSkills:
         return list(self._invalid)
 
 
+class ReloadableStubRuntimeSkills:
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def list_all(self) -> list[StubSkill]:
+        return [
+            StubSkill(name, f"{name} skill.") for name in self._runtime.storage._skill_directories
+        ]
+
+    def warnings_for(self, _name: str) -> list[str]:
+        return []
+
+    def invalid_diagnostics(self) -> list[Any]:
+        return []
+
+
 class StubAdapter:
     def __init__(
         self,
@@ -469,7 +485,7 @@ class StubRuntime:
         self.system_prompts = StubPrompts()
         self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
-        self.skills = StubSkills()
+        self.skills: Any = StubSkills()
         self._models = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
@@ -533,6 +549,9 @@ class StubRuntime:
 
     def _resolve_resources_path(self) -> Path:
         return self.resources_dir
+
+    def reload_skills(self) -> None:
+        self.skills = ReloadableStubRuntimeSkills(self)
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
@@ -1253,6 +1272,38 @@ async def test_settings_update_persists_skill_directories_and_returns_full_paylo
     assert response["result"]["skills"] == {
         "default_directory": str(tmp_path / "skills"),
         "directories": ["~/skills", " C:/skills/team "],
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    update_response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"skills": {"directories": ["debugging"]}},
+        },
+    )
+    list_response = await dispatch_rpc(state, {"method": "skill.list", "params": {}})
+
+    assert update_response["ok"] is True, update_response
+    assert list_response == {
+        "ok": True,
+        "result": {
+            "skills": [
+                {
+                    "name": "debugging",
+                    "description": "debugging skill.",
+                    "valid": True,
+                    "warnings": [],
+                }
+            ],
+            "invalid_skills": [],
+        },
     }
 
 

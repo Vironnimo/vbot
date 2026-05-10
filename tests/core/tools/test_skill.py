@@ -13,6 +13,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.skill import load_skill_content
 
 
 def test_skill_tool_loads_body_and_resources(tmp_path: Path) -> None:
@@ -80,6 +81,28 @@ def test_skill_tool_file_read_error(tmp_path: Path) -> None:
 
     assert result["ok"] is False
     assert error["code"] == "skill_read_error"
+
+
+def test_load_skill_content_escapes_skill_name_in_wrapper(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "unsafe"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        """---
+name: unsafe
+description: Unsafe name.
+---
+
+Body.
+""",
+        encoding="utf-8",
+    )
+
+    result = load_skill_content('bad" name><tag', skill_file)
+
+    assert result["content"] == (
+        '<skill_content name="bad&quot; name&gt;&lt;tag">\nBody.\n</skill_content>'
+    )
 
 
 async def async_dispatch(

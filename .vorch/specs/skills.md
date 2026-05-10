@@ -55,7 +55,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - Unknown allowlist entries are ignored because skills are not hard execution gates.
 - Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
 - The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
-- `/skill-name` and `$skill-name` triggers preserve the original user message. Unknown or non-loadable triggers become internal system reminders.
+- `/skill-name` and `$skill-name` triggers preserve the original user message. `allowed_skills=[]` exposes no skills; only a missing/`None` allowlist falls back to wildcard behavior in compatibility test stubs. Unknown or non-loadable triggers become internal system reminders.
 
 ## External Dependencies
 

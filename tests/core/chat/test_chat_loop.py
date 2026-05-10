@@ -516,6 +516,35 @@ async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["/debugging fix this", "Please use $debugging on this issue"],
+)
+async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    skill_file = _write_test_skill(tmp_path, "debugging")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=[],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+
+    await ChatLoop(runtime).send("coder", message, session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert '<skill_content name="debugging">' not in request_text
+    assert request_messages[1]["content"] == message
+    assert "Skill trigger 'debugging' did not match" in request_messages[2]["content"]
+
+
+@pytest.mark.asyncio
 async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
@@ -531,6 +560,27 @@ async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> Non
     request_messages = adapter.requests[0]["messages"]
     assert request_messages[1]["content"] == "/missing do it"
     assert "Skill trigger 'missing' did not match" in request_messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=[],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
+
+    request_text = "\n".join(
+        message.get("content", "") or "" for message in adapter.requests[0]["messages"]
+    )
+    assert request_text.count("Skill trigger 'missing' did not match") == 1
 
 
 @pytest.mark.asyncio

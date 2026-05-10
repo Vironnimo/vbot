@@ -286,7 +286,13 @@ class StorageManager:
         for directory in directories:
             if not isinstance(directory, str) or not directory.strip():
                 raise StorageError("Skill directories must be non-empty strings")
-            normalized_directories.append(directory.strip())
+            normalized_directory = directory.strip()
+            if not _is_absolute_or_home_relative_path(normalized_directory):
+                raise StorageError(
+                    "Skill directories must be absolute paths or home-relative paths "
+                    "starting with ~"
+                )
+            normalized_directories.append(normalized_directory)
         return normalized_directories
 
     @staticmethod
@@ -306,3 +312,9 @@ class StorageManager:
     def _remove_temporary_file(temp_path: Path) -> None:
         with suppress(OSError):
             temp_path.unlink(missing_ok=True)
+
+
+def _is_absolute_or_home_relative_path(path: str) -> bool:
+    if path == "~" or path.startswith(("~/", "~\\")):
+        return True
+    return Path(path).is_absolute()

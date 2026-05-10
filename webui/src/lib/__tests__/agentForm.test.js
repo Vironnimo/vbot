@@ -106,6 +106,40 @@ describe('agent form helpers', () => {
     expect(result.payload.allowed_tools).toEqual([]);
   });
 
+  it('does not parse legacy string allowed skills when creating form values', () => {
+    const values = createAgentFormValues({
+      allowed_skills: 'debugging\nctx7',
+    });
+
+    expect(values.allowed_skills).toEqual(['*']);
+  });
+
+  it('does not parse legacy string allowed skills when normalizing payloads', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: ['*'],
+      allowed_skills: 'debugging\nctx7',
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_skills).toEqual(['*']);
+  });
+
+  it('keeps legacy string allowed tools parsing unchanged', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: 'read\nwrite',
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_tools).toEqual(['read', 'write']);
+  });
+
   it('omits blank workspace from create payloads', () => {
     const result = normalizeAgentForm({
       id: 'coder',

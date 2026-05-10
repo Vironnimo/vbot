@@ -206,6 +206,20 @@ class Runtime:
             directories.append(Path(raw_directory).expanduser())
         return directories
 
+    def reload_skills(self) -> None:
+        """Reload the runtime skill registry from current persisted settings."""
+        self._ensure_started()
+        settings = self.storage.load_settings()
+        resources_path = self._resolve_resources_path()
+        skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
+        self._skills = SkillRegistry.load(
+            self.storage.data_dir / "skills",
+            extra_dirs=skill_directories,
+        )
+        if self._tools is not None:
+            self._tools.unregister("skill")
+            register_skill_tool(self._tools, self._skills)
+
     # ------------------------------------------------------------------
     # Read-only registry access
     # ------------------------------------------------------------------

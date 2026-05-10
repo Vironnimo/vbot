@@ -41,7 +41,9 @@ and bot tokens (belongs to the user, read at startup as fallback credential
 source). Both live in the data directory (`~/.vbot`). Process environment keeps
 higher precedence than the data-dir `.env`; vBot does not rewrite `os.environ`
 from `.env` values. `settings.json` may include `skill_directories`, an array of
-additional skill scan roots configured from the Settings UI.
+absolute or home-relative additional skill scan roots configured from the
+Settings UI. Saving skill directories through `settings.update` reloads the
+runtime skill registry immediately.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
