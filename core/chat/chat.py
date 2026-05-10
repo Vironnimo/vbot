@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import uuid
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -251,6 +252,7 @@ class ChatSession:
         if path.suffix != SESSION_FILE_EXTENSION:
             raise ChatSessionError("session path must end with .jsonl")
         self.path = path
+        self._pending_notes: deque[ChatMessage] = deque()
 
     @classmethod
     def create(cls, sessions_dir: Path, session_id: str | None = None) -> ChatSession:
@@ -275,6 +277,18 @@ class ChatSession:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8", newline="") as session_file:
             session_file.write(payload + SESSION_LINE_ENDING)
+
+    def add_note(self, content: str) -> None:
+        """Persist a kernel-internal note and enqueue it for provider-request injection."""
+        note = ChatMessage.note(content)
+        self.append(note)
+        self._pending_notes.append(note)
+
+    def drain_pending_notes(self) -> list[ChatMessage]:
+        """Return all pending notes and clear the in-memory pending buffer."""
+        notes = list(self._pending_notes)
+        self._pending_notes.clear()
+        return notes
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
