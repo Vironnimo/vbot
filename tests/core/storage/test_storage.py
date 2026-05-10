@@ -217,6 +217,55 @@ def test_update_appearance_settings_rejects_invalid_payloads(
         storage.update_appearance_settings(appearance)
 
 
+def test_update_skill_directory_settings_persists_list_and_preserves_other_settings(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500, "appearance": {"language": "en"}})
+    absolute_skills = tmp_path / "team-skills"
+
+    updated = storage.update_skill_directory_settings(["~/skills", f" {absolute_skills} "])
+
+    assert updated == ["~/skills", str(absolute_skills)]
+    assert storage.load_skill_directory_settings() == ["~/skills", str(absolute_skills)]
+    assert storage.load_settings() == {
+        "appearance": {"language": "en"},
+        "server_port": 8500,
+        "skill_directories": ["~/skills", str(absolute_skills)],
+    }
+
+
+@pytest.mark.parametrize(
+    ("directories", "message"),
+    [
+        ("~/skills", "settings.skill_directories must be a list"),
+        ([""], "Skill directories must be non-empty strings"),
+        ([1], "Skill directories must be non-empty strings"),
+        (["relative/skills"], "absolute paths or home-relative paths"),
+        (["./skills"], "absolute paths or home-relative paths"),
+    ],
+)
+def test_update_skill_directory_settings_rejects_invalid_payloads(
+    tmp_path: Path,
+    directories: Any,
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match=message):
+        storage.update_skill_directory_settings(directories)
+
+
+def test_update_skill_directory_settings_accepts_windows_absolute_paths(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    updated = storage.update_skill_directory_settings(["C:/skills/team"])
+
+    assert updated == ["C:/skills/team"]
+
+
 def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     data_dir = tmp_path / "data"

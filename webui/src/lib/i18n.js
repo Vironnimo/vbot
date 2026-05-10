@@ -88,6 +88,7 @@ export const englishCatalog = Object.freeze({
   'chat.streamDisconnected': 'Live run disconnected',
   'chat.historyLoadError': 'Chat history could not be loaded.',
   'chat.sendError': 'Message could not be sent.',
+  'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
   'chat.sessionCreateError': 'New session could not be created.',
   'chat.role.user': 'You',
@@ -133,6 +134,10 @@ export const englishCatalog = Object.freeze({
   'chat.tokenBadgeNoContext': '{tokens} tok',
   'chat.tokenBadgeEstimatedNoContext': '~{tokens} tok',
   'chat.tokenBadgeNoUsage': '— / {context} tok',
+
+  'skillAutocomplete.label': 'Skill suggestions',
+  'skillAutocomplete.eyebrow': 'skills',
+  'skillAutocomplete.noDescription': 'No description available',
 
   'queue.title': 'Queued messages',
   'queue.empty': 'No queued messages.',
@@ -214,8 +219,11 @@ export const englishCatalog = Object.freeze({
   'agents.access.toggleTool': 'Toggle tool {name}',
   'agents.access.toggleSkill': 'Toggle skill {name}',
   'agents.access.descriptionLabel': '{description}',
-  'agents.access.noSkills':
-    'No backend skill catalog is available; add skill names below.',
+  'agents.access.noSkills': 'No loadable skills are available.',
+  'agents.access.skillWarnings': 'Warnings',
+  'agents.access.invalidSkillsTitle': 'Unavailable skills',
+  'agents.access.unknownSkillName': 'Unknown skill',
+  'agents.access.notLoadable': 'not loadable',
 
   'systemPrompt.title': 'System Prompt',
   'systemPrompt.subtitle':
@@ -249,6 +257,21 @@ export const englishCatalog = Object.freeze({
     'Root path for agents, sessions, and workspace files.',
   'settings.general.dataDirectoryPlaceholder':
     'Data directory placeholder, not a detected runtime value',
+  'settings.skills.title': 'Skills',
+  'settings.skills.subtitle':
+    'Additional directories scanned for local skills.',
+  'settings.skills.defaultDirectory': 'Default skill directory',
+  'settings.skills.defaultDirectoryDescription':
+    'Always scanned from the vBot data directory and kept read-only here.',
+  'settings.skills.extraDirectories': 'Additional skill directories',
+  'settings.skills.extraDirectoriesDescription':
+    'Absolute or home-relative paths from settings.json skill_directories.',
+  'settings.skills.pathPlaceholder': 'C:/path/to/skills',
+  'settings.skills.addDirectory': 'Add directory',
+  'settings.skills.removeDirectory': 'Remove skill directory {path}',
+  'settings.skills.emptyDirectories':
+    'No additional skill directories configured.',
+  'settings.skills.saveSuccess': 'Skill directories updated.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',

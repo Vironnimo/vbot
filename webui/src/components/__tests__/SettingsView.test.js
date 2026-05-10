@@ -257,6 +257,10 @@ function settingsPayload(options = {}) {
       items: providers,
       custom_endpoints: { supported: false, items: [] },
     },
+    skills: {
+      default_directory: 'C:/data/skills',
+      directories: [],
+    },
     appearance: {
       language: 'en',
       available_languages: ['en'],

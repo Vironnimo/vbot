@@ -423,6 +423,29 @@ class TestToolRegistryDispatch:
         with pytest.raises(ValueError, match="envelope"):
             await registry.dispatch(make_context("invalid_tool"), {}, ["*"])
 
+    @pytest.mark.asyncio
+    async def test_internal_tool_dispatch_ignores_empty_allowlist(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            "internal_tool",
+            "Internal tool for testing.",
+            {"type": "object"},
+            lambda _context, _arguments: tool_success({"called": True}),
+            internal=True,
+        )
+
+        result = await registry.dispatch(make_context("internal_tool"), {}, [])
+
+        assert result == tool_success({"called": True})
+
+    @pytest.mark.asyncio
+    async def test_empty_allowlist_still_blocks_normal_tool_dispatch(self) -> None:
+        registry = ToolRegistry()
+        register_read_file(registry)
+
+        with pytest.raises(Exception, match="Tool not allowed: read_file"):
+            await registry.dispatch(make_context("read_file"), {"path": "SOUL.md"}, [])
+
 
 class TestToolExecutor:
     @pytest.mark.asyncio

@@ -50,6 +50,7 @@ class StubAgent:
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
+    allowed_skills: list[str] | None = None
     workspace: Path | None = None
 
     def __post_init__(self) -> None:
@@ -122,6 +123,23 @@ class StubPrompts:
                 "parameters": {"type": "object"},
             }
         ]
+
+
+@dataclass(frozen=True)
+class StubSkill:
+    name: str
+    description: str
+    path: Path
+
+
+class StubSkills:
+    def __init__(self, skills: list[StubSkill]) -> None:
+        self._skills = {skill.name: skill for skill in skills}
+
+    def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
+        if "*" in allowed_skills:
+            return sorted(self._skills.values(), key=lambda skill: skill.name)
+        return [self._skills[name] for name in allowed_skills if name in self._skills]
 
 
 class StubAdapter:
@@ -247,6 +265,7 @@ class StubRuntime:
         self.provider_credentials = StubProviderCredentials(
             {f"{agent.model.split('/', 1)[0]}:api-key"}
         )
+        self.skills = StubSkills([])
         self.adapter = adapter
         self.adapter_provider_id: str | None = None
         self.adapter_connection_id: str | None = None
@@ -407,6 +426,161 @@ async def test_request_messages_without_notes_keep_existing_shape(tmp_path: Path
     assert request_messages[0]["content"] == "System for coder"
     assert request_messages[1]["content"] == "Hi"
     assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: Path) -> None:
+    skill_file = _write_test_skill(tmp_path, "debugging")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=["debugging"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+
+    await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert request_messages[1]["content"].startswith('<skill_content name="debugging">')
+    assert request_messages[2]["content"] == "/debugging fix this"
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert "[skill-context]" not in request_text
+    assert "<system-reminder>\n[skill-context]" not in request_text
+
+
+@pytest.mark.asyncio
+async def test_skill_context_persists_across_later_sends_without_visible_user_message(
+    tmp_path: Path,
+) -> None:
+    skill_file = _write_test_skill(tmp_path, "debugging")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=["debugging"],
+    )
+    adapter = StubAdapter(
+        [
+            {"content": "First", "tool_calls": None},
+            {"content": "Second", "tool_calls": None},
+        ]
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+
+    await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
+    await ChatLoop(runtime).send("coder", "continue", session_id="session-one")
+
+    second_request_messages = adapter.requests[1]["messages"]
+    assert second_request_messages[1]["content"].startswith('<skill_content name="debugging">')
+    assert second_request_messages[-1]["content"] == "continue"
+    persisted_messages = runtime.chat_sessions.get("coder", "session-one").load()
+    visible_messages = [message for message in persisted_messages if message.role != "note"]
+    assert [message.role for message in visible_messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert all(
+        not (message.role == "user" and (message.content or "").startswith("<skill_content "))
+        for message in visible_messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -> None:
+    skill_file = _write_test_skill(tmp_path, "debugging")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=["debugging"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+
+    await ChatLoop(runtime).send(
+        "coder",
+        "Please use $debugging on this issue",
+        session_id="session-one",
+    )
+
+    request_messages = adapter.requests[0]["messages"]
+    assert request_messages[1]["content"].startswith('<skill_content name="debugging">')
+    assert request_messages[2]["content"] == "Please use $debugging on this issue"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["/debugging fix this", "Please use $debugging on this issue"],
+)
+async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    skill_file = _write_test_skill(tmp_path, "debugging")
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=[],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
+
+    await ChatLoop(runtime).send("coder", message, session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert '<skill_content name="debugging">' not in request_text
+    assert request_messages[1]["content"] == message
+    assert "Skill trigger 'debugging' did not match" in request_messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=[],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert request_messages[1]["content"] == "/missing do it"
+    assert "Skill trigger 'missing' did not match" in request_messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=[],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
+
+    request_text = "\n".join(
+        message.get("content", "") or "" for message in adapter.requests[0]["messages"]
+    )
+    assert request_text.count("Skill trigger 'missing' did not match") == 1
 
 
 @pytest.mark.asyncio
@@ -1367,6 +1541,25 @@ async def test_response_without_usage_applies_estimation(
     completed = [event for event in run.events if event.type == "run_completed"]
     assert len(completed) == 1
     assert completed[0].payload["usage"]["estimated"] is True
+
+
+def _write_test_skill(tmp_path: Path, name: str) -> Path:
+    skill_dir = tmp_path / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        f"""---
+name: {name}
+description: Test skill.
+---
+
+# {name}
+
+Use this skill content.
+""",
+        encoding="utf-8",
+    )
+    return skill_file
 
 
 @pytest.mark.asyncio

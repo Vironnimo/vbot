@@ -36,6 +36,42 @@ export function getDataDirectoryValue(settings, translate) {
   );
 }
 
+export function getDefaultSkillDirectoryValue(settings, translate) {
+  return (
+    settings?.skills?.default_directory ??
+    settings?.general?.default_skill_directory ??
+    translate('common.unknown', 'Unknown')
+  );
+}
+
+export function getSkillDirectories(settings) {
+  return Array.isArray(settings?.skills?.directories)
+    ? normalizeSkillDirectories(settings.skills.directories)
+    : [];
+}
+
+export function normalizeSkillDirectories(directories) {
+  if (!Array.isArray(directories)) {
+    return [];
+  }
+
+  return directories
+    .map((directory) =>
+      directory === null || directory === undefined
+        ? ''
+        : String(directory).trim(),
+    )
+    .filter((directory) => directory.length > 0);
+}
+
+export function createSkillDirectoriesUpdatePayload(directories) {
+  return {
+    skills: {
+      directories: normalizeSkillDirectories(directories),
+    },
+  };
+}
+
 export function getProviderItems(settings) {
   return Array.isArray(settings?.providers?.items)
     ? settings.providers.items
@@ -173,6 +209,11 @@ export function normalizeSettingsForDisplay(settings, translate) {
   return {
     serverHostValue: formatServerHost(settings?.general?.server, translate),
     dataDirectoryValue: getDataDirectoryValue(settings, translate),
+    defaultSkillDirectoryValue: getDefaultSkillDirectoryValue(
+      settings,
+      translate,
+    ),
+    skillDirectories: getSkillDirectories(settings),
     providerItems: getProviderItems(settings),
     availableLanguageOptions: buildLanguageOptions(settings?.appearance),
     persistedLanguageId: getPersistedLanguageId(settings),

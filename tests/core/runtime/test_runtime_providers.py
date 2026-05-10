@@ -275,7 +275,16 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "read",
         "write",
     ]
-    assert runtime.skills.list_all() == []
+    assert [skill.name for skill in runtime.skills.list_all()] == [
+        "poem-writer",
+        "warning-example",
+    ]
+    assert runtime.skills.warnings_for("warning-example") == [
+        "Skill name 'warning-example' does not match directory name 'warning-name-mismatch'."
+    ]
+    assert [diagnostic.name for diagnostic in runtime.skills.invalid_diagnostics()] == [
+        "broken-skill"
+    ]
     assert runtime.chat_sessions.sessions_dir("coder") == (
         runtime.storage.data_dir / "agents" / "coder" / "sessions"
     )

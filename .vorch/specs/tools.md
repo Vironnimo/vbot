@@ -4,15 +4,16 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 ## Overview
 
-`core/tools/` owns the registry of callable tools available to an agentic loop. The same allowlist filtering controls prompt-visible tools and official provider API tool definitions. Tools execute with a typed runtime `ToolContext` and return stable result envelopes so normal tool failures can be returned to the agent instead of failing the run. Built-in tools are registered during runtime startup.
+`core/tools/` owns the registry of callable tools available to an agentic loop. Normal tools use the same allowlist filtering for prompt-visible tools and official provider API tool definitions. Tools execute with a typed runtime `ToolContext` and return stable result envelopes so normal tool failures can be returned to the agent instead of failing the run. Built-in tools are registered during runtime startup.
 
 ## Data Model
 
-- `Tool`: `name`, `description`, `parameters`, `handler`.
+- `Tool`: `name`, `description`, `parameters`, `handler`, and `internal`.
 - `parameters` is a JSON Schema object for provider tool definitions.
 - `handler` receives `(ToolContext, arguments)` and returns a JSON result envelope, synchronously or asynchronously.
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, plus small runtime hooks.
 - Tool runtime hooks include lifecycle event emission, cancellation checks, and an optional note hook for adding kernel-internal background reminders to the current chat Session without exposing the Session object to tools.
+- Tool runtime hooks also include an optional skill activation hook plus `allowed_skills` for the internal `skill` tool.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - `ToolCall`: one requested tool invocation with stable id, index, name, and arguments.
 - Built-in `read` tool: flat name `read`; schema includes required `path` plus
@@ -36,22 +37,29 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `output_mode`. It searches file contents by regex by default or fixed string
   when `literal: true`. Relative paths resolve from `ToolContext.workspace`;
   absolute file or directory paths are allowed.
+- Internal `skill` tool: flat name `skill`; schema includes required `name`.
+  It loads an allowed skill's `SKILL.md` body, wraps it in `<skill_content>`,
+  lists activation-time resources, and stores the context in the current Session.
+  It is system-managed and not part of user-managed tool catalogs.
 
 ## Interfaces
 
-- `ToolRegistry.register(name, description, parameters, handler) -> Tool`
+- `ToolRegistry.register(name, description, parameters, handler, internal=False) -> Tool`
 - `get(name) -> Tool`
-- `list_tools(allowed_tools=None) -> list[Tool]`
-- `provider_definitions(allowed_tools=None) -> list[dict]` — name, description, JSON Schema.
-- `prompt_definitions(allowed_tools=None) -> list[dict]` — name and description only.
-- `dispatch(context, name, arguments, allowed_tools=None) -> dict` — executes through an async interface and returns a result envelope.
+- `unregister(name) -> None` — removes a registered tool when present; used for replacing internal tool handlers after runtime skill reloads.
+- `list_tools(allowed_tools=None, include_internal=False) -> list[Tool]`
+- `provider_definitions(allowed_tools=None, include_internal=False) -> list[dict]` — name, description, JSON Schema.
+- `prompt_definitions(allowed_tools=None, include_internal=False) -> list[dict]` — name and description only.
+- `dispatch(context, arguments, allowed_tools=None) -> dict` — executes `context.tool_name` through an async interface and returns a result envelope.
 - `ToolExecutor.execute_many(...) -> list[ToolExecutionResult]` — executes sibling tool calls concurrently, applies per-run/global concurrency limits, and returns terminal results in original tool-call order.
 - `ToolContext.add_note(content) -> None` — calls the configured note hook when present; otherwise it is a no-op. Chat wires this to `ChatSession.add_note()` so a tool can inject a background reminder for the next model request.
+- `ToolContext.activate_skill(name, data) -> dict | None` — calls the configured skill activation hook when present; otherwise returns `None`.
 - `register_read_tool(registry) -> None` — registers the built-in `read` tool.
 - `register_edit_tool(registry) -> None` — registers the built-in `edit` tool.
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 - `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
+- `register_skill_tool(registry, skill_registry) -> None` — registers the internal `skill` tool.
 
 ## Conventions
 
@@ -59,6 +67,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `allowed_tools=[]` means no tools.
 - Explicit allowlists match exact tool names; unknown names are ignored for listing and fail if dispatched.
 - Provider-visible definitions include only `name`, `description`, and `parameters`; handlers and runtime context are internal.
+- Internal tools are hidden from normal `list_tools()`, `prompt_definitions()`, and `provider_definitions()` unless `include_internal=True` is explicitly requested by the system prompt manager.
+- The internal `skill` tool is governed by `allowed_skills`, not `allowed_tools`; normal tool allowlists must not block it. Normal tools remain blocked by `allowed_tools=[]`.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
 - Tool execution failures are represented as failure envelopes where possible.
 - `read` is the authoritative read-like tool. It is the vControl-derived
@@ -104,5 +114,5 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 ## Constraints & Gotchas
 
 - Tool results must be JSON objects that match the stable result envelope. Non-envelope results are rejected.
-- Disallowed tools are blocked at dispatch time even if a provider asks for them.
+- Disallowed normal tools are blocked at dispatch time even if a provider asks for them. Internal tools bypass `allowed_tools` and must perform their own domain-specific checks.
 - Parallel result persistence must preserve the assistant's original tool-call order even when completion order differs.
