@@ -31,9 +31,6 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Resets started state and clears service references. Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
-- `LogManager` writes runtime-managed logs to `<data_dir>/logs/<YYYY-MM-DD>`
-  using the exact format `timestamp [LEVEL] name - message`; warnings render as
-  `[WARN]`.
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed
   through `has_provider_credentials(provider_id)` and

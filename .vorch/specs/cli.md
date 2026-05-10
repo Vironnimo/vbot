@@ -43,8 +43,7 @@ foreground entrypoint.
   `restart` fail with a clear conflict error and must not terminate that process.
 - `status` reports "not running" for vBot in that conflict case and adds a note
   that another service is using the target address/port.
-- Logs for the managed instance belong under `<data_dir>/logs/` and use the
-  shared daily-file contract (`<data_dir>/logs/<YYYY-MM-DD>`).
+- Logs for the managed instance belong under `<data_dir>/logs/`.
 - The CLI never opens a browser.
 - Process termination is allowed only after `/health` confirms the target is a
   vBot server, and local process lookup must match the resolved host/address and
@@ -59,6 +58,5 @@ foreground entrypoint.
   timeout. In-flight Runs may be interrupted.
 - Phase 5 does not require separate stale PID or launch-metadata recovery rules;
   live reachability and `/health` detection are the authority.
-- CLI-managed background server startup should avoid duplicating normal
-  application log lines to unmanaged stdio sinks when the managed log file is
-  already the authoritative record.
+- CLI-managed background server startup must not bypass the managed
+  application logger.
