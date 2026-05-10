@@ -46,7 +46,7 @@ Persisted agent configuration and workspace lifecycle management.
 - Writes to `agent.json` use a same-directory temp file plus atomic replace.
 - Workspace templates are `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, and `USER.md` in `resources/workspace-templates/`.
 - Prompt bodies are file-backed through `StorageManager.read_prompt_fragment()`, not hardcoded in code.
-- Workspace includes are restricted to the four workspace template filenames.
+- Workspace includes accept any safe flat filename (no path separators, not absolute). The `{include:filename}` directive wraps the resolved content as `<file name="{filename}">\n{content}\n</file>` in the built prompt.
 
 ## Constraints & Gotchas
 
