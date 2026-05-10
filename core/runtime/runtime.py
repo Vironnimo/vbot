@@ -6,7 +6,7 @@ all core services and manages the application lifecycle.
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
 from core.chat.chat import ChatSessionManager
@@ -28,6 +28,7 @@ from core.tools import (
     register_glob_tool,
     register_grep_tool,
     register_read_tool,
+    register_skill_tool,
     register_write_tool,
 )
 from core.tools.tools import ToolRegistry
@@ -134,7 +135,13 @@ class Runtime:
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
-        self._skills = SkillRegistry.load(self._storage.data_dir / "skills")
+        settings = self._storage.load_settings()
+        skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
+        self._skills = SkillRegistry.load(
+            self._storage.data_dir / "skills",
+            extra_dirs=skill_directories,
+        )
+        register_skill_tool(self._tools, self._skills)
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(
@@ -178,6 +185,42 @@ class Runtime:
             raise RuntimeError("Agent service not available")
         if not self._agents.list():
             self._agents.create("main", "Main")
+
+    def _extra_skill_directories(self, settings: dict[str, object]) -> list[Path]:
+        raw_directories = settings.get("skill_directories", [])
+        if not isinstance(raw_directories, list):
+            if self.logger is not None:
+                cast(Any, self.logger).warning(
+                    "settings.skill_directories must be a list; ignoring value"
+                )
+            return []
+
+        directories: list[Path] = []
+        for raw_directory in raw_directories:
+            if not isinstance(raw_directory, str) or not raw_directory.strip():
+                if self.logger is not None:
+                    cast(Any, self.logger).warning(
+                        "Ignoring invalid skill directory setting: %r", raw_directory
+                    )
+                continue
+            directories.append(Path(raw_directory).expanduser())
+        return directories
+
+    def reload_skills(self) -> None:
+        """Reload the runtime skill registry from current persisted settings."""
+        self._ensure_started()
+        settings = self.storage.load_settings()
+        resources_path = self._resolve_resources_path()
+        skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
+        self._skills = SkillRegistry.load(
+            self.storage.data_dir / "skills",
+            extra_dirs=skill_directories,
+        )
+        if self._tools is not None:
+            self._tools.unregister("skill")
+            register_skill_tool(self._tools, self._skills)
+        if self._system_prompts is not None:
+            self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
 
     # ------------------------------------------------------------------
     # Read-only registry access

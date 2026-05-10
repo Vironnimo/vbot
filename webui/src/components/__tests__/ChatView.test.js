@@ -131,6 +131,20 @@ function createChatRpcMock({ usage, contextWindow = 262144 } = {}) {
       };
     }
 
+    if (method === 'skill.list') {
+      return {
+        skills: [
+          {
+            name: 'debugging',
+            description: 'Investigate unclear bugs.',
+            valid: true,
+            warnings: [],
+          },
+        ],
+        invalid_skills: [],
+      };
+    }
+
     throw new Error(`Unexpected RPC method: ${method}`);
   };
 }

@@ -9,7 +9,6 @@
     AGENT_FORM_MODE_EDIT,
     createAgentFormValues,
     normalizeAgentForm,
-    textToList,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
 
@@ -46,6 +45,8 @@
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let availableTools = $state([]);
+  let availableSkills = $state([]);
+  let invalidSkills = $state([]);
   let modelSelectValue = $state('');
   let fallbackModelSelectValue = $state('');
 
@@ -68,7 +69,7 @@
         }),
   );
   let visibleToolItems = $derived(toolAccessItems());
-  let visibleSkillItems = $derived(accessItems(formValues.allowed_skills));
+  let visibleSkillItems = $derived(skillAccessItems());
   let modelOptions = $derived(
     selectModelOptions(
       formValues.model,
@@ -120,11 +121,13 @@
 
   async function loadCatalogs() {
     try {
-      const [modelsResult, connectionsResult, toolsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
-        rpc('tool.list'),
-      ]);
+      const [modelsResult, connectionsResult, toolsResult, skillsResult] =
+        await Promise.all([
+          rpc('model.list'),
+          rpc('connection.list'),
+          rpc('tool.list'),
+          rpc('skill.list'),
+        ]);
 
       availableModels = Array.isArray(modelsResult?.models)
         ? modelsResult.models
@@ -134,6 +137,12 @@
         : [];
       availableTools = Array.isArray(toolsResult?.tools)
         ? toolsResult.tools
+        : [];
+      availableSkills = Array.isArray(skillsResult?.skills)
+        ? skillsResult.skills
+        : [];
+      invalidSkills = Array.isArray(skillsResult?.invalid_skills)
+        ? skillsResult.invalid_skills
         : [];
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.loadError'));
@@ -261,19 +270,9 @@
       return;
     }
 
-    const currentItems = textToList(formValues[fieldName]);
-    const nextItems = currentItems.filter((item) => item !== WILDCARD_ACCESS);
-    const existingIndex = nextItems.indexOf(itemName);
-
-    if (isAllowed && existingIndex === -1) {
-      nextItems.push(itemName);
+    if (fieldName === 'allowed_skills') {
+      updateSkillAccessItem(itemName, isAllowed);
     }
-
-    if (!isAllowed && existingIndex !== -1) {
-      nextItems.splice(existingIndex, 1);
-    }
-
-    formValues[fieldName] = nextItems.join('\n');
   }
 
   function setAccessItems(fieldName, items, isAllowed) {
@@ -282,9 +281,9 @@
       return;
     }
 
-    formValues[fieldName] = isAllowed
-      ? items.map((item) => item.name).join('\n')
-      : '';
+    if (fieldName === 'allowed_skills') {
+      formValues.allowed_skills = isAllowed ? [WILDCARD_ACCESS] : [];
+    }
   }
 
   function updateToolAccessItem(itemName, isAllowed) {
@@ -332,24 +331,6 @@
     formValues.allowed_tools = nextItems;
   }
 
-  function accessItems(text) {
-    const items = textToList(text);
-
-    if (items.length === 0) {
-      return [];
-    }
-
-    if (items.includes(WILDCARD_ACCESS)) {
-      return [{ name: WILDCARD_ACCESS, isAllowed: true, isWildcard: true }];
-    }
-
-    return items.map((item) => ({
-      name: item,
-      isAllowed: true,
-      isWildcard: false,
-    }));
-  }
-
   function toolAccessItems() {
     const currentItems = Array.isArray(formValues.allowed_tools)
       ? formValues.allowed_tools
@@ -361,6 +342,65 @@
       ...tool,
       isAllowed: hasWildcard || allowedItems.includes(tool.name),
     }));
+  }
+
+  function skillAccessItems() {
+    const currentItems = Array.isArray(formValues.allowed_skills)
+      ? formValues.allowed_skills
+      : [];
+    const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
+    const allowedItems = hasWildcard ? [] : currentItems;
+
+    return availableSkills.map((skill) => ({
+      ...skill,
+      warnings: Array.isArray(skill.warnings) ? skill.warnings : [],
+      isAllowed: hasWildcard || allowedItems.includes(skill.name),
+    }));
+  }
+
+  function updateSkillAccessItem(itemName, isAllowed) {
+    const allSkillNames = availableSkills.map((skill) => skill.name);
+
+    if (allSkillNames.length === 0) {
+      formValues.allowed_skills = [];
+      return;
+    }
+
+    const currentItems = Array.isArray(formValues.allowed_skills)
+      ? [...formValues.allowed_skills]
+      : [];
+
+    if (currentItems.includes(WILDCARD_ACCESS)) {
+      if (isAllowed) {
+        formValues.allowed_skills = [WILDCARD_ACCESS];
+        return;
+      }
+
+      formValues.allowed_skills = allSkillNames.filter(
+        (name) => name !== itemName,
+      );
+      return;
+    }
+
+    const nextItems = currentItems.filter((item) =>
+      allSkillNames.includes(item),
+    );
+    const existingIndex = nextItems.indexOf(itemName);
+
+    if (isAllowed && existingIndex === -1) {
+      nextItems.push(itemName);
+    }
+
+    if (!isAllowed && existingIndex !== -1) {
+      nextItems.splice(existingIndex, 1);
+    }
+
+    if (allSkillNames.every((name) => nextItems.includes(name))) {
+      formValues.allowed_skills = [WILDCARD_ACCESS];
+      return;
+    }
+
+    formValues.allowed_skills = nextItems;
   }
 
   function createConnectionAgentFormValues(agent = {}) {
@@ -981,7 +1021,30 @@
               <div class="tl-items">
                 {#each visibleSkillItems as item (item.name)}
                   <div class="tl-item">
-                    <span class="tl-item-name">{item.name}</span>
+                    <div class="agents-view__access-copy">
+                      <span class="tl-item-name">{item.name}</span>
+                      {#if item.description}
+                        <span class="agents-view__access-description">
+                          {t(
+                            'agents.access.descriptionLabel',
+                            '{description}',
+                            { description: item.description },
+                          )}
+                        </span>
+                      {/if}
+                      {#if item.valid === false && item.warnings.length > 0}
+                        <div class="agents-view__skill-warnings">
+                          <span class="agents-view__warning-label">
+                            {t('agents.access.skillWarnings', 'Warnings')}
+                          </span>
+                          <ul>
+                            {#each item.warnings as warning, index (`${item.name}-warning-${index}`)}
+                              <li>{warning}</li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    </div>
                     <button
                       class="tl-toggle"
                       class:on={item.isAllowed}
@@ -1012,18 +1075,52 @@
               <p class="agents-view__placeholder-row">
                 {t(
                   'agents.access.noSkills',
-                  'No backend skill catalog is available; add skill names below.',
+                  'No loadable skills are available.',
                 )}
               </p>
             {/if}
-            <label class="agents-view__access-editor">
-              <span>{t('agents.form.allowedSkills', 'Allowed skills')}</span>
-              <textarea rows="4" bind:value={formValues.allowed_skills}
-              ></textarea>
-              <small
-                >{t('agents.form.listHelp', 'Enter one item per line.')}</small
-              >
-            </label>
+            {#if invalidSkills.length > 0}
+              <div class="agents-view__invalid-skills">
+                <div class="agents-view__invalid-skills-title">
+                  {t('agents.access.invalidSkillsTitle', 'Unavailable skills')}
+                </div>
+                <div class="agents-view__invalid-skills-list">
+                  {#each invalidSkills as item (item.path || item.name)}
+                    <div class="agents-view__invalid-skill">
+                      <div class="agents-view__access-copy">
+                        <span class="tl-item-name">
+                          {item.name ||
+                            t(
+                              'agents.access.unknownSkillName',
+                              'Unknown skill',
+                            )}
+                        </span>
+                        {#if item.path}
+                          <span class="agents-view__invalid-skill-path">
+                            {item.path}
+                          </span>
+                        {/if}
+                        {#if Array.isArray(item.warnings) && item.warnings.length > 0}
+                          <div class="agents-view__skill-warnings">
+                            <span class="agents-view__warning-label">
+                              {t('agents.access.skillWarnings', 'Warnings')}
+                            </span>
+                            <ul>
+                              {#each item.warnings as warning, index (`${item.path || item.name}-warning-${index}`)}
+                                <li>{warning}</li>
+                              {/each}
+                            </ul>
+                          </div>
+                        {/if}
+                      </div>
+                      <span class="chip chip-amber">
+                        {t('agents.access.notLoadable', 'not loadable')}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
 
           <div class="detail-fields agents-view__access-meta">
@@ -1287,8 +1384,7 @@
     grid-column: 1 / -1;
   }
 
-  .f-label,
-  .agents-view__access-editor span {
+  .f-label {
     color: var(--text-lo);
     font-family: var(--font-mono);
     font-size: 10.5px;
@@ -1375,17 +1471,71 @@
     line-height: 1.4;
   }
 
-  .agents-view__access-editor {
+  .agents-view__skill-warnings {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 12px 16px 16px;
+    gap: 4px;
+    margin-top: 3px;
+    padding: 7px 9px;
+    border: 1px solid rgba(245, 158, 11, 0.18);
+    border-left: 2px solid var(--amber);
+    border-radius: var(--r-sm);
+    color: var(--amber);
+    background: rgba(245, 158, 11, 0.06);
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+
+  .agents-view__skill-warnings ul {
+    margin: 0;
+    padding-left: 16px;
+  }
+
+  .agents-view__warning-label,
+  .agents-view__invalid-skills-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.07em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .agents-view__invalid-skills {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 16px 14px;
     border-top: 1px solid var(--border);
   }
 
-  .agents-view__access-editor textarea {
-    min-height: 82px;
-    resize: vertical;
+  .agents-view__invalid-skills-title {
+    color: var(--text-lo);
+  }
+
+  .agents-view__invalid-skills-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .agents-view__invalid-skill {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 10px;
+    border: 1px solid rgba(245, 158, 11, 0.18);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+
+  .agents-view__invalid-skill-path {
+    overflow-wrap: anywhere;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .agents-view__access-meta {
@@ -1452,7 +1602,7 @@
   }
 
   .agents-view__field-help,
-  .agents-view__access-editor small {
+  .agents-view__field-hint {
     color: var(--text-lo);
     font-size: 12px;
     line-height: 1.4;

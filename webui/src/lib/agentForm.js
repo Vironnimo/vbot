@@ -6,6 +6,9 @@ export const DEFAULT_AGENT_ALLOWED_LIST = '*';
 export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
+export const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
+  DEFAULT_AGENT_ALLOWED_LIST,
+]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const EMPTY_TEXT = '';
@@ -25,9 +28,9 @@ export function createAgentFormValues(agent = {}) {
       agent.allowed_tools,
       DEFAULT_AGENT_ALLOWED_TOOLS,
     ),
-    allowed_skills: listToText(
+    allowed_skills: normalizeArrayList(
       agent.allowed_skills,
-      DEFAULT_AGENT_ALLOWED_LIST,
+      DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
   };
 }
@@ -57,7 +60,7 @@ export function normalizeAgentForm(values, options = {}) {
     temperature,
     thinking_effort: normalized.thinking_effort,
     allowed_tools: normalized.allowed_tools,
-    allowed_skills: textToList(normalized.allowed_skills),
+    allowed_skills: normalized.allowed_skills,
   };
 
   if (mode === AGENT_FORM_MODE_CREATE) {
@@ -103,7 +106,7 @@ function normalizeValues(values = {}) {
     temperature: asText(values.temperature).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
     allowed_tools: normalizeList(values.allowed_tools),
-    allowed_skills: asText(values.allowed_skills),
+    allowed_skills: normalizeArrayList(values.allowed_skills),
   };
 }
 
@@ -112,6 +115,16 @@ function normalizeList(items, fallback = []) {
     return textToList(items);
   }
 
+  if (!Array.isArray(items)) {
+    return [...fallback];
+  }
+
+  return items
+    .map((item) => asText(item).trim())
+    .filter((item) => item.length > 0);
+}
+
+function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {
   if (!Array.isArray(items)) {
     return [...fallback];
   }

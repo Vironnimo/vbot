@@ -71,6 +71,10 @@ describe('AgentsView', () => {
         return { tools: [] };
       }
 
+      if (method === 'skill.list') {
+        return skillCatalog();
+      }
+
       if (method === 'agent.list') {
         return {
           agents: [
@@ -146,6 +150,10 @@ describe('AgentsView', () => {
 
       if (method === 'tool.list') {
         return { tools: [] };
+      }
+
+      if (method === 'skill.list') {
+        return skillCatalog();
       }
 
       if (method === 'agent.list') {
@@ -588,6 +596,10 @@ describe('AgentsView', () => {
         return { tools: [] };
       }
 
+      if (method === 'skill.list') {
+        return skillCatalog();
+      }
+
       if (method === 'agent.list') {
         return { agents: [baseAgent()] };
       }
@@ -607,6 +619,45 @@ describe('AgentsView', () => {
     expect(searchableOptionLabels('agent-model')).not.toContain(
       'openai/gpt-5.2',
     );
+  });
+
+  it('renders skill catalog warnings and unavailable diagnostics', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('poem-writer');
+
+    expect(document.body.textContent).toContain('Writes tiny poems.');
+    expect(document.body.textContent).toContain('name differs from folder');
+    expect(document.body.textContent).toContain('Unavailable skills');
+    expect(document.body.textContent).toContain('broken-skill');
+    expect(document.body.textContent).toContain('missing description');
+
+    const skillToggle = Array.from(
+      document.body.querySelectorAll('button.tl-toggle'),
+    ).find((button) =>
+      button.getAttribute('aria-label')?.includes('Toggle skill warning-skill'),
+    );
+    expect(skillToggle).toBeTruthy();
+    expect(skillToggle.getAttribute('aria-checked')).toBe('true');
+
+    skillToggle.click();
+    flushSync();
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1].allowed_skills).toEqual(['poem-writer']);
   });
 });
 
@@ -786,6 +837,10 @@ function createAgentsRpcMock(options = {}) {
       return { tools: [] };
     }
 
+    if (method === 'skill.list') {
+      return options.skills ?? skillCatalog();
+    }
+
     if (method === 'agent.list') {
       return { agents };
     }
@@ -795,6 +850,33 @@ function createAgentsRpcMock(options = {}) {
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
+function skillCatalog() {
+  return {
+    skills: [
+      {
+        name: 'poem-writer',
+        description: 'Writes tiny poems.',
+        valid: true,
+        warnings: [],
+      },
+      {
+        name: 'warning-skill',
+        description: 'Loads with a warning.',
+        valid: false,
+        warnings: ['name differs from folder'],
+      },
+    ],
+    invalid_skills: [
+      {
+        name: 'broken-skill',
+        path: 'C:/skills/broken-skill/SKILL.md',
+        valid: false,
+        warnings: ['missing description'],
+      },
+    ],
   };
 }
 
@@ -857,4 +939,11 @@ async function waitForCondition(check, attempts = 20) {
   }
 
   throw new Error('Timed out waiting for condition.');
+}
+
+async function waitForText(text, attempts = 20) {
+  await waitForCondition(
+    () => document.body.textContent?.includes(text),
+    attempts,
+  );
 }

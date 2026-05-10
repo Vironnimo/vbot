@@ -341,6 +341,7 @@ class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
         self._appearance = {"language": "en"}
+        self._skill_directories: list[str] = []
 
     def load_appearance_settings(self) -> JsonObject:
         return dict(self._appearance)
@@ -360,12 +361,72 @@ class StubStorage:
         self._appearance = {"language": language}
         return dict(self._appearance)
 
+    def load_skill_directory_settings(self) -> list[str]:
+        return list(self._skill_directories)
+
+    def update_skill_directory_settings(self, directories: object) -> list[str]:
+        if not isinstance(directories, list) or not all(
+            isinstance(directory, str) for directory in directories
+        ):
+            raise StorageError("settings.skill_directories must be a list")
+        self._skill_directories = list(directories)
+        return list(self._skill_directories)
+
 
 class StubPrompts:
     def build_system_prompt(self, agent: StubAgent) -> str:
         return f"System for {agent.id}"
 
     def provider_tool_definitions(self, _agent: StubAgent) -> list[JsonObject]:
+        return []
+
+
+@dataclass(frozen=True)
+class StubSkill:
+    name: str
+    description: str
+
+
+class StubSkills:
+    def __init__(self) -> None:
+        self._skills = [
+            StubSkill("debugging", "Debug failures."),
+            StubSkill("warned", "Loads with warnings."),
+        ]
+        self._warnings = {"debugging": [], "warned": ["Name does not match directory."]}
+        self._invalid = [
+            SimpleNamespace(
+                name="broken",
+                path=Path("/skills/broken/SKILL.md"),
+                valid=False,
+                warnings=["missing description"],
+                loadable=False,
+            )
+        ]
+
+    def list_all(self) -> list[StubSkill]:
+        return list(self._skills)
+
+    def warnings_for(self, name: str) -> list[str]:
+        return list(self._warnings[name])
+
+    def invalid_diagnostics(self) -> list[Any]:
+        return list(self._invalid)
+
+
+class ReloadableStubRuntimeSkills:
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def list_all(self) -> list[StubSkill]:
+        return [
+            StubSkill(name, f"{name} skill.") for name in self._runtime.storage._skill_directories
+        ]
+
+    def warnings_for(self, _name: str) -> list[str]:
+        return []
+
+    def invalid_diagnostics(self) -> list[Any]:
         return []
 
 
@@ -424,6 +485,7 @@ class StubRuntime:
         self.system_prompts = StubPrompts()
         self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
+        self.skills: Any = StubSkills()
         self._models = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
@@ -487,6 +549,9 @@ class StubRuntime:
 
     def _resolve_resources_path(self) -> Path:
         return self.resources_dir
+
+    def reload_skills(self) -> None:
+        self.skills = ReloadableStubRuntimeSkills(self)
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
@@ -596,6 +661,10 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                 },
             ],
             "custom_endpoints": {"supported": False, "items": []},
+        },
+        "skills": {
+            "default_directory": str(tmp_path / "skills"),
+            "directories": [],
         },
         "appearance": {"language": "en", "available_languages": ["en"]},
     }
@@ -1105,6 +1174,57 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
 
 
 @pytest.mark.asyncio
+async def test_tool_list_omits_internal_skill_tool(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.tools.register(
+        "skill",
+        "Load skills",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        lambda _context, _arguments: {"ok": True, "error": None, "data": {}, "artifacts": []},
+        internal=True,
+    )
+
+    response = await dispatch_rpc(state, {"method": "tool.list", "params": {}})
+
+    assert response == {"ok": True, "result": {"tools": []}}
+
+
+@pytest.mark.asyncio
+async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "skill.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "skills": [
+                {
+                    "name": "debugging",
+                    "description": "Debug failures.",
+                    "valid": True,
+                    "warnings": [],
+                },
+                {
+                    "name": "warned",
+                    "description": "Loads with warnings.",
+                    "valid": False,
+                    "warnings": ["Name does not match directory."],
+                },
+            ],
+            "invalid_skills": [
+                {
+                    "name": "broken",
+                    "path": str(Path("/skills/broken/SKILL.md")),
+                    "valid": False,
+                    "warnings": ["missing description"],
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_settings_update_persists_supported_language_and_returns_full_payload(
     tmp_path: Path,
 ) -> None:
@@ -1131,6 +1251,63 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_skill_directories_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"skills": {"directories": ["~/skills", " C:/skills/team "]}},
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_skill_directory_settings() == [
+        "~/skills",
+        " C:/skills/team ",
+    ]
+    assert response["result"]["skills"] == {
+        "default_directory": str(tmp_path / "skills"),
+        "directories": ["~/skills", " C:/skills/team "],
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    update_response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"skills": {"directories": ["debugging"]}},
+        },
+    )
+    list_response = await dispatch_rpc(state, {"method": "skill.list", "params": {}})
+
+    assert update_response["ok"] is True, update_response
+    assert list_response == {
+        "ok": True,
+        "result": {
+            "skills": [
+                {
+                    "name": "debugging",
+                    "description": "debugging skill.",
+                    "valid": True,
+                    "warnings": [],
+                }
+            ],
+            "invalid_skills": [],
+        },
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params",
     [
@@ -1140,6 +1317,11 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
         {"appearance": {}},
         {"appearance": {"show_token_counts": False}},
         {"appearance": {"language": ""}},
+        {"skills": []},
+        {"skills": {}},
+        {"skills": {"extra": []}},
+        {"skills": {"directories": "~/skills"}},
+        {"skills": {"directories": [1]}},
     ],
 )
 async def test_settings_update_rejects_unsupported_sections_and_fields(

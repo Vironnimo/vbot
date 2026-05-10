@@ -7,8 +7,11 @@ import { init } from '../i18n.js';
 import {
   buildLanguageOptions,
   createLanguageUpdatePayload,
+  createSkillDirectoriesUpdatePayload,
   describeProvider,
   formatServerHost,
+  getDefaultSkillDirectoryValue,
+  getSkillDirectories,
   providerStatusClass,
   providerStatusLabel,
 } from '../settingsView.js';
@@ -83,6 +86,51 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('Configured');
     expect(document.body.textContent).toContain('Custom endpoint');
     expect(document.body.textContent).toContain('Placeholder');
+  });
+
+  it('adds, removes, and saves skill directories', async () => {
+    rpcMock
+      .mockResolvedValueOnce(createSettingsPayload())
+      .mockImplementationOnce(async (_method, params) =>
+        createSettingsPayload({
+          skills: {
+            default_directory: 'C:/Users/test/.vbot/skills',
+            directories: params.skills.directories,
+          },
+        }),
+      );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+
+    await waitForText('0.0.0.0:9001');
+    clickButton('Skills');
+
+    expect(document.body.textContent).toContain('Default skill directory');
+    expect(document.body.textContent).toContain('C:/Users/test/.vbot/skills');
+    expect(document.body.textContent).toContain('C:/skills/shared');
+
+    const input = document.body.querySelector('input.s-input');
+    expect(input).not.toBeNull();
+    input.value = 'D:/skills/team';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    clickButton('Add directory');
+    expect(document.body.textContent).toContain('D:/skills/team');
+
+    clickButton('Remove');
+    expect(document.body.textContent).not.toContain('C:/skills/shared');
+
+    clickButton('Save');
+
+    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+      skills: {
+        directories: ['D:/skills/team'],
+      },
+    });
+
+    await waitForText('Skill directories updated.');
   });
 
   it('renders load failures and retries settings.get successfully', async () => {
@@ -190,6 +238,17 @@ describe('settingsView helpers', () => {
         language: 'fr',
       },
     });
+    expect(createSkillDirectoriesUpdatePayload([' C:/skills ', ''])).toEqual({
+      skills: {
+        directories: ['C:/skills'],
+      },
+    });
+    expect(
+      getDefaultSkillDirectoryValue(createSettingsPayload(), translate),
+    ).toBe('C:/Users/test/.vbot/skills');
+    expect(getSkillDirectories(createSettingsPayload())).toEqual([
+      'C:/skills/shared',
+    ]);
     expect(describeProvider(provider, translate)).toBe(
       'Credential key: OPENAI_API_KEY. Endpoint: https://api.openai.com/v1. 2 models available.',
     );
@@ -229,6 +288,10 @@ function createSettingsPayload(overrides = {}) {
           model_count: 2,
         },
       ],
+    },
+    skills: {
+      default_directory: 'C:/Users/test/.vbot/skills',
+      directories: ['C:/skills/shared'],
     },
     appearance: {
       language: 'en',

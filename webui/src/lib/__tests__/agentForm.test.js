@@ -19,7 +19,7 @@ describe('agent form helpers', () => {
       temperature: '0.1',
       thinking_effort: '',
       allowed_tools: ['*'],
-      allowed_skills: '*',
+      allowed_skills: ['*'],
     });
   });
 
@@ -37,11 +37,11 @@ describe('agent form helpers', () => {
     });
 
     expect(values.allowed_tools).toEqual(['read', 'write']);
-    expect(values.allowed_skills).toBe('debugging');
+    expect(values.allowed_skills).toEqual(['debugging']);
     expect(values.temperature).toBe('0.2');
   });
 
-  it('normalizes create payloads with trimmed scalar fields and array-based allowed tools', () => {
+  it('normalizes create payloads with trimmed scalar fields and array-based access lists', () => {
     const result = normalizeAgentForm({
       id: ' coder ',
       name: ' Coder ',
@@ -51,7 +51,7 @@ describe('agent form helpers', () => {
       temperature: '0.25',
       thinking_effort: ' low ',
       allowed_tools: [' read ', '', 'write '],
-      allowed_skills: ' debugging ',
+      allowed_skills: [' debugging ', ''],
     });
 
     expect(result.isValid).toBe(true);
@@ -80,7 +80,7 @@ describe('agent form helpers', () => {
       name: 'Coder',
       temperature: '0.1',
       allowed_tools: formValues.allowed_tools,
-      allowed_skills: '*',
+      allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
@@ -99,11 +99,45 @@ describe('agent form helpers', () => {
       name: 'Coder',
       temperature: '0.1',
       allowed_tools: formValues.allowed_tools,
-      allowed_skills: '*',
+      allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
     expect(result.payload.allowed_tools).toEqual([]);
+  });
+
+  it('does not parse legacy string allowed skills when creating form values', () => {
+    const values = createAgentFormValues({
+      allowed_skills: 'debugging\nctx7',
+    });
+
+    expect(values.allowed_skills).toEqual(['*']);
+  });
+
+  it('does not parse legacy string allowed skills when normalizing payloads', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: ['*'],
+      allowed_skills: 'debugging\nctx7',
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_skills).toEqual(['*']);
+  });
+
+  it('keeps legacy string allowed tools parsing unchanged', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: 'read\nwrite',
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_tools).toEqual(['read', 'write']);
   });
 
   it('omits blank workspace from create payloads', () => {
@@ -113,7 +147,7 @@ describe('agent form helpers', () => {
       workspace: ' ',
       temperature: '0.1',
       allowed_tools: ['*'],
-      allowed_skills: '*',
+      allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
@@ -127,7 +161,7 @@ describe('agent form helpers', () => {
       workspace: 'C:/workspace-coder',
       temperature: '0.1',
       allowed_tools: ['*'],
-      allowed_skills: '*',
+      allowed_skills: ['*'],
     });
 
     expect(result.isValid).toBe(true);
@@ -142,7 +176,7 @@ describe('agent form helpers', () => {
         workspace: 'C:/workspace-coder',
         temperature: '0.1',
         allowed_tools: ['*'],
-        allowed_skills: '*',
+        allowed_skills: ['*'],
       },
       { mode: AGENT_FORM_MODE_EDIT },
     );

@@ -19,6 +19,7 @@ from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 
 CANONICAL_BUILTIN_TOOLS = ["edit", "glob", "grep", "read", "write"]
+RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
 @pytest.fixture
@@ -201,3 +202,61 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
         _ = runtime.storage
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.provider_credentials
+
+
+def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_path: Path):
+    """Runtime.reload_skills() makes prompt catalogs use the fresh skill registry."""
+    runtime = Runtime(config)
+    runtime.start()
+    agent = runtime.agents.update("main", allowed_skills=[RELOADED_SKILL_NAME])
+    skill_root = tmp_path / "team-skills"
+    _write_test_skill(
+        skill_root,
+        RELOADED_SKILL_NAME,
+        "Fresh skill loaded after settings update.",
+    )
+
+    prompt_before_reload = runtime.system_prompts.build_system_prompt(agent)
+
+    runtime.storage.update_skill_directory_settings([str(skill_root)])
+    runtime.reload_skills()
+    prompt_after_reload = runtime.system_prompts.build_system_prompt(agent)
+
+    assert f"<name>{RELOADED_SKILL_NAME}</name>" not in prompt_before_reload
+    assert f"<name>{RELOADED_SKILL_NAME}</name>" in prompt_after_reload
+    assert "Fresh skill loaded after settings update." in prompt_after_reload
+
+
+def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tmp_path: Path):
+    """Runtime.reload_skills() makes provider tools use the fresh skill registry."""
+    runtime = Runtime(config)
+    runtime.start()
+    agent = runtime.agents.update(
+        "main",
+        allowed_tools=[],
+        allowed_skills=[RELOADED_SKILL_NAME],
+    )
+    skill_root = tmp_path / "team-skills"
+    _write_test_skill(
+        skill_root,
+        RELOADED_SKILL_NAME,
+        "Fresh skill loaded after settings update.",
+    )
+
+    definitions_before_reload = runtime.system_prompts.provider_tool_definitions(agent)
+
+    runtime.storage.update_skill_directory_settings([str(skill_root)])
+    runtime.reload_skills()
+    definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
+
+    assert [definition["name"] for definition in definitions_before_reload] == []
+    assert [definition["name"] for definition in definitions_after_reload] == ["skill"]
+
+
+def _write_test_skill(skill_root: Path, name: str, description: str) -> None:
+    skill_dir = skill_root / name
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\nUse this skill.\n",
+        encoding="utf-8",
+    )

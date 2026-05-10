@@ -26,10 +26,11 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `get_provider_credentials(provider_id)`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; currently includes `edit`, `glob`, `grep`, `read`, and `write`.
-- `skills` — `SkillRegistry` loaded from `<data_dir>/skills`.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`edit`, `glob`, `grep`, `read`, `write`) plus the internal `skill` tool when skills are loaded.
+- `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
+- `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
 - `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
 
 All service properties raise `RuntimeError` before `start()` and after `stop()`.

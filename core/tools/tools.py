@@ -19,6 +19,7 @@ JsonObject = dict[str, Any]
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
 ToolCancellationHook = Callable[[], bool]
 ToolNoteHook = Callable[[str], None]
+ToolSkillActivationHook = Callable[[str, JsonObject], JsonObject]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 
 
@@ -54,6 +55,8 @@ class ToolContext:
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     note_hook: ToolNoteHook | None = None
+    skill_activation_hook: ToolSkillActivationHook | None = None
+    allowed_skills: Sequence[str] | None = None
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
@@ -77,6 +80,13 @@ class ToolContext:
             return
 
         self.note_hook(content)
+
+    def activate_skill(self, name: str, data: JsonObject) -> JsonObject | None:
+        """Activate skill context through the runtime hook, when present."""
+        if self.skill_activation_hook is None:
+            return None
+
+        return self.skill_activation_hook(name, data)
 
 
 @dataclass(frozen=True)
@@ -102,6 +112,8 @@ class ToolExecutionConfig:
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     note_hook: ToolNoteHook | None = None
+    skill_activation_hook: ToolSkillActivationHook | None = None
+    allowed_skills: Sequence[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +124,7 @@ class Tool:
     description: str
     parameters: JsonObject
     handler: ToolHandler
+    internal: bool = False
 
 
 def tool_success(data: JsonObject, artifacts: list[JsonObject] | None = None) -> JsonObject:
@@ -173,6 +186,8 @@ class ToolRegistry:
         description: str,
         parameters: JsonObject,
         handler: ToolHandler,
+        *,
+        internal: bool = False,
     ) -> Tool:
         """Register a tool and return its immutable definition."""
         self._validate_tool(name, description, parameters, handler)
@@ -184,6 +199,7 @@ class ToolRegistry:
             description=description,
             parameters=dict(parameters),
             handler=handler,
+            internal=internal,
         )
         self._tools[name] = tool
         return tool
@@ -195,7 +211,16 @@ class ToolRegistry:
         except KeyError:
             raise ToolNotFoundError(f"Tool not found: {name}") from None
 
-    def list_tools(self, allowed_tools: Sequence[str] | None = None) -> list[Tool]:
+    def unregister(self, name: str) -> None:
+        """Remove a registered tool when it exists."""
+        self._tools.pop(name, None)
+
+    def list_tools(
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+    ) -> list[Tool]:
         """Return registered tools filtered by an allowlist."""
         if allowed_tools is not None and TOOL_ALLOWLIST_WILDCARD not in allowed_tools:
             allowed_names = set(allowed_tools)
@@ -203,17 +228,33 @@ class ToolRegistry:
         else:
             tools = list(self._tools.values())
 
+        if not include_internal:
+            tools = [tool for tool in tools if not tool.internal]
+
         return sorted(tools, key=lambda tool: tool.name)
 
-    def provider_definitions(self, allowed_tools: Sequence[str] | None = None) -> list[JsonObject]:
+    def provider_definitions(
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+    ) -> list[JsonObject]:
         """Return provider-ready tool definitions for allowed tools."""
-        return [self._to_provider_definition(tool) for tool in self.list_tools(allowed_tools)]
+        return [
+            self._to_provider_definition(tool)
+            for tool in self.list_tools(allowed_tools, include_internal=include_internal)
+        ]
 
-    def prompt_definitions(self, allowed_tools: Sequence[str] | None = None) -> list[JsonObject]:
+    def prompt_definitions(
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+    ) -> list[JsonObject]:
         """Return prompt-ready name and description pairs for allowed tools."""
         return [
             {"name": tool.name, "description": tool.description}
-            for tool in self.list_tools(allowed_tools)
+            for tool in self.list_tools(allowed_tools, include_internal=include_internal)
         ]
 
     async def dispatch(
@@ -224,7 +265,7 @@ class ToolRegistry:
     ) -> JsonObject:
         """Execute a registered allowed tool through an async interface."""
         tool = self.get(context.tool_name)
-        if not self._is_allowed(context.tool_name, allowed_tools):
+        if not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {context.tool_name}")
         if not isinstance(arguments, dict):
             raise ValueError("Tool arguments must be a JSON object")
@@ -257,7 +298,14 @@ class ToolRegistry:
             raise ValueError("Tool handler must be callable")
 
     @staticmethod
-    def _is_allowed(name: str, allowed_tools: Sequence[str] | None) -> bool:
+    def _is_allowed(
+        name: str,
+        allowed_tools: Sequence[str] | None,
+        *,
+        internal: bool = False,
+    ) -> bool:
+        if internal:
+            return True
         return (
             allowed_tools is None
             or TOOL_ALLOWLIST_WILDCARD in allowed_tools
@@ -337,6 +385,8 @@ class ToolExecutor:
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
                 note_hook=config.note_hook,
+                skill_activation_hook=config.skill_activation_hook,
+                allowed_skills=config.allowed_skills,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
 
