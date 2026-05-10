@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, and a functional System Prompt tab.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -16,19 +16,26 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - `Agents`
   - `System Prompt`
   - `Settings`
+  - `Logs`
 
 ## Interfaces
 
 - `webui/src/lib/api.js`
   - `rpc(method, params?, options?)` posts to `/api/rpc` and returns `result` or
-    throws `ApiClientError` with a stable `code`.
+     throws `ApiClientError` with a stable `code`.
+  - `listLogs(options?)` calls `log.list` and returns `{ files, default_file }`
+    for the daily logs catalog.
+  - `readLogFile(file, options?)` calls `log.read` and returns `{ file, entries }`
+    for one selected daily log file.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
     one Run timeline and returns `{ close, source }`. It subscribes to whole
     Run events plus streaming delta events and supports optional
     `afterSequence` URL construction for manual replay; native reconnect uses
     SSE event IDs / `Last-Event-ID` from the server.
   - `subscribeServerEvents(handlers, options?)` opens `/ws` and returns
-    `{ close, socket }`. Supports `afterSequence` option for reconnect replay.
+     `{ close, socket }`. Supports `afterSequence` option for reconnect replay.
+  - `subscribeLogEvents(file, handlers, options?)` opens `/ws/logs?file=...`
+    and returns `{ close, socket }` for one selected log file.
 - `webui/src/lib/i18n.js`
   - `t(key, fallback?, values?)` is required for all user-visible strings.
 - `webui/src/lib/connectionState.js`
@@ -49,6 +56,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/toastState.js`
   - Pure helpers for app-level toast state: `createToastState()`, `addToast(...)`,
     and `dismissToast(...)`.
+- `webui/src/lib/logsView.js`
+  - Pure helpers for Logs tab state: initial state, catalog application,
+    selected-file changes, append/reset stream merging, level option derivation,
+    and local text filtering across timestamp/level/logger/message/continuation.
 - `webui/src/components/ToastStack.svelte`
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
@@ -84,9 +95,15 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Normalizes skill directory settings from `settings.skills.directories` and builds update payloads for `settings.update`.
 - `webui/src/components/SettingsView.svelte`
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
+- `webui/src/components/LogsView.svelte`
+  - Loads the daily logs catalog on mount, selects the newest file by default,
+    reads one file at a time through `log.read`, applies local level/search
+    filtering, and owns a dedicated `/ws/logs` subscription with reconnect and
+    cleanup scoped to the currently selected file.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
+  - Routes the top-level `Logs` navigation item to `LogsView`.
   - Handles server-pushed `app_error` WebSocket events as error toasts.
 
 ## Conventions
@@ -98,6 +115,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   copy is introduced.
 - Browser resources (`EventSource`, `WebSocket`) must expose explicit cleanup and
   be closed on component destroy.
+- The Logs tab is read-only and file-backed. It reads one selected daily log file
+  at a time and must not depend on chat/session state or the shared app event bus.
 - The UI selects Agents, not Sessions. The shown chat is the selected Agent's
   `current_session_id`; old Sessions are not listed in Phase 4.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
@@ -129,4 +148,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
 - `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `Logs` is functional — it shows one selected daily log file, defaults to the
+  newest file, keeps the current selection sticky when newer files appear, and
+  applies level filtering plus free-text search locally in the accessor.
 - The production build emits `webui/dist`, which FastAPI serves when present.

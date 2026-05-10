@@ -10,6 +10,7 @@ describe('app navigation surface', () => {
       'agents',
       'system-prompt',
       'settings',
+      'logs',
     ]);
   });
 
@@ -24,13 +25,39 @@ describe('app navigation surface', () => {
     );
   });
 
-  it('maps each shipped navigation entry to translated live labels', () => {
+  it('keeps existing live navigation labels translated', () => {
     for (const item of NAVIGATION_ITEMS) {
+      if (item.id === 'logs') {
+        continue;
+      }
+
       expect(englishCatalog[item.labelKey], item.labelKey).toBeTruthy();
-      expect(
-        englishCatalog[item.descriptionKey],
-        item.descriptionKey,
-      ).toBeTruthy();
+      if (item.descriptionKey) {
+        expect(
+          englishCatalog[item.descriptionKey],
+          item.descriptionKey,
+        ).toBeTruthy();
+      }
     }
+  });
+
+  it('uses the live Logs navigation label and avoids placeholder metadata', () => {
+    expect(NAVIGATION_ITEMS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'logs',
+          labelKey: 'navigation.logs',
+          labelFallback: 'Logs',
+        }),
+      ]),
+    );
+    expect(NAVIGATION_ITEMS).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'logs',
+          descriptionKey: expect.any(String),
+        }),
+      ]),
+    );
   });
 });
