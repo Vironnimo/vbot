@@ -306,6 +306,110 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.add_note("Background job completed")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert request_messages[1] == {
+        "role": "user",
+        "content": "<system-reminder>\nBackground job completed\n</system-reminder>",
+    }
+    assert request_messages[2]["content"] == "Hi"
+    assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_multiple_consecutive_notes_are_embedded_as_one_synthetic_user_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.add_note("First background event")
+    session.add_note("Second background event")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert request_messages[1] == {
+        "role": "user",
+        "content": (
+            "<system-reminder>\nFirst background event\n</system-reminder>\n"
+            "<system-reminder>\nSecond background event\n</system-reminder>"
+        ),
+    }
+    assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_note_added_between_tool_iterations_is_sent_on_next_request(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["record_note"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": {}}],
+            },
+            {"content": "Saw reminder", "tool_calls": None},
+        ]
+    )
+
+    def record_note(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        context.add_note("Tool finished background work")
+        return tool_success({"ok": True})
+
+    tools = ToolRegistry()
+    tools.register("record_note", "Record note.", {"type": "object"}, record_note)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+
+    second_request_messages = adapter.requests[1]["messages"]
+    assert [message["role"] for message in second_request_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert second_request_messages[-1] == {
+        "role": "user",
+        "content": "<system-reminder>\nTool finished background work\n</system-reminder>",
+    }
+    assert all(
+        message["role"] != "note" for request in adapter.requests for message in request["messages"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_messages_without_notes_keep_existing_shape(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert [message["role"] for message in request_messages] == ["system", "user"]
+    assert request_messages[0]["content"] == "System for coder"
+    assert request_messages[1]["content"] == "Hi"
+    assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
 async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
