@@ -37,7 +37,9 @@ from core.tools import (
     ToolRegistry,
     is_tool_result_envelope,
     tool_failure,
+    tool_success,
 )
+from core.tools.skill import load_skill_content
 from core.utils.errors import ProviderError, VBotError
 from core.utils.tokens import estimate_tokens
 
@@ -52,6 +54,9 @@ MAX_TOOL_ITERATIONS = 8
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
+SKILL_SLASH_TRIGGER_PATTERN = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?=\s|$)")
+SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
+SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 
 
 class ChatError(VBotError):
@@ -255,6 +260,8 @@ class ChatSession:
             raise ChatSessionError("session path must end with .jsonl")
         self.path = path
         self._pending_notes: deque[ChatMessage] = deque()
+        self._activated_skill_names: set[str] = set()
+        self._activated_skill_contents: dict[str, str] = {}
 
     @classmethod
     def create(cls, sessions_dir: Path, session_id: str | None = None) -> ChatSession:
@@ -291,6 +298,53 @@ class ChatSession:
         notes = list(self._pending_notes)
         self._pending_notes.clear()
         return notes
+
+    def activate_skill_context(self, name: str, data: JsonObject) -> JsonObject:
+        """Store skill context once per session and return a result envelope."""
+        activated_contents = self._load_activated_skill_contents()
+        if name in activated_contents:
+            return tool_success(
+                {
+                    "content": (
+                        f"Skill '{name}' was already activated in this session. "
+                        "Skipping re-activation."
+                    ),
+                    "resources": [],
+                    "already_active": True,
+                }
+            )
+
+        content = data.get("content")
+        resources = data.get("resources", [])
+        if not isinstance(content, str):
+            raise ChatSessionError("skill activation content must be a string")
+        if not isinstance(resources, list):
+            raise ChatSessionError("skill activation resources must be a list")
+
+        self._activated_skill_names.add(name)
+        self._activated_skill_contents[name] = content
+        self._persist_skill_context_note(name, content)
+        return tool_success({"content": content, "resources": list(resources)})
+
+    def skill_context_messages(self) -> list[JsonObject]:
+        """Return currently activated skill context as provider request messages."""
+        activated_contents = self._load_activated_skill_contents()
+        return [
+            {"role": "user", "content": content}
+            for _name, content in sorted(activated_contents.items())
+        ]
+
+    def _load_activated_skill_contents(self) -> dict[str, str]:
+        if self._activated_skill_contents:
+            return dict(self._activated_skill_contents)
+
+        activated_contents = _skill_contexts_from_messages(self.load())
+        self._activated_skill_names = set(activated_contents)
+        self._activated_skill_contents = dict(activated_contents)
+        return activated_contents
+
+    def _persist_skill_context_note(self, name: str, content: str) -> None:
+        self.append(ChatMessage.note(_skill_context_note_content(name, content)))
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
@@ -540,6 +594,7 @@ class ChatLoop:
             user_message = ChatMessage.user(content)
             session.append(user_message)
             _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+            self._activate_triggered_skills(agent, session, content)
             run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
@@ -579,7 +634,7 @@ class ChatLoop:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
         history = _embed_notes_into_request(session.load())
-        return [system_message.to_dict(), *history]
+        return [system_message.to_dict(), *session.skill_context_messages(), *history]
 
     async def _send_until_final(
         self,
@@ -596,6 +651,7 @@ class ChatLoop:
             pending_notes = session.drain_pending_notes()
             if pending_notes:
                 messages.append(_notes_to_synthetic_user_message(pending_notes))
+            _sync_skill_context_messages(messages, session)
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -748,6 +804,7 @@ class ChatLoop:
                 app_root=_runtime_app_root(self._runtime),
                 data_root=_runtime_data_root(self._runtime),
                 allowed_tools=agent.allowed_tools,
+                allowed_skills=getattr(agent, "allowed_skills", ["*"]),
                 emit_hook=lambda event_type, payload: _emit_tool_context_event(
                     run,
                     event_type,
@@ -755,6 +812,7 @@ class ChatLoop:
                 ),
                 cancellation_hook=lambda: run.cancel_requested,
                 note_hook=session.add_note,
+                skill_activation_hook=session.activate_skill_context,
             ),
         )
         run.raise_if_cancelled()
@@ -774,6 +832,37 @@ class ChatLoop:
             if message.get("role") == "assistant" and message.get("tool_calls")
         ]
         return len(assistant_tool_messages) > self._max_tool_iterations
+
+    def _activate_triggered_skills(self, agent: Any, session: ChatSession, content: str) -> None:
+        skill_registry = getattr(self._runtime, "skills", None)
+        if skill_registry is None:
+            return
+
+        if not _triggered_skill_names(content):
+            return
+
+        filter_allowed = getattr(skill_registry, "filter_allowed", None)
+        if not callable(filter_allowed):
+            return
+
+        allowed_skills = getattr(agent, "allowed_skills", None) or ["*"]
+        allowed_by_name = {skill.name: skill for skill in filter_allowed(allowed_skills)}
+        for skill_name in _triggered_skill_names(content):
+            skill = allowed_by_name.get(skill_name)
+            if skill is None:
+                session.add_note(
+                    f"Skill trigger '{skill_name}' did not match an allowed loadable skill."
+                )
+                continue
+            try:
+                data = load_skill_content(skill.name, skill.path)
+            except OSError as error:
+                session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
+                continue
+            except ValueError as error:
+                session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
+                continue
+            session.activate_skill_context(skill.name, data)
 
 
 def _runtime_run_manager(runtime: Any) -> ChatRunManager:
@@ -863,6 +952,33 @@ def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
     return result
 
 
+def _triggered_skill_names(content: str) -> list[str]:
+    names: list[str] = []
+    slash_match = SKILL_SLASH_TRIGGER_PATTERN.search(content)
+    if slash_match:
+        names.append(slash_match.group(1))
+
+    for inline_match in SKILL_INLINE_TRIGGER_PATTERN.finditer(content):
+        name = inline_match.group(1)
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _sync_skill_context_messages(messages: list[JsonObject], session: ChatSession) -> None:
+    existing = {
+        message.get("content")
+        for message in messages
+        if message.get("role") == "user"
+        and isinstance(message.get("content"), str)
+        and str(message.get("content", "")).startswith("<skill_content ")
+    }
+    for skill_message in session.skill_context_messages():
+        if skill_message["content"] not in existing:
+            messages.insert(1, skill_message)
+            existing.add(skill_message["content"])
+
+
 def _new_message_id() -> str:
     return str(uuid.uuid4())
 
@@ -948,6 +1064,8 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
 
     for message in messages:
         if message.role == "note":
+            if _is_skill_context_note(message):
+                continue
             pending_notes.append(message)
             continue
 
@@ -974,6 +1092,39 @@ def _system_reminder_block(note: ChatMessage) -> str:
         raise ChatMessageValidationError("system reminders can only be built from notes")
     note.validate()
     return f"{SYSTEM_REMINDER_OPEN_TAG}\n{note.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+
+
+def _skill_context_note_content(name: str, content: str) -> str:
+    return SKILL_CONTEXT_NOTE_PREFIX + json.dumps(
+        {"name": name, "content": content},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _is_skill_context_note(message: ChatMessage) -> bool:
+    return message.role == "note" and bool(
+        message.content and message.content.startswith(SKILL_CONTEXT_NOTE_PREFIX)
+    )
+
+
+def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]:
+    contexts: dict[str, str] = {}
+    for message in messages:
+        if not _is_skill_context_note(message):
+            continue
+        assert message.content is not None
+        try:
+            payload = json.loads(message.content.removeprefix(SKILL_CONTEXT_NOTE_PREFIX))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        name = payload.get("name")
+        content = payload.get("content")
+        if isinstance(name, str) and isinstance(content, str):
+            contexts[name] = content
+    return contexts
 
 
 def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:

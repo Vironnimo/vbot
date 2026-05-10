@@ -61,12 +61,12 @@ class ToolPromptRegistry(Protocol):
     """Tool registry methods needed for prompt and provider definitions."""
 
     def prompt_definitions(
-        self, allowed_tools: Sequence[str] | None = None
+        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
     ) -> list[dict[str, Any]]:
         """Return prompt-ready tool name and description mappings."""
 
     def provider_definitions(
-        self, allowed_tools: Sequence[str] | None = None
+        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
     ) -> list[dict[str, Any]]:
         """Return provider-ready tool schemas."""
 
@@ -394,7 +394,14 @@ class SystemPromptManager:
 
     def provider_tool_definitions(self, agent: Agent) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist."""
-        return self._tool_registry.provider_definitions(agent.allowed_tools)
+        definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
+        if not self._agent_has_loadable_skills(agent):
+            return definitions
+
+        return [
+            *definitions,
+            *self._tool_registry.provider_definitions(["skill"], include_internal=True),
+        ]
 
     def _build_runtime_block(self, agent: Agent) -> str:
         runtime = self._storage.read_prompt_fragment("runtime.md")
@@ -421,6 +428,9 @@ class SystemPromptManager:
         skills = self._storage.read_prompt_fragment("skills.md")
         skill_list = _format_skill_list(self._skill_registry.filter_allowed(agent.allowed_skills))
         return skills.replace("{skill_list}", skill_list)
+
+    def _agent_has_loadable_skills(self, agent: Agent) -> bool:
+        return bool(self._skill_registry.filter_allowed(agent.allowed_skills))
 
     def _replace_workspace_includes(self, prompt: str, workspace_path: Path) -> str:
         def replace_include(match: re.Match[str]) -> str:

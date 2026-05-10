@@ -30,7 +30,10 @@ class StubTools:
         self.provider_allowlist: list[str] | None = None
 
     def prompt_definitions(
-        self, allowed_tools: Sequence[str] | None = None
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
         tools = [
@@ -40,7 +43,10 @@ class StubTools:
         return _filter_by_allowlist(tools, allowed_tools)
 
     def provider_definitions(
-        self, allowed_tools: Sequence[str] | None = None
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         self.provider_allowlist = list(allowed_tools) if allowed_tools is not None else None
         tools = [
@@ -54,7 +60,14 @@ class StubTools:
                 "description": "Run a shell command",
                 "parameters": {"type": "object"},
             },
+            {
+                "name": "skill",
+                "description": "Load a skill",
+                "parameters": {"type": "object"},
+            },
         ]
+        if allowed_tools == ["skill"]:
+            return [tools[-1]]
         return _filter_by_allowlist(tools, allowed_tools)
 
 
@@ -194,6 +207,46 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
         }
     ]
     assert tools.provider_allowlist == ["read_file"]
+
+
+def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([StubSkill("debugging", "Debug failures")]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+    agent = _agent(workspace, allowed_tools=[], allowed_skills=["debugging"])
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert [definition["name"] for definition in definitions] == ["skill"]
+
+
+def test_provider_tool_definitions_omit_internal_skill_when_agent_has_no_skills(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([StubSkill("debugging", "Debug failures")]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=[])
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert "skill" not in [definition["name"] for definition in definitions]
 
 
 def test_empty_tool_and_skill_allowlists_emit_empty_sections(
