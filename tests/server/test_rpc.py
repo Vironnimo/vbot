@@ -396,8 +396,8 @@ class StubStorage:
             raise StorageError(f"Unknown prompt fragment: {name}")
         default = f"# {name}\nDefault {name} content."
         self._prompt_fragments[name] = default
-        if (self.prompts_dir / name).exists():
-            (self.prompts_dir / name).unlink()
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        (self.prompts_dir / name).write_text(default, encoding="utf-8")
 
 
 class StubPrompts:
@@ -2363,7 +2363,7 @@ async def test_prompt_reset_restores_default_and_returns_content(tmp_path: Path)
 
     assert response["ok"] is True
     assert response["result"]["name"] == "skills.md"
-    assert "skills.md" in response["result"]["content"] or len(response["result"]["content"]) > 0
+    assert response["result"]["content"] == "# skills.md\nDefault skills.md content."
 
 
 @pytest.mark.asyncio
