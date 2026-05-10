@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,12 @@ from cli.server_management import (
     start_server_process,
     stop_server,
 )
+from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, resolve_daily_log_path
+
+MANAGED_CLI_LOG_PATTERN = (
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[(INFO|WARN|ERROR)\] "
+    r"vbot\.cli\.server_management - .+$"
+)
 
 
 def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
@@ -35,7 +42,7 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
         port=port,
         data_dir=data_dir,
         url=f"http://127.0.0.1:{port}",
-        log_path=data_dir / "logs" / "server.log",
+        log_path=resolve_daily_log_path(data_dir),
     )
 
 
@@ -54,7 +61,7 @@ def test_resolve_instance_uses_explicit_port_before_environment_and_settings(
     assert instance.port == 8700
     assert instance.url == "http://localhost:8700"
     assert instance.data_dir == data_dir.resolve()
-    assert instance.log_path == data_dir.resolve() / "logs" / "server.log"
+    assert instance.log_path == resolve_daily_log_path(data_dir.resolve())
 
 
 def test_resolve_instance_uses_environment_before_settings(
@@ -183,7 +190,6 @@ def test_start_server_process_uses_expected_args_and_log_location(
     process = start_server_process(instance)
 
     assert process.pid == 123
-    assert instance.log_path.exists()
     assert calls[0]["args"] == [
         "python-test",
         "-m",
@@ -195,8 +201,20 @@ def test_start_server_process_uses_expected_args_and_log_location(
         "--data-dir",
         str(instance.data_dir),
     ]
-    assert calls[0]["kwargs"]["stderr"] == subprocess.STDOUT
+    assert calls[0]["kwargs"]["stdout"] == subprocess.DEVNULL
+    assert calls[0]["kwargs"]["stderr"] == subprocess.DEVNULL
     assert calls[0]["kwargs"]["stdin"] == subprocess.DEVNULL
+    assert calls[0]["kwargs"]["env"][CONSOLE_LOGGING_ENV_VAR] == "0"
+    assert instance.log_path.exists() is False
+
+
+def test_resolve_instance_uses_daily_log_file_contract(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    instance = resolve_instance(data_dir=data_dir)
+
+    assert instance.log_path == resolve_daily_log_path(data_dir.resolve())
 
 
 def test_start_server_does_not_spawn_when_non_vbot_occupies_port(
@@ -282,6 +300,43 @@ def test_start_server_waits_for_health_and_reports_webui(
         log_path=instance.log_path,
         process_id=321,
     )
+
+
+def test_start_server_preserves_managed_daily_log_without_raw_child_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    health_results = iter(
+        [
+            HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+        ]
+    )
+    process = SimpleNamespace(pid=4321, poll=lambda: None)
+
+    monkeypatch.setattr(server_management, "probe_health", lambda instance: next(health_results))
+    monkeypatch.setattr(
+        server_management, "probe_webui", lambda instance: WebUIProbeResult(True, 200)
+    )
+    monkeypatch.setattr(server_management, "start_server_process", lambda instance: process)
+
+    result = start_server(instance, startup_timeout_seconds=1.0, probe_interval_seconds=0.0)
+
+    assert result.message == "started"
+    log_lines = instance.log_path.read_text(encoding="utf-8").splitlines()
+    assert log_lines
+    assert all(re.match(MANAGED_CLI_LOG_PATTERN, line) for line in log_lines)
+    assert any(
+        "Starting CLI-managed background server at http://127.0.0.1:8420" in line
+        for line in log_lines
+    )
+    assert any("Started CLI-managed background server process 4321" in line for line in log_lines)
+    assert any(
+        "CLI-managed background server became ready at http://127.0.0.1:8420" in line
+        for line in log_lines
+    )
+    assert all("raw child stderr" not in line for line in log_lines)
 
 
 def test_start_server_reports_readiness_timeout(
