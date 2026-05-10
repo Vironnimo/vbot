@@ -50,6 +50,8 @@ SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
 MAX_TOOL_ITERATIONS = 8
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
+SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 
 
 class ChatError(VBotError):
@@ -576,7 +578,7 @@ class ChatLoop:
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
-        history = [_message_to_request_dict(message) for message in session.load()]
+        history = _embed_notes_into_request(session.load())
         return [system_message.to_dict(), *history]
 
     async def _send_until_final(
@@ -591,6 +593,9 @@ class ChatLoop:
     ) -> ChatMessage:
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
+            pending_notes = session.drain_pending_notes()
+            if pending_notes:
+                messages.append(_notes_to_synthetic_user_message(pending_notes))
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -935,6 +940,40 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
         data.pop("reasoning_meta", None)
         data.pop("usage", None)
     return data
+
+
+def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
+    request_messages: list[JsonObject] = []
+    pending_notes: list[ChatMessage] = []
+
+    for message in messages:
+        if message.role == "note":
+            pending_notes.append(message)
+            continue
+
+        if pending_notes:
+            request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+            pending_notes = []
+        request_messages.append(_message_to_request_dict(message))
+
+    if pending_notes:
+        request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+
+    return request_messages
+
+
+def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
+    return {
+        "role": "user",
+        "content": "\n".join(_system_reminder_block(note) for note in notes),
+    }
+
+
+def _system_reminder_block(note: ChatMessage) -> str:
+    if note.role != "note":
+        raise ChatMessageValidationError("system reminders can only be built from notes")
+    note.validate()
+    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{note.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
 def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:
