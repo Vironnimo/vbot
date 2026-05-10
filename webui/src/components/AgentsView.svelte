@@ -34,6 +34,7 @@
 
   let agents = $state([]);
   let selectedAgentId = $state('');
+  let lastSharedSelectedAgentId = $state('');
   let formMode = $state(AGENT_FORM_MODE_CREATE);
   let formValues = $state(createAgentFormValues());
   let formErrors = $state({});
@@ -107,10 +108,15 @@
   $effect(() => {
     if (
       sharedSelectedAgentId &&
-      sharedSelectedAgentId !== selectedAgentId &&
+      sharedSelectedAgentId !== lastSharedSelectedAgentId &&
       agents.some((agent) => agent.id === sharedSelectedAgentId)
     ) {
-      selectAgent(sharedSelectedAgentId);
+      lastSharedSelectedAgentId = sharedSelectedAgentId;
+      if (sharedSelectedAgentId !== selectedAgentId) {
+        selectAgent(sharedSelectedAgentId);
+      }
+    } else if (!sharedSelectedAgentId) {
+      lastSharedSelectedAgentId = sharedSelectedAgentId;
     }
   });
 
