@@ -88,6 +88,7 @@ export const englishCatalog = Object.freeze({
   'chat.streamDisconnected': 'Live run disconnected',
   'chat.historyLoadError': 'Chat history could not be loaded.',
   'chat.sendError': 'Message could not be sent.',
+  'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
   'chat.sessionCreateError': 'New session could not be created.',
   'chat.role.user': 'You',
@@ -133,6 +134,10 @@ export const englishCatalog = Object.freeze({
   'chat.tokenBadgeNoContext': '{tokens} tok',
   'chat.tokenBadgeEstimatedNoContext': '~{tokens} tok',
   'chat.tokenBadgeNoUsage': '— / {context} tok',
+
+  'skillAutocomplete.label': 'Skill suggestions',
+  'skillAutocomplete.eyebrow': 'skills',
+  'skillAutocomplete.noDescription': 'No description available',
 
   'queue.title': 'Queued messages',
   'queue.empty': 'No queued messages.',
