@@ -55,7 +55,8 @@ Clients call the vBot server contract; provider wire details stay behind
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
   `agent.deleted` (full agent payload via `_agent_response`). Run output
-  includes persisted error-message events bridged as `run_output`.
+  includes persisted error-message events bridged as `run_output`. App-level
+  background failures use `app_error` with an error payload for WebSocket clients.
 
 ## Interfaces
 
@@ -74,7 +75,8 @@ Clients call the vBot server contract; provider wire details stay behind
 - `server.events.ServerEventBus` — in-memory replayable bus for general server
   lifecycle events sent over `/ws`. Supports `after_sequence` query param for
   reconnect replay: clients pass the last sequence number they saw, and the bus
-  replays all events with a higher sequence before streaming new ones.
+  replays all events with a higher sequence before streaming new ones. Published
+  event types must be in the server event contract allowlist.
 - `server.main.main(argv=None)` — starts uvicorn. Port priority is `--port` >
   `VBOT_SERVER_PORT` > `settings.json` > `8420`; ambient `PORT` /
   `SERVER_PORT` process environment variables are ignored unless they are keys

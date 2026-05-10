@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from server.app import _parse_after_sequence, create_app
 from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
-from server.events import ServerEventBus
+from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 
@@ -139,6 +139,34 @@ def test_websocket_receives_agent_created_event_via_rpc(tmp_path: Path) -> None:
 
     assert event["type"] == "agent.created"
     assert event["payload"]["id"] == "writer"
+
+
+def test_server_event_contract_allows_app_error_events() -> None:
+    bus = ServerEventBus()
+
+    event = bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
+
+    assert APP_ERROR_EVENT in ALLOWED_SERVER_EVENT_TYPES
+    assert event["type"] == APP_ERROR_EVENT
+    assert event["payload"] == {"message": "Background task failed"}
+
+
+def test_websocket_receives_app_error_events(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as websocket:
+        app.state.event_bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
+        event = websocket.receive_json()
+
+    assert event["type"] == APP_ERROR_EVENT
+    assert event["payload"] == {"message": "Background task failed"}
+
+
+def test_server_event_contract_rejects_unknown_events() -> None:
+    bus = ServerEventBus()
+
+    with pytest.raises(ValueError, match="unsupported server event type"):
+        bus.publish("unknown.event", {"message": "No contract"})
 
 
 def test_websocket_with_after_sequence_param_connects_successfully(tmp_path: Path) -> None:
