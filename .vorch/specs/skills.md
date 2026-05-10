@@ -6,7 +6,7 @@ Local skill metadata loading, validation diagnostics, and prompt allowlist filte
 
 `core/skills/` scans bundled skills under `resources/skills/`, user skills under `<data_dir>/skills/`, and configured extra skill directories. A directory is considered a skill only when it contains `SKILL.md`.
 
-Skills are playbooks, not normal user-managed tools. The registry exposes prompt metadata and internal activation metadata; actual activation is handled by the chat/tool pipeline.
+Skills are playbooks, not normal user-managed tools. The registry exposes prompt metadata and internal activation metadata; actual activation is handled by the chat/tool pipeline. Agents can activate skills through the internal `skill` tool, while user messages can activate skills deterministically through `/skill-name` at the start of the message or `$skill-name` anywhere in the message before the provider request is sent.
 
 ## Data Model
 
@@ -15,6 +15,7 @@ Skills are playbooks, not normal user-managed tools. The registry exposes prompt
 - YAML frontmatter is parsed with PyYAML. Validation is lenient: name/directory mismatch and names longer than 64 characters are warnings; missing required fields or invalid YAML make the skill non-loadable.
 - Resource paths are not stored in `SkillMetadata`; `scripts/` and `references/` are scanned at activation time.
 - Bundled `resources/skills/` contains tiny sample skills, including warning and broken examples, so UI diagnostics can be inspected manually.
+- Activated skill content is wrapped in `<skill_content name="...">` and persisted as an internal chat note so it remains available across later turns in the same Session without appearing as a normal visible chat message.
 
 ## Prompt Catalog
 
@@ -44,6 +45,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `diagnostics() -> list[SkillDiagnostic]`
 - `invalid_diagnostics() -> list[SkillDiagnostic]`
 - `warnings_for(name) -> list[str]`
+- Activation helper behavior: read the skill body after YAML frontmatter, scan `scripts/` and `references/`, and return a tool success envelope with `content` and `resources`.
 
 ## Conventions
 
@@ -52,6 +54,8 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - Explicit allowlists match exact skill names.
 - Unknown allowlist entries are ignored because skills are not hard execution gates.
 - Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
+- The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
+- `/skill-name` and `$skill-name` triggers preserve the original user message. Unknown or non-loadable triggers become internal system reminders.
 
 ## External Dependencies
 

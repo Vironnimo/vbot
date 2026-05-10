@@ -21,8 +21,9 @@ container; a Run is one active execution inside that session.
   - `user`: `content`
   - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `tool_calls`
   - `tool`: `tool_call_id`, `name`, `content`
-  - `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
+- `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
 - `reasoning` is readable thinking text. `reasoning_meta` is opaque provider data and must not be interpreted by chat.
+- Activated skill context is persisted as a special internal `note` whose content begins with `[skill-context] `. These notes are not converted to `<system-reminder>` blocks; instead the chat loop restores them as `<skill_content>` user-context messages before provider requests.
 
 ## Interfaces
 
@@ -33,6 +34,8 @@ container; a Run is one active execution inside that session.
 - `ChatSession.load()` — returns validated `ChatMessage` objects in file order.
 - `ChatSession.add_note(content)` — persists a `role: "note"` message and enqueues it in-memory for the next provider request.
 - `ChatSession.drain_pending_notes()` — returns queued note messages and clears the in-memory pending-note buffer; it does not re-read the session file.
+- `ChatSession.activate_skill_context(name, data)` — stores one activated skill's `<skill_content>` context once per Session, persists it as an internal skill-context note, and returns a stable tool result envelope. Re-activating the same skill returns an already-active success envelope.
+- `ChatSession.skill_context_messages()` — returns restored activated skill contexts as provider request messages.
 - `ChatSessionManager(data_dir)` — resolves `agents/<id>/sessions/` and creates/gets/lists/deletes sessions.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
@@ -81,6 +84,8 @@ container; a Run is one active execution inside that session.
   not be mistaken for the intended public/server product contract.
 - Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
+- Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
+- User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
 - Normal server history responses and the standard WebUI timeline must filter out notes; only debug-specific surfaces may expose them intentionally.
 - Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results.
 - If a Session later continues with a different provider, stale `reasoning_meta`

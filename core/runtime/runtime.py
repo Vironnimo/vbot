@@ -28,6 +28,7 @@ from core.tools import (
     register_glob_tool,
     register_grep_tool,
     register_read_tool,
+    register_skill_tool,
     register_write_tool,
 )
 from core.tools.tools import ToolRegistry
@@ -140,6 +141,7 @@ class Runtime:
             self._storage.data_dir / "skills",
             extra_dirs=skill_directories,
         )
+        register_skill_tool(self._tools, self._skills)
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(

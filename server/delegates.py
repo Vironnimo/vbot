@@ -84,6 +84,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _refresh_model_db(state, params)
         case "tool.list":
             return _list_tools(state, params)
+        case "skill.list":
+            return _list_skills(state, params)
         case "agent.list":
             return _list_agents(state)
         case "agent.create":
@@ -252,6 +254,20 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"tools": [_tool_response(tool) for tool in tools]}
+
+
+def _list_skills(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.list does not accept params")
+    try:
+        skills = state.runtime.skills.list_all()
+        invalid_skills = state.runtime.skills.invalid_diagnostics()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {
+        "skills": [_skill_response(state.runtime.skills, skill) for skill in skills],
+        "invalid_skills": [_invalid_skill_response(diagnostic) for diagnostic in invalid_skills],
+    }
 
 
 def _create_agent(state: Any, params: JsonObject) -> JsonObject:
@@ -745,6 +761,25 @@ def _tool_response(tool: Any) -> JsonObject:
     return {
         "name": tool.name,
         "description": tool.description,
+    }
+
+
+def _skill_response(skill_registry: Any, skill: Any) -> JsonObject:
+    warnings = skill_registry.warnings_for(skill.name)
+    return {
+        "name": skill.name,
+        "description": skill.description,
+        "valid": len(warnings) == 0,
+        "warnings": warnings,
+    }
+
+
+def _invalid_skill_response(diagnostic: Any) -> JsonObject:
+    return {
+        "name": diagnostic.name,
+        "path": str(diagnostic.path),
+        "valid": False,
+        "warnings": list(diagnostic.warnings),
     }
 
 

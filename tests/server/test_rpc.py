@@ -369,6 +369,39 @@ class StubPrompts:
         return []
 
 
+@dataclass(frozen=True)
+class StubSkill:
+    name: str
+    description: str
+
+
+class StubSkills:
+    def __init__(self) -> None:
+        self._skills = [
+            StubSkill("debugging", "Debug failures."),
+            StubSkill("warned", "Loads with warnings."),
+        ]
+        self._warnings = {"debugging": [], "warned": ["Name does not match directory."]}
+        self._invalid = [
+            SimpleNamespace(
+                name="broken",
+                path=Path("/skills/broken/SKILL.md"),
+                valid=False,
+                warnings=["missing description"],
+                loadable=False,
+            )
+        ]
+
+    def list_all(self) -> list[StubSkill]:
+        return list(self._skills)
+
+    def warnings_for(self, name: str) -> list[str]:
+        return list(self._warnings[name])
+
+    def invalid_diagnostics(self) -> list[Any]:
+        return list(self._invalid)
+
+
 class StubAdapter:
     def __init__(
         self,
@@ -424,6 +457,7 @@ class StubRuntime:
         self.system_prompts = StubPrompts()
         self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
+        self.skills = StubSkills()
         self._models = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
@@ -1100,6 +1134,57 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
                 {"name": "a_tool", "description": "First tool alphabetically"},
                 {"name": "z_tool", "description": "Last tool alphabetically"},
             ]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_list_omits_internal_skill_tool(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.tools.register(
+        "skill",
+        "Load skills",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        lambda _context, _arguments: {"ok": True, "error": None, "data": {}, "artifacts": []},
+        internal=True,
+    )
+
+    response = await dispatch_rpc(state, {"method": "tool.list", "params": {}})
+
+    assert response == {"ok": True, "result": {"tools": []}}
+
+
+@pytest.mark.asyncio
+async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "skill.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "skills": [
+                {
+                    "name": "debugging",
+                    "description": "Debug failures.",
+                    "valid": True,
+                    "warnings": [],
+                },
+                {
+                    "name": "warned",
+                    "description": "Loads with warnings.",
+                    "valid": False,
+                    "warnings": ["Name does not match directory."],
+                },
+            ],
+            "invalid_skills": [
+                {
+                    "name": "broken",
+                    "path": str(Path("/skills/broken/SKILL.md")),
+                    "valid": False,
+                    "warnings": ["missing description"],
+                }
+            ],
         },
     }
 
