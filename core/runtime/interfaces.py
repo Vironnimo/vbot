@@ -22,16 +22,20 @@ class LoggerProtocol(Protocol):
     custom implementation.
     """
 
-    def info(self, msg: str) -> None:
+    def info(self, msg: str, *args: Any) -> None:
         """Log an informational message."""
         ...
 
-    def error(self, msg: str) -> None:
+    def error(self, msg: str, *args: Any) -> None:
         """Log an error message."""
         ...
 
-    def debug(self, msg: str) -> None:
+    def debug(self, msg: str, *args: Any) -> None:
         """Log a debug message."""
+        ...
+
+    def warning(self, msg: str, *args: Any) -> None:
+        """Log a warning message."""
         ...
 
 

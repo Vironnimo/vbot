@@ -8,7 +8,6 @@ Markdown front matter for prompt metadata and filters it through an agent's
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,13 +20,14 @@ from core.skills.skill_validator import (
     repair_colon_scalars,
     validate_skill_metadata,
 )
+from core.utils.logging import get_logger
 
 FRONT_MATTER_DELIMITER = "---"
 WILDCARD_ALLOWLIST = "*"
 SKILL_FILENAME = "SKILL.md"
 RESOURCE_DIRECTORIES = ("scripts", "references")
 
-_LOGGER = logging.getLogger("vbot.skills")
+_LOGGER = get_logger("skills")
 
 
 @dataclass(frozen=True)
@@ -315,4 +315,4 @@ def _optional_string_list(value: Any) -> list[str]:
 
 def _log_validation_warnings(skill_name: str, warnings: list[str]) -> None:
     for warning in warnings:
-        _LOGGER.warning("Skill %s validation warning: %s", skill_name, warning)
+        _LOGGER.warning("Skill '%s' metadata warning: %s", skill_name, warning)

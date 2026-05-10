@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from core.utils.config import Config
+from core.utils.logging import build_uvicorn_log_config
 from server.app import create_app
 
 _UVICORN_IMPORT_ERROR: ModuleNotFoundError | None
@@ -116,6 +117,8 @@ def main(argv: list[str] | None = None) -> None:
         host=server_bind["listen_host"],
         port=server_bind["listen_port"],
         log_level="info",
+        access_log=False,
+        log_config=build_uvicorn_log_config(),
     )
 
 

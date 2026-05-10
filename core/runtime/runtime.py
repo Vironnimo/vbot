@@ -83,8 +83,9 @@ class Runtime:
             config: Any object satisfying :class:`ConfigProtocol`.
         """
         self._config: ConfigProtocol = config
+        self._data_dir = self._resolve_data_dir()
         log_level = config.get("LOG_LEVEL", "INFO")
-        self._log_manager = LogManager(level=log_level)
+        self._log_manager = LogManager(level=log_level, data_dir=self._data_dir)
         self.logger: LoggerProtocol | None = None
         self._started: bool = False
         self._providers: ProviderRegistry | None = None
@@ -111,6 +112,7 @@ class Runtime:
             return
 
         self.logger = self._log_manager.get_logger("core")
+        self.logger.info("Runtime startup initiated")
 
         resources_path = self._resolve_resources_path()
 
@@ -141,6 +143,13 @@ class Runtime:
             self._storage.data_dir / "skills",
             extra_dirs=skill_directories,
         )
+        invalid_skill_count = len(self._skills.invalid_diagnostics())
+        if invalid_skill_count > 0:
+            self.logger.warning(
+                "Loaded skills with %s invalid skill directories; "
+                "see vbot.skills warnings for details",
+                invalid_skill_count,
+            )
         register_skill_tool(self._tools, self._skills)
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._ensure_bootstrap_agent()
@@ -163,6 +172,7 @@ class Runtime:
         """
         if self.logger is not None:
             self.logger.info("Runtime stopped")
+        self._log_manager.close()
         self._started = False
         self._providers = None
         self._provider_credentials = None
@@ -179,6 +189,14 @@ class Runtime:
         if resources_path_raw is not None:
             return Path(resources_path_raw)
         return _DEFAULT_RESOURCES_DIR
+
+    def _resolve_data_dir(self) -> Path:
+        data_dir_raw = self._config.get("DATA_DIR") or self._config.get("VBOT_DATA_DIR")
+        if data_dir_raw:
+            return Path(cast(str, data_dir_raw)).expanduser()
+        if hasattr(self._config, "data_dir"):
+            return Path(cast(Any, self._config).data_dir).expanduser()
+        raise ConfigError("Runtime requires a data directory to initialize logging")
 
     def _ensure_bootstrap_agent(self) -> None:
         if self._agents is None:
@@ -216,6 +234,15 @@ class Runtime:
             self.storage.data_dir / "skills",
             extra_dirs=skill_directories,
         )
+        invalid_skill_count = len(self._skills.invalid_diagnostics())
+        if self.logger is not None:
+            self.logger.info("Reloaded skill registry")
+            if invalid_skill_count > 0:
+                self.logger.warning(
+                    "Reloaded skills with %s invalid skill directories; "
+                    "see vbot.skills warnings for details",
+                    invalid_skill_count,
+                )
         if self._tools is not None:
             self._tools.unregister("skill")
             register_skill_tool(self._tools, self._skills)

@@ -2,27 +2,29 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 import httpx
 import psutil  # type: ignore[import-untyped]
 
 from core.utils.config import Config
+from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager, resolve_daily_log_path
 from server.main import DEFAULT_HOST, resolve_port
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 10.0
 DEFAULT_PROBE_TIMEOUT_SECONDS = 0.5
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 HEALTH_PATH = "/health"
-SERVER_LOG_NAME = "server.log"
 WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
+CLI_SERVER_LOGGER_NAME = "cli.server_management"
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,7 @@ def resolve_instance(
         port=resolved_port,
         data_dir=resolved_data_dir,
         url=f"http://{host}:{resolved_port}",
-        log_path=resolved_data_dir / "logs" / SERVER_LOG_NAME,
+        log_path=resolve_daily_log_path(resolved_data_dir),
     )
 
 
@@ -137,8 +139,8 @@ def probe_webui(
 def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
     """Start the foreground server entrypoint as a background subprocess."""
 
-    instance.log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = instance.log_path.open("ab")
+    environment = dict(os.environ)
+    environment[CONSOLE_LOGGING_ENV_VAR] = "0"
     args = [
         sys.executable,
         "-m",
@@ -153,33 +155,31 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
     if sys.platform == "win32":
         return _open_server_process(
             args,
-            log_file,
+            env=environment,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
-    return _open_server_process(args, log_file, start_new_session=True)
+    return _open_server_process(args, env=environment, start_new_session=True)
 
 
 def _open_server_process(
     args: list[str],
-    log_file: BinaryIO,
     *,
+    env: dict[str, str],
     creationflags: int = 0,
     start_new_session: bool = False,
 ) -> subprocess.Popen[bytes]:
     """Open the server subprocess with typed subprocess arguments."""
 
-    try:
-        return subprocess.Popen(
-            args,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=creationflags,
-            start_new_session=start_new_session,
-        )
-    finally:
-        log_file.close()
+    return subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        env=env,
+        creationflags=creationflags,
+        start_new_session=start_new_session,
+    )
 
 
 def start_server(
@@ -190,73 +190,103 @@ def start_server(
 ) -> CommandResult:
     """Start the server and wait until vBot health is reachable."""
 
-    initial_health = probe_health(instance)
-    if initial_health.is_vbot:
-        return CommandResult(
-            ok=True,
-            message="already running",
-            instance=instance,
-            health=initial_health,
-            webui=probe_webui(instance),
-            log_path=instance.log_path,
-        )
-    if initial_health.reachable:
-        return CommandResult(
-            ok=False,
-            message="port occupied by non-vBot process",
-            instance=instance,
-            health=initial_health,
-            log_path=instance.log_path,
-        )
-
-    process = start_server_process(instance)
-    deadline = time.monotonic() + startup_timeout_seconds
-    health = initial_health
-    result: CommandResult | None = None
-    while time.monotonic() < deadline:
-        health = probe_health(instance)
-        if health.is_vbot:
+    manager = _create_cli_log_manager(instance)
+    logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
+    try:
+        initial_health = probe_health(instance)
+        if initial_health.is_vbot:
+            logger.info("CLI-managed background server already running at %s", instance.url)
             return CommandResult(
                 ok=True,
-                message="started",
+                message="already running",
                 instance=instance,
-                health=health,
+                health=initial_health,
                 webui=probe_webui(instance),
                 log_path=instance.log_path,
-                process_id=process.pid,
             )
-        if health.reachable:
-            result = CommandResult(
+        if initial_health.reachable:
+            logger.warning(
+                "Refusing CLI-managed background server start because %s is occupied by"
+                " a non-vBot process",
+                instance.url,
+            )
+            return CommandResult(
                 ok=False,
                 message="port occupied by non-vBot process",
                 instance=instance,
-                health=health,
+                health=initial_health,
                 log_path=instance.log_path,
-                process_id=process.pid,
             )
-            break
-        if process.poll() is not None:
-            return CommandResult(
+
+        logger.info("Starting CLI-managed background server at %s", instance.url)
+        process = start_server_process(instance)
+        logger.info("Started CLI-managed background server process %s", process.pid)
+        deadline = time.monotonic() + startup_timeout_seconds
+        health = initial_health
+        result: CommandResult | None = None
+        while time.monotonic() < deadline:
+            health = probe_health(instance)
+            if health.is_vbot:
+                logger.info("CLI-managed background server became ready at %s", instance.url)
+                return CommandResult(
+                    ok=True,
+                    message="started",
+                    instance=instance,
+                    health=health,
+                    webui=probe_webui(instance),
+                    log_path=instance.log_path,
+                    process_id=process.pid,
+                )
+            if health.reachable:
+                logger.error(
+                    "CLI-managed background server startup hit a non-vBot responder at %s",
+                    instance.url,
+                )
+                result = CommandResult(
+                    ok=False,
+                    message="port occupied by non-vBot process",
+                    instance=instance,
+                    health=health,
+                    log_path=instance.log_path,
+                    process_id=process.pid,
+                )
+                break
+            if process.poll() is not None:
+                logger.error(
+                    "CLI-managed background server process %s exited before readiness at %s",
+                    process.pid,
+                    instance.url,
+                )
+                return CommandResult(
+                    ok=False,
+                    message="server process exited before readiness",
+                    instance=instance,
+                    health=health,
+                    log_path=instance.log_path,
+                    process_id=process.pid,
+                )
+            time.sleep(probe_interval_seconds)
+
+        if result is None:
+            logger.error("CLI-managed background server readiness timed out at %s", instance.url)
+            result = CommandResult(
                 ok=False,
-                message="server process exited before readiness",
+                message="server readiness timed out",
                 instance=instance,
                 health=health,
                 log_path=instance.log_path,
                 process_id=process.pid,
             )
-        time.sleep(probe_interval_seconds)
+        _cleanup_spawned_process(process, timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS)
+        return result
+    finally:
+        manager.close()
 
-    if result is None:
-        result = CommandResult(
-            ok=False,
-            message="server readiness timed out",
-            instance=instance,
-            health=health,
-            log_path=instance.log_path,
-            process_id=process.pid,
-        )
-    _cleanup_spawned_process(process, timeout_seconds=DEFAULT_PROBE_TIMEOUT_SECONDS)
-    return result
+
+def _create_cli_log_manager(instance: ServerInstance) -> LogManager:
+    """Return a managed CLI log manager for the target data directory."""
+
+    return LogManager(data_dir=instance.data_dir, enable_console=False)
 
 
 def _cleanup_spawned_process(
