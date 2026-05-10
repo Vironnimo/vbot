@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from contextlib import aclosing
 from pathlib import Path
@@ -15,6 +16,11 @@ from server.app import _parse_after_sequence, create_app
 from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from tests.server.test_rpc import StubAdapter, StubRuntime
+
+
+def _close_log_viewer_now(app: Any) -> None:
+    with contextlib.suppress(Exception):
+        asyncio.run(app.state.log_viewer.aclose())
 
 
 def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_path: Path) -> None:
@@ -211,6 +217,9 @@ def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -
         )
 
         event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
 
     assert event == {
         "type": "append",
@@ -258,6 +267,8 @@ def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path:
         with client.websocket_connect(f"/ws/logs?file=2026-05-11&cursor={cursor}") as websocket:
             event = websocket.receive_json()
 
+    _close_log_viewer_now(app)
+
     assert event == {
         "type": "append",
         "file": "2026-05-11",
@@ -299,6 +310,9 @@ def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Pat
         )
 
         event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
 
     assert event == {
         "type": "reset",
@@ -332,6 +346,8 @@ def test_log_websocket_disconnect_releases_watcher_resources(tmp_path: Path) -> 
         deadline = time.time() + 2
         while time.time() < deadline and app.state.log_viewer.watcher_count != 0:
             time.sleep(0.05)
+
+    _close_log_viewer_now(app)
 
     assert app.state.log_viewer.watcher_count == 0
 

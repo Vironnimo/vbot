@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator
-from contextlib import aclosing, asynccontextmanager, suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -91,7 +91,7 @@ def create_app(
             yield
         finally:
             server_logger.info("Server application stopping")
-            await app.state.log_viewer.aclose()
+            await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
@@ -136,17 +136,17 @@ def create_app(
         await websocket.accept()
         file_name = websocket.query_params.get("file")
         cursor = websocket.query_params.get("cursor")
+        stream = websocket.app.state.log_viewer.subscribe(file_name or "", cursor=cursor)
         try:
-            async with aclosing(
-                websocket.app.state.log_viewer.subscribe(file_name or "", cursor=cursor)
-            ) as stream:
-                await _stream_log_events(websocket, stream)
+            await _stream_log_events(websocket, stream)
         except ValueError as exc:
             await websocket.close(code=1008, reason=str(exc))
         except FileNotFoundError as exc:
             await websocket.close(code=1008, reason=str(exc))
         except WebSocketDisconnect:
             return
+        finally:
+            await _close_log_stream(stream)
 
     _mount_webui(app)
 
@@ -160,7 +160,7 @@ def _initialize_app_state(
     app.state.chat_runs = ChatRunManager()
     app.state.chat_loop = ChatLoop(runtime)
     app.state.event_bus = ServerEventBus()
-    app.state.log_viewer = LogViewer(runtime.storage.data_dir)
+    app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
     _attach_run_manager(runtime, app.state.chat_runs)
@@ -219,6 +219,23 @@ def _runtime_config(runtime: Runtime) -> Config | None:
     if isinstance(config, Config):
         return config
     return None
+
+
+def _runtime_data_dir(runtime: Runtime) -> Path:
+    data_dir = getattr(runtime, "_data_dir", None)
+    if isinstance(data_dir, Path):
+        return data_dir
+
+    storage = getattr(runtime, "storage", None)
+    storage_data_dir = getattr(storage, "data_dir", None)
+    if isinstance(storage_data_dir, Path):
+        return storage_data_dir
+
+    config = _runtime_config(runtime)
+    if config is not None:
+        return Path(config.data_dir).expanduser()
+
+    raise RuntimeError("Runtime data directory is unavailable")
 
 
 def _coerce_bind_host(value: Any) -> str:
@@ -305,6 +322,20 @@ async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
         disconnect_task.cancel()
         with suppress(asyncio.CancelledError):
             await disconnect_task
+
+
+async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) -> None:
+    try:
+        await asyncio.wait_for(log_viewer.aclose(), timeout=1)
+    except TimeoutError:
+        logger.warning("Timed out while shutting down log viewer")
+
+
+async def _close_log_stream(stream: Any) -> None:
+    try:
+        await asyncio.wait_for(stream.aclose(), timeout=1)
+    except TimeoutError:
+        return
 
 
 def _is_reserved_server_path(path: str) -> bool:
