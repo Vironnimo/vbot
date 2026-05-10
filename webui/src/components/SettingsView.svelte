@@ -7,9 +7,12 @@
     SETTINGS_LAYOUT_CLASS,
     buildLanguageOptions,
     createLanguageUpdatePayload,
+    createSkillDirectoriesUpdatePayload,
     describeProvider,
     formatServerHost,
     getDataDirectoryValue,
+    getDefaultSkillDirectoryValue,
+    getSkillDirectories,
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
@@ -27,6 +30,17 @@
         t(
           'settings.general.subtitle',
           'Bind address and application data directory.',
+        ),
+    },
+    {
+      id: 'skills',
+      labelKey: 'settings.skills.title',
+      labelFallback: 'Skills',
+      label: () => t('settings.skills.title', 'Skills'),
+      subtitle: () =>
+        t(
+          'settings.skills.subtitle',
+          'Additional directories scanned for local skills.',
         ),
     },
     {
@@ -57,6 +71,8 @@
   let saveNotice = $state('');
   let saving = $state(false);
   let selectedLanguageId = $state('en');
+  let skillDirectories = $state([]);
+  let newSkillDirectory = $state('');
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
   let modelRefreshError = $state('');
@@ -68,6 +84,9 @@
     formatServerHost(settings?.general?.server, t),
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
+  let defaultSkillDirectoryValue = $derived(
+    getDefaultSkillDirectoryValue(settings, t),
+  );
   let providerItems = $derived(getProviderItems(settings));
   let hasRefreshEligibleProvider = $derived(
     providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
@@ -83,6 +102,11 @@
       selectedLanguageId,
       persistedLanguageId,
     }),
+  );
+  let skillDirectoriesSaveDisabled = $derived(
+    loading ||
+      saving ||
+      directoriesMatch(skillDirectories, getSkillDirectories(settings)),
   );
 
   onMount(() => {
@@ -100,6 +124,8 @@
 
     const language = nextSettings?.appearance?.language ?? 'en';
     selectedLanguageId = language;
+    skillDirectories = getSkillDirectories(nextSettings);
+    newSkillDirectory = '';
     init(language);
   }
 
@@ -142,10 +168,74 @@
     }
   }
 
+  async function saveSkillDirectories() {
+    if (skillDirectoriesSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+    saveNotice = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        createSkillDirectoriesUpdatePayload(skillDirectories),
+      );
+      applySettings(nextSettings);
+      saveNotice = t(
+        'settings.skills.saveSuccess',
+        'Skill directories updated.',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
+  function addSkillDirectory() {
+    const directory = newSkillDirectory.trim();
+    if (!directory) {
+      return;
+    }
+
+    if (!skillDirectories.includes(directory)) {
+      skillDirectories = [...skillDirectories, directory];
+    }
+
+    newSkillDirectory = '';
+    saveError = '';
+    saveNotice = '';
+  }
+
+  function removeSkillDirectory(directory) {
+    skillDirectories = skillDirectories.filter((item) => item !== directory);
+    saveError = '';
+    saveNotice = '';
+  }
+
   function handleLanguageChange(event) {
     selectedLanguageId = event.currentTarget.value;
     saveError = '';
     saveNotice = '';
+  }
+
+  function handleSkillDirectoryKeydown(event) {
+    if (event.key !== 'Enter') {
+      return;
+    }
+
+    event.preventDefault();
+    addSkillDirectory();
+  }
+
+  function directoriesMatch(left, right) {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((item, index) => item === right[index]);
   }
 
   function providerAppearsRefreshEligible(provider) {
@@ -284,6 +374,15 @@
           >
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </button>
+        {:else if activePanelId === 'skills' && !loading && !loadError}
+          <button
+            class="btn-primary s-save-button"
+            type="button"
+            disabled={skillDirectoriesSaveDisabled}
+            onclick={saveSkillDirectories}
+          >
+            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+          </button>
         {:else if activePanelId === 'providers' && !loading && !loadError && hasRefreshEligibleProvider}
           <button
             class="btn-primary s-refresh-button"
@@ -356,6 +455,104 @@
             <div class="s-row-control s-row-control--input">
               <div class="s-value-box">{dataDirectoryValue}</div>
             </div>
+          </div>
+        {:else if activePanelId === 'skills'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t(
+                  'settings.skills.defaultDirectory',
+                  'Default skill directory',
+                )}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.skills.defaultDirectoryDescription',
+                  'Always scanned from the vBot data directory and kept read-only here.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <div class="s-value-box">{defaultSkillDirectoryValue}</div>
+            </div>
+          </div>
+
+          <div class="s-row s-row--stacked">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t(
+                  'settings.skills.extraDirectories',
+                  'Additional skill directories',
+                )}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.skills.extraDirectoriesDescription',
+                  'Absolute or home-relative paths from settings.json skill_directories.',
+                )}
+              </div>
+            </div>
+
+            <div class="s-skill-directory-list">
+              {#if skillDirectories.length === 0}
+                <div class="s-feedback s-feedback--neutral s-feedback--compact">
+                  {t(
+                    'settings.skills.emptyDirectories',
+                    'No additional skill directories configured.',
+                  )}
+                </div>
+              {:else}
+                {#each skillDirectories as directory (directory)}
+                  <div class="s-skill-directory-item">
+                    <span>{directory}</span>
+                    <button
+                      class="btn-outline s-directory-remove"
+                      type="button"
+                      aria-label={t(
+                        'settings.skills.removeDirectory',
+                        'Remove skill directory {path}',
+                        { path: directory },
+                      )}
+                      onclick={() => removeSkillDirectory(directory)}
+                    >
+                      {t('common.remove', 'Remove')}
+                    </button>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+
+            <div class="s-skill-directory-add">
+              <input
+                class="s-input"
+                type="text"
+                bind:value={newSkillDirectory}
+                placeholder={t(
+                  'settings.skills.pathPlaceholder',
+                  'C:/path/to/skills',
+                )}
+                onkeydown={handleSkillDirectoryKeydown}
+              />
+              <button
+                class="btn-outline"
+                type="button"
+                disabled={!newSkillDirectory.trim()}
+                onclick={addSkillDirectory}
+              >
+                {t('settings.skills.addDirectory', 'Add directory')}
+              </button>
+            </div>
+
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              disabled={skillDirectoriesSaveDisabled}
+              onclick={saveSkillDirectories}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('common.save', 'Save')}
+            </button>
           </div>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
@@ -599,6 +796,11 @@
     border-bottom: 0;
   }
 
+  .s-row--stacked {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .s-row-info {
     flex: 1;
     min-width: 0;
@@ -618,7 +820,8 @@
   }
 
   .s-value-box,
-  .s-select {
+  .s-select,
+  .s-input {
     width: 100%;
     min-width: 0;
     padding: 7px 11px;
@@ -640,6 +843,12 @@
   .s-select {
     appearance: none;
     cursor: pointer;
+  }
+
+  .s-input:focus-visible {
+    border-color: rgba(232, 135, 10, 0.4);
+    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+    outline: none;
   }
 
   .s-select:disabled {
@@ -681,6 +890,45 @@
 
   .s-row-actions--provider {
     justify-content: flex-end;
+  }
+
+  .s-skill-directory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .s-skill-directory-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .s-skill-directory-item span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .s-skill-directory-add {
+    display: flex;
+    gap: 10px;
+  }
+
+  .s-feedback--compact {
+    margin-bottom: 0;
+  }
+
+  .s-directory-remove {
+    flex-shrink: 0;
   }
 
   .s-refresh-button {
@@ -735,6 +983,12 @@
       min-width: 0;
       flex-direction: column;
       align-items: stretch;
+    }
+
+    .s-skill-directory-add,
+    .s-skill-directory-item {
+      align-items: stretch;
+      flex-direction: column;
     }
 
     .s-save-button {

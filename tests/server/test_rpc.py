@@ -341,6 +341,7 @@ class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
         self._appearance = {"language": "en"}
+        self._skill_directories: list[str] = []
 
     def load_appearance_settings(self) -> JsonObject:
         return dict(self._appearance)
@@ -359,6 +360,17 @@ class StubStorage:
             raise StorageError(f"Unsupported appearance language: {language}")
         self._appearance = {"language": language}
         return dict(self._appearance)
+
+    def load_skill_directory_settings(self) -> list[str]:
+        return list(self._skill_directories)
+
+    def update_skill_directory_settings(self, directories: object) -> list[str]:
+        if not isinstance(directories, list) or not all(
+            isinstance(directory, str) for directory in directories
+        ):
+            raise StorageError("settings.skill_directories must be a list")
+        self._skill_directories = list(directories)
+        return list(self._skill_directories)
 
 
 class StubPrompts:
@@ -630,6 +642,10 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                 },
             ],
             "custom_endpoints": {"supported": False, "items": []},
+        },
+        "skills": {
+            "default_directory": str(tmp_path / "skills"),
+            "directories": [],
         },
         "appearance": {"language": "en", "available_languages": ["en"]},
     }
@@ -1216,6 +1232,31 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_skill_directories_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"skills": {"directories": ["~/skills", " C:/skills/team "]}},
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_skill_directory_settings() == [
+        "~/skills",
+        " C:/skills/team ",
+    ]
+    assert response["result"]["skills"] == {
+        "default_directory": str(tmp_path / "skills"),
+        "directories": ["~/skills", " C:/skills/team "],
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "params",
     [
@@ -1225,6 +1266,11 @@ async def test_settings_update_persists_supported_language_and_returns_full_payl
         {"appearance": {}},
         {"appearance": {"show_token_counts": False}},
         {"appearance": {"language": ""}},
+        {"skills": []},
+        {"skills": {}},
+        {"skills": {"extra": []}},
+        {"skills": {"directories": "~/skills"}},
+        {"skills": {"directories": [1]}},
     ],
 )
 async def test_settings_update_rejects_unsupported_sections_and_fields(

@@ -29,7 +29,7 @@ Clients call the vBot server contract; provider wire details stay behind
   configured `models_endpoint` and a usable connection credential, skips
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
-- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
@@ -37,6 +37,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
+- `settings.update` accepts supported `appearance` and `skills` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `connection` and `fallback_connection` are optional string fields alongside `model` and `fallback_model`. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created

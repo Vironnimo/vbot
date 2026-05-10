@@ -393,9 +393,14 @@ def _get_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _update_settings(state: Any, params: JsonObject) -> JsonObject:
-    appearance = _parse_settings_update(params)
+    settings_update = _parse_settings_update(params)
     try:
-        state.runtime.storage.update_appearance_settings(appearance)
+        if "appearance" in settings_update:
+            state.runtime.storage.update_appearance_settings(settings_update["appearance"])
+        if "skills" in settings_update:
+            state.runtime.storage.update_skill_directory_settings(
+                settings_update["skills"]["directories"]
+            )
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -414,7 +419,7 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
 
 
 def _parse_settings_update(params: JsonObject) -> JsonObject:
-    supported_sections = {"appearance"}
+    supported_sections = {"appearance", "skills"}
     unsupported_sections = sorted(set(params) - supported_sections)
     if unsupported_sections:
         raise RpcError(
@@ -422,7 +427,21 @@ def _parse_settings_update(params: JsonObject) -> JsonObject:
             f"unsupported settings sections: {', '.join(unsupported_sections)}",
         )
 
-    appearance = params.get("appearance")
+    if not params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.update requires a section")
+
+    parsed_update: JsonObject = {}
+
+    if "appearance" in params:
+        parsed_update["appearance"] = _parse_appearance_update(params["appearance"])
+
+    if "skills" in params:
+        parsed_update["skills"] = _parse_skills_update(params["skills"])
+
+    return parsed_update
+
+
+def _parse_appearance_update(appearance: Any) -> JsonObject:
     if not isinstance(appearance, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.appearance must be an object")
 
@@ -443,6 +462,29 @@ def _parse_settings_update(params: JsonObject) -> JsonObject:
     return {"language": language}
 
 
+def _parse_skills_update(skills: Any) -> JsonObject:
+    if not isinstance(skills, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.skills must be an object")
+
+    unsupported_fields = sorted(set(skills) - {"directories"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported skills settings: {', '.join(unsupported_fields)}",
+        )
+
+    directories = skills.get("directories")
+    if not isinstance(directories, list) or not all(
+        isinstance(directory, str) for directory in directories
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.skills.directories must be a list of strings",
+        )
+
+    return {"directories": list(directories)}
+
+
 def _required_string(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -455,7 +497,7 @@ def _settings_response(state: Any) -> JsonObject:
     appearance = runtime.storage.load_appearance_settings()
     server_bind = _server_bind_response(state)
 
-    return {
+    response = {
         "general": {
             "server": server_bind,
             "data_directory": str(runtime.storage.data_dir),
@@ -475,6 +517,13 @@ def _settings_response(state: Any) -> JsonObject:
             "available_languages": runtime.storage.supported_appearance_languages(),
         },
     }
+    skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
+    if callable(skill_directory_loader):
+        response["skills"] = {
+            "default_directory": str(runtime.storage.data_dir / "skills"),
+            "directories": skill_directory_loader(),
+        }
+    return response
 
 
 def _server_bind_response(state: Any) -> JsonObject:

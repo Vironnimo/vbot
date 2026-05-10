@@ -151,6 +151,22 @@ class StorageManager:
         self.save_settings(merged_settings)
         return dict(merged_settings["appearance"])
 
+    def load_skill_directory_settings(self) -> list[str]:
+        """Return normalized extra skill directory settings."""
+
+        settings = self.load_settings()
+        return self._normalize_skill_directories(settings.get("skill_directories"))
+
+    def update_skill_directory_settings(self, directories: Any) -> list[str]:
+        """Persist the extra skill directory list and return it."""
+
+        normalized_directories = self._normalize_skill_directories(directories)
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        merged_settings["skill_directories"] = normalized_directories
+        self.save_settings(merged_settings)
+        return normalized_directories
+
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json`` as UTF-8 JSON."""
 
@@ -258,6 +274,20 @@ class StorageManager:
             supported = ", ".join(sorted(SUPPORTED_APPEARANCE_LANGUAGES))
             raise StorageError(f"Unsupported appearance language: {value}. Supported: {supported}")
         return value
+
+    @staticmethod
+    def _normalize_skill_directories(directories: Any) -> list[str]:
+        if directories is None:
+            return []
+        if not isinstance(directories, list):
+            raise StorageError("settings.skill_directories must be a list")
+
+        normalized_directories: list[str] = []
+        for directory in directories:
+            if not isinstance(directory, str) or not directory.strip():
+                raise StorageError("Skill directories must be non-empty strings")
+            normalized_directories.append(directory.strip())
+        return normalized_directories
 
     @staticmethod
     def _validate_prompt_fragment_name(fragment_name: str) -> str:

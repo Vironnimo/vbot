@@ -217,6 +217,42 @@ def test_update_appearance_settings_rejects_invalid_payloads(
         storage.update_appearance_settings(appearance)
 
 
+def test_update_skill_directory_settings_persists_list_and_preserves_other_settings(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500, "appearance": {"language": "en"}})
+
+    updated = storage.update_skill_directory_settings(["~/skills", " C:/skills/team "])
+
+    assert updated == ["~/skills", "C:/skills/team"]
+    assert storage.load_skill_directory_settings() == ["~/skills", "C:/skills/team"]
+    assert storage.load_settings() == {
+        "appearance": {"language": "en"},
+        "server_port": 8500,
+        "skill_directories": ["~/skills", "C:/skills/team"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("directories", "message"),
+    [
+        ("~/skills", "settings.skill_directories must be a list"),
+        ([""], "Skill directories must be non-empty strings"),
+        ([1], "Skill directories must be non-empty strings"),
+    ],
+)
+def test_update_skill_directory_settings_rejects_invalid_payloads(
+    tmp_path: Path,
+    directories: Any,
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match=message):
+        storage.update_skill_directory_settings(directories)
+
+
 def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
     data_dir = tmp_path / "data"
