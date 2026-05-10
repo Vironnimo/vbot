@@ -378,6 +378,10 @@ class SystemPromptManager:
         self._os_name = os_name
         self._current_date = current_date or _current_utc_date
 
+    def update_skill_registry(self, skill_registry: SkillPromptRegistry) -> None:
+        """Replace the skill registry used for prompt and provider tool decisions."""
+        self._skill_registry = skill_registry
+
     def build_system_prompt(self, agent: Agent) -> str:
         """Build the complete system prompt for an agent."""
         prompt = self._storage.read_prompt_fragment("system.md")
