@@ -405,6 +405,7 @@ __all__ = [
     "ToolExecutionConfig",
     "ToolExecutor",
     "ToolHandler",
+    "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolRegistry",
