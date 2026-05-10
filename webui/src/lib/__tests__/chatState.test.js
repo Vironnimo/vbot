@@ -72,6 +72,40 @@ describe('chat state helpers', () => {
     expect(sessionState.queue).toHaveLength(1);
   });
 
+  it('filters internal notes from loaded history and visible timeline', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'message-one', role: 'user', content: 'Hi' },
+      { id: 'note-one', role: 'note', content: 'Internal reminder' },
+      { id: 'unknown-one', role: 'debug', content: 'Internal debug data' },
+      { id: 'message-two', role: 'assistant', content: 'Hello' },
+    ]);
+
+    expect(sessionState.messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
+    expect(visibleTimelineItems(sessionState)).toEqual([
+      expect.objectContaining({
+        id: 'message-one',
+        type: 'message',
+        message: expect.objectContaining({ content: 'Hi' }),
+      }),
+      expect.objectContaining({
+        type: 'assistant_run',
+        outputs: [expect.objectContaining({ content: 'Hello' })],
+      }),
+    ]);
+    expect(JSON.stringify(visibleTimelineItems(sessionState))).not.toContain(
+      'Internal reminder',
+    );
+  });
+
   it('preserves active run events when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),

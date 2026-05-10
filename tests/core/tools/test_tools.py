@@ -14,6 +14,7 @@ from core.tools import (
     ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
+    ToolNoteHook,
     ToolRegistry,
     is_tool_result_envelope,
     tool_failure,
@@ -135,6 +136,32 @@ class TestToolContext:
         context = make_context()
 
         assert context.is_cancelled() is False
+
+    def test_add_note_uses_hook_when_present(self) -> None:
+        notes: list[str] = []
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_call_index=0,
+            workspace=Path("workspace"),
+            app_root=Path("app"),
+            data_root=Path("data"),
+            note_hook=notes.append,
+        )
+
+        context.add_note("reminder")
+
+        assert notes == ["reminder"]
+
+    def test_add_note_without_hook_does_nothing(self) -> None:
+        context = make_context()
+
+        context.add_note("reminder")
+
+        assert context.note_hook is None
 
 
 class TestToolEnvelope:
@@ -606,3 +633,11 @@ class TestPublicExports:
         tool = register_read_file(registry)
 
         assert tool.name == "read_file"
+
+    def test_note_hook_type_exports_from_package_root(self) -> None:
+        def note_hook(content: str) -> None:
+            assert content == "reminder"
+
+        exported_hook: ToolNoteHook = note_hook
+
+        exported_hook("reminder")

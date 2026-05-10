@@ -6,6 +6,7 @@ import inspect
 import json
 import re
 import uuid
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -40,7 +41,7 @@ from core.tools import (
 from core.utils.errors import ProviderError, VBotError
 from core.utils.tokens import estimate_tokens
 
-MessageRole = Literal["system", "user", "assistant", "tool"]
+MessageRole = Literal["system", "user", "assistant", "tool", "note"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
@@ -49,6 +50,8 @@ SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
 MAX_TOOL_ITERATIONS = 8
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
+SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 
 
 class ChatError(VBotError):
@@ -124,6 +127,16 @@ class ChatMessage:
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="user",
+            content=content,
+        )
+
+    @classmethod
+    def note(cls, content: str, *, timestamp: datetime | None = None) -> ChatMessage:
+        """Create a kernel-internal note message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="note",
             content=content,
         )
 
@@ -230,6 +243,8 @@ class ChatMessage:
                 _validate_assistant_message(self)
             case "tool":
                 _validate_tool_message(self)
+            case "note":
+                _validate_note_message(self)
 
 
 class ChatSession:
@@ -239,6 +254,7 @@ class ChatSession:
         if path.suffix != SESSION_FILE_EXTENSION:
             raise ChatSessionError("session path must end with .jsonl")
         self.path = path
+        self._pending_notes: deque[ChatMessage] = deque()
 
     @classmethod
     def create(cls, sessions_dir: Path, session_id: str | None = None) -> ChatSession:
@@ -263,6 +279,18 @@ class ChatSession:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8", newline="") as session_file:
             session_file.write(payload + SESSION_LINE_ENDING)
+
+    def add_note(self, content: str) -> None:
+        """Persist a kernel-internal note and enqueue it for provider-request injection."""
+        note = ChatMessage.note(content)
+        self.append(note)
+        self._pending_notes.append(note)
+
+    def drain_pending_notes(self) -> list[ChatMessage]:
+        """Return all pending notes and clear the in-memory pending buffer."""
+        notes = list(self._pending_notes)
+        self._pending_notes.clear()
+        return notes
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
@@ -550,7 +578,7 @@ class ChatLoop:
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
-        history = [_message_to_request_dict(message) for message in session.load()]
+        history = _embed_notes_into_request(session.load())
         return [system_message.to_dict(), *history]
 
     async def _send_until_final(
@@ -565,6 +593,9 @@ class ChatLoop:
     ) -> ChatMessage:
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
+            pending_notes = session.drain_pending_notes()
+            if pending_notes:
+                messages.append(_notes_to_synthetic_user_message(pending_notes))
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -588,7 +619,10 @@ class ChatLoop:
                 raise ChatError("maximum tool iterations exceeded")
 
             tool_messages = await self._dispatch_tool_calls(
-                agent, assistant_message.tool_calls, run
+                agent,
+                assistant_message.tool_calls,
+                session,
+                run,
             )
             for tool_message in tool_messages:
                 run.raise_if_cancelled()
@@ -692,6 +726,7 @@ class ChatLoop:
         self,
         agent: Any,
         tool_calls: list[ToolCall],
+        session: ChatSession,
         run: Run,
     ) -> list[ChatMessage]:
         run.raise_if_cancelled()
@@ -719,6 +754,7 @@ class ChatLoop:
                     payload,
                 ),
                 cancellation_hook=lambda: run.cancel_requested,
+                note_hook=session.add_note,
             ),
         )
         run.raise_if_cancelled()
@@ -906,6 +942,40 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
     return data
 
 
+def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
+    request_messages: list[JsonObject] = []
+    pending_notes: list[ChatMessage] = []
+
+    for message in messages:
+        if message.role == "note":
+            pending_notes.append(message)
+            continue
+
+        if pending_notes:
+            request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+            pending_notes = []
+        request_messages.append(_message_to_request_dict(message))
+
+    if pending_notes:
+        request_messages.append(_notes_to_synthetic_user_message(pending_notes))
+
+    return request_messages
+
+
+def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
+    return {
+        "role": "user",
+        "content": "\n".join(_system_reminder_block(note) for note in notes),
+    }
+
+
+def _system_reminder_block(note: ChatMessage) -> str:
+    if note.role != "note":
+        raise ChatMessageValidationError("system reminders can only be built from notes")
+    note.validate()
+    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{note.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+
+
 def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMessage:
     tool_calls = _parse_tool_calls(response.get("tool_calls"))
     return ChatMessage.assistant(
@@ -985,8 +1055,8 @@ def _optional_string(data: JsonObject, key: str) -> str | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool"):
-        raise ChatMessageValidationError("role must be system, user, assistant, or tool")
+    if role not in ("system", "user", "assistant", "tool", "note"):
+        raise ChatMessageValidationError("role must be system, user, assistant, tool, or note")
     return cast(MessageRole, role)
 
 
@@ -1072,6 +1142,21 @@ def _validate_tool_message(message: ChatMessage) -> None:
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
     _reject_fields(message, "model", "reasoning", "reasoning_meta", "usage", "tool_calls")
+
+
+def _validate_note_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("note messages require content")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+    )
 
 
 def _reject_fields(message: ChatMessage, *fields: str) -> None:
