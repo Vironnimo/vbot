@@ -11,6 +11,7 @@ from core.agents import AgentError
 from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    ERROR_MESSAGE_PERSISTED_EVENT,
     REASONING_DELTA_EVENT,
     REASONING_EVENT,
     RUN_CANCELLED_EVENT,
@@ -750,7 +751,7 @@ def _visible_message(message: ChatMessage) -> JsonObject:
 
 
 def _is_visible_history_message(message: ChatMessage) -> bool:
-    return message.role != "note"
+    return message.role not in ("note",)
 
 
 def _resolve_context_window(state: Any, model: str) -> int | None:
@@ -903,6 +904,7 @@ RUN_OUTPUT_EVENT_TYPES = {
     TOOL_CALL_STARTED_EVENT,
     TOOL_CALL_RESULT_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    ERROR_MESSAGE_PERSISTED_EVENT,
 }
 RUN_DELTA_EVENT_TYPES = {
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -917,6 +919,7 @@ SERVER_EVENT_TYPES = {
     TOOL_CALL_STARTED_EVENT: "run_output",
     TOOL_CALL_RESULT_EVENT: "run_output",
     ASSISTANT_OUTPUT_EVENT: "run_output",
+    ERROR_MESSAGE_PERSISTED_EVENT: "run_output",
     RUN_COMPLETED_EVENT: "run_completed",
     RUN_CANCELLED_EVENT: "run_cancelled",
     RUN_FAILED_EVENT: "run_failed",

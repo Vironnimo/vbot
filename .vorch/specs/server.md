@@ -45,7 +45,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.history` returns visible persisted messages for `{ agent_id,
   session_id? }`. If `session_id` is omitted, it loads the Agent's
   `current_session_id`. Kernel-internal note messages are excluded from this
-  normal history response.
+  normal history response; persisted `role: "error"` messages are included.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
@@ -54,7 +54,8 @@ Clients call the vBot server contract; provider wire details stay behind
 - Server event bus events contain lifecycle summaries for WebSocket clients:
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
-  `agent.deleted` (full agent payload via `_agent_response`).
+  `agent.deleted` (full agent payload via `_agent_response`). Run output
+  includes persisted error-message events bridged as `run_output`.
 
 ## Interfaces
 
@@ -99,6 +100,8 @@ Clients call the vBot server contract; provider wire details stay behind
   metadata such as `reasoning_meta` recursively.
 - Public history payloads must not include `role: "note"` messages; notes are
   internal system reminders, not normal UI-visible chat messages.
+- Public history payloads include `role: "error"` messages so failed Runs remain
+  visible after reload.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
   `tool_call_delta`) are SSE-only. They must not be bridged to WebSocket
   lifecycle summaries.

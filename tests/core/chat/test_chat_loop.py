@@ -13,6 +13,7 @@ import pytest
 
 from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
+    ERROR_MESSAGE_PERSISTED_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -26,6 +27,7 @@ from core.chat import (
     RunCancelledError,
     RunStatus,
 )
+from core.providers.errors import ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
@@ -372,6 +374,31 @@ async def test_multiple_consecutive_notes_are_embedded_as_one_synthetic_user_mes
 
 
 @pytest.mark.asyncio
+async def test_notes_and_visible_errors_are_embedded_as_system_reminders(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.note("Background event"))
+    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+    session.append(ChatMessage.error("auth_error", "Invalid provider credential"))
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert "<system-reminder>\nBackground event\n</system-reminder>" in request_text
+    assert (
+        "<system-reminder>\nProvider rate limited the previous run\n</system-reminder>"
+        in request_text
+    )
+    assert "Invalid provider credential" not in request_text
+    assert all(message["role"] != "error" for message in request_messages)
+
+
+@pytest.mark.asyncio
 async def test_note_added_between_tool_iterations_is_sent_on_next_request(
     tmp_path: Path,
 ) -> None:
@@ -607,6 +634,31 @@ async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([ProviderRateLimitError("too many requests")])  # type: ignore[list-item]
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ProviderRateLimitError, match="too many requests"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "rate_limit"
+    assert messages[1].content == "too many requests"
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        ERROR_MESSAGE_PERSISTED_EVENT,
+        "run_failed",
+    ]
+    assert run.events[2].payload["message"]["role"] == "error"
+    assert run.events[2].payload["message"]["error_kind"] == "rate_limit"
+
+
+@pytest.mark.asyncio
 async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
     adapter = StubAdapter(
@@ -832,11 +884,13 @@ async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Pa
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user"]
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "provider_fatal"
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
+        ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
     ]
     assert adapter.requests == []
@@ -858,11 +912,13 @@ async def test_streaming_mode_chunk_timeout_fails_run(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user"]
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "config_error"
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
+        ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
     ]
 
@@ -1328,7 +1384,8 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
         )
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [message.role for message in messages] == ["user", "assistant", "error"]
+    assert messages[2].error_kind == "tool_iterations_exceeded"
 
 
 @pytest.mark.asyncio
@@ -1341,7 +1398,8 @@ async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_pat
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user"]
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "provider_fatal"
     assert adapter.requests[0]["model_id"] == "unknown-new-model"
 
 
