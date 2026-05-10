@@ -99,7 +99,9 @@ export function loadHistory(sessionState, messages) {
   const activeStreamingItems = isRunActive(sessionState)
     ? sessionState.streamingItems
     : [];
-  sessionState.messages = Array.isArray(messages) ? messages : [];
+  sessionState.messages = Array.isArray(messages)
+    ? messages.filter(isVisibleHistoryMessage)
+    : [];
   sessionState.runEvents = activeRunEvents;
   sessionState.streamingItems = activeStreamingItems;
   sessionState.error = null;
@@ -344,6 +346,10 @@ function historyTimelineItems(messages) {
 
   pushActiveAssistantRun(timelineItems, activeAssistantRun);
   return timelineItems;
+}
+
+function isVisibleHistoryMessage(message) {
+  return ['user', 'assistant', 'tool'].includes(message?.role);
 }
 
 function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {

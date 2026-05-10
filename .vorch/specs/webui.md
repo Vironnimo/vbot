@@ -92,6 +92,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   lifecycle events (`tool_call_started` and `tool_call_result`) are merged into a
   single expandable tool row inside that block rather than rendered as separate
   chat messages.
+- Visible chat history accepts only normal user, assistant, and tool messages;
+  kernel-internal note/system-reminder entries must be filtered out if they ever
+  arrive from a server response.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`
   event arrives.
