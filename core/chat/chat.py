@@ -40,7 +40,7 @@ from core.tools import (
 from core.utils.errors import ProviderError, VBotError
 from core.utils.tokens import estimate_tokens
 
-MessageRole = Literal["system", "user", "assistant", "tool"]
+MessageRole = Literal["system", "user", "assistant", "tool", "note"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
@@ -124,6 +124,16 @@ class ChatMessage:
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="user",
+            content=content,
+        )
+
+    @classmethod
+    def note(cls, content: str, *, timestamp: datetime | None = None) -> ChatMessage:
+        """Create a kernel-internal note message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="note",
             content=content,
         )
 
@@ -230,6 +240,8 @@ class ChatMessage:
                 _validate_assistant_message(self)
             case "tool":
                 _validate_tool_message(self)
+            case "note":
+                _validate_note_message(self)
 
 
 class ChatSession:
@@ -985,8 +997,8 @@ def _optional_string(data: JsonObject, key: str) -> str | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool"):
-        raise ChatMessageValidationError("role must be system, user, assistant, or tool")
+    if role not in ("system", "user", "assistant", "tool", "note"):
+        raise ChatMessageValidationError("role must be system, user, assistant, tool, or note")
     return cast(MessageRole, role)
 
 
@@ -1072,6 +1084,21 @@ def _validate_tool_message(message: ChatMessage) -> None:
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
     _reject_fields(message, "model", "reasoning", "reasoning_meta", "usage", "tool_calls")
+
+
+def _validate_note_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("note messages require content")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+    )
 
 
 def _reject_fields(message: ChatMessage, *fields: str) -> None:
