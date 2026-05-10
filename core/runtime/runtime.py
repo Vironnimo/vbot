@@ -219,6 +219,8 @@ class Runtime:
         if self._tools is not None:
             self._tools.unregister("skill")
             register_skill_tool(self._tools, self._skills)
+        if self._system_prompts is not None:
+            self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
 
     # ------------------------------------------------------------------
     # Read-only registry access
