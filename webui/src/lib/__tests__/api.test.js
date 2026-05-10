@@ -426,6 +426,24 @@ describe('subscribeLogEvents()', () => {
     connection.close();
   });
 
+  it('passes the explicit log cursor through to the logs websocket', () => {
+    const connection = subscribeLogEvents(
+      '2026-05-11',
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        cursor: 'cursor-123',
+      },
+    );
+
+    expect(connection.socket.url).toBe(
+      'wss://localhost:8420/ws/logs?file=2026-05-11&cursor=cursor-123',
+    );
+
+    connection.close();
+  });
+
   it('reports malformed log websocket messages through the error handler', () => {
     const onError = vi.fn();
     const connection = subscribeLogEvents(

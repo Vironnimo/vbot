@@ -50,7 +50,11 @@ describe('App', () => {
       files: ['2026-05-11.log'],
       default_file: '2026-05-11.log',
     });
-    readLogFileMock.mockResolvedValue({ file: '2026-05-11.log', entries: [] });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11.log',
+      entries: [],
+      cursor: 'app-log-cursor',
+    });
   });
 
   afterEach(async () => {
@@ -104,6 +108,7 @@ describe('App', () => {
           onError: expect.any(Function),
           onClose: expect.any(Function),
         }),
+        { cursor: 'app-log-cursor' },
       );
     });
     flushSync();

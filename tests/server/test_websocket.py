@@ -227,6 +227,52 @@ def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -
     }
 
 
+def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        read_response = client.post(
+            "/api/rpc",
+            json={"method": "log.read", "params": {"file": "2026-05-11"}},
+        )
+        cursor = read_response.json()["result"]["cursor"]
+
+        log_file.write_text(
+            "\n".join(
+                [
+                    "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                    "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with client.websocket_connect(f"/ws/logs?file=2026-05-11&cursor={cursor}") as websocket:
+            event = websocket.receive_json()
+
+    assert event == {
+        "type": "append",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "error",
+                "logger_name": "vbot.server.app",
+                "message": "Failed",
+                "continuation": "",
+            }
+        ],
+    }
+
+
 def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()

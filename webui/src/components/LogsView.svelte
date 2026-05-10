@@ -109,7 +109,7 @@
       }
 
       replaceLogEntries(viewState, result);
-      connectLogStream(file);
+      connectLogStream(file, result?.cursor);
     } catch (error) {
       if (destroyed || requestId !== activeReadRequest) {
         return;
@@ -124,56 +124,60 @@
     }
   }
 
-  function connectLogStream(file) {
+  function connectLogStream(file, cursor) {
     const stream = {
       file,
       shouldReconnect: true,
       connection: null,
     };
 
-    const connection = subscribeLogEvents(file, {
-      onOpen: () => {
-        if (currentStream !== stream) {
-          return;
-        }
+    const connection = subscribeLogEvents(
+      file,
+      {
+        onOpen: () => {
+          if (currentStream !== stream) {
+            return;
+          }
 
-        reconnectAttempt = 0;
-        viewState.streamError = '';
-        viewState.streamStatus = LOGS_STREAM_STATUS_CONNECTED;
+          reconnectAttempt = 0;
+          viewState.streamError = '';
+          viewState.streamStatus = LOGS_STREAM_STATUS_CONNECTED;
+        },
+        onEvent: (event) => {
+          if (currentStream !== stream) {
+            return;
+          }
+
+          mergeLogStreamEvent(viewState, event);
+        },
+        onError: (error) => {
+          if (currentStream !== stream) {
+            return;
+          }
+
+          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${error.message}`;
+          viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
+        },
+        onClose: () => {
+          if (currentStream !== stream) {
+            return;
+          }
+
+          currentStream = null;
+          if (
+            !stream.shouldReconnect ||
+            destroyed ||
+            viewState.selectedFile !== file
+          ) {
+            return;
+          }
+
+          viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
+          scheduleReconnect(file);
+        },
       },
-      onEvent: (event) => {
-        if (currentStream !== stream) {
-          return;
-        }
-
-        mergeLogStreamEvent(viewState, event);
-      },
-      onError: (error) => {
-        if (currentStream !== stream) {
-          return;
-        }
-
-        viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${error.message}`;
-        viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
-      },
-      onClose: () => {
-        if (currentStream !== stream) {
-          return;
-        }
-
-        currentStream = null;
-        if (
-          !stream.shouldReconnect ||
-          destroyed ||
-          viewState.selectedFile !== file
-        ) {
-          return;
-        }
-
-        viewState.streamStatus = LOGS_STREAM_STATUS_RECONNECTING;
-        scheduleReconnect(file);
-      },
-    });
+      { cursor },
+    );
 
     stream.connection = connection;
     currentStream = stream;

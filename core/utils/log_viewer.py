@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from watchfiles import awatch
 
@@ -41,6 +42,12 @@ class _WatcherState:
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     subscribers: list[asyncio.Queue[JsonObject]] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
+
+
+@dataclass(slots=True)
+class _ReadHandoff:
+    file_name: str
+    snapshot: _LogSnapshot
 
 
 def parse_log_entries(text: str) -> list[JsonObject]:
@@ -114,6 +121,8 @@ class LogViewer:
 
     def __init__(self, data_dir: str | Path) -> None:
         self._logs_dir = Path(data_dir).expanduser() / "logs"
+        self._read_handoffs: dict[str, _ReadHandoff] = {}
+        self._latest_read_cursor_by_file: dict[str, str] = {}
         self._watchers: dict[str, _WatcherState] = {}
         self._watch_lock = asyncio.Lock()
 
@@ -126,22 +135,48 @@ class LogViewer:
 
     def read_file(self, file_name: str) -> JsonObject:
         file_path = self._resolve_existing_file(file_name)
+        snapshot = self._read_snapshot(file_path)
         return {
             "file": file_path.name,
-            "entries": parse_log_entries(file_path.read_text(encoding="utf-8")),
+            "entries": snapshot.entries,
+            "cursor": self._store_read_handoff(file_path.name, snapshot),
         }
 
-    async def subscribe(self, file_name: str) -> AsyncGenerator[JsonObject, None]:
+    async def subscribe(
+        self,
+        file_name: str,
+        *,
+        cursor: str | None = None,
+    ) -> AsyncGenerator[JsonObject, None]:
         file_path = self._resolve_existing_file(file_name)
+        handoff_snapshot = self._take_read_handoff(file_path.name, cursor)
         watcher = await self._ensure_watcher(file_path.name)
         queue: asyncio.Queue[JsonObject] = asyncio.Queue()
         pending_event: JsonObject | None = None
+        catch_up_event: JsonObject | None = None
+        catch_up_subscribers: list[asyncio.Queue[JsonObject]] = []
 
         async with self._watch_lock:
-            watcher.subscribers.append(queue)
             next_snapshot = self._read_snapshot(file_path)
-            pending_event = _build_snapshot_event(file_path.name, watcher.snapshot, next_snapshot)
+            previous_snapshot = watcher.snapshot
+            catch_up_event = _build_snapshot_event(file_path.name, previous_snapshot, next_snapshot)
+            if catch_up_event is not None:
+                catch_up_subscribers = list(watcher.subscribers)
             watcher.snapshot = next_snapshot
+            watcher.subscribers.append(queue)
+
+            if handoff_snapshot is not None:
+                pending_event = _build_snapshot_event(
+                    file_path.name, handoff_snapshot, next_snapshot
+                )
+            else:
+                pending_event = _build_snapshot_event(
+                    file_path.name, previous_snapshot, next_snapshot
+                )
+
+        if catch_up_event is not None:
+            for subscriber in catch_up_subscribers:
+                subscriber.put_nowait(catch_up_event)
 
         if pending_event is not None:
             queue.put_nowait(pending_event)
@@ -290,6 +325,39 @@ class LogViewer:
             return _LogSnapshot(exists=False, size=0, entries=[])
 
         return _LogSnapshot(exists=True, size=size, entries=parse_log_entries(text))
+
+    def _store_read_handoff(self, file_name: str, snapshot: _LogSnapshot) -> str:
+        previous_cursor = self._latest_read_cursor_by_file.get(file_name)
+        if previous_cursor is not None:
+            self._read_handoffs.pop(previous_cursor, None)
+
+        cursor = uuid4().hex
+        self._read_handoffs[cursor] = _ReadHandoff(file_name=file_name, snapshot=snapshot)
+        self._latest_read_cursor_by_file[file_name] = cursor
+        return cursor
+
+    def _take_read_handoff(
+        self,
+        file_name: str,
+        cursor: str | None,
+    ) -> _LogSnapshot | None:
+        if cursor is None:
+            latest_cursor = self._latest_read_cursor_by_file.pop(file_name, None)
+            if latest_cursor is None:
+                return None
+            handoff = self._read_handoffs.pop(latest_cursor, None)
+            if handoff is None:
+                return None
+            return handoff.snapshot
+        if not isinstance(cursor, str) or not cursor:
+            raise ValueError("log cursor must be a non-empty string")
+
+        handoff = self._read_handoffs.pop(cursor, None)
+        if handoff is None or handoff.file_name != file_name:
+            raise ValueError("invalid log cursor")
+        if self._latest_read_cursor_by_file.get(file_name) == cursor:
+            self._latest_read_cursor_by_file.pop(file_name, None)
+        return handoff.snapshot
 
 
 def _includes_path(changes: set[tuple[Any, str]], watched_path: str) -> bool:
