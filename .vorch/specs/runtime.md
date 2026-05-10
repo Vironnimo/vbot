@@ -7,19 +7,33 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 `core/runtime/interfaces.py` — `typing.Protocol` contracts for DI.
 
 - `ConfigProtocol` — `get(key: str, default: Any = None) -> Any`
-- `LoggerProtocol` — `info(msg)`, `error(msg)`, `debug(msg)`
+- `LoggerProtocol` — `debug(msg)`, `info(msg)`, `warning(msg)`, `error(msg)`
 
 ## Runtime class
 
 `core/runtime/runtime.py` — constructor injection via `ConfigProtocol`.
 
+Runtime-owned logging is initialized through `LogManager` before normal
+bootstrap logging begins.
+
 ```
 Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 ```
 
-- `start()` — idempotent. Creates `vbot.core` logger via `LogManager`, loads provider/model registries, prepares data directories, reads `<data_dir>/.env` as a fallback credential snapshot without mutating `os.environ`, instantiates the central provider credential resolver (process environment takes precedence over the data-dir fallback), copies prompt fragments, wires services, registers built-in tools, and ensures a usable default Agent exists. Writes "Runtime started" at info level. Second call is no-op (debug log) and preserves service instances.
+- `start()` — idempotent. Resolves the runtime data dir early, initializes
+  `LogManager`, and creates the `vbot.core` logger before normal bootstrap
+  logging. Then it loads provider/model registries, prepares data directories,
+  reads `<data_dir>/.env` as a fallback credential snapshot without mutating
+  `os.environ`, instantiates the central provider credential resolver (process
+  environment takes precedence over the data-dir fallback), copies prompt
+  fragments, wires services, registers built-in tools, and ensures a usable
+  default Agent exists. Writes `Runtime started` at info level. Second call is
+  no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Resets started state and clears service references. Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
+- `LogManager` writes runtime-managed logs to `<data_dir>/logs/<YYYY-MM-DD>`
+  using the exact format `timestamp [LEVEL] name - message`; warnings render as
+  `[WARN]`.
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed
   through `has_provider_credentials(provider_id)` and

@@ -81,6 +81,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `VBOT_SERVER_PORT` > `settings.json` > `8420`; ambient `PORT` /
   `SERVER_PORT` process environment variables are ignored unless they are keys
   inside `settings.json`.
+- Server startup routes useful lifecycle/error visibility through the managed
+  vBot logging pipeline; routine uvicorn access logging is suppressed by
+  default so successful request spam does not fill the normal application log.
 - FastAPI serves built WebUI assets from `webui/dist` when `index.html` exists.
   `/assets/*` maps to Vite assets and non-reserved routes fall back to
   `index.html` for single-page-app refreshes.
@@ -98,6 +101,8 @@ Clients call the vBot server contract; provider wire details stay behind
   send requests via `POST /api/rpc`.
 - SSE is the primary per-Run output stream and should remain event-level and
   provider-agnostic.
+- Server-owned logs must follow the shared application format exactly:
+  `timestamp [LEVEL] name - message`.
 - Public history, Run, SSE, and WebSocket payloads must strip opaque provider
   metadata such as `reasoning_meta` recursively.
 - Public history payloads must not include `role: "note"` messages; notes are
