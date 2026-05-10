@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -79,9 +80,16 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        server_logger = logging.getLogger("vbot.server.app")
+        server_logger.info(
+            "Server application ready on %s:%s",
+            resolved_server_bind["listen_host"],
+            resolved_server_bind["listen_port"],
+        )
         try:
             yield
         finally:
+            server_logger.info("Server application stopping")
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)

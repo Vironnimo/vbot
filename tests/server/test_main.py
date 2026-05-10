@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 from core.utils.config import Config
+from core.utils.logging import ManagedLoggerProxyHandler
 from server import main as server_main
 from server.main import DEFAULT_PORT, main, parse_args, resolve_port, resolve_server_bind
 
@@ -92,8 +94,25 @@ def test_resolve_server_bind_uses_explicit_port_before_environment_and_settings(
 def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) -> None:
     calls = []
 
-    def fake_run(app, *, host: str, port: int, log_level: str) -> None:
-        calls.append({"app": app, "host": host, "port": port, "log_level": log_level})
+    def fake_run(
+        app,
+        *,
+        host: str,
+        port: int,
+        log_level: str,
+        access_log: bool,
+        log_config: dict[str, object],
+    ) -> None:
+        calls.append(
+            {
+                "app": app,
+                "host": host,
+                "port": port,
+                "log_level": log_level,
+                "access_log": access_log,
+                "log_config": log_config,
+            }
+        )
 
     monkeypatch.setattr(server_main, "uvicorn", SimpleNamespace(run=fake_run))
     monkeypatch.setattr(
@@ -107,8 +126,39 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) ->
     assert calls[0]["host"] == "127.0.0.1"
     assert calls[0]["port"] == 8765
     assert calls[0]["log_level"] == "info"
+    assert calls[0]["access_log"] is False
+    assert calls[0]["log_config"]["handlers"]["vbot_proxy"] == {
+        "class": "core.utils.logging.ManagedLoggerProxyHandler",
+        "target_logger_name": "vbot.server.uvicorn",
+    }
+    assert calls[0]["log_config"]["loggers"]["uvicorn.access"] == {
+        "handlers": ["null"],
+        "level": "INFO",
+        "propagate": False,
+    }
     assert calls[0]["app"]["server_bind"] == {
         "listen_host": "127.0.0.1",
         "listen_port": 8765,
         "port_source": "cli",
     }
+
+
+def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace(caplog) -> None:
+    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
+    logger = logging.getLogger("uvicorn.error")
+    logger.handlers = []
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    try:
+        with caplog.at_level(logging.INFO, logger="vbot.server.uvicorn"):
+            logger.info("Server started")
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+    assert any(
+        record.name == "vbot.server.uvicorn" and record.message == "Server started"
+        for record in caplog.records
+    )
