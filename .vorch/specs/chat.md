@@ -21,14 +21,16 @@ container; a Run is one active execution inside that session.
   - `user`: `content`
   - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `tool_calls`
   - `tool`: `tool_call_id`, `name`, `content`
-- `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
+  - `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
+  - `error`: `content`, `error_kind`; persisted run-time failure visible in normal history
 - `reasoning` is readable thinking text. `reasoning_meta` is opaque provider data and must not be interpreted by chat.
 - Activated skill context is persisted as a special internal `note` whose content begins with `[skill-context] `. These notes are not converted to `<system-reminder>` blocks; instead the chat loop restores them as `<skill_content>` user-context messages before provider requests.
 
 ## Interfaces
 
-- `ChatMessage.system(content, model)` / `.user(content)` / `.assistant(...)` / `.tool(...)` / `.note(content)` — constructors for role-specific messages.
+- `ChatMessage.system(content, model)` / `.user(content)` / `.assistant(...)` / `.tool(...)` / `.note(content)` / `.error(error_kind, content)` — constructors for role-specific messages.
 - `ChatMessage.to_dict()` / `ChatMessage.from_dict(data)` — canonical JSON-compatible conversion.
+- `error_kind_llm_visible(kind)` — returns whether a persisted error should be embedded into the next provider request.
 - `ChatSession.create(sessions_dir, session_id=None)` — creates an empty session file. Public/server-facing session creation uses a server-generated UUID session ID.
 - `ChatSession.append(message)` — appends one compact UTF-8 JSON object plus newline.
 - `ChatSession.load()` — returns validated `ChatMessage` objects in file order.
@@ -42,6 +44,7 @@ container; a Run is one active execution inside that session.
 - `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, and allows parallel Runs in different Sessions.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, and `tool_call_delta` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
+- Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
 - `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=...) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager.
@@ -84,6 +87,7 @@ container; a Run is one active execution inside that session.
   not be mistaken for the intended public/server product contract.
 - Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
+- Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
 - User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
 - Normal server history responses and the standard WebUI timeline must filter out notes; only debug-specific surfaces may expose them intentionally.

@@ -9,6 +9,30 @@ from typing import Any
 
 JsonObject = dict[str, Any]
 
+APP_ERROR_EVENT = "app_error"
+AGENT_CREATED_EVENT = "agent.created"
+AGENT_UPDATED_EVENT = "agent.updated"
+AGENT_DELETED_EVENT = "agent.deleted"
+RUN_STARTED_SERVER_EVENT = "run_started"
+RUN_OUTPUT_SERVER_EVENT = "run_output"
+RUN_COMPLETED_SERVER_EVENT = "run_completed"
+RUN_CANCELLED_SERVER_EVENT = "run_cancelled"
+RUN_FAILED_SERVER_EVENT = "run_failed"
+
+ALLOWED_SERVER_EVENT_TYPES = frozenset(
+    {
+        APP_ERROR_EVENT,
+        AGENT_CREATED_EVENT,
+        AGENT_UPDATED_EVENT,
+        AGENT_DELETED_EVENT,
+        RUN_STARTED_SERVER_EVENT,
+        RUN_OUTPUT_SERVER_EVENT,
+        RUN_COMPLETED_SERVER_EVENT,
+        RUN_CANCELLED_SERVER_EVENT,
+        RUN_FAILED_SERVER_EVENT,
+    }
+)
+
 
 class ServerEventBus:
     """Replayable in-memory event bus for server lifecycle events."""
@@ -19,6 +43,8 @@ class ServerEventBus:
 
     def publish(self, event_type: str, payload: JsonObject | None = None) -> JsonObject:
         """Publish one provider-agnostic server event to active subscribers."""
+        if event_type not in ALLOWED_SERVER_EVENT_TYPES:
+            raise ValueError(f"unsupported server event type: {event_type}")
         event = {
             "sequence": len(self.events) + 1,
             "type": event_type,

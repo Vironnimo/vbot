@@ -1164,6 +1164,11 @@ textarea::placeholder {
   background: var(--surface-3);
 }
 
+.msg.error .msg-avatar {
+  color: var(--red);
+  background: rgba(252, 129, 129, 0.1);
+}
+
 .msg-author {
   font-size: 12px;
   font-weight: 600;
@@ -1176,6 +1181,10 @@ textarea::placeholder {
 
 .msg.assistant .msg-author {
   color: var(--text-med);
+}
+
+.msg.error .msg-author {
+  color: var(--red);
 }
 
 .msg.assistant-run {
@@ -1241,6 +1250,18 @@ textarea::placeholder {
   color: var(--text-hi);
   font-size: 14px;
   line-height: 1.65;
+}
+
+.msg.error .msg-body-text {
+  max-width: min(720px, 100%);
+  padding: 10px 14px;
+  border: 1px solid rgba(252, 129, 129, 0.24);
+  border-left: 3px solid var(--red);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  color: var(--text-hi);
+  background: rgba(252, 129, 129, 0.07);
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .reasoning-block {
