@@ -378,6 +378,19 @@ Three semantic colors, pill shape (12px border-radius), mono font 11.5px:
 - Amber chip: amber tint bg + `amber` text
 - Orange/accent chip: `accent-dim` bg + `accent` text
 
+### Log viewer
+
+- The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`,
+  mono text) for file selection, level filtering, and search.
+- Live connection state uses a pill-shaped mono status chip: neutral by default,
+  green for connected, amber for reconnecting, red for stream errors.
+- Log entries render as `surface` cards with a 3px semantic left border:
+  accent for info, amber for warn, red for error, neutral `border-2` for
+  unknown/other levels.
+- Log metadata (timestamp, level, logger) stays monospace and compact. The log
+  body also stays monospace and preserves multiline continuation text with
+  wrapped whitespace so stack traces remain readable.
+
 ### Toasts
 
 Slide in from the right (bottom-right stack). `surface` background, `border-2`

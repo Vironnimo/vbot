@@ -1,5 +1,6 @@
 const RPC_ENDPOINT = '/api/rpc';
 const WEBSOCKET_ENDPOINT = '/ws';
+const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
 
 export const RPC_ERROR_INVALID_CLIENT_REQUEST = 'invalid_client_request';
 export const RPC_ERROR_NETWORK = 'network_error';
@@ -122,6 +123,24 @@ export async function rpc(method, params = {}, options = {}) {
     throw normalizeRpcError(payload.error, { method, status: response.status });
   }
   return payload.result;
+}
+
+export function listLogs(options = {}) {
+  return rpc('log.list', {}, options);
+}
+
+export function readLogFile(file, options = {}) {
+  if (!isNonEmptyString(file)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Log file must be a non-empty string',
+      {
+        method: 'log.read',
+      },
+    );
+  }
+
+  return rpc('log.read', { file }, options);
 }
 
 export function normalizeRpcError(error, options = {}) {
@@ -252,6 +271,67 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
   return { close, socket };
 }
 
+export function subscribeLogEvents(file, handlers = {}, options = {}) {
+  if (!isNonEmptyString(file)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Log file must be a non-empty string',
+    );
+  }
+
+  const WebSocketClass = options.WebSocket ?? globalThis.WebSocket;
+  if (typeof WebSocketClass !== 'function') {
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'WebSocket is not available');
+  }
+
+  const socket = new WebSocketClass(
+    buildWebSocketUrlWithParams(
+      options.path ?? LOGS_WEBSOCKET_ENDPOINT,
+      options.baseUrl,
+      {
+        file,
+        cursor: options.cursor,
+      },
+    ),
+  );
+  const cleanupCallbacks = [];
+  let closed = false;
+
+  addListener(socket, 'open', handlers.onOpen, cleanupCallbacks);
+  addListener(socket, 'error', handlers.onError, cleanupCallbacks);
+  addListener(socket, 'close', handlers.onClose, cleanupCallbacks);
+  addListener(
+    socket,
+    'message',
+    (event) => {
+      const parsed = parseJsonEventData(
+        event.data,
+        WEBSOCKET_ERROR_RESPONSE,
+        'WebSocket event data must be JSON',
+      );
+      if (parsed instanceof ApiClientError) {
+        handlers.onError?.(parsed, event);
+        return;
+      }
+      handlers.onEvent?.(parsed, event);
+    },
+    cleanupCallbacks,
+  );
+
+  const close = (code, reason) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    for (const cleanup of cleanupCallbacks) {
+      cleanup();
+    }
+    socket.close(code, reason);
+  };
+
+  return { close, socket };
+}
+
 async function readRpcPayload(response, method) {
   try {
     return await response.json();
@@ -304,28 +384,40 @@ function buildHttpUrlWithAfterSequence(path, afterSequence = 0) {
 }
 
 function buildWebSocketUrl(path, baseUrl, afterSequence = 0) {
+  return buildWebSocketUrlWithParams(
+    path,
+    baseUrl,
+    afterSequence > 0 ? { after_sequence: String(afterSequence) } : {},
+  );
+}
+
+function buildWebSocketUrlWithParams(path, baseUrl, params = {}) {
   if (path.startsWith('ws://') || path.startsWith('wss://')) {
-    if (afterSequence > 0) {
-      const url = new URL(path);
-      url.searchParams.set('after_sequence', String(afterSequence));
-      return url.toString();
-    }
-    return path;
+    const url = new URL(path);
+    appendSearchParams(url, params);
+    return url.toString();
   }
+
   const browserBaseUrl = baseUrl ?? browserOrigin();
   if (!browserBaseUrl) {
-    if (afterSequence > 0) {
-      const separator = path.includes('?') ? '&' : '?';
-      return `${path}${separator}after_sequence=${afterSequence}`;
-    }
-    return path;
+    const url = new URL(path, 'ws://vbot.local');
+    appendSearchParams(url, params);
+    return `${url.pathname}${url.search}${url.hash}`;
   }
+
   const url = new URL(path, browserBaseUrl);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  if (afterSequence > 0) {
-    url.searchParams.set('after_sequence', String(afterSequence));
-  }
+  appendSearchParams(url, params);
   return url.toString();
+}
+
+function appendSearchParams(url, params) {
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === '') {
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
 }
 
 function browserOrigin() {
