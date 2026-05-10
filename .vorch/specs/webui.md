@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, and a placeholder for System Prompt.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, and a functional System Prompt tab.
 
 ## Layout
 
@@ -128,5 +128,5 @@ does not talk to providers directly. The product presents an Agent-first chat su
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` remains a placeholder. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
 - The production build emits `webui/dist`, which FastAPI serves when present.
