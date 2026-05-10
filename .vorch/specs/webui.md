@@ -25,8 +25,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
      throws `ApiClientError` with a stable `code`.
   - `listLogs(options?)` calls `log.list` and returns `{ files, default_file }`
     for the daily logs catalog.
-  - `readLogFile(file, options?)` calls `log.read` and returns `{ file, entries }`
-    for one selected daily log file.
+  - `readLogFile(file, options?)` calls `log.read` and returns
+    `{ file, entries, cursor }` for one selected daily log file.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
     one Run timeline and returns `{ close, source }`. It subscribes to whole
     Run events plus streaming delta events and supports optional
@@ -34,8 +34,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     SSE event IDs / `Last-Event-ID` from the server.
   - `subscribeServerEvents(handlers, options?)` opens `/ws` and returns
      `{ close, socket }`. Supports `afterSequence` option for reconnect replay.
-  - `subscribeLogEvents(file, handlers, options?)` opens `/ws/logs?file=...`
-    and returns `{ close, socket }` for one selected log file.
+  - `subscribeLogEvents(file, handlers, options?)` opens
+    `/ws/logs?file=...&cursor=...` and returns `{ close, socket }` for one
+    selected log file. Callers should pass the latest `cursor` from
+    `readLogFile(...)`.
 - `webui/src/lib/i18n.js`
   - `t(key, fallback?, values?)` is required for all user-visible strings.
 - `webui/src/lib/connectionState.js`
@@ -100,6 +102,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     reads one file at a time through `log.read`, applies local level/search
     filtering, and owns a dedicated `/ws/logs` subscription with reconnect and
     cleanup scoped to the currently selected file.
+  - Uses the `cursor` from each `log.read` response when opening the live log
+    socket so append events are not lost during the read→subscribe handoff.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
@@ -117,6 +121,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   be closed on component destroy.
 - The Logs tab is read-only and file-backed. It reads one selected daily log file
   at a time and must not depend on chat/session state or the shared app event bus.
+- The Logs tab should pass the most recent `log.read` cursor into
+  `subscribeLogEvents(...)` whenever it opens or reopens the dedicated log
+  socket.
 - The UI selects Agents, not Sessions. The shown chat is the selected Agent's
   `current_session_id`; old Sessions are not listed in Phase 4.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current

@@ -9,6 +9,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 ## Data Model
 
 - Daily log catalog: `{ files: string[], default_file: string | null }`
+- Read snapshot result: `{ file: string, entries: ParsedLogEntry[], cursor: string }`
 - Parsed log entry:
   - `timestamp: string`
   - `level: string` — lower-cased level such as `info`, `warn`, `error`
@@ -24,17 +25,17 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 - `core/utils/log_viewer.py`
   - `LogViewer.list_files()` → `{ files, default_file }`
-  - `LogViewer.read_file(file_name)` → `{ file, entries }`
-  - `LogViewer.subscribe(file_name)` → async generator of `{ type, file, entries }`
+  - `LogViewer.read_file(file_name)` → `{ file, entries, cursor }`
+  - `LogViewer.subscribe(file_name, cursor?)` → async generator of `{ type, file, entries }`
 - Server RPC
   - `log.list` — returns the daily log catalog sorted newest-first
-  - `log.read { file }` — returns parsed entries for one selected file
+  - `log.read { file }` — returns parsed entries plus a handoff cursor for one selected file
 - Server transport
-  - `GET /ws/logs?file=<name>` — streams append/reset events for one selected file only
+  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for one selected file only and can replay the read→socket handoff gap
 - WebUI
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
   - `webui/src/lib/logsView.js` owns client-side selection/filter/search helpers
-  - `webui/src/components/LogsView.svelte` renders the tab and reconnects its dedicated log stream
+  - `webui/src/components/LogsView.svelte` renders the tab and reconnects its dedicated log stream using the latest read cursor
 
 ## Conventions
 
@@ -42,6 +43,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - Validate file names strictly; never allow path traversal or absolute paths.
 - If a line does not match the header format, append it to the previous entry's `continuation` when possible; otherwise keep it visible as an `unknown` entry.
 - The level filter is based only on parsed `level`. Logger names are searchable through free-text search, not separate filter UI.
+- `cursor` is an internal handoff token, not user-visible UI state.
 - The selected file remains user-controlled. Refreshing the catalog may add newer files, but it must not auto-switch the active selection.
 
 ## External Dependencies

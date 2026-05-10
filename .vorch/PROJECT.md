@@ -171,8 +171,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   sequence number they saw, and the server replays missed events.
 - **Logs view transport is file-backed and isolated.** The WebUI log tab reads
   daily files from `<data_dir>/logs/` through dedicated `log.list`/`log.read`
-  RPC methods plus `/ws/logs` for live updates of one selected file. It does
-  not reuse the shared app event bus.
+  RPC methods plus `/ws/logs` for live updates of one selected file. `log.read`
+  returns a short-lived cursor so the log socket can replay anything appended
+  between the initial file read and websocket connect. It does not reuse the
+  shared app event bus.
 - **Provider usability for model selection is credential-based, not
   health-based.** A provider is considered usable when its configured
   credential is present and non-empty. Missing or empty credentials mean the

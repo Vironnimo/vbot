@@ -799,8 +799,11 @@ async def test_log_read_returns_structured_entries(tmp_path: Path) -> None:
                     "continuation": "",
                 },
             ],
+            "cursor": response["result"]["cursor"],
         },
     }
+    assert isinstance(response["result"]["cursor"], str)
+    assert response["result"]["cursor"]
 
 
 @pytest.mark.asyncio

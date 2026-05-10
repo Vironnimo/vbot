@@ -60,6 +60,7 @@ describe('LogsView', () => {
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
       entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-initial',
     });
 
     mountedComponent = mount(LogsView, { target: document.body });
@@ -73,6 +74,7 @@ describe('LogsView', () => {
     expect(subscribeLogEventsMock).toHaveBeenCalledWith(
       '2026-05-11',
       expect.any(Object),
+      { cursor: 'cursor-initial' },
     );
     expect(document.body.textContent).toContain('Ready');
     expect(selectByLabel('File').value).toBe('2026-05-11');
@@ -124,6 +126,7 @@ describe('LogsView', () => {
     readLogFileMock.mockImplementation(async (file) => ({
       file,
       entries: [entry({ message: `Loaded ${file}` })],
+      cursor: `cursor-${file}`,
     }));
 
     mountedComponent = mount(LogsView, { target: document.body });
@@ -146,8 +149,34 @@ describe('LogsView', () => {
     expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
       '2026-05-10',
       expect.any(Object),
+      { cursor: 'cursor-2026-05-10' },
     );
     expect(document.body.textContent).toContain('Loaded 2026-05-10');
+  });
+
+  it('uses the read cursor when opening the live log stream', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-live-handoff',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => subscribeLogEventsMock.mock.calls.length === 1,
+    );
+
+    expect(subscribeLogEventsMock).toHaveBeenCalledWith(
+      '2026-05-11',
+      expect.any(Object),
+      { cursor: 'cursor-live-handoff' },
+    );
   });
 
   it('applies live append events and renders continuation lines', async () => {
@@ -158,6 +187,7 @@ describe('LogsView', () => {
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
       entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-reconnect',
     });
 
     mountedComponent = mount(LogsView, { target: document.body });
@@ -219,6 +249,7 @@ describe('LogsView', () => {
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
       entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-reconnect',
     });
 
     mountedComponent = mount(LogsView, { target: document.body });
@@ -241,6 +272,11 @@ describe('LogsView', () => {
     expect(
       readLogFileMock.mock.calls.filter((call) => call[0] === '2026-05-11'),
     ).toHaveLength(2);
+    expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
+      '2026-05-11',
+      expect.any(Object),
+      { cursor: 'cursor-reconnect' },
+    );
   });
 });
 

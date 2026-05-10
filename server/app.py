@@ -135,9 +135,10 @@ def create_app(
     async def websocket_logs(websocket: WebSocket) -> None:
         await websocket.accept()
         file_name = websocket.query_params.get("file")
+        cursor = websocket.query_params.get("cursor")
         try:
             async with aclosing(
-                websocket.app.state.log_viewer.subscribe(file_name or "")
+                websocket.app.state.log_viewer.subscribe(file_name or "", cursor=cursor)
             ) as stream:
                 await _stream_log_events(websocket, stream)
         except ValueError as exc:

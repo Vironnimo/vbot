@@ -290,6 +290,7 @@ export function subscribeLogEvents(file, handlers = {}, options = {}) {
       options.baseUrl,
       {
         file,
+        cursor: options.cursor,
       },
     ),
   );

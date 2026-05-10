@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
 from pathlib import Path
 
 import pytest
@@ -99,25 +101,86 @@ def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
 
     viewer = LogViewer(tmp_path)
 
-    assert viewer.read_file("2026-05-11") == {
+    result = viewer.read_file("2026-05-11")
+
+    assert result["file"] == "2026-05-11"
+    assert result["entries"] == [
+        {
+            "timestamp": "2026-05-11 09:00:00",
+            "level": "info",
+            "logger_name": "vbot.server.app",
+            "message": "Server started",
+            "continuation": "details line",
+        },
+        {
+            "timestamp": "2026-05-11 09:00:01",
+            "level": "error",
+            "logger_name": "vbot.core",
+            "message": "Boom",
+            "continuation": "",
+        },
+    ]
+    assert isinstance(result["cursor"], str)
+    assert result["cursor"]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_replays_entries_appended_after_read_handoff(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+
+    viewer = LogViewer(tmp_path)
+    initial = viewer.read_file("2026-05-11")
+    cursor = initial["cursor"]
+
+    log_file.write_text(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
+        event = await asyncio.wait_for(stream.__anext__(), timeout=1)
+
+    assert event == {
+        "type": "append",
         "file": "2026-05-11",
         "entries": [
             {
-                "timestamp": "2026-05-11 09:00:00",
-                "level": "info",
-                "logger_name": "vbot.server.app",
-                "message": "Server started",
-                "continuation": "details line",
-            },
-            {
                 "timestamp": "2026-05-11 09:00:01",
                 "level": "error",
-                "logger_name": "vbot.core",
-                "message": "Boom",
+                "logger_name": "vbot.server.app",
+                "message": "Failed",
                 "continuation": "",
-            },
+            }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_subscribe_rejects_invalid_cursor(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-11").write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+
+    viewer = LogViewer(tmp_path)
+
+    with pytest.raises(ValueError, match="invalid log cursor"):
+        async with aclosing(viewer.subscribe("2026-05-11", cursor="missing")) as stream:
+            await stream.__anext__()
 
 
 def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
