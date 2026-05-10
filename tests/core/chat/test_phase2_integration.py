@@ -268,7 +268,26 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
                 "name": "read_file",
                 "description": "Read a workspace file.",
                 "parameters": {"type": "object"},
-            }
+            },
+            {
+                "name": "skill",
+                "description": (
+                    "Load an allowed skill by name and add its instructions to session context."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Name of the skill to activate from the available skills catalog."
+                            ),
+                        }
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+            },
         ]
     finally:
         runtime.stop()
