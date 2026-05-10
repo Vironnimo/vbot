@@ -43,7 +43,7 @@ from core.tools.skill import load_skill_content
 from core.utils.errors import ProviderError, VBotError
 from core.utils.tokens import estimate_tokens
 
-MessageRole = Literal["system", "user", "assistant", "tool", "note"]
+MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
@@ -57,6 +57,24 @@ SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 SKILL_SLASH_TRIGGER_PATTERN = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?=\s|$)")
 SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+ERROR_KIND_RATE_LIMIT = "rate_limit"
+ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_PROVIDER_OVERLOAD = "provider_overloaded"
+ERROR_KIND_TOOL_ITERATIONS = "tool_iterations_exceeded"
+ERROR_KIND_AUTH = "auth_error"
+ERROR_KIND_PROVIDER_FATAL = "provider_fatal"
+ERROR_KIND_CONFIG = "config_error"
+ERROR_KIND_PROVIDER_ERROR = "provider_error"
+ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
+    ERROR_KIND_RATE_LIMIT: True,
+    ERROR_KIND_TIMEOUT: True,
+    ERROR_KIND_PROVIDER_OVERLOAD: True,
+    ERROR_KIND_TOOL_ITERATIONS: True,
+    ERROR_KIND_AUTH: False,
+    ERROR_KIND_PROVIDER_FATAL: False,
+    ERROR_KIND_CONFIG: False,
+    ERROR_KIND_PROVIDER_ERROR: True,
+}
 
 
 class ChatError(VBotError):
@@ -69,6 +87,10 @@ class ChatMessageValidationError(ChatError):
 
 class ChatSessionError(ChatError):
     """Raised when a chat session file operation cannot be completed."""
+
+
+class ToolIterationLimitError(ChatError):
+    """Raised when a chat run exceeds its configured tool-iteration limit."""
 
 
 @dataclass(frozen=True)
@@ -113,6 +135,7 @@ class ChatMessage:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    error_kind: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -143,6 +166,23 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="note",
             content=content,
+        )
+
+    @classmethod
+    def error(
+        cls,
+        error_kind: str,
+        content: str,
+        *,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a persisted error message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="error",
+            content=content,
+            error_kind=error_kind,
         )
 
     @classmethod
@@ -206,6 +246,7 @@ class ChatMessage:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
+        _add_if_not_none(message, "error_kind", self.error_kind)
         return message
 
     @classmethod
@@ -232,6 +273,7 @@ class ChatMessage:
             tool_calls=tool_calls,
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
+            error_kind=_optional_string(data, "error_kind"),
         )
         message.validate()
         return message
@@ -250,6 +292,8 @@ class ChatMessage:
                 _validate_tool_message(self)
             case "note":
                 _validate_note_message(self)
+            case "error":
+                _validate_error_message(self)
 
 
 class ChatSession:
@@ -982,6 +1026,11 @@ def _sync_skill_context_messages(messages: list[JsonObject], session: ChatSessio
             existing.add(skill_message["content"])
 
 
+def error_kind_llm_visible(kind: str) -> bool:
+    """Return whether an error kind should be included in later provider context."""
+    return ERROR_KIND_LLM_VISIBLE.get(kind, False)
+
+
 def _new_message_id() -> str:
     return str(uuid.uuid4())
 
@@ -1209,8 +1258,10 @@ def _optional_string(data: JsonObject, key: str) -> str | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool", "note"):
-        raise ChatMessageValidationError("role must be system, user, assistant, tool, or note")
+    if role not in ("system", "user", "assistant", "tool", "note", "error"):
+        raise ChatMessageValidationError(
+            "role must be system, user, assistant, tool, note, or error"
+        )
     return cast(MessageRole, role)
 
 
@@ -1259,7 +1310,14 @@ def _validate_system_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("system messages require content")
     _reject_fields(
-        message, "reasoning", "reasoning_meta", "usage", "tool_calls", "tool_call_id", "name"
+        message,
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
     )
 
 
@@ -1275,13 +1333,14 @@ def _validate_user_message(message: ChatMessage) -> None:
         "tool_calls",
         "tool_call_id",
         "name",
+        "error_kind",
     )
 
 
 def _validate_assistant_message(message: ChatMessage) -> None:
     if message.model is None:
         raise ChatMessageValidationError("assistant messages require model")
-    _reject_fields(message, "tool_call_id", "name")
+    _reject_fields(message, "tool_call_id", "name", "error_kind")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -1295,12 +1354,38 @@ def _validate_tool_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("tool messages require tool_call_id")
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
-    _reject_fields(message, "model", "reasoning", "reasoning_meta", "usage", "tool_calls")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "error_kind",
+    )
 
 
 def _validate_note_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("note messages require content")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
+    )
+
+
+def _validate_error_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("error messages require content")
+    if not message.error_kind:
+        raise ChatMessageValidationError("error messages require error_kind")
     _reject_fields(
         message,
         "model",
