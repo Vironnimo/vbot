@@ -401,6 +401,10 @@ Max-width 75%. Header reversed (avatar on right).
 Assistant messages: no card — prose flows free at full content width. Tool events,
 thinking blocks, and code snippets appear inline between prose paragraphs.
 
+Error messages: standalone timeline entries, not assistant bubbles. Use the red
+semantic token sparingly: red avatar tint, red author label, and a compact text
+block with a red left border plus low-opacity red background.
+
 Thinking blocks: collapsible, italic `text-med` body, `border-2` left border,
 `font-ui` (not mono). Collapsed by default in production; open in prototypes.
 

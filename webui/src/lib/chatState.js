@@ -349,7 +349,7 @@ function historyTimelineItems(messages) {
 }
 
 function isVisibleHistoryMessage(message) {
-  return ['user', 'assistant', 'tool'].includes(message?.role);
+  return ['user', 'assistant', 'tool', 'error'].includes(message?.role);
 }
 
 function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {
@@ -518,6 +518,18 @@ function liveTimelineItems(runEvents) {
         arrivalIndex,
       );
       runGroup.events.push(event);
+      continue;
+    }
+
+    if (event?.type === 'error_message_persisted') {
+      const message = event.payload?.message;
+      if (message) {
+        timelineEntries.push({
+          kind: 'standalone',
+          order: arrivalIndex,
+          item: historyMessageItem(message),
+        });
+      }
       continue;
     }
 

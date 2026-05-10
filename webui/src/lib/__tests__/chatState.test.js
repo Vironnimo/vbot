@@ -106,6 +106,116 @@ describe('chat state helpers', () => {
     );
   });
 
+  it('keeps error history messages visible and outside assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Try the request' },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'I will call the provider.',
+      },
+      {
+        id: 'error-one',
+        role: 'error',
+        error_kind: 'rate_limit',
+        content: 'Provider rate limit exceeded',
+      },
+      { id: 'user-two', role: 'user', content: 'Try again later' },
+    ]);
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(sessionState.messages.map((message) => message.role)).toEqual([
+      'user',
+      'assistant',
+      'error',
+      'user',
+    ]);
+    expect(timelineItems).toEqual([
+      expect.objectContaining({ id: 'user-one', type: 'message' }),
+      expect.objectContaining({ type: 'assistant_run', source: 'history' }),
+      expect.objectContaining({
+        id: 'error-one',
+        type: 'message',
+        message: expect.objectContaining({
+          role: 'error',
+          error_kind: 'rate_limit',
+          content: 'Provider rate limit exceeded',
+        }),
+      }),
+      expect.objectContaining({ id: 'user-two', type: 'message' }),
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'I will call the provider.' }),
+    ]);
+  });
+
+  it('keeps live error persisted events visible and outside assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: { id: 'user-one', role: 'user', content: 'Try request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'Calling provider.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'error_message_persisted',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'error-one',
+          role: 'error',
+          error_kind: 'rate_limit',
+          content: 'Provider rate limit exceeded',
+        },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems).toEqual([
+      expect.objectContaining({ id: 'event-run-one-1', type: 'event' }),
+      expect.objectContaining({ type: 'assistant_run', runId: 'run-one' }),
+      expect.objectContaining({
+        id: 'error-one',
+        type: 'message',
+        message: expect.objectContaining({
+          role: 'error',
+          content: 'Provider rate limit exceeded',
+        }),
+      }),
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'Calling provider.' }),
+    ]);
+  });
+
   it('preserves active run events when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
