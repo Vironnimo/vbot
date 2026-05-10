@@ -18,7 +18,8 @@ vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
 }));
 
-const { default: SystemPromptView } = await import('../SystemPromptView.svelte');
+const { default: SystemPromptView } =
+  await import('../SystemPromptView.svelte');
 
 const COMPONENT_SOURCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -222,7 +223,9 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('button.btn-outline.sp-btn-sm').length > 0,
+      () =>
+        document.body.querySelectorAll('button.btn-outline.sp-btn-sm').length >
+        0,
       100,
     );
 
@@ -253,8 +256,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () =>
-        document.body.textContent.includes('Preview for'),
+      () => document.body.textContent.includes('Preview for'),
       100,
     );
 
@@ -327,6 +329,7 @@ describe('SystemPromptView', () => {
       'systemPrompt.error.saveFailed',
       'systemPrompt.error.resetFailed',
       'systemPrompt.error.previewFailed',
+      'systemPrompt.error.copyFailed',
     ];
 
     for (const key of requiredKeys) {
@@ -350,9 +353,7 @@ function baseFragments() {
       name: 'runtime.md',
       content: '# Runtime content',
       is_modified: false,
-      variables: [
-        { placeholder: '{host}', description: 'Server host' },
-      ],
+      variables: [{ placeholder: '{host}', description: 'Server host' }],
     },
     {
       name: 'tools.md',

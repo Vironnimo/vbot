@@ -225,14 +225,14 @@ class StorageManager:
         target_path = self.prompts_dir / safe_name
 
         try:
-            content = source_path.read_bytes()
+            content = source_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise StorageError(f"Cannot read bundled prompt fragment {safe_name}: {exc}") from exc
 
         self.ensure_directories()
         temp_path = self._temporary_path(target_path)
         try:
-            temp_path.write_bytes(content)
+            temp_path.write_text(content, encoding="utf-8")
             os.replace(temp_path, target_path)
         except OSError as exc:
             self._remove_temporary_file(temp_path)
