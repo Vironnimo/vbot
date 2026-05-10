@@ -14,6 +14,7 @@ from core.tools import (
     ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
+    ToolNoteHook,
     ToolRegistry,
     is_tool_result_envelope,
     tool_failure,
@@ -632,3 +633,11 @@ class TestPublicExports:
         tool = register_read_file(registry)
 
         assert tool.name == "read_file"
+
+    def test_note_hook_type_exports_from_package_root(self) -> None:
+        def note_hook(content: str) -> None:
+            assert content == "reminder"
+
+        exported_hook: ToolNoteHook = note_hook
+
+        exported_hook("reminder")
