@@ -37,6 +37,7 @@ from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.storage.storage import PROMPT_FRAGMENT_NAMES
 from core.utils.errors import ConfigError, VBotError
+from core.utils.log_viewer import LogViewer
 from core.utils.tokens import estimate_tokens
 from server.events import (
     AGENT_CREATED_EVENT,
@@ -150,6 +151,10 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _get_settings(state, params)
         case "settings.update":
             return _update_settings(state, params)
+        case "log.list":
+            return _list_logs(state, params)
+        case "log.read":
+            return _read_log(state, params)
         case "prompt.list":
             return _list_prompts(state)
         case "prompt.update":
@@ -459,6 +464,29 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
 
+def _list_logs(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "log.list does not accept params")
+    return _log_viewer(state).list_files()
+
+
+def _read_log(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"file"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported log read fields: {', '.join(unsupported_fields)}",
+        )
+
+    file_name = _required_string(params, "file")
+    try:
+        return _log_viewer(state).read_file(file_name)
+    except ValueError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
+
+
 def _list_prompts(state: Any) -> JsonObject:
     fragment_order = ["system.md", "runtime.md", "tools.md", "skills.md"]
     fragments: list[JsonObject] = []
@@ -652,6 +680,15 @@ def _server_bind_response(state: Any) -> JsonObject:
         "listen_port": listen_port,
         "port_source": port_source,
     }
+
+
+def _log_viewer(state: Any) -> LogViewer:
+    log_viewer = getattr(state, "log_viewer", None)
+    if log_viewer is not None:
+        return cast(LogViewer, log_viewer)
+    log_viewer = LogViewer(state.runtime.storage.data_dir)
+    state.log_viewer = log_viewer
+    return log_viewer
 
 
 def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:

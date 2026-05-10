@@ -729,6 +729,117 @@ async def test_settings_get_rejects_params(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_list_returns_sorted_files_with_default_selection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    (logs_dir / "2026-05-09").write_text("", encoding="utf-8")
+    (logs_dir / "2026-05-11").write_text("", encoding="utf-8")
+    (logs_dir / "2026-05-10").write_text("", encoding="utf-8")
+
+    response = await dispatch_rpc(state, {"method": "log.list", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "files": ["2026-05-11", "2026-05-10", "2026-05-09"],
+            "default_file": "2026-05-11",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_log_list_rejects_params(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "log.list", "params": {"extra": True}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_log_read_returns_structured_entries(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    (logs_dir / "2026-05-11").write_text(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                "trace line",
+                "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "log.read", "params": {"file": "2026-05-11"}},
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "file": "2026-05-11",
+            "entries": [
+                {
+                    "timestamp": "2026-05-11 09:00:00",
+                    "level": "info",
+                    "logger_name": "vbot.server.app",
+                    "message": "Ready",
+                    "continuation": "trace line",
+                },
+                {
+                    "timestamp": "2026-05-11 09:00:01",
+                    "level": "error",
+                    "logger_name": "vbot.server.app",
+                    "message": "Failed",
+                    "continuation": "",
+                },
+            ],
+            "cursor": response["result"]["cursor"],
+        },
+    }
+    assert isinstance(response["result"]["cursor"], str)
+    assert response["result"]["cursor"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"file": ""},
+        {"file": "../2026-05-11"},
+        {"file": "2026-05-11", "extra": True},
+    ],
+)
+async def test_log_read_rejects_invalid_requests(tmp_path: Path, params: JsonObject) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "log.read", "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_log_read_rejects_missing_file_with_domain_error(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "log.read", "params": {"file": "2026-05-11"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert response["error"]["message"] == "log file not found: 2026-05-11"
+
+
+@pytest.mark.asyncio
 async def test_connection_list_returns_connections_with_usability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

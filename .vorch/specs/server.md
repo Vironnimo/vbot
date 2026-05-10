@@ -18,7 +18,8 @@ Clients call the vBot server contract; provider wire details stay behind
   "error": { "code": ..., "message": ... } }`.
 - WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `skill.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
-  `chat.history`, `chat.send`, `chat.stream`, and `chat.cancel`.
+  `chat.history`, `chat.send`, `chat.stream`, `chat.cancel`, `log.list`, and
+  `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
@@ -30,6 +31,13 @@ Clients call the vBot server contract; provider wire details stay behind
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
 - `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel.
+- `log.list` returns available daily log filenames from `<data_dir>/logs/` as
+  `{ files, default_file }`, sorted newest-first with `default_file` set to the
+  newest item or `null` when none exist.
+- `log.read` accepts `{ file }` and returns `{ file, entries, cursor }`, where
+  each parsed entry includes `timestamp`, `level`, `logger_name`, `message`,
+  and `continuation` for multiline tails. `cursor` is a short-lived handoff
+  token for the follow-up log WebSocket subscription.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
@@ -69,6 +77,13 @@ Clients call the vBot server contract; provider wire details stay behind
   `text/event-stream`, replaying existing events and then following new events
   until a terminal Run event. Each SSE event includes `id: <RunEvent.sequence>`
   so native EventSource reconnect can resume with `Last-Event-ID`.
+- `GET /ws/logs?file=<name>&cursor=<cursor>` upgrades to a dedicated WebSocket
+  for one selected daily log file. `cursor` is optional but should be supplied
+  from the latest `log.read` response so the server can replay entries appended
+  between the initial read snapshot and socket subscription. The socket streams
+  structured `{ type, file, entries }` payloads where `type` is `append` for
+  new parsed entries or `reset` when the file is truncated/replaced and the
+  client must replace its current entry list.
 - The Run SSE endpoint supports replay filtering with optional
   `after_sequence`; explicit query parameter wins over `Last-Event-ID`, and
   malformed/negative values clamp to replay from the beginning.
@@ -96,6 +111,11 @@ Clients call the vBot server contract; provider wire details stay behind
 - WebSocket is the persistent signalling channel for app-wide events (connection
   status, agent CRUD, run lifecycle summaries). It is server-push only; clients
   send requests via `POST /api/rpc`.
+- The dedicated `/ws/logs` socket is not part of the shared server event bus.
+  It is a file-specific transport for log viewing only.
+- `log.read` plus `/ws/logs` form one handoff contract: callers should pass the
+  returned cursor into the socket subscription to avoid losing lines appended in
+  the gap between initial load and live stream connect.
 - SSE is the primary per-Run output stream and should remain event-level and
   provider-agnostic.
 - Routine uvicorn access logging is suppressed by default.

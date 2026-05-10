@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from contextlib import aclosing
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +16,11 @@ from server.app import _parse_after_sequence, create_app
 from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from tests.server.test_rpc import StubAdapter, StubRuntime
+
+
+def _close_log_viewer_now(app: Any) -> None:
+    with contextlib.suppress(Exception):
+        asyncio.run(app.state.log_viewer.aclose())
 
 
 def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_path: Path) -> None:
@@ -178,6 +185,171 @@ def test_websocket_with_after_sequence_param_connects_successfully(tmp_path: Pat
             assert app.state.event_bus.subscriber_count == 1
 
         assert app.state.event_bus.subscriber_count == 0
+
+
+def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
+    ):
+        assert app.state.event_bus.subscriber_count == 0
+        assert app.state.log_viewer.watcher_count == 1
+        assert app.state.log_viewer.subscriber_count("2026-05-11") == 1
+
+        log_file.write_text(
+            "\n".join(
+                [
+                    "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                    "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
+
+    assert event == {
+        "type": "append",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "error",
+                "logger_name": "vbot.server.app",
+                "message": "Failed",
+                "continuation": "",
+            }
+        ],
+    }
+
+
+def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        read_response = client.post(
+            "/api/rpc",
+            json={"method": "log.read", "params": {"file": "2026-05-11"}},
+        )
+        cursor = read_response.json()["result"]["cursor"]
+
+        log_file.write_text(
+            "\n".join(
+                [
+                    "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                    "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with client.websocket_connect(f"/ws/logs?file=2026-05-11&cursor={cursor}") as websocket:
+            event = websocket.receive_json()
+
+    _close_log_viewer_now(app)
+
+    assert event == {
+        "type": "append",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "error",
+                "logger_name": "vbot.server.app",
+                "message": "Failed",
+                "continuation": "",
+            }
+        ],
+    }
+
+
+def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
+    ):
+        log_file.write_text(
+            "2026-05-11 09:00:02 [WARN] vbot.server.app - Reset\n",
+            encoding="utf-8",
+        )
+
+        event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
+
+    assert event == {
+        "type": "reset",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:02",
+                "level": "warn",
+                "logger_name": "vbot.server.app",
+                "message": "Reset",
+                "continuation": "",
+            }
+        ],
+    }
+
+
+def test_log_websocket_disconnect_releases_watcher_resources(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-11").write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/logs?file=2026-05-11"):
+            assert app.state.log_viewer.watcher_count == 1
+            assert app.state.log_viewer.subscriber_count("2026-05-11") == 1
+
+        deadline = time.time() + 2
+        while time.time() < deadline and app.state.log_viewer.watcher_count != 0:
+            time.sleep(0.05)
+
+    _close_log_viewer_now(app)
+
+    assert app.state.log_viewer.watcher_count == 0
 
 
 # -- Unit tests for _parse_after_sequence --
