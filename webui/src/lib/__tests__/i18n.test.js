@@ -218,6 +218,59 @@ describe('i18n t()', () => {
     );
   });
 
+  it('contains Logs tab copy for navigation, filters, and states', () => {
+    const requiredKeys = [
+      'navigation.logs',
+      'logs.title',
+      'logs.eyebrow',
+      'logs.subtitle',
+      'logs.file',
+      'logs.emptyOption',
+      'logs.levelFilter',
+      'logs.level.all',
+      'logs.level.info',
+      'logs.level.warn',
+      'logs.level.warning',
+      'logs.level.error',
+      'logs.level.unknown',
+      'logs.search',
+      'logs.searchPlaceholder',
+      'logs.resultsCount',
+      'logs.currentFile',
+      'logs.entries',
+      'logs.loadingCatalog',
+      'logs.loadingFile',
+      'logs.emptyTitle',
+      'logs.emptySubtitle',
+      'logs.fileEmptyTitle',
+      'logs.fileEmptySubtitle',
+      'logs.noMatchesTitle',
+      'logs.noMatchesSubtitle',
+      'logs.catalogLoadError',
+      'logs.readError',
+      'logs.streamError',
+      'logs.stream.connecting',
+      'logs.stream.connected',
+      'logs.stream.reconnecting',
+      'logs.stream.error',
+      'logs.stream.idle',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('navigation.logs')).toBe('Logs');
+    expect(t('logs.resultsCount', undefined, { count: 7 })).toBe(
+      '7 visible entries',
+    );
+    expect(t('logs.currentFile', undefined, { file: '2026-05-11.log' })).toBe(
+      'Current file: 2026-05-11.log',
+    );
+    expect(t('logs.level.warn')).toBe('WARN');
+    expect(t('logs.level.error')).toBe('ERROR');
+    expect(t('logs.searchPlaceholder')).toContain('logger');
+    expect(t('logs.stream.connected')).toBe('Live');
+    expect(t('logs.stream.error')).toBe('Live update error');
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();

@@ -32,6 +32,11 @@
       descriptionFallback:
         'Runtime and WebUI settings placeholders live here for now.',
     },
+    {
+      id: 'logs',
+      labelKey: 'navigation.logs',
+      labelFallback: 'Logs',
+    },
   ]);
 </script>
 
@@ -40,6 +45,7 @@
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
+  import LogsView from './components/LogsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import ToastStack from './components/ToastStack.svelte';
@@ -142,6 +148,8 @@
     <SystemPromptView />
   {:else if activeViewId === 'settings'}
     <SettingsView />
+  {:else if activeViewId === 'logs'}
+    <LogsView />
   {/if}
   <ToastStack
     toasts={toastState.toasts}

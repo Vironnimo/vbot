@@ -92,6 +92,11 @@
               <path
                 d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.6-4.4-1.4 1.4M4 12l1.4-1.4M12 12l-1.4-1.4M4 4l1.4 1.4"
               />
+            {:else if item.id === 'logs'}
+              <path
+                d="M3 2.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5z"
+              />
+              <path d="M5 5.5h6M5 8h6M5 10.5h4" />
             {/if}
           </svg>
           <span>{t(item.labelKey, item.labelFallback)}</span>
