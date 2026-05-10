@@ -442,9 +442,10 @@ class SystemPromptManager:
             _validate_workspace_include(filename)
             include_path = workspace_path / filename
             try:
-                return include_path.read_text(encoding="utf-8")
+                content = include_path.read_text(encoding="utf-8")
             except OSError as exc:
                 raise AgentError(f"Cannot read workspace include {filename}: {exc}") from exc
+            return f'<file name="{filename}">\n{content}\n</file>'
 
         return INCLUDE_PATTERN.sub(replace_include, prompt)
 
@@ -531,7 +532,7 @@ def _format_skill_list(skills: list[SkillPromptMetadata]) -> str:
 
 def _validate_workspace_include(filename: str) -> None:
     path = Path(filename)
-    if path.name != filename or path.is_absolute() or filename not in WORKSPACE_TEMPLATE_FILES:
+    if path.name != filename or path.is_absolute():
         raise AgentError(f"Unsafe workspace include: {filename}")
 
 

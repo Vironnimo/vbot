@@ -212,6 +212,56 @@ class StorageManager:
             written_paths.append(target_path)
         return written_paths
 
+    def reset_prompt_fragment(self, fragment_name: str) -> Path:
+        """Reset a user-copy prompt fragment to its bundled default.
+
+        Validates the name, reads the bundled resource fragment, and atomically
+        overwrites the user copy in ``<data_dir>/prompts/``.  Returns the
+        written path.
+        """
+
+        safe_name = self._validate_prompt_fragment_name(fragment_name)
+        source_path = self.resource_prompts_dir / safe_name
+        target_path = self.prompts_dir / safe_name
+
+        try:
+            content = source_path.read_bytes()
+        except OSError as exc:
+            raise StorageError(f"Cannot read bundled prompt fragment {safe_name}: {exc}") from exc
+
+        self.ensure_directories()
+        temp_path = self._temporary_path(target_path)
+        try:
+            temp_path.write_bytes(content)
+            os.replace(temp_path, target_path)
+        except OSError as exc:
+            self._remove_temporary_file(temp_path)
+            raise StorageError(f"Cannot write prompt fragment {safe_name}: {exc}") from exc
+
+        return target_path
+
+    def write_prompt_fragment(self, fragment_name: str, content: str) -> Path:
+        """Write arbitrary content to a user-copy prompt fragment.
+
+        Validates the name against the allowlist and atomically writes the
+        given string (UTF-8) to ``<data_dir>/prompts/<fragment_name>``.
+        Returns the written path.
+        """
+
+        safe_name = self._validate_prompt_fragment_name(fragment_name)
+        target_path = self.prompts_dir / safe_name
+
+        self.ensure_directories()
+        temp_path = self._temporary_path(target_path)
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            os.replace(temp_path, target_path)
+        except OSError as exc:
+            self._remove_temporary_file(temp_path)
+            raise StorageError(f"Cannot write prompt fragment {safe_name}: {exc}") from exc
+
+        return target_path
+
     def read_prompt_fragment(self, fragment_name: str) -> str:
         """Read a prompt fragment from the data directory, falling back to resources."""
 
