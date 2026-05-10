@@ -9,6 +9,7 @@ import pytest
 
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
+from core.utils.logging import resolve_daily_log_path
 
 
 def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
@@ -18,7 +19,7 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
         port=port,
         data_dir=data_dir,
         url=f"http://127.0.0.1:{port}",
-        log_path=data_dir / "logs" / "server.log",
+        log_path=resolve_daily_log_path(data_dir),
     )
 
 
@@ -222,7 +223,7 @@ def test_output_contains_deterministic_status_fields(
         "url: http://127.0.0.1:8420",
         "webui: unavailable",
         f"data_dir: {tmp_path / 'data'}",
-        f"log_path: {tmp_path / 'data' / 'logs' / 'server.log'}",
+        f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
     ]
 
 
@@ -272,7 +273,7 @@ def test_status_conflict_output_reports_not_running_with_note(
         "url: http://127.0.0.1:8420",
         "webui: unavailable",
         f"data_dir: {tmp_path / 'data'}",
-        f"log_path: {tmp_path / 'data' / 'logs' / 'server.log'}",
+        f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
         "conflict: port occupied by non-vBot process",
     ]
 

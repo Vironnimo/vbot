@@ -125,3 +125,11 @@ Frontend:
 ```bash
 python scripts/quality-frontend.py
 ```
+
+## Logging
+
+- vBot schreibt Anwendungslogs unter `~/.vbot/logs/` standardmäßig in **eine Datei pro Tag**.
+- Der Dateiname ist das aktuelle Datum, zum Beispiel `~/.vbot/logs/2026-05-10`.
+- Das erzwungene Log-Format lautet exakt: `timestamp [LEVEL] name - message`.
+- Warnungen erscheinen dabei als `[WARN]`.
+- Normale erfolgreiche HTTP-Access-Zeilen (zum Beispiel viele `200 OK`-Einträge) sind im Standard-Log absichtlich unterdrückt, damit nur relevante Anwendungsereignisse sichtbar bleiben.

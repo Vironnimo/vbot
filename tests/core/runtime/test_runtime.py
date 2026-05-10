@@ -1,10 +1,7 @@
-"""Tests for the Runtime bootstrap class.
-
-Verifies that ``Runtime`` initialises, starts, and stops without errors,
-and that the logger is properly created after ``start()``.
-"""
+"""Tests for the Runtime bootstrap class."""
 
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -30,6 +27,7 @@ def config(tmp_path: Path) -> Config:
 def test_runtime_start_no_error(tmp_path: Path):
     """Instantiating Runtime and calling start() raises no exception."""
     # Arrange
+    logging.getLogger("vbot").handlers = []
     config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
@@ -43,6 +41,7 @@ def test_runtime_start_no_error(tmp_path: Path):
 def test_runtime_logger_exists_after_start(tmp_path: Path):
     """After start(), runtime.logger is a valid logger object."""
     # Arrange
+    logging.getLogger("vbot").handlers = []
     config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
@@ -59,9 +58,55 @@ def test_runtime_logger_exists_after_start(tmp_path: Path):
     assert isinstance(logger, logging.Logger)
 
 
+def test_runtime_start_creates_date_named_log_file(config: Config) -> None:
+    """Runtime logging writes to the active daily log file under the data dir."""
+    runtime = Runtime(config)
+
+    runtime.start()
+    runtime.stop()
+
+    log_files = list((config.data_dir / "logs").iterdir())
+    assert len(log_files) == 1
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", log_files[0].name)
+
+
+def test_runtime_start_logs_startup_and_shutdown_with_required_format(config: Config) -> None:
+    """Runtime lifecycle logs use the required shared log format."""
+    runtime = Runtime(config)
+
+    runtime.start()
+    runtime.stop()
+
+    log_file = next((config.data_dir / "logs").iterdir())
+    lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+
+    assert any(line.endswith("[INFO] vbot.core - Runtime startup initiated") for line in lines)
+    assert any(line.endswith("[INFO] vbot.core - Runtime started") for line in lines)
+    assert any(line.endswith("[INFO] vbot.core - Runtime stopped") for line in lines)
+
+
+def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
+    """Runtime warnings emitted during startup use the managed logger contract."""
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath("settings.json").write_text(
+        '{"skill_directories": [null]}\n',
+        encoding="utf-8",
+    )
+    runtime = Runtime(config)
+
+    runtime.start()
+    runtime.stop()
+
+    log_file = next((config.data_dir / "logs").iterdir())
+    contents = log_file.read_text(encoding="utf-8")
+
+    assert "[WARN] vbot.core - Ignoring invalid skill directory setting: None" in contents
+
+
 def test_runtime_stop_runs_cleanly(tmp_path: Path):
     """After start(), calling stop() completes without exception."""
     # Arrange
+    logging.getLogger("vbot").handlers = []
     config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
     runtime.start()
@@ -75,6 +120,7 @@ def test_runtime_stop_runs_cleanly(tmp_path: Path):
 def test_runtime_stop_without_start_does_not_crash(tmp_path: Path):
     """Calling stop() before start() is a no-op and does not crash."""
     # Arrange
+    logging.getLogger("vbot").handlers = []
     config = Config(data_dir=tmp_path / "data")
     runtime = Runtime(config)
 
@@ -86,6 +132,7 @@ def test_runtime_stop_without_start_does_not_crash(tmp_path: Path):
 
 def test_phase_two_services_available_after_start(config: Config):
     """Runtime.start() wires all Phase 2 domain services."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -101,6 +148,7 @@ def test_phase_two_services_available_after_start(config: Config):
 
 def test_start_registers_builtin_tools_once(config: Config):
     """Runtime.start() registers each built-in tool exactly once for agent use."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -111,6 +159,7 @@ def test_start_registers_builtin_tools_once(config: Config):
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):
     """Runtime tool definitions expose schemas without handlers or context."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -130,6 +179,7 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
 
 def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
     """Runtime startup exposes the canonical built-in tool set."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -140,6 +190,7 @@ def test_runtime_start_exposes_canonical_builtin_tools(config: Config):
 
 def test_phase_two_services_inaccessible_before_start(config: Config):
     """Runtime service properties raise a startup error before start()."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     for attribute_name in (
@@ -157,6 +208,7 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
 
 def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
     """Runtime.start() prepares the Phase 2 data directory structure."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -179,6 +231,7 @@ def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
 
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
     """Runtime.start() leaves a new data dir with a usable default agent."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
@@ -193,6 +246,7 @@ def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
 
 def test_runtime_stop_clears_phase_two_services(config: Config):
     """After stop(), Phase 2 service properties are inaccessible again."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
 
@@ -206,6 +260,7 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
 
 def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_path: Path):
     """Runtime.reload_skills() makes prompt catalogs use the fresh skill registry."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
     agent = runtime.agents.update("main", allowed_skills=[RELOADED_SKILL_NAME])
@@ -229,6 +284,7 @@ def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_
 
 def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tmp_path: Path):
     """Runtime.reload_skills() makes provider tools use the fresh skill registry."""
+    logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
     agent = runtime.agents.update(
