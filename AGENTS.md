@@ -8,7 +8,7 @@ These rules apply to every agent, every task, unconditionally.
 Every session begins by reading these files — immediately, before anything else:
 
 1. `.vorch/PROJECT.md`
-2. `.vorch/GLOSSARY.md` (if it exists)
+2. `.vorch/GLOSSARY.md`
 
 Your agent file lists any additional files to read on top of these.
 
