@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import logging
 import re
 import uuid
 from collections import deque
@@ -44,12 +43,13 @@ from core.tools import (
 )
 from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
+from core.utils.logging import get_logger
 from core.utils.tokens import estimate_tokens
 
 MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
 JsonObject = dict[str, Any]
 
-_LOGGER = logging.getLogger("vbot.chat")
+_LOGGER = get_logger("chat")
 
 TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
@@ -665,10 +665,10 @@ class ChatLoop:
                 session.append(error_message)
                 _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
                 _LOGGER.error(
-                    "Run error persisted: kind=%s agent=%s session=%s: %s",
-                    kind,
+                    "Persisted run error for agent=%s session=%s kind=%s: %s",
                     run.agent_id,
                     run.session_id,
+                    kind,
                     exc,
                 )
                 raise
@@ -917,6 +917,13 @@ class ChatLoop:
         for skill_name in _triggered_skill_names(content):
             skill = allowed_by_name.get(skill_name)
             if skill is None:
+                _LOGGER.warning(
+                    "Ignored skill trigger '%s' for agent=%s session=%s "
+                    "because it is not allowed or loadable",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                )
                 session.add_note(
                     f"Skill trigger '{skill_name}' did not match an allowed loadable skill."
                 )
@@ -924,12 +931,32 @@ class ChatLoop:
             try:
                 data = load_skill_content(skill.name, skill.path)
             except OSError as error:
+                _LOGGER.warning(
+                    "Failed to load triggered skill '%s' for agent=%s session=%s: %s",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                    error,
+                )
                 session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
                 continue
             except ValueError as error:
+                _LOGGER.warning(
+                    "Failed to parse triggered skill '%s' for agent=%s session=%s: %s",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                    error,
+                )
                 session.add_note(f"Skill trigger '{skill_name}' could not be loaded: {error}")
                 continue
             session.activate_skill_context(skill.name, data)
+            _LOGGER.info(
+                "Activated triggered skill '%s' for agent=%s session=%s",
+                skill.name,
+                agent.id,
+                session.id,
+            )
 
 
 def _runtime_run_manager(runtime: Any) -> ChatRunManager:
