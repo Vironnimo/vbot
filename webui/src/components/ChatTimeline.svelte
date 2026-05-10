@@ -1206,6 +1206,15 @@
     }
   }
 
+  .msg.error {
+    border-left: 3px solid var(--red);
+    padding-left: 12px;
+  }
+
+  .msg.error .msg-author {
+    color: var(--red);
+  }
+
   @media (max-width: 760px) {
     .tool-event-body {
       max-width: 100%;
