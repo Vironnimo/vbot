@@ -1,0 +1,206 @@
+"""Tests for read-only log viewing utilities."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from core.utils.log_viewer import (
+    LogViewer,
+    _build_snapshot_event,
+    _LogSnapshot,
+    parse_log_entries,
+)
+
+
+def test_parse_log_entries_groups_multiline_continuations() -> None:
+    entries = parse_log_entries(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started",
+                "Traceback (most recent call last):",
+                '  File "server/app.py", line 10, in create_app',
+                "2026-05-11 09:00:01 [WARN] vbot.server.app - Slow request",
+            ]
+        )
+    )
+
+    assert entries == [
+        {
+            "timestamp": "2026-05-11 09:00:00",
+            "level": "info",
+            "logger_name": "vbot.server.app",
+            "message": "Server started",
+            "continuation": (
+                'Traceback (most recent call last):\n  File "server/app.py", line 10, in create_app'
+            ),
+        },
+        {
+            "timestamp": "2026-05-11 09:00:01",
+            "level": "warn",
+            "logger_name": "vbot.server.app",
+            "message": "Slow request",
+            "continuation": "",
+        },
+    ]
+
+
+def test_parse_log_entries_keeps_orphan_lines_visible() -> None:
+    entries = parse_log_entries("orphan line\n2026-05-11 09:00:00 [ERROR] vbot.core - Boom")
+
+    assert entries == [
+        {
+            "timestamp": "",
+            "level": "unknown",
+            "logger_name": "",
+            "message": "orphan line",
+            "continuation": "",
+        },
+        {
+            "timestamp": "2026-05-11 09:00:00",
+            "level": "error",
+            "logger_name": "vbot.core",
+            "message": "Boom",
+            "continuation": "",
+        },
+    ]
+
+
+def test_list_files_returns_newest_first_with_default_selection(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-09").write_text("", encoding="utf-8")
+    (logs_dir / "2026-05-11").write_text("", encoding="utf-8")
+    (logs_dir / "2026-05-10").write_text("", encoding="utf-8")
+    (logs_dir / "subdir").mkdir()
+
+    viewer = LogViewer(tmp_path)
+
+    assert viewer.list_files() == {
+        "files": ["2026-05-11", "2026-05-10", "2026-05-09"],
+        "default_file": "2026-05-11",
+    }
+
+
+def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "2026-05-11").write_text(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Server started",
+                "details line",
+                "2026-05-11 09:00:01 [ERROR] vbot.core - Boom",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    viewer = LogViewer(tmp_path)
+
+    assert viewer.read_file("2026-05-11") == {
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:00",
+                "level": "info",
+                "logger_name": "vbot.server.app",
+                "message": "Server started",
+                "continuation": "details line",
+            },
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "error",
+                "logger_name": "vbot.core",
+                "message": "Boom",
+                "continuation": "",
+            },
+        ],
+    }
+
+
+def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
+    viewer = LogViewer(tmp_path)
+
+    with pytest.raises(ValueError, match="invalid log file name"):
+        viewer.read_file("../2026-05-11")
+
+
+def test_build_snapshot_event_appends_only_new_entries() -> None:
+    previous = _LogSnapshot(
+        exists=True,
+        size=10,
+        entries=[
+            {
+                "timestamp": "2026-05-11 09:00:00",
+                "level": "info",
+                "logger_name": "vbot.server.app",
+                "message": "Server started",
+                "continuation": "",
+            }
+        ],
+    )
+    current = _LogSnapshot(
+        exists=True,
+        size=20,
+        entries=[
+            previous.entries[0],
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "warn",
+                "logger_name": "vbot.server.app",
+                "message": "Slow request",
+                "continuation": "",
+            },
+        ],
+    )
+
+    assert _build_snapshot_event("2026-05-11", previous, current) == {
+        "type": "append",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:01",
+                "level": "warn",
+                "logger_name": "vbot.server.app",
+                "message": "Slow request",
+                "continuation": "",
+            }
+        ],
+    }
+
+
+def test_build_snapshot_event_resets_when_previous_tail_changes() -> None:
+    previous = _LogSnapshot(
+        exists=True,
+        size=10,
+        entries=[
+            {
+                "timestamp": "2026-05-11 09:00:00",
+                "level": "error",
+                "logger_name": "vbot.server.app",
+                "message": "Boom",
+                "continuation": "",
+            }
+        ],
+    )
+    current = _LogSnapshot(
+        exists=True,
+        size=25,
+        entries=[
+            {
+                "timestamp": "2026-05-11 09:00:00",
+                "level": "error",
+                "logger_name": "vbot.server.app",
+                "message": "Boom",
+                "continuation": "Traceback line",
+            }
+        ],
+    )
+
+    assert _build_snapshot_event("2026-05-11", previous, current) == {
+        "type": "reset",
+        "file": "2026-05-11",
+        "entries": current.entries,
+    }

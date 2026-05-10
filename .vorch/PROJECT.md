@@ -30,7 +30,8 @@ public API, soft limit 600 lines per file. Providers has a subfolder structure:
 shared HTTP utilities, and error classes in addition to the registry.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
-+ SSE (streaming). No auth (single-user-local).
++ `/ws/logs` (selected log-file live tail) + SSE (streaming). No auth
+(single-user-local).
 
 **Data flow:** Accessors → HTTP/WS/SSE → server delegates → core (orchestration
 via providers, models, tools, agents) → external APIs. Agentic-only — no
@@ -99,7 +100,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx` and `pyyaml` (direct `SKILL.md` YAML frontmatter parsing). The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx` and `pyyaml` (direct `SKILL.md` YAML frontmatter parsing). The `server` group includes `watchfiles` for the dedicated log-view watcher transport. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -168,6 +169,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   The WS channel broadcasts server events; it does not accept client commands.
 - **WebSocket reconnect uses `after_sequence` replay.** Clients send the last
   sequence number they saw, and the server replays missed events.
+- **Logs view transport is file-backed and isolated.** The WebUI log tab reads
+  daily files from `<data_dir>/logs/` through dedicated `log.list`/`log.read`
+  RPC methods plus `/ws/logs` for live updates of one selected file. It does
+  not reuse the shared app event bus.
 - **Provider usability for model selection is credential-based, not
   health-based.** A provider is considered usable when its configured
   credential is present and non-empty. Missing or empty credentials mean the
