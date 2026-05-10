@@ -1,7 +1,7 @@
 ## Available Skills
 
-Each skill below has a description and a path to its directory.
-When a skill's description matches the current task, read the SKILL.md
-inside the skill directory for detailed instructions to follow.
+Each skill below has a name and a description.
+When a skill's description matches the current task, use the `skill` tool with
+the skill name to load its detailed instructions before proceeding.
 
 {skill_list}

@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "vbot"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["httpx"]
+dependencies = ["httpx", "pyyaml"]
 
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets"]
@@ -36,3 +36,7 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true

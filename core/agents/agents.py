@@ -82,10 +82,6 @@ class SkillPromptMetadata(Protocol):
     def description(self) -> str:
         """Prompt-visible skill description."""
 
-    @property
-    def path(self) -> Path:
-        """Absolute path to the skill file."""
-
 
 class SkillPromptRegistry(Protocol):
     """Skill registry method needed for prompt-visible skill filtering."""
@@ -512,7 +508,6 @@ def _format_skill_list(skills: list[SkillPromptMetadata]) -> str:
                 "  <skill>",
                 f"    <name>{escape(skill.name)}</name>",
                 f"    <description>{escape(skill.description)}</description>",
-                f"    <path>{escape(str(skill.path))}</path>",
                 "  </skill>",
             ]
         )
