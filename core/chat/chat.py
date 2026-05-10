@@ -634,6 +634,7 @@ class ChatLoop:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
         history = _embed_notes_into_request(session.load())
+        session.drain_pending_notes()
         return [system_message.to_dict(), *session.skill_context_messages(), *history]
 
     async def _send_until_final(
@@ -845,7 +846,9 @@ class ChatLoop:
         if not callable(filter_allowed):
             return
 
-        allowed_skills = getattr(agent, "allowed_skills", None) or ["*"]
+        allowed_skills = getattr(agent, "allowed_skills", None)
+        if allowed_skills is None:
+            allowed_skills = ["*"]
         allowed_by_name = {skill.name: skill for skill in filter_allowed(allowed_skills)}
         for skill_name in _triggered_skill_names(content):
             skill = allowed_by_name.get(skill_name)

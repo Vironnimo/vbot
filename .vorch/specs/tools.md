@@ -46,6 +46,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 - `ToolRegistry.register(name, description, parameters, handler, internal=False) -> Tool`
 - `get(name) -> Tool`
+- `unregister(name) -> None` — removes a registered tool when present; used for replacing internal tool handlers after runtime skill reloads.
 - `list_tools(allowed_tools=None, include_internal=False) -> list[Tool]`
 - `provider_definitions(allowed_tools=None, include_internal=False) -> list[dict]` — name, description, JSON Schema.
 - `prompt_definitions(allowed_tools=None, include_internal=False) -> list[dict]` — name and description only.

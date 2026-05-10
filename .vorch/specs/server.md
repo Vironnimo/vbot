@@ -37,7 +37,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
-- `settings.update` accepts supported `appearance` and `skills` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`.
+- `settings.update` accepts supported `appearance` and `skills` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `connection` and `fallback_connection` are optional string fields alongside `model` and `fallback_model`. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created

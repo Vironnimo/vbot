@@ -28,7 +28,7 @@ export function createAgentFormValues(agent = {}) {
       agent.allowed_tools,
       DEFAULT_AGENT_ALLOWED_TOOLS,
     ),
-    allowed_skills: normalizeList(
+    allowed_skills: normalizeArrayList(
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
@@ -124,7 +124,7 @@ function normalizeList(items, fallback = []) {
     .filter((item) => item.length > 0);
 }
 
-function normalizeArrayList(items, fallback = []) {
+function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {
   if (!Array.isArray(items)) {
     return [...fallback];
   }

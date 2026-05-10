@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +110,7 @@ def _read_skill_body(skill_file: Path) -> str:
 
 
 def _wrap_skill_content(skill_name: str, body: str, resources: list[str]) -> str:
-    lines = [f'<skill_content name="{skill_name}">']
+    lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
     if resources:
         lines.append("<resources>")
         lines.extend(f"- {resource}" for resource in resources)

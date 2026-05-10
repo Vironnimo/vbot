@@ -48,7 +48,7 @@ as a read-only fallback credential source.
   snapshots instead.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
-- Skill directory settings are stored as a list of non-empty strings. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
+- Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 
 ## Constraints & Gotchas
 

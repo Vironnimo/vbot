@@ -211,6 +211,10 @@ class ToolRegistry:
         except KeyError:
             raise ToolNotFoundError(f"Tool not found: {name}") from None
 
+    def unregister(self, name: str) -> None:
+        """Remove a registered tool when it exists."""
+        self._tools.pop(name, None)
+
     def list_tools(
         self,
         allowed_tools: Sequence[str] | None = None,
