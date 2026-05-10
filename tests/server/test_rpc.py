@@ -1450,6 +1450,31 @@ async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_
 
 
 @pytest.mark.asyncio
+async def test_chat_history_filters_internal_notes(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="note-session")
+    state.runtime.agents.update("coder", current_session_id="note-session")
+    session.append(ChatMessage.user(content="Visible request"))
+    session.append(ChatMessage.note(content="Internal reminder"))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Visible response",
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    messages = response["result"]["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert "Internal reminder" not in str(messages)
+
+
+@pytest.mark.asyncio
 async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="usage-session")

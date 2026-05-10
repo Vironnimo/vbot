@@ -42,7 +42,8 @@ Clients call the vBot server contract; provider wire details stay behind
   Session ID is persisted to the Agent's `current_session_id`.
 - `chat.history` returns visible persisted messages for `{ agent_id,
   session_id? }`. If `session_id` is omitted, it loads the Agent's
-  `current_session_id`.
+  `current_session_id`. Kernel-internal note messages are excluded from this
+  normal history response.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
@@ -94,6 +95,8 @@ Clients call the vBot server contract; provider wire details stay behind
   provider-agnostic.
 - Public history, Run, SSE, and WebSocket payloads must strip opaque provider
   metadata such as `reasoning_meta` recursively.
+- Public history payloads must not include `role: "note"` messages; notes are
+  internal system reminders, not normal UI-visible chat messages.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
   `tool_call_delta`) are SSE-only. They must not be bridged to WebSocket
   lifecycle summaries.

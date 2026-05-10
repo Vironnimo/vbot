@@ -18,6 +18,7 @@ DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
 JsonObject = dict[str, Any]
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
 ToolCancellationHook = Callable[[], bool]
+ToolNoteHook = Callable[[str], None]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 
 
@@ -52,6 +53,7 @@ class ToolContext:
     data_root: Path
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
+    note_hook: ToolNoteHook | None = None
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
@@ -68,6 +70,13 @@ class ToolContext:
             return False
 
         return self.cancellation_hook()
+
+    def add_note(self, content: str) -> None:
+        """Add a kernel-internal note through the runtime hook, when present."""
+        if self.note_hook is None:
+            return
+
+        self.note_hook(content)
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,7 @@ class ToolExecutionConfig:
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
+    note_hook: ToolNoteHook | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +336,7 @@ class ToolExecutor:
                 data_root=config.data_root,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
+                note_hook=config.note_hook,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
 
@@ -394,6 +405,7 @@ __all__ = [
     "ToolExecutionConfig",
     "ToolExecutor",
     "ToolHandler",
+    "ToolNoteHook",
     "ToolNotAllowedError",
     "ToolNotFoundError",
     "ToolRegistry",

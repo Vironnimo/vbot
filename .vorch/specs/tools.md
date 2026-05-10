@@ -12,6 +12,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `parameters` is a JSON Schema object for provider tool definitions.
 - `handler` receives `(ToolContext, arguments)` and returns a JSON result envelope, synchronously or asynchronously.
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, plus small runtime hooks.
+- Tool runtime hooks include lifecycle event emission, cancellation checks, and an optional note hook for adding kernel-internal background reminders to the current chat Session without exposing the Session object to tools.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - `ToolCall`: one requested tool invocation with stable id, index, name, and arguments.
 - Built-in `read` tool: flat name `read`; schema includes required `path` plus
@@ -45,6 +46,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `prompt_definitions(allowed_tools=None) -> list[dict]` — name and description only.
 - `dispatch(context, name, arguments, allowed_tools=None) -> dict` — executes through an async interface and returns a result envelope.
 - `ToolExecutor.execute_many(...) -> list[ToolExecutionResult]` — executes sibling tool calls concurrently, applies per-run/global concurrency limits, and returns terminal results in original tool-call order.
+- `ToolContext.add_note(content) -> None` — calls the configured note hook when present; otherwise it is a no-op. Chat wires this to `ChatSession.add_note()` so a tool can inject a background reminder for the next model request.
 - `register_read_tool(registry) -> None` — registers the built-in `read` tool.
 - `register_edit_tool(registry) -> None` — registers the built-in `edit` tool.
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.

@@ -57,6 +57,25 @@ class TestChatMessageFactories:
             "content": "What's the weather in Berlin?",
         }
 
+    def test_note_message_contains_only_content(self):
+        message = ChatMessage.note("Background task completed.", timestamp=FIXED_TIMESTAMP)
+
+        assert message.role == "note"
+        assert message.content == "Background task completed."
+        assert message.model is None
+        assert message.reasoning is None
+        assert message.reasoning_meta is None
+        assert message.usage is None
+        assert message.tool_calls is None
+        assert message.tool_call_id is None
+        assert message.name is None
+        assert message.to_dict() == {
+            "id": message.id,
+            "timestamp": "2026-05-03T14:30:00+00:00",
+            "role": "note",
+            "content": "Background task completed.",
+        }
+
     def test_assistant_message_preserves_reasoning_meta_and_tool_calls(self):
         tool_call = ToolCall(id="call_abc", name="get_weather", arguments={"city": "Berlin"})
         message = ChatMessage.assistant(
@@ -150,6 +169,20 @@ class TestChatMessageParsing:
 
         message = ChatMessage.from_dict(data)
 
+        assert message.to_dict() == data
+
+    def test_from_dict_round_trips_note_message(self):
+        data = {
+            "id": "note_abc",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "role": "note",
+            "content": "Background task completed.",
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.role == "note"
+        assert message.content == "Background task completed."
         assert message.to_dict() == data
 
     def test_unknown_extra_fields_are_ignored(self):
@@ -278,6 +311,40 @@ class TestChatMessageParsing:
                     "name": "get_weather",
                     "content": "{}",
                     "usage": {"input_tokens": 10, "output_tokens": 0},
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("model", "openai/gpt-4.1"),
+            ("reasoning", "thinking"),
+            ("reasoning_meta", {"signature": "opaque"}),
+            ("usage", {"input_tokens": 10, "output_tokens": 0}),
+            ("tool_calls", [{"id": "call_abc", "name": "get_weather", "arguments": {}}]),
+            ("tool_call_id", "call_abc"),
+            ("name", "get_weather"),
+        ],
+    )
+    def test_from_dict_rejects_optional_fields_on_note_message(self, field, value):
+        data = {
+            "id": "note_bad",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "role": "note",
+            "content": "Background task completed.",
+            field: value,
+        }
+
+        with pytest.raises(ChatMessageValidationError, match=field):
+            ChatMessage.from_dict(data)
+
+    def test_from_dict_rejects_note_without_content(self):
+        with pytest.raises(ChatMessageValidationError, match="content"):
+            ChatMessage.from_dict(
+                {
+                    "id": "note_missing_content",
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "role": "note",
                 }
             )
 

@@ -322,7 +322,11 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         agent = state.runtime.agents.get(agent_id)
         active_session_id = session_id or agent.current_session_id
         session = state.runtime.chat_sessions.get(agent_id, active_session_id)
-        messages = [_visible_message(message) for message in session.load()]
+        messages = [
+            _visible_message(message)
+            for message in session.load()
+            if _is_visible_history_message(message)
+        ]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"agent_id": agent_id, "session_id": active_session_id, "messages": messages}
@@ -675,6 +679,10 @@ def _run_response(
 
 def _visible_message(message: ChatMessage) -> JsonObject:
     return cast(JsonObject, _remove_opaque_provider_metadata(message.to_dict()))
+
+
+def _is_visible_history_message(message: ChatMessage) -> bool:
+    return message.role != "note"
 
 
 def _resolve_context_window(state: Any, model: str) -> int | None:
