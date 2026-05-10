@@ -214,8 +214,11 @@ export const englishCatalog = Object.freeze({
   'agents.access.toggleTool': 'Toggle tool {name}',
   'agents.access.toggleSkill': 'Toggle skill {name}',
   'agents.access.descriptionLabel': '{description}',
-  'agents.access.noSkills':
-    'No backend skill catalog is available; add skill names below.',
+  'agents.access.noSkills': 'No loadable skills are available.',
+  'agents.access.skillWarnings': 'Warnings',
+  'agents.access.invalidSkillsTitle': 'Unavailable skills',
+  'agents.access.unknownSkillName': 'Unknown skill',
+  'agents.access.notLoadable': 'not loadable',
 
   'systemPrompt.title': 'System Prompt',
   'systemPrompt.subtitle':
@@ -249,6 +252,21 @@ export const englishCatalog = Object.freeze({
     'Root path for agents, sessions, and workspace files.',
   'settings.general.dataDirectoryPlaceholder':
     'Data directory placeholder, not a detected runtime value',
+  'settings.skills.title': 'Skills',
+  'settings.skills.subtitle':
+    'Additional directories scanned for local skills.',
+  'settings.skills.defaultDirectory': 'Default skill directory',
+  'settings.skills.defaultDirectoryDescription':
+    'Always scanned from the vBot data directory and kept read-only here.',
+  'settings.skills.extraDirectories': 'Additional skill directories',
+  'settings.skills.extraDirectoriesDescription':
+    'Absolute or home-relative paths from settings.json skill_directories.',
+  'settings.skills.pathPlaceholder': 'C:/path/to/skills',
+  'settings.skills.addDirectory': 'Add directory',
+  'settings.skills.removeDirectory': 'Remove skill directory {path}',
+  'settings.skills.emptyDirectories':
+    'No additional skill directories configured.',
+  'settings.skills.saveSuccess': 'Skill directories updated.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',

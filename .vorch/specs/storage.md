@@ -15,6 +15,11 @@ Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`
 `<data_dir>/.env` stores user-owned secrets such as provider API keys and acts
 as a read-only fallback credential source.
 
+`<data_dir>/settings.json` may include:
+
+- `appearance.language` — persisted WebUI language preference.
+- `skill_directories` — additional skill scan root paths configured from the Settings UI.
+
 ## Interfaces
 
 - `core/storage/__init__.py` exports `StorageManager`, `StorageError`, data-dir constants, and the storage config protocol.
@@ -28,6 +33,8 @@ as a read-only fallback credential source.
   process-env-over-data-dir credential snapshot without mutating process state.
 - `load_settings() -> dict` — returns `{}` when `settings.json` does not exist.
 - `save_settings(settings)` — atomically writes sorted, indented JSON.
+- `load_appearance_settings() -> dict[str, str]` and `update_appearance_settings(appearance)` — read/write the supported Appearance settings subset.
+- `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 
@@ -41,6 +48,7 @@ as a read-only fallback credential source.
   snapshots instead.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
+- Skill directory settings are stored as a list of non-empty strings. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 
 ## Constraints & Gotchas
 

@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with three sub-panels, and a placeholder for System Prompt.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, and a placeholder for System Prompt.
 
 ## Layout
 
@@ -50,9 +50,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   Phase 4.
 - `webui/src/components/AgentsView.svelte`
   - Loads `agent.list` plus the backend catalogs from `model.list`,
-    `connection.list`, and `tool.list` on mount.
+    `connection.list`, `tool.list`, and `skill.list` on mount.
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
+  - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.
   - Model and fallback-model selects store both the canonical public model ID and
     selected connection. If a provider has one usable connection, the label stays
     as the model ID (for example `openrouter/anthropic/claude-sonnet-4`). If a
@@ -66,7 +67,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     provider is refresh-capable and credential-configured, the Providers panel
     shows one global model database refresh control. It calls `model.refresh_db`
     without `provider_id` and then re-requests `model.list` after success.
-  - Skills remain textarea-based until a backend skill catalog exists.
+  - Normalizes skill directory settings from `settings.skills.directories` and builds update payloads for `settings.update`.
+- `webui/src/components/SettingsView.svelte`
+  - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
@@ -107,5 +110,5 @@ does not talk to providers directly. The product presents an Agent-first chat su
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` remains a placeholder. `Settings` is functional and contains three sub-panels: General (server host, data directory), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model and tool catalogs are now backend-backed; skills still remain textarea-based until a backend skill catalog exists.
+- `System Prompt` remains a placeholder. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
 - The production build emits `webui/dist`, which FastAPI serves when present.
