@@ -36,6 +36,16 @@ from core.chat import (
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.utils.errors import ConfigError, VBotError
+from server.events import (
+    AGENT_CREATED_EVENT,
+    AGENT_DELETED_EVENT,
+    AGENT_UPDATED_EVENT,
+    RUN_CANCELLED_SERVER_EVENT,
+    RUN_COMPLETED_SERVER_EVENT,
+    RUN_FAILED_SERVER_EVENT,
+    RUN_OUTPUT_SERVER_EVENT,
+    RUN_STARTED_SERVER_EVENT,
+)
 
 JsonObject = dict[str, Any]
 
@@ -281,7 +291,7 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
-    _publish_agent_event(state, "agent.created", response)
+    _publish_agent_event(state, AGENT_CREATED_EVENT, response)
     return response
 
 
@@ -294,7 +304,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
-    _publish_agent_event(state, "agent.updated", response)
+    _publish_agent_event(state, AGENT_UPDATED_EVENT, response)
     return response
 
 
@@ -314,7 +324,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
     }
-    _publish_agent_event(state, "agent.deleted", result)
+    _publish_agent_event(state, AGENT_DELETED_EVENT, result)
     return result
 
 
@@ -883,7 +893,7 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         payload["status"] = event.payload.get("status")
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
         payload["usage"] = _remove_opaque_provider_metadata(event.payload["usage"])
-    return {"type": SERVER_EVENT_TYPES.get(event.type, "run_output"), "payload": payload}
+    return {"type": SERVER_EVENT_TYPES.get(event.type, RUN_OUTPUT_SERVER_EVENT), "payload": payload}
 
 
 def _remove_opaque_provider_metadata(value: Any) -> Any:
@@ -913,14 +923,14 @@ RUN_DELTA_EVENT_TYPES = {
 }
 RUN_TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_CANCELLED_EVENT, RUN_FAILED_EVENT}
 SERVER_EVENT_TYPES = {
-    RUN_STARTED_EVENT: "run_started",
-    USER_MESSAGE_EVENT: "run_output",
-    REASONING_EVENT: "run_output",
-    TOOL_CALL_STARTED_EVENT: "run_output",
-    TOOL_CALL_RESULT_EVENT: "run_output",
-    ASSISTANT_OUTPUT_EVENT: "run_output",
-    ERROR_MESSAGE_PERSISTED_EVENT: "run_output",
-    RUN_COMPLETED_EVENT: "run_completed",
-    RUN_CANCELLED_EVENT: "run_cancelled",
-    RUN_FAILED_EVENT: "run_failed",
+    RUN_STARTED_EVENT: RUN_STARTED_SERVER_EVENT,
+    USER_MESSAGE_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    REASONING_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    TOOL_CALL_STARTED_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    TOOL_CALL_RESULT_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    ASSISTANT_OUTPUT_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    ERROR_MESSAGE_PERSISTED_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    RUN_COMPLETED_EVENT: RUN_COMPLETED_SERVER_EVENT,
+    RUN_CANCELLED_EVENT: RUN_CANCELLED_SERVER_EVENT,
+    RUN_FAILED_EVENT: RUN_FAILED_SERVER_EVENT,
 }
