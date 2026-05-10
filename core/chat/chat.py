@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
 import uuid
 from collections import deque
@@ -15,6 +16,7 @@ from typing import Any, Literal, cast
 
 from core.chat.runs import (
     ASSISTANT_OUTPUT_EVENT,
+    ERROR_MESSAGE_PERSISTED_EVENT,
     REASONING_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
@@ -27,6 +29,7 @@ from core.chat.streaming import (
     StreamingAccumulator,
     iter_with_chunk_timeout,
 )
+from core.providers.errors import ProviderAuthError, ProviderRateLimitError, ProviderTimeoutError
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
     ToolContext,
@@ -40,11 +43,13 @@ from core.tools import (
     tool_success,
 )
 from core.tools.skill import load_skill_content
-from core.utils.errors import ProviderError, VBotError
+from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.tokens import estimate_tokens
 
-MessageRole = Literal["system", "user", "assistant", "tool", "note"]
+MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
 JsonObject = dict[str, Any]
+
+_LOGGER = logging.getLogger("vbot.chat")
 
 TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
@@ -57,6 +62,24 @@ SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 SKILL_SLASH_TRIGGER_PATTERN = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?=\s|$)")
 SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+ERROR_KIND_RATE_LIMIT = "rate_limit"
+ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_PROVIDER_OVERLOAD = "provider_overloaded"
+ERROR_KIND_TOOL_ITERATIONS = "tool_iterations_exceeded"
+ERROR_KIND_AUTH = "auth_error"
+ERROR_KIND_PROVIDER_FATAL = "provider_fatal"
+ERROR_KIND_CONFIG = "config_error"
+ERROR_KIND_PROVIDER_ERROR = "provider_error"
+ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
+    ERROR_KIND_RATE_LIMIT: True,
+    ERROR_KIND_TIMEOUT: True,
+    ERROR_KIND_PROVIDER_OVERLOAD: True,
+    ERROR_KIND_TOOL_ITERATIONS: True,
+    ERROR_KIND_AUTH: False,
+    ERROR_KIND_PROVIDER_FATAL: False,
+    ERROR_KIND_CONFIG: False,
+    ERROR_KIND_PROVIDER_ERROR: True,
+}
 
 
 class ChatError(VBotError):
@@ -69,6 +92,10 @@ class ChatMessageValidationError(ChatError):
 
 class ChatSessionError(ChatError):
     """Raised when a chat session file operation cannot be completed."""
+
+
+class ToolIterationLimitError(ChatError):
+    """Raised when a chat run exceeds its configured tool-iteration limit."""
 
 
 @dataclass(frozen=True)
@@ -113,6 +140,7 @@ class ChatMessage:
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    error_kind: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -143,6 +171,23 @@ class ChatMessage:
             timestamp=_format_timestamp(timestamp),
             role="note",
             content=content,
+        )
+
+    @classmethod
+    def error(
+        cls,
+        error_kind: str,
+        content: str,
+        *,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a persisted error message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="error",
+            content=content,
+            error_kind=error_kind,
         )
 
     @classmethod
@@ -206,6 +251,7 @@ class ChatMessage:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
+        _add_if_not_none(message, "error_kind", self.error_kind)
         return message
 
     @classmethod
@@ -232,6 +278,7 @@ class ChatMessage:
             tool_calls=tool_calls,
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
+            error_kind=_optional_string(data, "error_kind"),
         )
         message.validate()
         return message
@@ -250,6 +297,8 @@ class ChatMessage:
                 _validate_tool_message(self)
             case "note":
                 _validate_note_message(self)
+            case "error":
+                _validate_error_message(self)
 
 
 class ChatSession:
@@ -599,15 +648,30 @@ class ChatLoop:
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
-            return await self._send_until_final(
-                agent,
-                adapter,
-                model_id,
-                session,
-                messages,
-                tools,
-                run,
-            )
+            try:
+                return await self._send_until_final(
+                    agent,
+                    adapter,
+                    model_id,
+                    session,
+                    messages,
+                    tools,
+                    run,
+                )
+            except (ProviderError, ChatError, ConfigError, VBotError) as exc:
+                kind = _exception_to_error_kind(exc)
+                content = str(exc)
+                error_message = ChatMessage.error(error_kind=kind, content=content)
+                session.append(error_message)
+                _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
+                _LOGGER.error(
+                    "Run error persisted: kind=%s agent=%s session=%s: %s",
+                    kind,
+                    run.agent_id,
+                    run.session_id,
+                    exc,
+                )
+                raise
         finally:
             await _close_adapter(adapter)
 
@@ -673,7 +737,7 @@ class ChatLoop:
                 return assistant_message
 
             if self._tool_iterations_exhausted(messages):
-                raise ChatError("maximum tool iterations exceeded")
+                raise ToolIterationLimitError("maximum tool iterations exceeded")
 
             tool_messages = await self._dispatch_tool_calls(
                 agent,
@@ -686,7 +750,7 @@ class ChatLoop:
                 session.append(tool_message)
                 messages.append(tool_message.to_dict())
 
-        raise ChatError("maximum tool iterations exceeded")
+        raise ToolIterationLimitError("maximum tool iterations exceeded")
 
     async def _send_assistant_request(
         self,
@@ -982,6 +1046,29 @@ def _sync_skill_context_messages(messages: list[JsonObject], session: ChatSessio
             existing.add(skill_message["content"])
 
 
+def error_kind_llm_visible(kind: str) -> bool:
+    """Return whether an error kind should be included in later provider context."""
+    return ERROR_KIND_LLM_VISIBLE.get(kind, False)
+
+
+def _exception_to_error_kind(exc: Exception) -> str:
+    if isinstance(exc, ProviderRateLimitError):
+        return ERROR_KIND_RATE_LIMIT
+    if isinstance(exc, ProviderTimeoutError):
+        return ERROR_KIND_TIMEOUT
+    if isinstance(exc, ProviderAuthError):
+        return ERROR_KIND_AUTH
+    if isinstance(exc, ProviderError):
+        if exc.retryable:
+            return ERROR_KIND_PROVIDER_OVERLOAD
+        return ERROR_KIND_PROVIDER_FATAL
+    if isinstance(exc, ToolIterationLimitError):
+        return ERROR_KIND_TOOL_ITERATIONS
+    if isinstance(exc, (ChatError, ConfigError, VBotError)):
+        return ERROR_KIND_CONFIG
+    return ERROR_KIND_PROVIDER_ERROR
+
+
 def _new_message_id() -> str:
     return str(uuid.uuid4())
 
@@ -1072,6 +1159,11 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
             pending_notes.append(message)
             continue
 
+        if message.role == "error":
+            if message.error_kind is not None and error_kind_llm_visible(message.error_kind):
+                pending_notes.append(message)
+            continue
+
         if pending_notes:
             request_messages.append(_notes_to_synthetic_user_message(pending_notes))
             pending_notes = []
@@ -1090,11 +1182,9 @@ def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
     }
 
 
-def _system_reminder_block(note: ChatMessage) -> str:
-    if note.role != "note":
-        raise ChatMessageValidationError("system reminders can only be built from notes")
-    note.validate()
-    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{note.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+def _system_reminder_block(message: ChatMessage) -> str:
+    message.validate()
+    return f"{SYSTEM_REMINDER_OPEN_TAG}\n{message.content}\n{SYSTEM_REMINDER_CLOSE_TAG}"
 
 
 def _skill_context_note_content(name: str, content: str) -> str:
@@ -1209,8 +1299,10 @@ def _optional_string(data: JsonObject, key: str) -> str | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool", "note"):
-        raise ChatMessageValidationError("role must be system, user, assistant, tool, or note")
+    if role not in ("system", "user", "assistant", "tool", "note", "error"):
+        raise ChatMessageValidationError(
+            "role must be system, user, assistant, tool, note, or error"
+        )
     return cast(MessageRole, role)
 
 
@@ -1259,7 +1351,14 @@ def _validate_system_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("system messages require content")
     _reject_fields(
-        message, "reasoning", "reasoning_meta", "usage", "tool_calls", "tool_call_id", "name"
+        message,
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
     )
 
 
@@ -1275,13 +1374,14 @@ def _validate_user_message(message: ChatMessage) -> None:
         "tool_calls",
         "tool_call_id",
         "name",
+        "error_kind",
     )
 
 
 def _validate_assistant_message(message: ChatMessage) -> None:
     if message.model is None:
         raise ChatMessageValidationError("assistant messages require model")
-    _reject_fields(message, "tool_call_id", "name")
+    _reject_fields(message, "tool_call_id", "name", "error_kind")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -1295,12 +1395,38 @@ def _validate_tool_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("tool messages require tool_call_id")
     if message.name is None:
         raise ChatMessageValidationError("tool messages require name")
-    _reject_fields(message, "model", "reasoning", "reasoning_meta", "usage", "tool_calls")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "error_kind",
+    )
 
 
 def _validate_note_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("note messages require content")
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
+    )
+
+
+def _validate_error_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("error messages require content")
+    if not message.error_kind:
+        raise ChatMessageValidationError("error messages require error_kind")
     _reject_fields(
         message,
         "model",

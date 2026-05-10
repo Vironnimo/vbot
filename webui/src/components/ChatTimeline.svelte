@@ -93,6 +93,9 @@
     if (message.role === 'tool') {
       return t('chat.event.toolResult', 'Tool result').toUpperCase();
     }
+    if (message.role === 'error') {
+      return t('chat.role.error', 'Error').toUpperCase();
+    }
     return t('common.unknown', 'Unknown').toUpperCase();
   };
 
@@ -883,6 +886,7 @@
           <article
             class:assistant={item.message.role === 'assistant'}
             class:user={item.message.role === 'user'}
+            class:error={item.message.role === 'error'}
             class="msg"
           >
             <div class="msg-header">

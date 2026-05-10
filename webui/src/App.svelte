@@ -42,12 +42,15 @@
   import ChatView from './components/ChatView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
+  import ToastStack from './components/ToastStack.svelte';
   import {
     createConnectionState,
     connect,
     disconnect,
   } from '$lib/connectionState.js';
   import { rpc } from '$lib/api.js';
+  import { t } from '$lib/i18n.js';
+  import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
@@ -57,6 +60,7 @@
   let selectedAgentId = $state('');
   let agentsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
+  let toastState = $state(createToastState());
 
   const selectView = (viewId) => {
     activeViewId = viewId;
@@ -87,6 +91,15 @@
   };
 
   const handleServerEvent = async (event) => {
+    if (event.type === 'app_error') {
+      addToast(toastState, {
+        title: t('errors.appError', 'Error'),
+        message: event.payload?.message ?? '',
+        variant: 'error',
+      });
+      return;
+    }
+
     const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
     if (!agentEventTypes.includes(event.type)) {
       return;
@@ -130,4 +143,8 @@
   {:else if activeViewId === 'settings'}
     <SettingsView />
   {/if}
+  <ToastStack
+    toasts={toastState.toasts}
+    onDismiss={(id) => dismissToast(toastState, id)}
+  />
 </AppShell>

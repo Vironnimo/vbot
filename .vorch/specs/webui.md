@@ -44,6 +44,14 @@ does not talk to providers directly. The product presents an Agent-first chat su
     queued messages. Visible timeline aggregation groups Run events into one
     `assistant_run` item per Run so thinking, tool lifecycle rows, and assistant
     output render together.
+  - `role: "error"` history messages and live `error_message_persisted` Run events
+    render as standalone message timeline items, never inside an assistant Run.
+- `webui/src/lib/toastState.js`
+  - Pure helpers for app-level toast state: `createToastState()`, `addToast(...)`,
+    and `dismissToast(...)`.
+- `webui/src/components/ToastStack.svelte`
+  - Renders dismissable toast notifications from toast state using the shared
+    toast CSS classes.
 - `webui/src/components/ChatView.svelte`
   - Loads `skill.list` on mount and passes the loadable `skills` array (not `invalid_skills`) to the composer for skill-trigger suggestions.
 - `webui/src/components/ChatComposer.svelte`
@@ -79,6 +87,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
+  - Handles server-pushed `app_error` WebSocket events as error toasts.
 
 ## Conventions
 
@@ -101,9 +110,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   lifecycle events (`tool_call_started` and `tool_call_result`) are merged into a
   single expandable tool row inside that block rather than rendered as separate
   chat messages.
-- Visible chat history accepts only normal user, assistant, and tool messages;
-  kernel-internal note/system-reminder entries must be filtered out if they ever
-  arrive from a server response.
+- Visible chat history accepts normal user, assistant, tool, and persisted error
+  messages; kernel-internal note/system-reminder entries must be filtered out if
+  they ever arrive from a server response.
+- Persisted error messages are visible chat timeline items with an error label and
+  distinct red treatment.
 - Skill trigger autocomplete is a composer aid only. It must not fetch or inject skill content directly; `/skill-name` and `$skill-name` text is sent unchanged for backend deterministic activation.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`

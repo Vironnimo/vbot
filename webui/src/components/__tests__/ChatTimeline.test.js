@@ -125,6 +125,37 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('renders error history messages with an error label and content', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-error-message',
+    );
+    sessionState.messages = [
+      {
+        id: 'error-one',
+        role: 'error',
+        error_kind: 'rate_limit',
+        content: 'Provider rate limit exceeded',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const errorMessage = document.querySelector('.msg.error');
+    expect(errorMessage).toBeTruthy();
+    expect(errorMessage.textContent).toContain('ERROR');
+    expect(errorMessage.textContent).toContain('Provider rate limit exceeded');
+  });
+
   it('uses human-readable label instead of raw JSON for known tool', () => {
     const sessionState = ensureSessionState(
       createChatState(),
