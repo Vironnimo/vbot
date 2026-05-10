@@ -18,7 +18,7 @@ from core.utils.errors import VBotError
 
 JsonObject = dict[str, Any]
 
-STREAM_CHUNK_TIMEOUT_SECONDS = 30.0
+STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 
 CONTENT_DELTA_TYPE = "content_delta"
 REASONING_DELTA_TYPE = "reasoning_delta"
