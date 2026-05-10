@@ -13,8 +13,11 @@ import {
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   createRpcEnvelope,
+  listLogs,
   normalizeRpcError,
+  readLogFile,
   rpc,
+  subscribeLogEvents,
   subscribeRunEvents,
   subscribeServerEvents,
 } from '../api.js';
@@ -140,6 +143,58 @@ describe('rpc()', () => {
     ).rejects.toMatchObject({
       code: RPC_ERROR_RESPONSE,
     });
+  });
+
+  it('loads the logs catalog through log.list', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { files: ['2026-05-11'], default_file: '2026-05-11' },
+      }),
+    );
+
+    await expect(listLogs({ fetch: fetchFunction })).resolves.toEqual({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'log.list',
+      params: {},
+    });
+  });
+
+  it('loads one log file through log.read', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: {
+          file: '2026-05-11',
+          entries: [{ message: 'Ready' }],
+        },
+      }),
+    );
+
+    await expect(
+      readLogFile('2026-05-11', { fetch: fetchFunction }),
+    ).resolves.toEqual({
+      file: '2026-05-11',
+      entries: [{ message: 'Ready' }],
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'log.read',
+      params: { file: '2026-05-11' },
+    });
+  });
+
+  it('rejects invalid log file names before sending log.read', async () => {
+    expect(() => readLogFile('')).toThrow(
+      expect.objectContaining({
+        code: RPC_ERROR_INVALID_CLIENT_REQUEST,
+        method: 'log.read',
+      }),
+    );
   });
 });
 
@@ -344,6 +399,55 @@ describe('subscribeServerEvents()', () => {
     expect(connection.socket.url).not.toContain('after_sequence');
 
     connection.close();
+  });
+});
+
+describe('subscribeLogEvents()', () => {
+  it('subscribes to the dedicated logs websocket with file query param', () => {
+    const onEvent = vi.fn();
+    const connection = subscribeLogEvents(
+      '2026-05-11',
+      { onEvent },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+
+    connection.socket.emit('message', {
+      data: JSON.stringify({ type: 'append', file: '2026-05-11', entries: [] }),
+    });
+
+    expect(connection.socket.url).toBe(
+      'wss://localhost:8420/ws/logs?file=2026-05-11',
+    );
+    expect(onEvent).toHaveBeenCalledWith(
+      { type: 'append', file: '2026-05-11', entries: [] },
+      expect.any(Object),
+    );
+
+    connection.close();
+  });
+
+  it('reports malformed log websocket messages through the error handler', () => {
+    const onError = vi.fn();
+    const connection = subscribeLogEvents(
+      '2026-05-11',
+      { onError },
+      { WebSocket: MockWebSocket },
+    );
+
+    connection.socket.emit('message', { data: '{' });
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: WEBSOCKET_ERROR_RESPONSE }),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects invalid log subscriptions before opening websocket', () => {
+    expect(() =>
+      subscribeLogEvents('', {}, { WebSocket: MockWebSocket }),
+    ).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
   });
 });
 
