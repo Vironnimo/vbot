@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 
-from core.agents.agents import Agent, AgentError, SkillPromptMetadata, SystemPromptManager
+from core.agents.agents import (
+    Agent,
+    AgentError,
+    SkillPromptMetadata,
+    SystemPromptManager,
+    _validate_workspace_include,
+)
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,7 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "Identity text" in prompt
     assert "Agents text" in prompt
     assert "User text" in prompt
+    assert '<file name="SOUL.md">' in prompt
     assert "{" not in prompt
     assert tools.prompt_allowlist == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
@@ -310,6 +317,45 @@ def test_unsafe_workspace_include_raises_error(
 
     with pytest.raises(AgentError, match="Unsafe workspace include"):
         manager.build_system_prompt(_agent(workspace))
+
+
+@pytest.mark.parametrize("filename", ["SOUL.md", "CUSTOM.md", "my-notes.txt", "notes.json"])
+def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -> None:
+    _validate_workspace_include(filename)  # should not raise
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "../foo",
+        "foo/bar",
+        "/etc/passwd",
+        "C:\\Windows\\system32\\cmd.exe",
+    ],
+)
+def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
+    with pytest.raises(AgentError, match="Unsafe workspace include"):
+        _validate_workspace_include(filename)
+
+
+def test_workspace_include_wraps_content_in_xml_file_tag(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    fragments["system.md"] = "{include:SOUL.md}"
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(_agent(workspace))
+
+    assert prompt == '<file name="SOUL.md">\nSoul text\n</file>'
 
 
 def _agent(
