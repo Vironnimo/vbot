@@ -65,6 +65,39 @@ class TestChatSession:
         assert "Grüße" in content
         assert json.loads(content) == message.to_dict()
 
+    def test_add_note_appends_valid_note_jsonl_line(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        session.add_note("Background task completed")
+
+        content = session.path.read_text(encoding="utf-8")
+        assert content.endswith("\n")
+        note_data = json.loads(content)
+        assert note_data["role"] == "note"
+        assert note_data["content"] == "Background task completed"
+        assert ChatMessage.from_dict(note_data).to_dict() == note_data
+
+    def test_load_includes_added_note(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        session.add_note("Background task completed")
+
+        messages = session.load()
+        assert len(messages) == 1
+        assert messages[0].role == "note"
+        assert messages[0].content == "Background task completed"
+
+    def test_drain_pending_notes_returns_added_notes_and_clears_queue(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        session.add_note("First reminder")
+        session.add_note("Second reminder")
+
+        pending_notes = session.drain_pending_notes()
+        assert [note.content for note in pending_notes] == ["First reminder", "Second reminder"]
+        assert [note.role for note in pending_notes] == ["note", "note"]
+        assert session.drain_pending_notes() == []
+
     def test_load_returns_messages_in_append_order(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         user_message = ChatMessage.user("Weather?", timestamp=FIXED_TIMESTAMP)
