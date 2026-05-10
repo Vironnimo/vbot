@@ -64,15 +64,10 @@ backoff + jitter. Provider errors classified as `retryable` vs `fatal`. No silen
 `except Exception: pass`.
 
 **Logging:** Structured logging via `LogManager` from `core/utils/logging`.
-All application logs must go through that managed pipeline. Per-module loggers
-use the `vbot.<domain>` naming scheme (`vbot.chat`, `vbot.tools`, …).
-Required format for every emitted entry is exactly `timestamp [LEVEL] name -
-message`; warning entries render as `[WARN]`. Runtime logs are written to one
-file per day under `<data_dir>/logs/`, using the date itself as the filename
-(for example `2026-05-10`). Routine HTTP access noise such as successful `200
-OK` lines stays out of the default application log unless deliberately enabled
-for diagnostics. No `print()`, no `logging.basicConfig()`, and no ad-hoc logger
-formatting.
+All application logs go through that pipeline and use per-module
+`vbot.<domain>` loggers. Required format: `timestamp [LEVEL] name - message`.
+Logs live under `<data_dir>/logs/`; `LogManager` handles the file layout. No
+`print()`, no `logging.basicConfig()`, and no ad-hoc formatting.
 
 **Naming:** Descriptive, no abbreviations (except `id`, `url`, `db`). One thing
 per function, max 3 nesting levels.
@@ -119,8 +114,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
-keys), `settings.json`, `logs/` (one date-named log file per day), and all
-runtime data.
+keys), `settings.json`, `logs/`, and all runtime data.
 
 ## Testing
 
@@ -180,10 +174,6 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   provider is ignored by model-selection UI. This applies to local providers
   too (for example, Ollama or LM Studio): no special-casing, no runtime
   reachability checks.
-- **Logging contract is exact.** Application logs must use the managed
-  `LogManager` pipeline, emit the exact format `timestamp [LEVEL] name -
-  message`, write to one date-named file per day under `<data_dir>/logs/`, and
-  keep routine successful HTTP access noise out of the default log.
 - **Provider credentials are source-agnostic.** Process environment currently
   has higher precedence than the data-dir `.env`, but backend code should ask a
   central provider-credential path whether credentials exist and what value to
