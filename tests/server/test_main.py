@@ -143,22 +143,38 @@ def test_main_starts_uvicorn_with_configured_app(tmp_path: Path, monkeypatch) ->
     }
 
 
-def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace(caplog) -> None:
+def test_managed_logger_proxy_handler_routes_records_into_vbot_namespace() -> None:
     handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
     logger = logging.getLogger("uvicorn.error")
+    target_logger = logging.getLogger("vbot.server.uvicorn")
+    captured_records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    capture_handler = CaptureHandler()
+    original_target_level = target_logger.level
+    original_target_propagate = target_logger.propagate
     logger.handlers = []
     logger.propagate = False
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+    target_logger.addHandler(capture_handler)
+    target_logger.setLevel(logging.INFO)
+    target_logger.propagate = True
 
     try:
-        with caplog.at_level(logging.INFO, logger="vbot.server.uvicorn"):
-            logger.info("Server started")
+        logger.info("Server started")
     finally:
+        target_logger.removeHandler(capture_handler)
+        target_logger.setLevel(original_target_level)
+        target_logger.propagate = original_target_propagate
         logger.removeHandler(handler)
         handler.close()
+        capture_handler.close()
 
     assert any(
-        record.name == "vbot.server.uvicorn" and record.message == "Server started"
-        for record in caplog.records
+        record.name == "vbot.server.uvicorn" and record.getMessage() == "Server started"
+        for record in captured_records
     )
