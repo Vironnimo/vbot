@@ -94,6 +94,7 @@ describe('i18n t()', () => {
       'chat.subagent.resultStatus',
       'chat.subagentSessionReadOnly',
       'chat.subagentSessionReadOnlyHint',
+      'chat.returnToCurrentSession',
       'status.connected',
       'status.activeRun',
       'status.notReachable',
@@ -122,6 +123,10 @@ describe('i18n t()', () => {
     expect(t('chat.tokenBadgeNoUsage', undefined, { context: 8000 })).toBe(
       '— / 8000 tok',
     );
+    expect(t('chat.subagentSessionReadOnlyHint')).toContain(
+      'Return to the current agent session',
+    );
+    expect(t('chat.returnToCurrentSession')).toBe('Return to current session');
     expect(englishCatalog['navigation.components']).toBeUndefined();
   });
 

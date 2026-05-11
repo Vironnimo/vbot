@@ -256,6 +256,15 @@
     overrideSessionId = '';
   };
 
+  const handleReturnToCurrentSession = async () => {
+    if (!readOnlySessionActive || loadingHistory) {
+      return;
+    }
+
+    clearSessionOverride();
+    await loadCurrentHistory();
+  };
+
   const handleNewSession = async () => {
     const agent = selectedAgent(chatState);
     if (!agent || newSessionBlocked) {
@@ -500,18 +509,28 @@
         <div class="chat-view__notice-stack" aria-live="polite">
           {#if readOnlySessionActive}
             <div class="chat-view__readonly-notice">
-              <p class="chat-view__readonly-title">
-                {t(
-                  'chat.subagentSessionReadOnly',
-                  'Viewing a sub-agent session',
-                )}
-              </p>
-              <p class="chat-view__readonly-hint">
-                {t(
-                  'chat.subagentSessionReadOnlyHint',
-                  'This historical session is read-only. Start a new session or send from the current agent session to continue chatting.',
-                )}
-              </p>
+              <div class="chat-view__readonly-copy">
+                <p class="chat-view__readonly-title">
+                  {t(
+                    'chat.subagentSessionReadOnly',
+                    'Viewing a sub-agent session',
+                  )}
+                </p>
+                <p class="chat-view__readonly-hint">
+                  {t(
+                    'chat.subagentSessionReadOnlyHint',
+                    'This historical session is read-only. Return to the current agent session to continue chatting.',
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="btn-outline chat-view__readonly-return"
+                disabled={loadingHistory}
+                onclick={handleReturnToCurrentSession}
+              >
+                {t('chat.returnToCurrentSession', 'Return to current session')}
+              </button>
             </div>
           {/if}
           {#if loadingHistory}
@@ -706,6 +725,10 @@
   }
 
   .chat-view__readonly-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
     border-left: 3px solid var(--accent);
     padding: 7px 0 7px 12px;
     background: linear-gradient(
@@ -713,6 +736,10 @@
       rgba(232, 135, 10, 0.08),
       transparent 72%
     );
+  }
+
+  .chat-view__readonly-copy {
+    min-width: 0;
   }
 
   .chat-view__readonly-title,
@@ -733,6 +760,11 @@
     margin-top: 4px;
     color: var(--text-med);
     font-size: 12.5px;
+  }
+
+  .chat-view__readonly-return {
+    flex-shrink: 0;
+    margin-right: 12px;
   }
 
   .btn-new svg {
@@ -767,6 +799,15 @@
 
     .chat-view__notice-stack {
       padding: 10px 14px;
+    }
+
+    .chat-view__readonly-notice {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .chat-view__readonly-return {
+      margin-right: 0;
     }
   }
 </style>

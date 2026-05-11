@@ -115,7 +115,50 @@ describe('ChatView', () => {
       session_id: 'sub-session-1',
     });
     expect(document.body.textContent).toContain('Viewing a sub-agent session');
+    expect(document.body.textContent).toContain('Return to current session');
     expect(document.querySelector('textarea')?.disabled).toBe(true);
+  });
+
+  it('returns from a read-only sub-agent session to the current session', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Sub-agent response'),
+      100,
+    );
+
+    const returnButton = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Return to current session',
+    );
+
+    expect(returnButton).toBeTruthy();
+    returnButton.click();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Hello') &&
+        !document.body.textContent.includes('Viewing a sub-agent session'),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    });
+    expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 });
 

@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 
 import core.chat as chat_api
+import core.tools.subagent as subagent_module
+from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager, Run, RunNotFoundError
 from core.tools.subagent import (
     SUBAGENT_RESULT_TOOL_NAME,
@@ -52,8 +54,11 @@ def make_context(
 class RecordingTriggerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
+        self.error: BaseException | None = None
 
     async def trigger_run(self, agent_id: str, message: str, session_id: str | None = None) -> Run:
+        if self.error is not None:
+            raise self.error
         self.calls.append((agent_id, message, session_id))
         return Run(run_id="trigger-run", agent_id=agent_id, session_id=session_id or "new-session")
 
@@ -65,6 +70,16 @@ class FakeStorage:
 
     def load_subagent_settings(self) -> JsonObject:
         return dict(self._settings)
+
+
+class FakeAgents:
+    def __init__(self, agent_ids: set[str] | None = None) -> None:
+        self._agent_ids = agent_ids or {"parent", "worker"}
+
+    def get(self, agent_id: str) -> SimpleNamespace:
+        if agent_id not in self._agent_ids:
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        return SimpleNamespace(id=agent_id)
 
 
 class FakeRunManager:
@@ -125,6 +140,7 @@ def make_runtime(
     tmp_path: Path, manager: FakeRunManager, settings: JsonObject | None = None
 ) -> Any:
     return SimpleNamespace(
+        agents=FakeAgents(),
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
         storage=FakeStorage(settings),
@@ -172,6 +188,29 @@ async def test_batch_tracker_does_not_trigger_when_completed_item_was_fetched() 
     # Assert
     assert trigger_service.calls == []
     assert tracker.spawn_count(parent_key) == 1
+
+
+async def test_batch_tracker_logs_trigger_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Arrange
+    log_calls: list[tuple[Any, ...]] = []
+    trigger_service = RecordingTriggerService()
+    trigger_service.error = RuntimeError("trigger failed")
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-one", "run-one")
+    monkeypatch.setattr(
+        subagent_module._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
+    )
+
+    # Act
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    # Assert
+    assert log_calls
+    assert "Sub-agent batch completion trigger failed" in log_calls[0][1]
+    assert str(log_calls[0][2]) == "trigger failed"
 
 
 async def test_register_subagent_tools_registers_both_public_tools() -> None:
@@ -233,6 +272,31 @@ async def test_subagent_tool_enforces_per_turn_limit(tmp_path: Path) -> None:
     assert manager.started == []
 
 
+async def test_subagent_tool_validates_target_agent_before_creating_session(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    runtime.agents = FakeAgents({"parent"})
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "missing"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_not_found"
+    assert manager.started == []
+    assert list((tmp_path / "agents").glob("missing")) == []
+
+
 async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -263,6 +327,43 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     assert result["data"]["status"] == "running"
     assert manager.started[0][0] == "parent"
     assert FakeChatLoop.seen_depths == [4]
+
+
+async def test_subagent_completion_tracker_logs_unexpected_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    log_calls: list[tuple[Any, ...]] = []
+    manager = FakeRunManager()
+    manager.next_result = ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    monkeypatch.setattr(
+        tracker,
+        "on_sub_agent_complete",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        subagent_module._LOGGER, "error", lambda *args, **_kwargs: log_calls.append(args)
+    )
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    # Assert
+    assert result["ok"] is True
+    assert log_calls
+    assert "Sub-agent completion tracker failed" in log_calls[0][1]
+    assert str(log_calls[0][2]) == "boom"
 
 
 async def test_subagent_tool_propagates_parent_cancellation(tmp_path: Path) -> None:
@@ -314,6 +415,39 @@ async def test_subagent_tool_blocking_waits_for_full_result(tmp_path: Path) -> N
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "finished"
     assert result["data"]["usage"] == {"input_tokens": 1, "output_tokens": 2}
+
+
+async def test_subagent_tool_blocking_timeout_completes_tracker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager, {"subagent_timeout_minutes": 1})
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    async def raise_timeout(_awaitable: Any, *, timeout: float | None = None) -> Any:
+        _awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", raise_timeout)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "do work", "blocking": True},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "subagent_timeout"
+    assert manager.started[0][3].cancel_requested is True
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
+    trigger_service = tracker._trigger_service  # noqa: SLF001 - test observes tracker outcome.
+    assert trigger_service.calls == []
 
 
 async def test_wait_for_subagent_result_converts_normal_failures_to_result_dict() -> None:
