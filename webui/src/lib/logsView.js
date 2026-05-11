@@ -3,8 +3,11 @@ export const LOGS_STREAM_STATUS_CONNECTING = 'connecting';
 export const LOGS_STREAM_STATUS_CONNECTED = 'connected';
 export const LOGS_STREAM_STATUS_RECONNECTING = 'reconnecting';
 export const LOGS_STREAM_STATUS_ERROR = 'error';
+export const LOGS_SORT_ORDER_NEWEST = 'newest';
+export const LOGS_SORT_ORDER_OLDEST = 'oldest';
 
 const ALL_LEVELS_FILTER = 'all';
+const SORT_ORDER_OPTIONS = [LOGS_SORT_ORDER_NEWEST, LOGS_SORT_ORDER_OLDEST];
 const SEARCHABLE_ENTRY_FIELDS = [
   'timestamp',
   'level',
@@ -18,6 +21,7 @@ export function createLogsViewState() {
     selectedFile: '',
     entries: [],
     levelFilter: ALL_LEVELS_FILTER,
+    sortOrder: LOGS_SORT_ORDER_NEWEST,
     searchText: '',
     loadingCatalog: false,
     loadingEntries: false,
@@ -81,6 +85,13 @@ export function setLevelFilter(state, level) {
   return state.levelFilter;
 }
 
+export function setSortOrder(state, value) {
+  state.sortOrder = SORT_ORDER_OPTIONS.includes(value)
+    ? value
+    : LOGS_SORT_ORDER_NEWEST;
+  return state.sortOrder;
+}
+
 export function setSearchText(state, value) {
   state.searchText = typeof value === 'string' ? value : '';
   return state.searchText;
@@ -118,15 +129,32 @@ export function filterLogEntries(entries, filters = {}) {
   });
 }
 
+export function sortLogEntries(entries, sortOrder = LOGS_SORT_ORDER_NEWEST) {
+  const nextEntries = Array.isArray(entries) ? [...entries] : [];
+
+  if (sortOrder === LOGS_SORT_ORDER_OLDEST) {
+    return nextEntries;
+  }
+
+  nextEntries.reverse();
+  return nextEntries;
+}
+
 export function visibleLogEntries(state) {
-  return filterLogEntries(state?.entries, {
+  const filteredEntries = filterLogEntries(state?.entries, {
     levelFilter: state?.levelFilter,
     searchText: state?.searchText,
   });
+
+  return sortLogEntries(filteredEntries, state?.sortOrder);
 }
 
 export function levelOptionValue() {
   return ALL_LEVELS_FILTER;
+}
+
+export function deriveSortOptions() {
+  return SORT_ORDER_OPTIONS;
 }
 
 function normalizeSearchText(value) {
