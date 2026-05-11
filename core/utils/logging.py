@@ -15,6 +15,59 @@ from pathlib import Path
 
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
+LOGS_WEBSOCKET_PATH = "/ws/logs"
+
+
+def _normalize_websocket_path(path: object) -> str | None:
+    if not isinstance(path, str) or not path:
+        return None
+    return path.split("?", 1)[0]
+
+
+def _extract_websocket_path(record: logging.LogRecord) -> str | None:
+    websocket = getattr(record, "websocket", None)
+    request = getattr(websocket, "request", None)
+    request_path = _normalize_websocket_path(getattr(request, "path", None))
+    if request_path is not None:
+        return request_path
+
+    arguments = record.args
+    if isinstance(arguments, tuple):
+        values = arguments
+    elif isinstance(arguments, dict):
+        values = tuple(arguments.values())
+    else:
+        values = ()
+
+    for value in values:
+        candidate_path = _normalize_websocket_path(value)
+        if candidate_path is not None and candidate_path.startswith("/"):
+            return candidate_path
+
+    return None
+
+
+def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
+    """Return whether *record* is routine `/ws/logs` lifecycle noise."""
+
+    if record.levelno != logging.INFO:
+        return False
+
+    if _extract_websocket_path(record) != LOGS_WEBSOCKET_PATH:
+        return False
+
+    message = record.getMessage()
+    if message in {"connection open", "connection closed"}:
+        return True
+
+    return '"WebSocket ' in message and "[accepted]" in message
+
+
+class QuietLogsWebSocketLifecycleFilter(logging.Filter):
+    """Suppress routine INFO lifecycle records for the dedicated log socket."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not is_logs_websocket_lifecycle_record(record)
 
 
 def resolve_daily_log_path(
@@ -70,10 +123,16 @@ def build_uvicorn_log_config(
     return {
         "version": 1,
         "disable_existing_loggers": False,
+        "filters": {
+            "quiet_logs_websocket_lifecycle": {
+                "()": "core.utils.logging.QuietLogsWebSocketLifecycleFilter",
+            },
+        },
         "handlers": {
             "vbot_proxy": {
                 "class": "core.utils.logging.ManagedLoggerProxyHandler",
                 "target_logger_name": server_logger_name,
+                "filters": ["quiet_logs_websocket_lifecycle"],
             },
             "null": {
                 "class": "logging.NullHandler",
@@ -92,6 +151,11 @@ def build_uvicorn_log_config(
             },
             "uvicorn.access": {
                 "handlers": ["null"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "websockets.server": {
+                "handlers": ["vbot_proxy"],
                 "level": "INFO",
                 "propagate": False,
             },
