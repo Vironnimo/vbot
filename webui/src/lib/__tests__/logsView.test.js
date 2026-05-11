@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  LOGS_SORT_ORDER_NEWEST,
+  LOGS_SORT_ORDER_OLDEST,
   LOGS_STREAM_STATUS_IDLE,
   applyLogCatalog,
   createLogsViewState,
   deriveLevelOptions,
+  deriveSortOptions,
   filterLogEntries,
   levelOptionValue,
   mergeLogStreamEvent,
+  normalizeLevelFilter,
   replaceLogEntries,
   selectLogFile,
   setLevelFilter,
+  setSortOrder,
   setSearchText,
+  sortLogEntries,
   visibleLogEntries,
 } from '../logsView.js';
 
@@ -22,6 +28,7 @@ describe('logsView helpers', () => {
       selectedFile: '',
       entries: [],
       levelFilter: 'all',
+      sortOrder: 'newest',
       searchText: '',
       loadingCatalog: false,
       loadingEntries: false,
@@ -79,6 +86,29 @@ describe('logsView helpers', () => {
     expect(state.entries.map((item) => item.message)).toEqual(['Reset']);
   });
 
+  it('normalizes the level filter when loaded entries no longer include it', () => {
+    const state = createLogsViewState();
+
+    setLevelFilter(state, 'warn');
+
+    replaceLogEntries(state, {
+      file: '2026-05-11',
+      entries: [entry({ level: 'info', message: 'Ready' })],
+    });
+
+    expect(state.levelFilter).toBe('all');
+
+    setLevelFilter(state, 'error');
+
+    mergeLogStreamEvent(state, {
+      type: 'reset',
+      file: '2026-05-11',
+      entries: [entry({ level: 'warn', message: 'Retry soon' })],
+    });
+
+    expect(state.levelFilter).toBe('all');
+  });
+
   it('ignores stream events for a different file', () => {
     const state = createLogsViewState();
     replaceLogEntries(state, {
@@ -131,6 +161,29 @@ describe('logsView helpers', () => {
         searchText: 'worker retry',
       }).map((item) => item.message),
     ).toEqual(['Retry soon']);
+    expect(deriveSortOptions()).toEqual(['newest', 'oldest']);
+  });
+
+  it('keeps all plus distinct parsed levels only', () => {
+    const entries = [
+      entry({ level: 'warn' }),
+      entry({ level: 'warn', message: 'Second warning' }),
+      entry({ level: 'error' }),
+      entry({ level: '' }),
+      entry({ level: null }),
+    ];
+
+    expect(deriveLevelOptions(entries)).toEqual(['all', 'error', 'warn']);
+  });
+
+  it('keeps the current level filter when it remains valid', () => {
+    const state = createLogsViewState();
+    state.entries = [entry({ level: 'info' }), entry({ level: 'warn' })];
+
+    setLevelFilter(state, 'warn');
+
+    expect(normalizeLevelFilter(state)).toBe('warn');
+    expect(state.levelFilter).toBe('warn');
   });
 
   it('searches timestamp, level, logger, message, and continuation text', () => {
@@ -160,8 +213,16 @@ describe('logsView helpers', () => {
   it('computes visible entries from state filters', () => {
     const state = createLogsViewState();
     state.entries = [
-      entry({ level: 'info', message: 'Ready' }),
-      entry({ level: 'error', message: 'Failed' }),
+      entry({
+        timestamp: '2026-05-11 09:00:00',
+        level: 'info',
+        message: 'Ready',
+      }),
+      entry({
+        timestamp: '2026-05-11 09:00:01',
+        level: 'error',
+        message: 'Failed',
+      }),
     ];
 
     selectLogFile(state, '2026-05-11');
@@ -171,6 +232,55 @@ describe('logsView helpers', () => {
     expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
       'Failed',
     ]);
+  });
+
+  it('defaults to newest-first and supports oldest-first ordering', () => {
+    const entries = [
+      entry({ timestamp: '2026-05-11 09:00:00', message: 'First' }),
+      entry({ timestamp: '2026-05-11 09:00:01', message: 'Second' }),
+      entry({ timestamp: '2026-05-11 09:00:02', message: 'Third' }),
+    ];
+
+    expect(
+      sortLogEntries(entries, LOGS_SORT_ORDER_NEWEST).map(
+        (item) => item.message,
+      ),
+    ).toEqual(['Third', 'Second', 'First']);
+    expect(
+      sortLogEntries(entries, LOGS_SORT_ORDER_OLDEST).map(
+        (item) => item.message,
+      ),
+    ).toEqual(['First', 'Second', 'Third']);
+  });
+
+  it('applies visible ordering from state sort selection', () => {
+    const state = createLogsViewState();
+    state.entries = [
+      entry({ timestamp: '2026-05-11 09:00:00', message: 'First' }),
+      entry({ timestamp: '2026-05-11 09:00:01', message: 'Second' }),
+      entry({ timestamp: '2026-05-11 09:00:02', message: 'Third' }),
+    ];
+
+    expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
+      'Third',
+      'Second',
+      'First',
+    ]);
+
+    setSortOrder(state, LOGS_SORT_ORDER_OLDEST);
+
+    expect(visibleLogEntries(state).map((item) => item.message)).toEqual([
+      'First',
+      'Second',
+      'Third',
+    ]);
+  });
+
+  it('falls back to newest sort order for invalid values', () => {
+    const state = createLogsViewState();
+
+    expect(setSortOrder(state, 'sideways')).toBe(LOGS_SORT_ORDER_NEWEST);
+    expect(state.sortOrder).toBe(LOGS_SORT_ORDER_NEWEST);
   });
 });
 

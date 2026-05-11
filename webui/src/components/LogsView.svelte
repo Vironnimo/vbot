@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Dropdown from './Dropdown.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -12,11 +13,14 @@
     applyLogCatalog,
     createLogsViewState,
     deriveLevelOptions,
+    deriveSortOptions,
     levelOptionValue,
     mergeLogStreamEvent,
+    normalizeLevelFilter,
     replaceLogEntries,
     selectLogFile,
     setLevelFilter,
+    setSortOrder,
     setSearchText,
     visibleLogEntries,
   } from '$lib/logsView.js';
@@ -29,6 +33,30 @@
 
   let filteredEntries = $derived(visibleLogEntries(viewState));
   let levelOptions = $derived(deriveLevelOptions(viewState.entries));
+  let sortOrderOptions = $derived(
+    deriveSortOptions().map((value) => ({
+      value,
+      label:
+        value === 'oldest'
+          ? t('logs.sort.oldest', 'Oldest first')
+          : t('logs.sort.newest', 'Newest first'),
+    })),
+  );
+  let fileOptions = $derived(
+    viewState.files.map((file) => ({
+      value: file,
+      label: file,
+    })),
+  );
+  let levelDropdownOptions = $derived(
+    levelOptions.map((level) => ({
+      value: level,
+      label:
+        level === levelOptionValue()
+          ? t('logs.level.all', 'All levels')
+          : levelLabel(level),
+    })),
+  );
   let hasFiles = $derived(viewState.files.length > 0);
   let hasActiveFilters = $derived(
     viewState.levelFilter !== levelOptionValue() ||
@@ -81,7 +109,7 @@
         await loadSelectedFile(selectedFile);
       }
     } catch (error) {
-      viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${error.message}`;
+      viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
       viewState.loadingCatalog = false;
     }
@@ -115,7 +143,7 @@
         return;
       }
 
-      viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${error.message}`;
+      viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
       viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
     } finally {
       if (requestId === activeReadRequest) {
@@ -155,7 +183,7 @@
             return;
           }
 
-          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${error.message}`;
+          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${errorMessageText(error, t('logs.streamErrorUnknown', 'Connection closed unexpectedly.'))}`;
           viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
         },
         onClose: () => {
@@ -218,14 +246,22 @@
     currentStream = null;
   }
 
-  async function handleFileChange(event) {
-    const file = event.currentTarget.value;
+  async function handleFileChange(file) {
+    if (!file || file === viewState.selectedFile) {
+      return;
+    }
+
     selectLogFile(viewState, file);
     await loadSelectedFile(file);
   }
 
-  function handleLevelChange(event) {
-    setLevelFilter(viewState, event.currentTarget.value);
+  function handleLevelChange(level) {
+    setLevelFilter(viewState, level);
+    normalizeLevelFilter(viewState);
+  }
+
+  function handleSortChange(sortOrder) {
+    setSortOrder(viewState, sortOrder);
   }
 
   function handleSearchInput(event) {
@@ -295,6 +331,22 @@
     return entry.continuation
       ? `${entry.message}\n${entry.continuation}`
       : entry.message;
+  }
+
+  function entryPreview(entry) {
+    return entryBody(entry).replace(/\s+/g, ' ').trim();
+  }
+
+  function errorMessageText(error, fallback) {
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message.trim();
+    }
+
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+
+    return fallback;
   }
 </script>
 
@@ -369,44 +421,49 @@
   <div class="logs-view__toolbar">
     <label class="logs-view__field">
       <span class="logs-view__field-label">{t('logs.file', 'File')}</span>
-      <select
-        class="logs-view__select"
-        aria-label={t('logs.file', 'File')}
-        bind:value={viewState.selectedFile}
+      <Dropdown
+        id="logs-file"
+        value={viewState.selectedFile}
+        options={fileOptions}
+        placeholder={t('logs.emptyOption', 'No log files')}
+        ariaLabel={t('logs.file', 'File')}
         disabled={!hasFiles ||
           viewState.loadingCatalog ||
           viewState.loadingEntries}
-        onchange={handleFileChange}
-      >
-        {#if !hasFiles}
-          <option value="">{t('logs.emptyOption', 'No log files')}</option>
-        {:else}
-          {#each viewState.files as file (file)}
-            <option value={file}>{file}</option>
-          {/each}
-        {/if}
-      </select>
+        triggerClass="logs-view__dropdown"
+        listClass="logs-view__dropdown-list"
+        onValueChange={handleFileChange}
+      />
     </label>
 
     <label class="logs-view__field logs-view__field--narrow">
       <span class="logs-view__field-label"
         >{t('logs.levelFilter', 'Level')}</span
       >
-      <select
-        class="logs-view__select"
-        aria-label={t('logs.levelFilter', 'Level')}
-        bind:value={viewState.levelFilter}
+      <Dropdown
+        id="logs-level-filter"
+        value={viewState.levelFilter}
+        options={levelDropdownOptions}
+        ariaLabel={t('logs.levelFilter', 'Level')}
         disabled={!hasFiles}
-        onchange={handleLevelChange}
-      >
-        {#each levelOptions as level (level)}
-          <option value={level}>
-            {level === levelOptionValue()
-              ? t('logs.level.all', 'All levels')
-              : levelLabel(level)}
-          </option>
-        {/each}
-      </select>
+        triggerClass="logs-view__dropdown"
+        listClass="logs-view__dropdown-list"
+        onValueChange={handleLevelChange}
+      />
+    </label>
+
+    <label class="logs-view__field logs-view__field--narrow">
+      <span class="logs-view__field-label">{t('logs.sort', 'Order')}</span>
+      <Dropdown
+        id="logs-sort-order"
+        value={viewState.sortOrder}
+        options={sortOrderOptions}
+        ariaLabel={t('logs.sort', 'Order')}
+        disabled={!hasFiles}
+        triggerClass="logs-view__dropdown"
+        listClass="logs-view__dropdown-list"
+        onValueChange={handleSortChange}
+      />
     </label>
 
     <label class="logs-view__field logs-view__field--search">
@@ -487,15 +544,17 @@
       aria-label={t('logs.entries', 'Log entries')}
     >
       {#each filteredEntries as entry, index (`${entry.timestamp}-${entry.logger_name}-${index}`)}
-        <article class={`logs-entry ${levelTone(entry.level)}`} role="listitem">
-          <div class="logs-entry__meta">
-            <span class="logs-entry__timestamp">{entry.timestamp || '—'}</span>
-            <span class="logs-entry__level">{levelLabel(entry.level)}</span>
-            <span class="logs-entry__logger"
-              >{entry.logger_name || t('common.unknown', 'Unknown')}</span
-            >
-          </div>
-          <pre class="logs-entry__message">{entryBody(entry)}</pre>
+        <article
+          class={`logs-entry ${levelTone(entry.level)}`}
+          role="listitem"
+          title={entryBody(entry)}
+        >
+          <span class="logs-entry__timestamp">{entry.timestamp || '—'}</span>
+          <span class="logs-entry__level">{levelLabel(entry.level)}</span>
+          <span class="logs-entry__logger"
+            >{entry.logger_name || t('common.unknown', 'Unknown')}</span
+          >
+          <span class="logs-entry__message">{entryPreview(entry)}</span>
         </article>
       {/each}
     </div>
@@ -612,10 +671,11 @@
 
   .logs-view__toolbar {
     display: grid;
-    grid-template-columns: minmax(180px, 240px) minmax(140px, 170px) minmax(
-        220px,
-        1fr
-      );
+    grid-template-columns:
+      minmax(180px, 240px)
+      minmax(140px, 168px)
+      minmax(140px, 168px)
+      minmax(220px, 1fr);
     gap: 12px;
     align-items: end;
   }
@@ -636,10 +696,19 @@
     text-transform: uppercase;
   }
 
-  .logs-view__select,
+  :global(.logs-view__dropdown),
+  :global(.logs-view__dropdown-list),
   .logs-view__input {
     width: 100%;
     min-width: 0;
+  }
+
+  :global(.logs-view__dropdown),
+  :global(.logs-view__dropdown.open) {
+    min-width: 0;
+  }
+
+  .logs-view__input {
     padding: 7px 11px;
     border: 1px solid var(--border-2);
     border-radius: var(--r-md);
@@ -650,11 +719,21 @@
     line-height: 1.5;
   }
 
-  .logs-view__select:focus-visible,
   .logs-view__input:focus-visible {
     border-color: rgba(232, 135, 10, 0.4);
     box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
     outline: none;
+  }
+
+  :global(.logs-view__dropdown .dropdown-primitive__trigger),
+  :global(.logs-view__dropdown .dropdown-primitive__option) {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+
+  :global(.logs-view__dropdown-list) {
+    max-height: 240px;
+    overflow-y: auto;
   }
 
   .logs-view__summary {
@@ -707,19 +786,23 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
     overflow: auto;
     padding-right: 4px;
   }
 
   .logs-entry {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 14px;
+    display: grid;
+    grid-template-columns:
+      minmax(154px, auto) minmax(66px, auto) minmax(180px, 0.7fr)
+      minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-left-width: 3px;
-    border-radius: var(--r-md);
+    border-radius: var(--r-sm);
     background: var(--surface);
   }
 
@@ -729,7 +812,9 @@
 
   .logs-entry--warn {
     border-left-color: var(--amber);
-    background: rgba(245, 158, 11, 0.04);
+    border-color: rgba(245, 158, 11, 0.28);
+    background: rgba(245, 158, 11, 0.08);
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.08);
   }
 
   .logs-entry--error {
@@ -741,17 +826,24 @@
     border-left-color: var(--border-2);
   }
 
-  .logs-entry__meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 10px;
-    align-items: center;
+  .logs-entry__timestamp,
+  .logs-entry__logger,
+  .logs-entry__message {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .logs-entry__timestamp,
+  .logs-entry__logger {
     color: var(--text-lo);
     font-family: var(--font-mono);
     font-size: 11px;
   }
 
   .logs-entry__level {
+    justify-self: start;
     padding: 2px 8px;
     border-radius: 12px;
     color: var(--text-hi);
@@ -763,7 +855,7 @@
 
   .logs-entry--warn .logs-entry__level {
     color: var(--amber);
-    background: rgba(245, 158, 11, 0.12);
+    background: rgba(245, 158, 11, 0.18);
   }
 
   .logs-entry--error .logs-entry__level {
@@ -776,19 +868,32 @@
     background: rgba(232, 135, 10, 0.12);
   }
 
-  .logs-entry__logger,
-  .logs-entry__timestamp {
-    overflow-wrap: anywhere;
-  }
-
   .logs-entry__message {
-    margin: 0;
     color: var(--text-hi);
     font-family: var(--font-mono);
     font-size: 12px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    line-height: 1.4;
+  }
+
+  @media (max-width: 1080px) {
+    .logs-entry {
+      grid-template-columns: minmax(140px, auto) minmax(64px, auto) minmax(
+          0,
+          1fr
+        );
+    }
+
+    .logs-entry__logger {
+      grid-column: 1 / span 2;
+      grid-row: 2;
+      color: var(--text-med);
+    }
+
+    .logs-entry__message {
+      grid-column: 3;
+      grid-row: 1 / span 2;
+      align-self: center;
+    }
   }
 
   @media (max-width: 860px) {
@@ -808,6 +913,24 @@
 
     .logs-view__toolbar {
       grid-template-columns: 1fr;
+    }
+
+    .logs-entry {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+    }
+
+    .logs-entry__message,
+    .logs-entry__logger {
+      grid-column: auto;
+      grid-row: auto;
+    }
+
+    .logs-entry__timestamp,
+    .logs-entry__logger,
+    .logs-entry__message {
+      white-space: normal;
+      text-overflow: clip;
     }
   }
 </style>
