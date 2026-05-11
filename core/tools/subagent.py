@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 
+from core.agents import AgentNotFoundError, InvalidAgentIdError
 from core.chat import (
     ChatMessage,
     ChatRunManager,
@@ -16,6 +17,7 @@ from core.chat import (
 )
 from core.chat.runs import RunStatus
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.utils.logging import get_logger
 
 SUBAGENT_TOOL_NAME = "subagent"
 SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
@@ -24,6 +26,8 @@ DEFAULT_MAX_SUBAGENTS_PER_TURN = 8
 DEFAULT_SUBAGENT_TIMEOUT_MINUTES = 60
 SECONDS_PER_MINUTE = 60
 RESULT_PREVIEW_LIMIT = 300
+
+_LOGGER = get_logger("tools.subagent")
 
 SUBAGENT_TOOL_DESCRIPTION = (
     "Spawn a sub-agent run in a new persisted session. Use non-blocking mode for "
@@ -138,8 +142,15 @@ class SubAgentBatchTracker:
             return
 
         message = _batch_completion_message(pending_entries)
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._trigger_service.trigger_run(parent_key[0], message, session_id=parent_key[1])
+        )
+        task.add_done_callback(
+            lambda completed: _log_background_task_result(
+                completed,
+                "Sub-agent batch completion trigger failed for "
+                f"agent={parent_key[0]} session={parent_key[1]} run={parent_key[2]}",
+            )
         )
 
     def mark_fetched(self, parent_key: ParentKey, sub_session_id: str) -> None:
@@ -230,6 +241,10 @@ async def _handle_subagent(
     if context.is_cancelled():
         return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
 
+    validation_error = _validate_target_agent(runtime, target_agent_id)
+    if validation_error is not None:
+        return validation_error
+
     session = runtime.chat_sessions.create(target_agent_id)
     sub_run = await _start_subagent_run(runtime, target_agent_id, session.id, content, context)
     batch_tracker.register(parent_key, target_agent_id, session.id, sub_run.id)
@@ -246,18 +261,25 @@ async def _handle_subagent(
             }
         )
 
-    batch_tracker.mark_fetched(parent_key, session.id)
     timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
     try:
         result = await asyncio.wait_for(_wait_for_subagent_result(sub_run), timeout=timeout_seconds)
     except TimeoutError:
         sub_run.request_cancel()
+        result = _result_dict(
+            sub_run,
+            status=RunStatus.FAILED.value,
+            message=f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
+        )
+        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
+        batch_tracker.mark_fetched(parent_key, session.id)
         return tool_failure(
             "subagent_timeout",
             f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
         )
 
     batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
+    batch_tracker.mark_fetched(parent_key, session.id)
     return tool_success(result)
 
 
@@ -322,7 +344,28 @@ def _track_subagent_completion(
         result = await _wait_for_subagent_result(run)
         batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
 
-    asyncio.create_task(complete_when_terminal())
+    task = asyncio.create_task(complete_when_terminal())
+    task.add_done_callback(
+        lambda completed: _log_background_task_result(
+            completed,
+            "Sub-agent completion tracker failed for "
+            f"agent={run.agent_id} session={run.session_id} run={run.id}",
+        )
+    )
+
+
+def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is None:
+        return
+    _LOGGER.error(
+        "%s: %s",
+        message,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
 
 
 async def _wait_for_subagent_result(run: Run) -> JsonObject:
@@ -441,6 +484,21 @@ def _positive_int(value: Any, default: int) -> int:
     if isinstance(value, int) and value > 0:
         return value
     return default
+
+
+def _validate_target_agent(runtime: Any, target_agent_id: str) -> JsonObject | None:
+    agent_store = getattr(runtime, "agents", None)
+    if agent_store is None:
+        return None
+    get_agent = getattr(agent_store, "get", None)
+    if not callable(get_agent):
+        return None
+
+    try:
+        get_agent(target_agent_id)
+    except (AgentNotFoundError, InvalidAgentIdError) as error:
+        return tool_failure("agent_not_found", str(error))
+    return None
 
 
 def _attach_parent_cancellation(runtime: Any, parent_run_id: str, sub_run: Run) -> None:

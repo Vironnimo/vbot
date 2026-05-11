@@ -133,8 +133,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - The UI normally selects Agents, not Sessions. The shown chat is the selected
   Agent's `current_session_id`; old Sessions are not listed. Sub-agent session
   links are the targeted exception: they load an explicit Session ID as a
-  transient read-only override and clear the override when the user returns to
-  normal chat actions.
+  transient read-only override. The read-only banner provides an explicit
+  “Return to current session” action, and normal new-session/agent-selection
+  actions also clear the override.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
 - Streaming output is accessor-local/in-memory. `streamingItems` preserves the
