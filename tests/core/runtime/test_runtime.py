@@ -1,21 +1,26 @@
 """Tests for the Runtime bootstrap class."""
 
+import asyncio
 import logging
 import re
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from core.agents.agents import AgentStore, SystemPromptManager
-from core.chat.chat import ChatSessionManager
+from core.chat.chat import ChatLoop, ChatSessionManager
+from core.chat.runs import ChatRunManager, RunCancelledError
 from core.providers.credentials import ProviderCredentialResolver
 from core.runtime.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
+from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 
-CANONICAL_BUILTIN_TOOLS = ["edit", "glob", "grep", "read", "write"]
+CANONICAL_BUILTIN_TOOLS = ["bash", "edit", "glob", "grep", "process", "read", "write"]
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
@@ -141,6 +146,7 @@ def test_phase_two_services_available_after_start(config: Config):
     assert isinstance(runtime.agents, AgentStore)
     assert isinstance(runtime.provider_credentials, ProviderCredentialResolver)
     assert isinstance(runtime.tools, ToolRegistry)
+    assert isinstance(runtime.process_manager, ProcessManager)
     assert isinstance(runtime.skills, SkillRegistry)
     assert isinstance(runtime.chat_sessions, ChatSessionManager)
     assert isinstance(runtime.system_prompts, SystemPromptManager)
@@ -198,6 +204,7 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
         "agents",
         "provider_credentials",
         "tools",
+        "process_manager",
         "skills",
         "chat_sessions",
         "system_prompts",
@@ -256,6 +263,76 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
         _ = runtime.storage
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.provider_credentials
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.process_manager
+
+
+@pytest.mark.asyncio
+async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) -> None:
+    """Runtime owns the ProcessManager lifecycle when an event loop is running."""
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+
+    runtime.start()
+    process_manager = runtime.process_manager
+
+    assert process_manager._sweeper_task is not None
+    assert not process_manager._sweeper_task.done()
+
+    runtime.stop()
+
+    assert process_manager._sweeper_task is None
+
+
+def test_runtime_registers_bash_and_process_tools(config: Config) -> None:
+    """Runtime.start() registers host process tools backed by ProcessManager."""
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert runtime.tools.get("bash").name == "bash"
+    assert runtime.tools.get("process").name == "process"
+
+
+@pytest.mark.asyncio
+async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Config) -> None:
+    """ProcessManager cancellation kills all processes associated with one Run."""
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    process_manager = runtime.process_manager
+    session_id = await process_manager.spawn(
+        "run-one",
+        "agent-one",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env={},
+        cwd=config.data_dir,
+    )
+
+    process_manager.cancel_scope("run-one")
+    poll_result = await process_manager.poll(session_id, "agent-one", timeout_ms=1000)
+
+    assert poll_result["status"] == "killed"
+
+
+@pytest.mark.asyncio
+async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Path) -> None:
+    """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope()."""
+    adapter = _BlockingAdapter()
+    process_manager = _RecordingProcessManager()
+    runtime = _ChatRuntimeStub(tmp_path, adapter, process_manager)
+    runtime.chat_sessions.create("agent-one", session_id="session-one")
+    chat_loop = ChatLoop(runtime)
+
+    run = await chat_loop.start_run("agent-one", "hello", session_id="session-one")
+    await adapter.request_started.wait()
+    run.request_cancel()
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    assert process_manager.cancelled_scopes == [run.id]
 
 
 def test_reload_skills_updates_system_prompt_skill_registry(config: Config, tmp_path: Path):
@@ -316,3 +393,85 @@ def _write_test_skill(skill_root: Path, name: str, description: str) -> None:
         f"---\nname: {name}\ndescription: {description}\n---\n\nUse this skill.\n",
         encoding="utf-8",
     )
+
+
+class _BlockingAdapter:
+    def __init__(self) -> None:
+        self.request_started = asyncio.Event()
+
+    async def send(self, _messages: object, **_kwargs: object) -> dict[str, object]:
+        self.request_started.set()
+        await asyncio.Event().wait()
+        return {"content": "unreachable", "tool_calls": None}
+
+    def normalize_response(self, response: dict[str, object]) -> dict[str, object]:
+        return response
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _RecordingProcessManager:
+    def __init__(self) -> None:
+        self.cancelled_scopes: list[str] = []
+
+    def cancel_scope(self, scope_key: str) -> None:
+        self.cancelled_scopes.append(scope_key)
+
+
+class _ChatRuntimeStub:
+    def __init__(
+        self,
+        tmp_path: Path,
+        adapter: _BlockingAdapter,
+        process_manager: _RecordingProcessManager,
+    ) -> None:
+        self.agents = _StubAgents()
+        self.providers = _StubProviders()
+        self.provider_credentials = _StubCredentials()
+        self.chat_sessions = ChatSessionManager(tmp_path)
+        self.chat_runs = ChatRunManager()
+        self.system_prompts = _StubPrompts()
+        self.tools = ToolRegistry()
+        self.storage = SimpleNamespace(data_dir=tmp_path)
+        self._process_manager = process_manager
+        self._adapter = adapter
+
+    def get_adapter(self, _provider_id: str, _connection_id: str) -> _BlockingAdapter:
+        return self._adapter
+
+    @property
+    def process_manager(self) -> _RecordingProcessManager:
+        return self._process_manager
+
+
+class _StubAgents:
+    def get(self, agent_id: str) -> object:
+        return SimpleNamespace(
+            id=agent_id,
+            model="provider/model",
+            connection="provider:default",
+            temperature=0.0,
+            thinking_effort="",
+            allowed_tools=["*"],
+            allowed_skills=["*"],
+            workspace="",
+        )
+
+
+class _StubProviders:
+    def get(self, provider_id: str) -> object:
+        return SimpleNamespace(id=provider_id)
+
+
+class _StubCredentials:
+    def has_credentials(self, _provider_id: str, _connection_id: str | None = None) -> bool:
+        return True
+
+
+class _StubPrompts:
+    def build_system_prompt(self, _agent: object) -> str:
+        return "System prompt"
+
+    def provider_tool_definitions(self, _agent: object) -> list[dict[str, object]]:
+        return []

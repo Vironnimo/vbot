@@ -37,6 +37,20 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `output_mode`. It searches file contents by regex by default or fixed string
   when `literal: true`. Relative paths resolve from `ToolContext.workspace`;
   absolute file or directory paths are allowed.
+- Built-in `bash` tool: flat name `bash`; schema includes required `command` and
+  optional `workdir`, `env`, `yield_after`, `background`, and `timeout`. It runs
+  through the host shell, streams foreground stdout/stderr as Run delta events,
+  and returns either a foreground completion envelope or a background process
+  `session_id`.
+- Built-in `process` tool: flat name `process`; schema includes required
+  `action` plus action-specific `session_id`, `timeout_ms`, `offset`, `limit`,
+  `data`, and `eof`. It manages background process sessions started by `bash`.
+- `ProcessManager` is the in-memory service behind host process execution. It
+  stores process sessions by process `session_id`, isolates access by
+  `ToolContext.agent_id`, scopes cancellation by `ToolContext.run_id`, keeps a
+  capped combined output buffer, caps foreground stdout/stderr capture to the
+  same budget, kills process trees for explicit kill/timeout/cancel operations,
+  and reaps finished sessions after its TTL.
 - Internal `skill` tool: flat name `skill`; schema includes required `name`.
   It loads an allowed skill's `SKILL.md` body, wraps it in `<skill_content>`,
   stores the context in the current Session, and returns only a minimal status
@@ -60,6 +74,19 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 - `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
+- `register_bash_tool(registry, process_manager) -> None` — registers the
+  built-in `bash` tool backed by the shared `ProcessManager`.
+- `register_process_tool(registry, process_manager) -> None` — registers the
+  built-in `process` tool backed by the shared `ProcessManager`.
+- `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
+  a subprocess session for the given Run scope and Agent.
+- `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)` — manages
+  existing process sessions while returning not-found semantics for both missing
+  and cross-agent sessions.
+- `ProcessManager.list_sessions(agent_id) -> list[ProcessSession]` — lists only
+  sessions owned by the calling Agent.
+- `ProcessManager.cancel_scope(scope_key) -> None` — kills all active sessions
+  associated with a Run regardless of Agent owner.
 - `register_skill_tool(registry, skill_registry) -> None` — registers the internal `skill` tool.
 
 ## Conventions
@@ -112,6 +139,22 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   expected path/search errors are failure envelopes.
 - `grep` may use `rg`/ripgrep when available on `PATH`, but must work via the
   Python fallback without requiring ripgrep as a dependency.
+- `bash` resolves relative working directories from `ToolContext.workspace` and
+  accepts absolute working directories unchanged. It uses the platform-native
+  shell (`pwsh` on Windows, `bash -c` elsewhere) and blocks sensitive environment
+  overrides such as `PATH`, loader hooks, and shell startup hooks.
+- `bash` probes a login shell environment once per process and falls back to
+  `os.environ` on failure or timeout. Timed-out probe processes are killed and
+  reaped best-effort before the fallback is returned.
+- `bash` non-zero process exits are successful tool results with an exit code;
+  only spawn failures and tool-enforced timeouts are failure envelopes.
+- `process poll` output is incremental since the previous poll. `process log`
+  returns a line window from the combined capped output buffer.
+- `process poll` includes `waiting_for_input` as a best-effort hint only. Slow
+  commands without output may look idle even when they do not need stdin.
+- Process session identifiers are distinct from chat Session identifiers. Tool
+  and server code should use context (`run_id` and `agent_id`) rather than chat
+  session paths to manage processes.
 
 ## Constraints & Gotchas
 
