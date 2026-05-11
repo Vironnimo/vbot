@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
+from core.automation import TriggerService
+from core.chat import ChatLoop, ChatRunManager
 from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
@@ -101,6 +103,10 @@ class Runtime:
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
+        self._chat_run_manager: ChatRunManager | None = None
+        self.chat_runs: ChatRunManager | None = None
+        self._chat_loop: ChatLoop | None = None
+        self._trigger_service: TriggerService | None = None
         self._system_prompts: SystemPromptManager | None = None
 
     def start(self) -> None:
@@ -161,6 +167,10 @@ class Runtime:
             )
         register_skill_tool(self._tools, self._skills)
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        self._chat_run_manager = ChatRunManager()
+        self.chat_runs = self._chat_run_manager
+        self._chat_loop = ChatLoop(self, streaming=False)
+        self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
         self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(
             self._storage,
@@ -194,6 +204,10 @@ class Runtime:
         self._process_manager = None
         self._skills = None
         self._chat_sessions = None
+        self._trigger_service = None
+        self._chat_loop = None
+        self._chat_run_manager = None
+        self.chat_runs = None
         self._system_prompts = None
 
     def _resolve_resources_path(self) -> Path:
@@ -359,6 +373,22 @@ class Runtime:
         if self._chat_sessions is None:
             raise RuntimeError("Chat session service not available")
         return self._chat_sessions
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        """Access to shared chat run lifecycle management."""
+        self._ensure_started()
+        if self._chat_run_manager is None:
+            raise RuntimeError("Chat run manager service not available")
+        return self._chat_run_manager
+
+    @property
+    def trigger_service(self) -> TriggerService:
+        """Access to programmatic run triggering."""
+        self._ensure_started()
+        if self._trigger_service is None:
+            raise RuntimeError("Trigger service not available")
+        return self._trigger_service
 
     @property
     def system_prompts(self) -> SystemPromptManager:

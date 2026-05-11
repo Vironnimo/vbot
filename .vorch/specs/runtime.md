@@ -27,9 +27,11 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `os.environ`, instantiates the central provider credential resolver (process
   environment takes precedence over the data-dir fallback), copies prompt
   fragments, wires services, starts the `ProcessManager` sweeper when startup
-  happens inside a running asyncio loop, registers built-in tools, and ensures a
-  usable default Agent exists. Writes `Runtime started` at info level. Second
-  call is no-op (debug log) and preserves service instances.
+  happens inside a running asyncio loop, registers built-in tools, creates the
+  shared `ChatRunManager`, creates the non-streaming automation `ChatLoop`, wires
+  `TriggerService`, and ensures a usable default Agent exists. Writes `Runtime
+  started` at info level. Second call is no-op (debug log) and preserves service
+  instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
   `ProcessManager` sweeper, resets started state, and clears service references.
   Safe to call before `start()`.
@@ -46,6 +48,11 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   and Run-scoped cancellation.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
+- `chat_run_manager` — shared `ChatRunManager` used by server chat flows and
+  automation triggers. Runtime also exposes it as `runtime.chat_runs` for server
+  compatibility.
+- `trigger_service` — `TriggerService` for programmatic Run starts and
+  in-memory busy-Session queueing.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
 - `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
 - `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
