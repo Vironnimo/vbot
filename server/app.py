@@ -172,7 +172,11 @@ def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
 
     try:
         run_manager = runtime.chat_run_manager
-    except (AttributeError, RuntimeError):
+    except AttributeError:
+        run_manager = None
+    except RuntimeError:
+        if isinstance(runtime, Runtime):
+            raise
         run_manager = None
     if isinstance(run_manager, ChatRunManager):
         runtime.chat_runs = run_manager
