@@ -204,6 +204,7 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
 - **Skill activation is session-scoped.** Skills may be activated through the internal `skill` tool or deterministic `/skill-name` and `$skill-name` message triggers. Activated `<skill_content>` is persisted as an internal note and restored on later provider requests in the same Session, while normal history/UI responses continue to hide note messages.
+- **Programmatic run triggers queue in memory only.** Automation triggers can start runs without a WebUI send flow; when a target Session already has an active Run, triggers are queued FIFO in memory and are not persisted across process restarts.
 
 ## Specs
 
@@ -221,6 +222,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/tools.md` | `core/tools/` | Tool metadata, allowlist filtering, provider definitions, dispatch |
 | `.vorch/specs/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
 | `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
+| `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
