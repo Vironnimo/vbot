@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
@@ -48,6 +49,15 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
         assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
+
+
+def test_create_app_wires_runtime_owned_chat_runs_for_lazy_stub_runtime(tmp_path: Path) -> None:
+    runtime = _LazyChatRunRuntime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app):
+        assert isinstance(app.state.chat_runs, ChatRunManager)
+        assert runtime.chat_runs is app.state.chat_runs
 
 
 def test_create_app_uses_explicit_server_bind_state(tmp_path: Path) -> None:
@@ -159,3 +169,20 @@ def _write_webui_build(tmp_path: Path) -> Path:
     )
     (assets_dir / "app.js").write_text("console.log('webui');", encoding="utf-8")
     return dist_dir
+
+
+class _LazyChatRunRuntime:
+    def __init__(self, data_dir: Path) -> None:
+        self.chat_runs = None
+        self._chat_run_manager = ChatRunManager()
+        self.storage = type("Storage", (), {"data_dir": data_dir})()
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        return self._chat_run_manager
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
