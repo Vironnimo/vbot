@@ -412,6 +412,7 @@
         value={viewState.selectedFile}
         options={fileOptions}
         placeholder={t('logs.emptyOption', 'No log files')}
+        ariaLabel={t('logs.file', 'File')}
         disabled={!hasFiles ||
           viewState.loadingCatalog ||
           viewState.loadingEntries}
@@ -419,24 +420,6 @@
         listClass="logs-view__dropdown-list"
         onValueChange={handleFileChange}
       />
-      <select
-        class="logs-view__native-shadow"
-        aria-label={t('logs.file', 'File')}
-        value={viewState.selectedFile}
-        disabled={!hasFiles ||
-          viewState.loadingCatalog ||
-          viewState.loadingEntries}
-        tabindex="-1"
-        onchange={(event) => handleFileChange(event.currentTarget.value)}
-      >
-        {#if !hasFiles}
-          <option value="">{t('logs.emptyOption', 'No log files')}</option>
-        {:else}
-          {#each viewState.files as file (file)}
-            <option value={file}>{file}</option>
-          {/each}
-        {/if}
-      </select>
     </label>
 
     <label class="logs-view__field logs-view__field--narrow">
@@ -447,27 +430,12 @@
         id="logs-level-filter"
         value={viewState.levelFilter}
         options={levelDropdownOptions}
+        ariaLabel={t('logs.levelFilter', 'Level')}
         disabled={!hasFiles}
         triggerClass="logs-view__dropdown"
         listClass="logs-view__dropdown-list"
         onValueChange={handleLevelChange}
       />
-      <select
-        class="logs-view__native-shadow"
-        aria-label={t('logs.levelFilter', 'Level')}
-        value={viewState.levelFilter}
-        disabled={!hasFiles}
-        tabindex="-1"
-        onchange={(event) => handleLevelChange(event.currentTarget.value)}
-      >
-        {#each levelOptions as level (level)}
-          <option value={level}>
-            {level === levelOptionValue()
-              ? t('logs.level.all', 'All levels')
-              : levelLabel(level)}
-          </option>
-        {/each}
-      </select>
     </label>
 
     <label class="logs-view__field logs-view__field--narrow">
@@ -476,23 +444,12 @@
         id="logs-sort-order"
         value={viewState.sortOrder}
         options={sortOrderOptions}
+        ariaLabel={t('logs.sort', 'Order')}
         disabled={!hasFiles}
         triggerClass="logs-view__dropdown"
         listClass="logs-view__dropdown-list"
         onValueChange={handleSortChange}
       />
-      <select
-        class="logs-view__native-shadow"
-        aria-label={t('logs.sort', 'Order')}
-        value={viewState.sortOrder}
-        disabled={!hasFiles}
-        tabindex="-1"
-        onchange={(event) => handleSortChange(event.currentTarget.value)}
-      >
-        {#each sortOrderOptions as option (option.value)}
-          <option value={option.value}>{option.label}</option>
-        {/each}
-      </select>
     </label>
 
     <label class="logs-view__field logs-view__field--search">
@@ -746,18 +703,6 @@
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.5;
-  }
-
-  .logs-view__native-shadow {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    opacity: 0;
-    pointer-events: none;
-    inset: auto;
   }
 
   .logs-view__input:focus-visible {
