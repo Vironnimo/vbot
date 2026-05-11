@@ -37,6 +37,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `output_mode`. It searches file contents by regex by default or fixed string
   when `literal: true`. Relative paths resolve from `ToolContext.workspace`;
   absolute file or directory paths are allowed.
+- `ProcessManager` is the in-memory service behind host process execution. It
+  stores process sessions by process `session_id`, isolates access by
+  `ToolContext.agent_id`, scopes cancellation by `ToolContext.run_id`, keeps a
+  capped combined output buffer, and reaps finished sessions after its TTL.
 - Internal `skill` tool: flat name `skill`; schema includes required `name`.
   It loads an allowed skill's `SKILL.md` body, wraps it in `<skill_content>`,
   stores the context in the current Session, and returns only a minimal status
@@ -60,6 +64,15 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 - `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
+- `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
+  a subprocess session for the given Run scope and Agent.
+- `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)` — manages
+  existing process sessions while returning not-found semantics for both missing
+  and cross-agent sessions.
+- `ProcessManager.list_sessions(agent_id) -> list[ProcessSession]` — lists only
+  sessions owned by the calling Agent.
+- `ProcessManager.cancel_scope(scope_key) -> None` — kills all active sessions
+  associated with a Run regardless of Agent owner.
 - `register_skill_tool(registry, skill_registry) -> None` — registers the internal `skill` tool.
 
 ## Conventions
@@ -112,6 +125,9 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   expected path/search errors are failure envelopes.
 - `grep` may use `rg`/ripgrep when available on `PATH`, but must work via the
   Python fallback without requiring ripgrep as a dependency.
+- Process session identifiers are distinct from chat Session identifiers. Tool
+  and server code should use context (`run_id` and `agent_id`) rather than chat
+  session paths to manage processes.
 
 ## Constraints & Gotchas
 
