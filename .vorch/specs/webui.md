@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Sub-Agents, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -95,8 +95,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
     shows one global model database refresh control. It calls `model.refresh_db`
     without `provider_id` and then re-requests `model.list` after success.
   - Normalizes skill directory settings from `settings.skills.directories` and builds update payloads for `settings.update`.
+  - Normalizes Sub-Agent settings from `settings.subagents` and builds update payloads for `settings.update`.
 - `webui/src/components/SettingsView.svelte`
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
+  - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
+- `webui/src/components/ChatTimeline.svelte`
+  - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
 - `webui/src/components/LogsView.svelte`
   - Loads the daily logs catalog on mount, selects the newest file by default,
     reads one file at a time through `log.read`, applies local level/search/sort
