@@ -1607,8 +1607,7 @@
     height: 34px;
   }
 
-  .agents-view__field-help,
-  .agents-view__field-hint {
+  .agents-view__field-help {
     color: var(--text-lo);
     font-size: 12px;
     line-height: 1.4;

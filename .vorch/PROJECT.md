@@ -68,10 +68,12 @@ backoff + jitter. Provider errors classified as `retryable` vs `fatal`. No silen
 All application logs go through that pipeline and use per-module
 `vbot.<domain>` loggers. Required format: `timestamp [LEVEL] name - message`.
 Logs live under `<data_dir>/logs/`; `LogManager` handles the file layout. No
-`print()`, no `logging.basicConfig()`, and no ad-hoc formatting. Routine
-`/ws/logs` websocket lifecycle noise (`connection open`, `connection closed`,
-and accepted-handshake lines) is filtered out of normal INFO logs; transport
-errors must still remain visible.
+`print()`, no `logging.basicConfig()`, and no ad-hoc formatting. Routine `/ws`
+and `/ws/logs` websocket lifecycle noise (`connection open`, `connection
+closed`, and accepted-handshake lines) is filtered out of normal INFO logs;
+transport errors must still remain visible. The Logs viewer also filters that
+same routine websocket noise at read/stream time so older matching rows
+already on disk do not remain visible in the Logs tab.
 
 **Naming:** Descriptive, no abbreviations (except `id`, `url`, `db`). One thing
 per function, max 3 nesting levels.

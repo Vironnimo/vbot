@@ -13,6 +13,11 @@ from uuid import uuid4
 
 from watchfiles import awatch
 
+from core.utils.logging import (
+    extract_websocket_path_from_message,
+    is_routine_websocket_lifecycle_message,
+)
+
 JsonObject = dict[str, Any]
 
 APPEND_EVENT = "append"
@@ -66,7 +71,8 @@ def parse_log_entries(text: str) -> list[JsonObject]:
                 "message": match.group("message"),
                 "continuation": "",
             }
-            entries.append(current_entry)
+            if _should_include_entry(current_entry):
+                entries.append(current_entry)
             continue
 
         if current_entry is None:
@@ -86,6 +92,16 @@ def parse_log_entries(text: str) -> list[JsonObject]:
         )
 
     return entries
+
+
+def _should_include_entry(entry: JsonObject) -> bool:
+    message = str(entry["message"])
+    return not is_routine_websocket_lifecycle_message(
+        level=str(entry["level"]).upper(),
+        logger_name=str(entry["logger_name"]),
+        message=message,
+        websocket_path=extract_websocket_path_from_message(message),
+    )
 
 
 def _append_continuation(existing: str, line: str) -> str:
