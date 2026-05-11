@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
+from core.chat import ChatLoop, RunNotFoundError
 from core.runtime import Runtime
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
@@ -95,7 +95,6 @@ def create_app(
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
-    _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -157,13 +156,12 @@ def _initialize_app_state(
     app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
 ) -> None:
     app.state.runtime = runtime
-    app.state.chat_runs = ChatRunManager()
+    app.state.chat_runs = runtime.chat_runs
     app.state.chat_loop = ChatLoop(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
-    _attach_run_manager(runtime, app.state.chat_runs)
 
 
 def _resolve_server_bind(
@@ -282,10 +280,6 @@ def _mount_webui(app: FastAPIType) -> None:
         if requested_file is not None:
             return FileResponse(requested_file)
         return FileResponse(webui_index_file)
-
-
-def _attach_run_manager(runtime: Any, run_manager: ChatRunManager) -> None:
-    runtime.chat_runs = run_manager
 
 
 async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
