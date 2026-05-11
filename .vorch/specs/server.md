@@ -119,6 +119,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - SSE is the primary per-Run output stream and should remain event-level and
   provider-agnostic.
 - Routine uvicorn access logging is suppressed by default.
+- Routine `websockets.server` lifecycle noise for the dedicated `/ws/logs`
+  socket is also suppressed from normal INFO logs. Transport errors still flow
+  through the managed `vbot.server.uvicorn` logger.
 - Public history, Run, SSE, and WebSocket payloads must strip opaque provider
   metadata such as `reasoning_meta` recursively.
 - Public history payloads must not include `role: "note"` messages; notes are
