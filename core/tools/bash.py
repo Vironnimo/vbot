@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import signal
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -56,6 +59,8 @@ BLOCKED_ENV_KEYS = {"PATH", "LD_PRELOAD", "BASH_ENV", "DYLD_INSERT_LIBRARIES"}
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
 FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
+SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
+HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 
 _cached_shell_env: dict[str, str] | None = None
 
@@ -253,11 +258,10 @@ async def _probe_shell_env() -> dict[str, str]:
                 'Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }',
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=_probe_creationflags(),
+                start_new_session=_probe_start_new_session(),
             )
-            stdout, _stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=SHELL_ENV_PROBE_TIMEOUT_SECONDS,
-            )
+            stdout = await _communicate_with_probe_timeout(proc)
             if proc.returncode != 0:
                 return os.environ.copy()
             return _parse_line_env(stdout.decode("utf-8", errors="replace"))
@@ -269,16 +273,70 @@ async def _probe_shell_env() -> dict[str, str]:
             "env -0",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=_probe_creationflags(),
+            start_new_session=_probe_start_new_session(),
         )
-        stdout, _stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=SHELL_ENV_PROBE_TIMEOUT_SECONDS,
-        )
+        stdout = await _communicate_with_probe_timeout(proc)
         if proc.returncode != 0:
             return os.environ.copy()
         return _parse_null_env(stdout.decode("utf-8", errors="replace"))
     except (OSError, TimeoutError):
         return os.environ.copy()
+
+
+def _probe_creationflags() -> int:
+    if sys.platform == "win32":
+        return subprocess.CREATE_NEW_PROCESS_GROUP
+    return 0
+
+
+def _probe_start_new_session() -> bool:
+    return sys.platform != "win32"
+
+
+async def _communicate_with_probe_timeout(proc: asyncio.subprocess.Process) -> bytes:
+    try:
+        stdout, _stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=SHELL_ENV_PROBE_TIMEOUT_SECONDS,
+        )
+        return stdout
+    except TimeoutError:
+        await _terminate_probe_process(proc)
+        raise
+
+
+async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
+    try:
+        if sys.platform == "win32":
+            try:
+                completed = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+                taskkill_succeeded = completed.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                taskkill_succeeded = False
+
+            if not taskkill_succeeded:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+        else:
+            os.killpg(proc.pid, HARD_KILL_SIGNAL)
+    except (OSError, ProcessLookupError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+    try:
+        await asyncio.wait_for(
+            proc.communicate(),
+            timeout=SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS,
+        )
+    except (ProcessLookupError, RuntimeError, TimeoutError):
+        return
 
 
 def _parse_line_env(output: str) -> dict[str, str]:
