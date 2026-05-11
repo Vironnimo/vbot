@@ -130,8 +130,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - The Logs tab should pass the most recent `log.read` cursor into
   `subscribeLogEvents(...)` whenever it opens or reopens the dedicated log
   socket.
-- The UI selects Agents, not Sessions. The shown chat is the selected Agent's
-  `current_session_id`; old Sessions are not listed in Phase 4.
+- The UI normally selects Agents, not Sessions. The shown chat is the selected
+  Agent's `current_session_id`; old Sessions are not listed. Sub-agent session
+  links are the targeted exception: they load an explicit Session ID as a
+  transient read-only override and clear the override when the user returns to
+  normal chat actions.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
 - Streaming output is accessor-local/in-memory. `streamingItems` preserves the

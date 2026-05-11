@@ -88,36 +88,58 @@ describe('ChatView', () => {
       document.body.querySelector('.token-badge')?.textContent?.trim(),
     ).toBe(expectedBadge);
   });
+
+  it('loads a sub-agent session override and shows it as read-only', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Sub-agent response'),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'sub-session-1',
+    });
+    expect(document.body.textContent).toContain('Viewing a sub-agent session');
+    expect(document.querySelector('textarea')?.disabled).toBe(true);
+  });
 });
 
 function createChatRpcMock({ usage, contextWindow = 262144 } = {}) {
   return async (method, params) => {
     if (method === 'agent.list') {
-      return {
-        agents: [
-          {
-            id: 'alpha',
-            name: 'Alpha',
-            model: 'openrouter/anthropic/claude-sonnet-4',
-            fallback_model: '',
-            connection: 'openrouter:api-key',
-            fallback_connection: '',
-            workspace: 'C:/agents/alpha',
-            temperature: '',
-            thinking_effort: '',
-            allowed_tools: ['*'],
-            allowed_skills: ['*'],
-            current_session_id: 'session-1',
-            context_window: contextWindow,
-            created_at: '2026-05-09T00:00:00+00:00',
-            updated_at: '2026-05-09T00:00:00+00:00',
-          },
-        ],
-      };
+      return { agents: [createAgent({ context_window: contextWindow })] };
     }
 
     if (method === 'chat.history') {
-      expect(params).toEqual({ agent_id: 'alpha' });
+      if (params.session_id === 'sub-session-1') {
+        return {
+          session_id: 'sub-session-1',
+          messages: [
+            {
+              id: 'sub-assistant-one',
+              role: 'assistant',
+              content: 'Sub-agent response',
+            },
+          ],
+        };
+      }
+
+      expect(params).toEqual({ agent_id: 'alpha', session_id: 'session-1' });
       return {
         session_id: 'session-1',
         messages: [
@@ -146,6 +168,27 @@ function createChatRpcMock({ usage, contextWindow = 262144 } = {}) {
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
+function createAgent(overrides = {}) {
+  return {
+    id: 'alpha',
+    name: 'Alpha',
+    model: 'openrouter/anthropic/claude-sonnet-4',
+    fallback_model: '',
+    connection: 'openrouter:api-key',
+    fallback_connection: '',
+    workspace: 'C:/agents/alpha',
+    temperature: '',
+    thinking_effort: '',
+    allowed_tools: ['*'],
+    allowed_skills: ['*'],
+    current_session_id: 'session-1',
+    context_window: 262144,
+    created_at: '2026-05-09T00:00:00+00:00',
+    updated_at: '2026-05-09T00:00:00+00:00',
+    ...overrides,
   };
 }
 

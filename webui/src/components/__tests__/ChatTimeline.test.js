@@ -1723,6 +1723,73 @@ describe('ChatTimeline', () => {
     expect(chevron.getAttribute('height')).toBe('10');
     expect(chevron.style.transform).toBe('rotate(180deg)');
   });
+
+  it('calls the sub-agent navigation callback with a spawned session target', () => {
+    const onNavigateToSubAgent = vi.fn();
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-link',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-link',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            content: 'Inspect the logs',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-link',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            status: 'running',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        onNavigateToSubAgent,
+      },
+    });
+    flushSync();
+
+    const viewSessionButton = document.querySelector('.subagent-link');
+    expect(viewSessionButton).toBeTruthy();
+
+    viewSessionButton.click();
+    flushSync();
+
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'beta',
+      sessionId: 'sub-session-1',
+    });
+  });
 });
 
 function reportedMultiStepMessages() {
