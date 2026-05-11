@@ -11,6 +11,7 @@ import {
   filterLogEntries,
   levelOptionValue,
   mergeLogStreamEvent,
+  normalizeLevelFilter,
   replaceLogEntries,
   selectLogFile,
   setLevelFilter,
@@ -85,6 +86,29 @@ describe('logsView helpers', () => {
     expect(state.entries.map((item) => item.message)).toEqual(['Reset']);
   });
 
+  it('normalizes the level filter when loaded entries no longer include it', () => {
+    const state = createLogsViewState();
+
+    setLevelFilter(state, 'warn');
+
+    replaceLogEntries(state, {
+      file: '2026-05-11',
+      entries: [entry({ level: 'info', message: 'Ready' })],
+    });
+
+    expect(state.levelFilter).toBe('all');
+
+    setLevelFilter(state, 'error');
+
+    mergeLogStreamEvent(state, {
+      type: 'reset',
+      file: '2026-05-11',
+      entries: [entry({ level: 'warn', message: 'Retry soon' })],
+    });
+
+    expect(state.levelFilter).toBe('all');
+  });
+
   it('ignores stream events for a different file', () => {
     const state = createLogsViewState();
     replaceLogEntries(state, {
@@ -150,6 +174,16 @@ describe('logsView helpers', () => {
     ];
 
     expect(deriveLevelOptions(entries)).toEqual(['all', 'error', 'warn']);
+  });
+
+  it('keeps the current level filter when it remains valid', () => {
+    const state = createLogsViewState();
+    state.entries = [entry({ level: 'info' }), entry({ level: 'warn' })];
+
+    setLevelFilter(state, 'warn');
+
+    expect(normalizeLevelFilter(state)).toBe('warn');
+    expect(state.levelFilter).toBe('warn');
   });
 
   it('searches timestamp, level, logger, message, and continuation text', () => {
