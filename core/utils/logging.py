@@ -15,7 +15,10 @@ from pathlib import Path
 
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
+APP_WEBSOCKET_PATH = "/ws"
 LOGS_WEBSOCKET_PATH = "/ws/logs"
+ROUTINE_WEBSOCKET_PATHS = frozenset({APP_WEBSOCKET_PATH, LOGS_WEBSOCKET_PATH})
+ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES = frozenset({"connection open", "connection closed"})
 
 
 def _normalize_websocket_path(path: object) -> str | None:
@@ -48,23 +51,23 @@ def _extract_websocket_path(record: logging.LogRecord) -> str | None:
 
 
 def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
-    """Return whether *record* is routine `/ws/logs` lifecycle noise."""
+    """Return whether *record* is routine `/ws` or `/ws/logs` lifecycle noise."""
 
     if record.levelno != logging.INFO:
         return False
 
-    if _extract_websocket_path(record) != LOGS_WEBSOCKET_PATH:
+    if _extract_websocket_path(record) not in ROUTINE_WEBSOCKET_PATHS:
         return False
 
     message = record.getMessage()
-    if message in {"connection open", "connection closed"}:
+    if message in ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES:
         return True
 
     return '"WebSocket ' in message and "[accepted]" in message
 
 
 class QuietLogsWebSocketLifecycleFilter(logging.Filter):
-    """Suppress routine INFO lifecycle records for the dedicated log socket."""
+    """Suppress routine INFO lifecycle records for managed websocket paths."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         return not is_logs_websocket_lifecycle_record(record)
