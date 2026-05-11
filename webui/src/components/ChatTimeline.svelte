@@ -5,7 +5,11 @@
 
   import { visibleTimelineItems } from '../lib/chatState.js';
 
-  let { sessionState, agentName = '' } = $props();
+  let {
+    sessionState,
+    agentName = '',
+    onNavigateToSubAgent = () => {},
+  } = $props();
 
   function isNearBottom(container) {
     return (
@@ -258,8 +262,12 @@
     bash: ['command'],
     glob: ['pattern'],
     grep: ['pattern', 'path'],
+    subagent: ['agent_id', 'content'],
+    subagent_result: ['agent_id', 'session_id'],
   };
   const MAX_TOOL_LABEL_LENGTH = 80;
+  const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
+  const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
   const TOOL_ERROR_DETAIL_KEYS = [
     'error',
     'message',
@@ -289,6 +297,10 @@
 
     if (toolName === 'grep') {
       return searchToolLabel(args, true) ?? formatJson(argumentsValue);
+    }
+
+    if (SUBAGENT_TOOL_NAMES.has(toolName)) {
+      return subAgentToolLabel(toolName, args) ?? formatJson(argumentsValue);
     }
 
     if (
@@ -348,6 +360,104 @@
       argumentsValue,
     );
     return label ? `(${label})` : '';
+  };
+
+  const isSubAgentTool = (tool) =>
+    SUBAGENT_TOOL_NAMES.has(toolNameForRunTool(tool));
+
+  const subAgentArguments = (tool) => {
+    const parsedArguments = parseJsonValue(toolArguments(tool));
+    return isPlainObject(parsedArguments) ? parsedArguments : {};
+  };
+
+  const subAgentResultEnvelope = (tool) => {
+    const parsedResult = parseJsonValue(tool.result);
+    return isPlainObject(parsedResult) ? parsedResult : {};
+  };
+
+  const subAgentResultData = (tool) => {
+    const resultEnvelope = subAgentResultEnvelope(tool);
+    if (isPlainObject(resultEnvelope.data)) {
+      return resultEnvelope.data;
+    }
+    return resultEnvelope;
+  };
+
+  const subAgentAgentId = (tool) => {
+    const args = subAgentArguments(tool);
+    const data = subAgentResultData(tool);
+    return (
+      trimmedString(args.agent_id) ||
+      trimmedString(data.agent_id) ||
+      t('common.unknown', 'Unknown')
+    );
+  };
+
+  const subAgentPreview = (tool) => {
+    const args = subAgentArguments(tool);
+    const toolName = toolNameForRunTool(tool);
+    if (toolName === 'subagent') {
+      return truncateToolLabel(
+        trimmedString(args.content),
+        MAX_SUBAGENT_PREVIEW_LENGTH,
+      );
+    }
+    return truncateToolLabel(
+      trimmedString(args.session_id),
+      MAX_SUBAGENT_PREVIEW_LENGTH,
+    );
+  };
+
+  const subAgentToolLabel = (toolName, args) => {
+    const agentId = trimmedString(args.agent_id);
+    const preview =
+      toolName === 'subagent'
+        ? truncateToolLabel(
+            trimmedString(args.content),
+            MAX_SUBAGENT_PREVIEW_LENGTH,
+          )
+        : truncateToolLabel(
+            trimmedString(args.session_id),
+            MAX_SUBAGENT_PREVIEW_LENGTH,
+          );
+    return [agentId, preview].filter(Boolean).join(' · ');
+  };
+
+  const subAgentStatusLabel = (tool) => {
+    if (toolStatus(tool) === 'running') {
+      return t('chat.subagent.running', 'running');
+    }
+
+    const data = subAgentResultData(tool);
+    const status = trimmedString(data.status) || toolStatus(tool);
+    return t('chat.subagent.resultStatus', 'Status: {status}', { status });
+  };
+
+  const subAgentNavigationTarget = (tool) => {
+    const data = subAgentResultData(tool);
+    const agentId = trimmedString(data.agent_id);
+    const sessionId = trimmedString(data.session_id);
+    if (!agentId || !sessionId) {
+      return null;
+    }
+    return { agentId, sessionId };
+  };
+
+  const handleSubAgentNavigate = (event, tool) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const target = subAgentNavigationTarget(tool);
+    if (target) {
+      onNavigateToSubAgent(target);
+    }
+  };
+
+  const truncateToolLabel = (value, maxLength) => {
+    if (!value || value.length <= maxLength) {
+      return value;
+    }
+    return `${value.slice(0, maxLength - 1)}…`;
   };
 
   const isPlainObject = (value) =>
@@ -841,33 +951,90 @@
                     <div class="reasoning-body">{child.content}</div>
                   </details>
                 {:else if child.type === 'tool_call'}
-                  <details class="tool-event run-tool-event">
-                    <summary class="tool-event-line">
-                      <span
-                        class:done={toolStatus(child) === 'success'}
-                        class:error={toolStatus(child) === 'failed'}
-                        class:running={toolStatus(child) === 'running'}
-                        class="te-dot">●</span
-                      >
-                      <span class="te-fn">{toolNameForRunTool(child)}</span>
-                      {#if toolArgumentSummary(child)}
-                        <span class="te-arg">{toolArgumentSummary(child)}</span>
-                      {/if}
-                    </summary>
-                    <div class="tool-event-body">
-                      {@render toolDetailSection(
-                        t('chat.toolArgs', 'Args'),
-                        toolArguments(child),
-                      )}
-                      {@render toolDetailSection(
-                        t('chat.toolResultLabel', 'Result'),
-                        child.result,
-                        toolStatus(child) === 'failed',
-                        true,
-                        toolNameForRunTool(child),
-                      )}
-                    </div>
-                  </details>
+                  {#if isSubAgentTool(child)}
+                    <details
+                      class="tool-event run-tool-event subagent-tool-event"
+                      open={toolStatus(child) === 'running'}
+                    >
+                      <summary class="tool-event-line subagent-line">
+                        <span
+                          class:done={toolStatus(child) === 'success'}
+                          class:error={toolStatus(child) === 'failed'}
+                          class:running={toolStatus(child) === 'running'}
+                          class="te-dot">●</span
+                        >
+                        <span class="te-fn">
+                          {t('chat.subagent.label', 'Sub-agent')}
+                        </span>
+                        <span class="subagent-agent">
+                          {t('agents.form.id', 'Agent ID')}: {subAgentAgentId(
+                            child,
+                          )}
+                        </span>
+                        {#if subAgentPreview(child)}
+                          <span class="te-arg subagent-preview">
+                            {subAgentPreview(child)}
+                          </span>
+                        {/if}
+                        <span class="te-time subagent-status">
+                          {subAgentStatusLabel(child)}
+                        </span>
+                        {#if subAgentNavigationTarget(child)}
+                          <button
+                            type="button"
+                            class="subagent-link"
+                            onclick={(event) =>
+                              handleSubAgentNavigate(event, child)}
+                          >
+                            {t('chat.subagent.viewSession', 'view session')}
+                          </button>
+                        {/if}
+                      </summary>
+                      <div class="tool-event-body">
+                        {@render toolDetailSection(
+                          t('chat.toolArgs', 'Args'),
+                          toolArguments(child),
+                        )}
+                        {@render toolDetailSection(
+                          t('chat.toolResultLabel', 'Result'),
+                          child.result,
+                          toolStatus(child) === 'failed',
+                          true,
+                          toolNameForRunTool(child),
+                        )}
+                      </div>
+                    </details>
+                  {:else}
+                    <details class="tool-event run-tool-event">
+                      <summary class="tool-event-line">
+                        <span
+                          class:done={toolStatus(child) === 'success'}
+                          class:error={toolStatus(child) === 'failed'}
+                          class:running={toolStatus(child) === 'running'}
+                          class="te-dot">●</span
+                        >
+                        <span class="te-fn">{toolNameForRunTool(child)}</span>
+                        {#if toolArgumentSummary(child)}
+                          <span class="te-arg"
+                            >{toolArgumentSummary(child)}</span
+                          >
+                        {/if}
+                      </summary>
+                      <div class="tool-event-body">
+                        {@render toolDetailSection(
+                          t('chat.toolArgs', 'Args'),
+                          toolArguments(child),
+                        )}
+                        {@render toolDetailSection(
+                          t('chat.toolResultLabel', 'Result'),
+                          child.result,
+                          toolStatus(child) === 'failed',
+                          true,
+                          toolNameForRunTool(child),
+                        )}
+                      </div>
+                    </details>
+                  {/if}
                 {:else if child.type === 'assistant_output'}
                   <p
                     class="msg-body-text"
@@ -1176,6 +1343,53 @@
 
   .streaming-tool-event .te-time {
     color: var(--amber);
+  }
+
+  .subagent-tool-event .tool-event-line {
+    align-items: center;
+  }
+
+  .subagent-agent {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+
+  .subagent-preview {
+    max-width: min(34rem, 42vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subagent-status {
+    color: var(--text-lo);
+  }
+
+  .subagent-tool-event .te-dot.running + .te-fn ~ .subagent-status {
+    color: var(--amber);
+  }
+
+  .subagent-link {
+    border: 0;
+    border-bottom: 1px solid rgba(232, 135, 10, 0.32);
+    padding: 0;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+
+  .subagent-link:hover {
+    border-bottom-color: var(--accent);
+    color: var(--text-hi);
+  }
+
+  .subagent-link:focus-visible {
+    border-radius: 3px;
+    outline: 1px solid rgba(232, 135, 10, 0.4);
+    outline-offset: 3px;
   }
 
   .streaming-caret {

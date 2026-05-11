@@ -67,6 +67,7 @@
   let agentsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
+  let pendingSubAgentNavigation = $state(null);
 
   const selectView = (viewId) => {
     activeViewId = viewId;
@@ -89,6 +90,25 @@
   const selectAgent = (agentOrId) => {
     selectedAgentId =
       typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
+  };
+
+  const navigateToSubAgent = (targetOrAgentId, maybeSessionId) => {
+    const agentId =
+      typeof targetOrAgentId === 'string'
+        ? targetOrAgentId
+        : (targetOrAgentId?.agentId ?? '');
+    const sessionId =
+      typeof targetOrAgentId === 'string'
+        ? maybeSessionId
+        : targetOrAgentId?.sessionId;
+
+    if (!agentId || !sessionId) {
+      return;
+    }
+
+    selectView('chat');
+    selectAgent(agentId);
+    pendingSubAgentNavigation = { agentId, sessionId };
   };
 
   const refreshAgents = (nextAgents = []) => {
@@ -137,6 +157,8 @@
       {agentsRefreshToken}
       onAgentsChanged={syncAgents}
       onAgentSelected={selectAgent}
+      {navigateToSubAgent}
+      {pendingSubAgentNavigation}
     />
   {:else if activeViewId === 'agents'}
     <AgentsView

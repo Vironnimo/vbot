@@ -343,6 +343,7 @@ class StubStorage:
         self.prompts_dir = tmp_path / "prompts"
         self._appearance = {"language": "en"}
         self._skill_directories: list[str] = []
+        self._settings: JsonObject = {}
         self._prompt_fragments: dict[str, str] = {
             "system.md": "# System\nDefault system prompt.",
             "runtime.md": "# Runtime\nDefault runtime info.",
@@ -378,6 +379,19 @@ class StubStorage:
             raise StorageError("settings.skill_directories must be a list")
         self._skill_directories = list(directories)
         return list(self._skill_directories)
+
+    def load_subagent_settings(self) -> JsonObject:
+        return {
+            "max_subagent_depth": int(self._settings.get("max_subagent_depth", 4)),
+            "max_subagents_per_turn": int(self._settings.get("max_subagents_per_turn", 8)),
+            "subagent_timeout_minutes": int(self._settings.get("subagent_timeout_minutes", 60)),
+        }
+
+    def load_settings(self) -> JsonObject:
+        return dict(self._settings)
+
+    def save_settings(self, settings: JsonObject) -> None:
+        self._settings = dict(settings)
 
     def read_prompt_fragment(self, name: str) -> str:
         if name not in self._prompt_fragments:
@@ -694,6 +708,11 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "directories": [],
         },
         "appearance": {"language": "en", "available_languages": ["en"]},
+        "subagents": {
+            "max_subagent_depth": 4,
+            "max_subagents_per_turn": 8,
+            "subagent_timeout_minutes": 60,
+        },
     }
     assert "sk-live-secret" not in str(response)
     assert "show_token_counts" not in str(response)
@@ -1467,6 +1486,39 @@ async def test_settings_update_persists_skill_directories_and_returns_full_paylo
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_subagent_settings_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "subagents": {
+                    "max_subagent_depth": 6,
+                    "max_subagents_per_turn": 12,
+                    "subagent_timeout_minutes": 90,
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_settings() == {
+        "max_subagent_depth": 6,
+        "max_subagents_per_turn": 12,
+        "subagent_timeout_minutes": 90,
+    }
+    assert response["result"]["subagents"] == {
+        "max_subagent_depth": 6,
+        "max_subagents_per_turn": 12,
+        "subagent_timeout_minutes": 90,
+    }
+
+
+@pytest.mark.asyncio
 async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
     tmp_path: Path,
 ) -> None:
@@ -1513,6 +1565,36 @@ async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
         {"skills": {"extra": []}},
         {"skills": {"directories": "~/skills"}},
         {"skills": {"directories": [1]}},
+        {"subagents": []},
+        {"subagents": {}},
+        {"subagents": {"extra": 1}},
+        {
+            "subagents": {
+                "max_subagent_depth": 0,
+                "max_subagents_per_turn": 8,
+                "subagent_timeout_minutes": 60,
+            }
+        },
+        {
+            "subagents": {
+                "max_subagent_depth": True,
+                "max_subagents_per_turn": 8,
+                "subagent_timeout_minutes": 60,
+            }
+        },
+        {
+            "subagents": {
+                "max_subagent_depth": 4,
+                "max_subagents_per_turn": "8",
+                "subagent_timeout_minutes": 60,
+            }
+        },
+        {
+            "subagents": {
+                "max_subagent_depth": 4,
+                "max_subagents_per_turn": 8,
+            }
+        },
     ],
 )
 async def test_settings_update_rejects_unsupported_sections_and_fields(

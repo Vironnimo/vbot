@@ -17,10 +17,21 @@ from core.runtime.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools.process_manager import ProcessManager
+from core.tools.subagent import SubAgentBatchTracker
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 
-CANONICAL_BUILTIN_TOOLS = ["bash", "edit", "glob", "grep", "process", "read", "write"]
+CANONICAL_BUILTIN_TOOLS = [
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "process",
+    "read",
+    "subagent",
+    "subagent_result",
+    "write",
+]
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
 
 
@@ -293,6 +304,18 @@ def test_runtime_registers_bash_and_process_tools(config: Config) -> None:
 
     assert runtime.tools.get("bash").name == "bash"
     assert runtime.tools.get("process").name == "process"
+
+
+def test_runtime_registers_subagent_tools(config: Config) -> None:
+    """Runtime.start() registers sub-agent tools and owns their batch tracker."""
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime._subagent_batch_tracker, SubAgentBatchTracker)  # noqa: SLF001
+    assert runtime.tools.get("subagent").name == "subagent"
+    assert runtime.tools.get("subagent_result").name == "subagent_result"
 
 
 @pytest.mark.asyncio

@@ -57,6 +57,7 @@ class ToolContext:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
+    nesting_depth: int = 0
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
@@ -114,6 +115,7 @@ class ToolExecutionConfig:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
+    nesting_depth: int = 0
 
 
 @dataclass(frozen=True)
@@ -387,6 +389,7 @@ class ToolExecutor:
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
                 allowed_skills=config.allowed_skills,
+                nesting_depth=config.nesting_depth,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
 
