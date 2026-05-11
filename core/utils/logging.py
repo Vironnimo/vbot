@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -19,12 +20,58 @@ APP_WEBSOCKET_PATH = "/ws"
 LOGS_WEBSOCKET_PATH = "/ws/logs"
 ROUTINE_WEBSOCKET_PATHS = frozenset({APP_WEBSOCKET_PATH, LOGS_WEBSOCKET_PATH})
 ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES = frozenset({"connection open", "connection closed"})
+UVICORN_WEBSOCKET_LOGGER_NAMES = frozenset({"uvicorn.error", "vbot.server.uvicorn"})
+WEBSOCKET_ACCEPTED_MESSAGE_PATTERN = re.compile(
+    r'"WebSocket (?P<path>/[^"\s]*)[^\"]*" \[accepted\]'
+)
 
 
 def _normalize_websocket_path(path: object) -> str | None:
     if not isinstance(path, str) or not path:
         return None
     return path.split("?", 1)[0]
+
+
+def extract_websocket_path_from_message(message: object) -> str | None:
+    if not isinstance(message, str) or not message:
+        return None
+
+    message_match = WEBSOCKET_ACCEPTED_MESSAGE_PATTERN.search(message)
+    if message_match is None:
+        return None
+    return _normalize_websocket_path(message_match.group("path"))
+
+
+def is_routine_websocket_lifecycle_message(
+    *,
+    level: int | str,
+    logger_name: str,
+    message: str,
+    websocket_path: str | None = None,
+) -> bool:
+    """Return whether a log message is routine `/ws` or `/ws/logs` noise."""
+
+    normalized_level = (
+        level if isinstance(level, int) else logging.getLevelNamesMapping().get(level.upper())
+    )
+    if normalized_level != logging.INFO:
+        return False
+
+    normalized_path = _normalize_websocket_path(websocket_path)
+    if normalized_path is None:
+        normalized_path = extract_websocket_path_from_message(message)
+
+    if message in ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES:
+        return (
+            normalized_path in ROUTINE_WEBSOCKET_PATHS
+            or logger_name in UVICORN_WEBSOCKET_LOGGER_NAMES
+        )
+
+    return (
+        normalized_path in ROUTINE_WEBSOCKET_PATHS
+        and '"WebSocket ' in message
+        and "[accepted]" in message
+    )
 
 
 def _extract_websocket_path(record: logging.LogRecord) -> str | None:
@@ -47,23 +94,18 @@ def _extract_websocket_path(record: logging.LogRecord) -> str | None:
         if candidate_path is not None and candidate_path.startswith("/"):
             return candidate_path
 
-    return None
+    return extract_websocket_path_from_message(record.getMessage())
 
 
 def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
     """Return whether *record* is routine `/ws` or `/ws/logs` lifecycle noise."""
 
-    if record.levelno != logging.INFO:
-        return False
-
-    if _extract_websocket_path(record) not in ROUTINE_WEBSOCKET_PATHS:
-        return False
-
-    message = record.getMessage()
-    if message in ROUTINE_WEBSOCKET_LIFECYCLE_MESSAGES:
-        return True
-
-    return '"WebSocket ' in message and "[accepted]" in message
+    return is_routine_websocket_lifecycle_message(
+        level=record.levelno,
+        logger_name=record.name,
+        message=record.getMessage(),
+        websocket_path=_extract_websocket_path(record),
+    )
 
 
 class QuietLogsWebSocketLifecycleFilter(logging.Filter):

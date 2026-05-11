@@ -10,6 +10,7 @@ from core.utils.logging import (
     LogManager,
     QuietLogsWebSocketLifecycleFilter,
     is_logs_websocket_lifecycle_record,
+    is_routine_websocket_lifecycle_message,
 )
 
 
@@ -167,6 +168,58 @@ def test_logs_websocket_lifecycle_filter_suppresses_accepted_handshake_info_for_
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
 
 
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_open_without_path() -> None:
+    record = make_websocket_record(message="connection open")
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_closed_without_path() -> (
+    None
+):
+    record = make_websocket_record(message="connection closed")
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_accepted_handshake_without_args() -> (
+    None
+):
+    record = make_websocket_record(message='127.0.0.1:55090 - "WebSocket /ws" [accepted]')
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_routine_websocket_lifecycle_matcher_suppresses_persisted_app_socket_accept_message() -> (
+    None
+):
+    assert (
+        is_routine_websocket_lifecycle_message(
+            level="INFO",
+            logger_name="vbot.server.uvicorn",
+            message='127.0.0.1:55090 - "WebSocket /ws" [accepted]',
+        )
+        is True
+    )
+
+
+def test_routine_websocket_lifecycle_matcher_keeps_persisted_log_socket_error_message() -> None:
+    assert (
+        is_routine_websocket_lifecycle_message(
+            level="ERROR",
+            logger_name="vbot.server.uvicorn",
+            message='127.0.0.1:60756 - "WebSocket /ws/logs?cursor=abc" handshake failed',
+        )
+        is False
+    )
+
+
 def test_logs_websocket_lifecycle_filter_keeps_debug_diagnostics_for_log_stream() -> None:
     record = make_websocket_record(level=logging.DEBUG, message="connection open", path="/ws/logs")
 
@@ -204,6 +257,14 @@ def test_logs_websocket_lifecycle_filter_keeps_other_websocket_path_info() -> No
         message='%s - "WebSocket %s" [accepted]',
         args=("127.0.0.1", "/ws/other"),
     )
+
+    assert is_logs_websocket_lifecycle_record(record) is False
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
+
+
+def test_logs_websocket_lifecycle_filter_keeps_non_websocket_connection_open_info() -> None:
+    record = make_websocket_record(message="connection open")
+    record.name = "some.other.logger"
 
     assert is_logs_websocket_lifecycle_record(record) is False
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
