@@ -381,15 +381,20 @@ Three semantic colors, pill shape (12px border-radius), mono font 11.5px:
 ### Log viewer
 
 - The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`,
-  mono text) for file selection, level filtering, and search.
+  mono text) for file selection, level filtering, sort order, and search. Use the
+  shared **simple** dropdown style for the file, level, and order controls.
 - Live connection state uses a pill-shaped mono status chip: neutral by default,
   green for connected, amber for reconnecting, red for stream errors.
-- Log entries render as `surface` cards with a 3px semantic left border:
-  accent for info, amber for warn, red for error, neutral `border-2` for
-  unknown/other levels.
-- Log metadata (timestamp, level, logger) stays monospace and compact. The log
-  body also stays monospace and preserves multiline continuation text with
-  wrapped whitespace so stack traces remain readable.
+- Log entries render as dense single-row list items, not roomy stacked cards.
+  Each row keeps timestamp, level, logger, and message on one line on normal
+  desktop widths, with truncation acceptable for long content.
+- Rows keep a 3px semantic left border: accent for info, amber for warn, red
+  for error, neutral `border-2` for unknown/other levels. Warn treatment should
+  be visibly stronger than info, not just a near-match.
+- Log metadata and message preview stay monospace and compact. Full multiline
+  continuation text may still be exposed through tooltip/title or responsive
+  fallback behavior, but the default desktop presentation is one visible row per
+  entry.
 
 ### Toasts
 

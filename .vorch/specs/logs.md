@@ -34,7 +34,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for one selected file only and can replay the read→socket handoff gap
 - WebUI
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
-  - `webui/src/lib/logsView.js` owns client-side selection/filter/search helpers
+  - `webui/src/lib/logsView.js` owns client-side selection/filter/search/sort helpers
   - `webui/src/components/LogsView.svelte` renders the tab and reconnects its dedicated log stream using the latest read cursor
 
 ## Conventions
@@ -43,8 +43,10 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - Validate file names strictly; never allow path traversal or absolute paths.
 - If a line does not match the header format, append it to the previous entry's `continuation` when possible; otherwise keep it visible as an `unknown` entry.
 - The level filter is based only on parsed `level`. Logger names are searchable through free-text search, not separate filter UI.
+- Entry ordering is accessor-local UI state. Switching between newest-first and oldest-first must not trigger another `log.read` call for the same file.
 - `cursor` is an internal handoff token, not user-visible UI state.
 - The selected file remains user-controlled. Refreshing the catalog may add newer files, but it must not auto-switch the active selection.
+- The Logs toolbar uses the shared simple dropdown style for file, level, and order controls.
 
 ## External Dependencies
 
