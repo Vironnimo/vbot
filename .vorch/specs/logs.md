@@ -47,6 +47,9 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - `cursor` is an internal handoff token, not user-visible UI state.
 - The selected file remains user-controlled. Refreshing the catalog may add newer files, but it must not auto-switch the active selection.
 - The Logs toolbar uses the shared simple dropdown style for file, level, and order controls.
+- Routine `/ws/logs` websocket transport lifecycle messages are considered noise
+  and should not appear in normal INFO logs; websocket transport failures should
+  still remain visible.
 
 ## External Dependencies
 
