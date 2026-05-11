@@ -165,6 +165,37 @@ def test_load_appearance_settings_rejects_non_object_section(tmp_path: Path) -> 
         storage.load_appearance_settings()
 
 
+def test_load_subagent_settings_returns_defaults_when_missing(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    settings = storage.load_subagent_settings()
+
+    assert settings == {
+        "max_subagent_depth": 4,
+        "max_subagents_per_turn": 8,
+        "subagent_timeout_minutes": 60,
+    }
+
+
+def test_load_subagent_settings_reads_custom_values(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "max_subagent_depth": 2,
+            "max_subagents_per_turn": 5,
+            "subagent_timeout_minutes": 30,
+        }
+    )
+
+    settings = storage.load_subagent_settings()
+
+    assert settings == {
+        "max_subagent_depth": 2,
+        "max_subagents_per_turn": 5,
+        "subagent_timeout_minutes": 30,
+    }
+
+
 def test_update_appearance_settings_persists_language_and_preserves_other_settings(
     tmp_path: Path,
 ) -> None:

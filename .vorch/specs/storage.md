@@ -19,6 +19,7 @@ as a read-only fallback credential source.
 
 - `appearance.language` — persisted WebUI language preference.
 - `skill_directories` — additional skill scan root paths configured from the Settings UI.
+- `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` — integer limits for sub-agent tool execution.
 
 ## Interfaces
 
@@ -35,6 +36,7 @@ as a read-only fallback credential source.
 - `save_settings(settings)` — atomically writes sorted, indented JSON.
 - `load_appearance_settings() -> dict[str, str]` and `update_appearance_settings(appearance)` — read/write the supported Appearance settings subset.
 - `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
+- `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 
