@@ -37,6 +37,7 @@ from core.tools import (
     register_write_tool,
 )
 from core.tools.process_manager import ProcessManager
+from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -107,6 +108,7 @@ class Runtime:
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
+        self._subagent_batch_tracker: SubAgentBatchTracker | None = None
         self._system_prompts: SystemPromptManager | None = None
 
     def start(self) -> None:
@@ -171,6 +173,13 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         self._chat_loop = ChatLoop(self, streaming=False)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        self._subagent_batch_tracker = SubAgentBatchTracker(self._trigger_service)
+        register_subagent_tools(
+            self._tools,
+            self,
+            self._trigger_service,
+            self._subagent_batch_tracker,
+        )
         self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(
             self._storage,
@@ -205,6 +214,7 @@ class Runtime:
         self._skills = None
         self._chat_sessions = None
         self._trigger_service = None
+        self._subagent_batch_tracker = None
         self._chat_loop = None
         self._chat_run_manager = None
         self.chat_runs = None

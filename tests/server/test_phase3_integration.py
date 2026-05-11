@@ -155,6 +155,13 @@ class IntegrationStorage:
     def supported_appearance_languages(self) -> list[str]:
         return ["en"]
 
+    def load_subagent_settings(self) -> JsonObject:
+        return {
+            "max_subagent_depth": 4,
+            "max_subagents_per_turn": 8,
+            "subagent_timeout_minutes": 60,
+        }
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -365,6 +372,11 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "custom_endpoints": {"supported": False, "items": []},
             },
             "appearance": {"language": "en", "available_languages": ["en"]},
+            "subagents": {
+                "max_subagent_depth": 4,
+                "max_subagents_per_turn": 8,
+                "subagent_timeout_minutes": 60,
+            },
         },
     }
     assert "env_key" not in json.dumps(settings_response.json())

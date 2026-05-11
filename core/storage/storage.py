@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from core.utils.config import build_environment_snapshot, read_env_file
@@ -17,6 +17,11 @@ DEFAULT_DATA_DIR = Path.home() / ".vbot"
 PROMPT_FRAGMENT_NAMES = frozenset({"system.md", "runtime.md", "tools.md", "skills.md"})
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
+SUBAGENT_SETTING_DEFAULTS = {
+    "max_subagent_depth": 4,
+    "max_subagents_per_turn": 8,
+    "subagent_timeout_minutes": 60,
+}
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
@@ -166,6 +171,15 @@ class StorageManager:
         merged_settings["skill_directories"] = normalized_directories
         self.save_settings(merged_settings)
         return normalized_directories
+
+    def load_subagent_settings(self) -> dict[str, int]:
+        """Return normalized persisted Sub-Agent settings."""
+
+        settings = self.load_settings()
+        return {
+            key: self._normalize_subagent_integer(key, settings.get(key), default)
+            for key, default in SUBAGENT_SETTING_DEFAULTS.items()
+        }
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json`` as UTF-8 JSON."""
@@ -344,6 +358,16 @@ class StorageManager:
                 )
             normalized_directories.append(normalized_directory)
         return normalized_directories
+
+    @staticmethod
+    def _normalize_subagent_integer(key: str, value: Any, default: int) -> int:
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise StorageError(f"Sub-agent setting {key} must be an integer")
+        if value <= 0:
+            raise StorageError(f"Sub-agent setting {key} must be positive")
+        return cast("int", value)
 
     @staticmethod
     def _validate_prompt_fragment_name(fragment_name: str) -> str:

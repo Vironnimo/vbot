@@ -8,11 +8,13 @@
     buildLanguageOptions,
     createLanguageUpdatePayload,
     createSkillDirectoriesUpdatePayload,
+    buildSubAgentSettingsPayload,
     describeProvider,
     formatServerHost,
     getDataDirectoryValue,
     getDefaultSkillDirectoryValue,
     getSkillDirectories,
+    normalizeSubAgentSettings,
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
@@ -44,6 +46,17 @@
         ),
     },
     {
+      id: 'subagents',
+      labelKey: 'settings.subagents.title',
+      labelFallback: 'Sub-Agents',
+      label: () => t('settings.subagents.title', 'Sub-Agents'),
+      subtitle: () =>
+        t(
+          'settings.subagents.subtitle',
+          'Depth, fan-out, and timeout limits for spawned agent sessions.',
+        ),
+    },
+    {
       id: 'providers',
       labelKey: 'settings.providers.title',
       labelFallback: 'Providers',
@@ -72,6 +85,7 @@
   let saving = $state(false);
   let selectedLanguageId = $state('en');
   let skillDirectories = $state([]);
+  let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let newSkillDirectory = $state('');
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
@@ -108,6 +122,14 @@
       saving ||
       directoriesMatch(skillDirectories, getSkillDirectories(settings)),
   );
+  let subAgentSettingsSaveDisabled = $derived(
+    loading ||
+      saving ||
+      subAgentSettingsMatch(
+        subAgentSettings,
+        normalizeSubAgentSettings(settings),
+      ),
+  );
 
   onMount(() => {
     loadSettings();
@@ -125,6 +147,7 @@
     const language = nextSettings?.appearance?.language ?? 'en';
     selectedLanguageId = language;
     skillDirectories = getSkillDirectories(nextSettings);
+    subAgentSettings = normalizeSubAgentSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
   }
@@ -194,6 +217,32 @@
     }
   }
 
+  async function saveSubAgentSettings() {
+    if (subAgentSettingsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+    saveNotice = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        buildSubAgentSettingsPayload(subAgentSettings),
+      );
+      applySettings(nextSettings);
+      saveNotice = t(
+        'settings.subagents.saveSuccess',
+        'Sub-agent settings updated.',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   function addSkillDirectory() {
     const directory = newSkillDirectory.trim();
     if (!directory) {
@@ -228,6 +277,29 @@
 
     event.preventDefault();
     addSkillDirectory();
+  }
+
+  function handleSubAgentSettingChange(key, event) {
+    subAgentSettings = {
+      ...subAgentSettings,
+      [key]: event.currentTarget.value,
+    };
+    saveError = '';
+    saveNotice = '';
+  }
+
+  function subAgentSettingsMatch(left, right) {
+    const normalizedLeft = normalizeSubAgentSettings({ subagents: left });
+    const normalizedRight = normalizeSubAgentSettings({ subagents: right });
+
+    return (
+      normalizedLeft.max_subagent_depth ===
+        normalizedRight.max_subagent_depth &&
+      normalizedLeft.max_subagents_per_turn ===
+        normalizedRight.max_subagents_per_turn &&
+      normalizedLeft.subagent_timeout_minutes ===
+        normalizedRight.subagent_timeout_minutes
+    );
   }
 
   function directoriesMatch(left, right) {
@@ -380,6 +452,15 @@
             type="button"
             disabled={skillDirectoriesSaveDisabled}
             onclick={saveSkillDirectories}
+          >
+            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+          </button>
+        {:else if activePanelId === 'subagents' && !loading && !loadError}
+          <button
+            class="btn-primary s-save-button"
+            type="button"
+            disabled={subAgentSettingsSaveDisabled}
+            onclick={saveSubAgentSettings}
           >
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </button>
@@ -554,6 +635,105 @@
                 : t('common.save', 'Save')}
             </button>
           </div>
+        {:else if activePanelId === 'subagents'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.subagents.maxDepth', 'Max sub-agent depth')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.subagents.maxDepthDescription',
+                  'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                class="s-input"
+                type="number"
+                min="1"
+                step="1"
+                value={subAgentSettings.max_subagent_depth}
+                aria-label={t(
+                  'settings.subagents.maxDepth',
+                  'Max sub-agent depth',
+                )}
+                oninput={(event) =>
+                  handleSubAgentSettingChange('max_subagent_depth', event)}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.subagents.maxPerTurnDescription',
+                  'Maximum number of sub-agent sessions one parent run may spawn.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                class="s-input"
+                type="number"
+                min="1"
+                step="1"
+                value={subAgentSettings.max_subagents_per_turn}
+                aria-label={t(
+                  'settings.subagents.maxPerTurn',
+                  'Max sub-agents per turn',
+                )}
+                oninput={(event) =>
+                  handleSubAgentSettingChange('max_subagents_per_turn', event)}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.subagents.timeoutMinutesDescription',
+                  'Maximum wait time for blocking sub-agent calls before they fail.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                class="s-input"
+                type="number"
+                min="1"
+                step="1"
+                value={subAgentSettings.subagent_timeout_minutes}
+                aria-label={t(
+                  'settings.subagents.timeoutMinutes',
+                  'Timeout minutes',
+                )}
+                oninput={(event) =>
+                  handleSubAgentSettingChange(
+                    'subagent_timeout_minutes',
+                    event,
+                  )}
+              />
+            </div>
+          </div>
+
+          <button
+            class="btn-primary s-save-button s-save-button--inline"
+            type="button"
+            disabled={subAgentSettingsSaveDisabled}
+            onclick={saveSubAgentSettings}
+          >
+            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+          </button>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
             <div class="s-feedback s-feedback--neutral">
@@ -876,6 +1056,11 @@
     min-width: 180px;
   }
 
+  .s-row-control--number {
+    width: 132px;
+    min-width: 132px;
+  }
+
   .s-row-control--appearance {
     gap: 10px;
     width: min(360px, 100%);
@@ -972,7 +1157,8 @@
     }
 
     .s-row-control,
-    .s-row-control--input {
+    .s-row-control--input,
+    .s-row-control--number {
       width: 100%;
       min-width: 0;
       max-width: none;

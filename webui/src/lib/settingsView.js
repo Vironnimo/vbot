@@ -1,5 +1,19 @@
 export const SETTINGS_LAYOUT_CLASS = 'settings-layout view active';
 
+export const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
+  max_subagent_depth: 4,
+  max_subagents_per_turn: 8,
+  subagent_timeout_minutes: 60,
+});
+
+function positiveIntegerOrDefault(value, fallback) {
+  const numberValue = Number(value);
+
+  return Number.isInteger(numberValue) && numberValue > 0
+    ? numberValue
+    : fallback;
+}
+
 export function buildLanguageOptions(appearance) {
   const availableLanguages = Array.isArray(appearance?.available_languages)
     ? appearance.available_languages
@@ -69,6 +83,33 @@ export function createSkillDirectoriesUpdatePayload(directories) {
     skills: {
       directories: normalizeSkillDirectories(directories),
     },
+  };
+}
+
+export function normalizeSubAgentSettings(rawSettings) {
+  const subagents = rawSettings?.subagents ?? {};
+
+  return {
+    max_subagent_depth: positiveIntegerOrDefault(
+      subagents.max_subagent_depth,
+      SUBAGENT_SETTINGS_DEFAULTS.max_subagent_depth,
+    ),
+    max_subagents_per_turn: positiveIntegerOrDefault(
+      subagents.max_subagents_per_turn,
+      SUBAGENT_SETTINGS_DEFAULTS.max_subagents_per_turn,
+    ),
+    subagent_timeout_minutes: positiveIntegerOrDefault(
+      subagents.subagent_timeout_minutes,
+      SUBAGENT_SETTINGS_DEFAULTS.subagent_timeout_minutes,
+    ),
+  };
+}
+
+export function buildSubAgentSettingsPayload(formValues) {
+  return {
+    subagents: normalizeSubAgentSettings({
+      subagents: formValues,
+    }),
   };
 }
 
@@ -214,6 +255,7 @@ export function normalizeSettingsForDisplay(settings, translate) {
       translate,
     ),
     skillDirectories: getSkillDirectories(settings),
+    subAgentSettings: normalizeSubAgentSettings(settings),
     providerItems: getProviderItems(settings),
     availableLanguageOptions: buildLanguageOptions(settings?.appearance),
     persistedLanguageId: getPersistedLanguageId(settings),

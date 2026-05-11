@@ -106,6 +106,11 @@ def register_write_file(registry: ToolRegistry) -> Tool:
 
 
 class TestToolContext:
+    def test_nesting_depth_defaults_to_zero(self) -> None:
+        context = make_context()
+
+        assert context.nesting_depth == 0
+
     @pytest.mark.asyncio
     async def test_emit_uses_async_hook(self) -> None:
         events: list[tuple[str, JsonObject]] = []
@@ -448,6 +453,40 @@ class TestToolRegistryDispatch:
 
 
 class TestToolExecutor:
+    @pytest.mark.asyncio
+    async def test_nesting_depth_flows_from_config_to_context(self) -> None:
+        registry = ToolRegistry()
+        seen_depths: list[int] = []
+
+        def depth_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            seen_depths.append(context.nesting_depth)
+            return tool_success({"nesting_depth": context.nesting_depth})
+
+        registry.register(
+            "depth",
+            "Return the current nesting depth for testing.",
+            {"type": "object"},
+            depth_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="depth", arguments={})],
+            ToolExecutionConfig(
+                agent_id="agent-1",
+                session_id="session-1",
+                run_id="run-1",
+                workspace=Path("workspace"),
+                app_root=Path("app"),
+                data_root=Path("data"),
+                allowed_tools=["*"],
+                nesting_depth=3,
+            ),
+        )
+
+        assert seen_depths == [3]
+        assert results == [tool_success({"nesting_depth": 3})]
+
     @pytest.mark.asyncio
     async def test_unknown_tool_becomes_failed_result(self) -> None:
         executor = ToolExecutor(ToolRegistry())

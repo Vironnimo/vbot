@@ -80,6 +80,19 @@ from core.tools.write import (
     write_handler,
 )
 
+
+def __getattr__(name: str) -> object:
+    if name in {"SubAgentBatchTracker", "register_subagent_tools"}:
+        from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
+
+        exports = {
+            "SubAgentBatchTracker": SubAgentBatchTracker,
+            "register_subagent_tools": register_subagent_tools,
+        }
+        return exports[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
@@ -105,6 +118,7 @@ __all__ = [
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
+    "SubAgentBatchTracker",
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",
@@ -138,6 +152,7 @@ __all__ = [
     "register_process_tool",
     "register_read_tool",
     "register_skill_tool",
+    "register_subagent_tools",
     "register_write_tool",
     "tool_failure",
     "tool_success",
