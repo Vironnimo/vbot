@@ -6,12 +6,14 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../i18n.js';
 import {
   buildLanguageOptions,
+  buildSubAgentSettingsPayload,
   createLanguageUpdatePayload,
   createSkillDirectoriesUpdatePayload,
   describeProvider,
   formatServerHost,
   getDefaultSkillDirectoryValue,
   getSkillDirectories,
+  normalizeSubAgentSettings,
   providerStatusClass,
   providerStatusLabel,
 } from '../settingsView.js';
@@ -133,6 +135,52 @@ describe('SettingsView', () => {
     await waitForText('Skill directories updated.');
   });
 
+  it('edits and saves sub-agent settings', async () => {
+    rpcMock
+      .mockResolvedValueOnce(createSettingsPayload())
+      .mockImplementationOnce(async (_method, params) =>
+        createSettingsPayload({
+          subagents: params.subagents,
+        }),
+      );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+
+    await waitForText('0.0.0.0:9001');
+    clickButton('Sub-Agents');
+
+    expect(document.body.textContent).toContain('Max sub-agent depth');
+    expect(document.body.textContent).toContain('Max sub-agents per turn');
+    expect(document.body.textContent).toContain('Timeout minutes');
+
+    const inputs = document.body.querySelectorAll('input.s-input');
+    expect(inputs).toHaveLength(3);
+    expect(inputs[0].value).toBe('4');
+    expect(inputs[1].value).toBe('8');
+    expect(inputs[2].value).toBe('60');
+
+    inputs[0].value = '5';
+    inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+    inputs[1].value = '12';
+    inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+    inputs[2].value = '45';
+    inputs[2].dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    clickButton('Save');
+
+    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+      subagents: {
+        max_subagent_depth: 5,
+        max_subagents_per_turn: 12,
+        subagent_timeout_minutes: 45,
+      },
+    });
+
+    await waitForText('Sub-agent settings updated.');
+  });
+
   it('renders load failures and retries settings.get successfully', async () => {
     rpcMock
       .mockRejectedValueOnce(new Error('server offline'))
@@ -243,6 +291,37 @@ describe('settingsView helpers', () => {
         directories: ['C:/skills'],
       },
     });
+    expect(normalizeSubAgentSettings({})).toEqual({
+      max_subagent_depth: 4,
+      max_subagents_per_turn: 8,
+      subagent_timeout_minutes: 60,
+    });
+    expect(
+      normalizeSubAgentSettings({
+        subagents: {
+          max_subagent_depth: '6',
+          max_subagents_per_turn: 0,
+          subagent_timeout_minutes: 90,
+        },
+      }),
+    ).toEqual({
+      max_subagent_depth: 6,
+      max_subagents_per_turn: 8,
+      subagent_timeout_minutes: 90,
+    });
+    expect(
+      buildSubAgentSettingsPayload({
+        max_subagent_depth: '7',
+        max_subagents_per_turn: '9',
+        subagent_timeout_minutes: '30',
+      }),
+    ).toEqual({
+      subagents: {
+        max_subagent_depth: 7,
+        max_subagents_per_turn: 9,
+        subagent_timeout_minutes: 30,
+      },
+    });
     expect(
       getDefaultSkillDirectoryValue(createSettingsPayload(), translate),
     ).toBe('C:/Users/test/.vbot/skills');
@@ -296,6 +375,11 @@ function createSettingsPayload(overrides = {}) {
     appearance: {
       language: 'en',
       available_languages: ['en', 'fr'],
+    },
+    subagents: {
+      max_subagent_depth: 4,
+      max_subagents_per_turn: 8,
+      subagent_timeout_minutes: 60,
     },
   };
 

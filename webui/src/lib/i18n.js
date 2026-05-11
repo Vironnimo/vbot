@@ -135,6 +135,10 @@ export const englishCatalog = Object.freeze({
   'chat.tokenBadgeNoContext': '{tokens} tok',
   'chat.tokenBadgeEstimatedNoContext': '~{tokens} tok',
   'chat.tokenBadgeNoUsage': '— / {context} tok',
+  'chat.subagent.label': 'Sub-agent',
+  'chat.subagent.viewSession': 'view session',
+  'chat.subagent.running': 'running',
+  'chat.subagent.resultStatus': 'Status: {status}',
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow': 'skills',
@@ -273,6 +277,19 @@ export const englishCatalog = Object.freeze({
   'settings.skills.emptyDirectories':
     'No additional skill directories configured.',
   'settings.skills.saveSuccess': 'Skill directories updated.',
+  'settings.subagents.title': 'Sub-Agents',
+  'settings.subagents.subtitle':
+    'Depth, fan-out, and timeout limits for spawned agent sessions.',
+  'settings.subagents.maxDepth': 'Max sub-agent depth',
+  'settings.subagents.maxDepthDescription':
+    'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
+  'settings.subagents.maxPerTurn': 'Max sub-agents per turn',
+  'settings.subagents.maxPerTurnDescription':
+    'Maximum number of sub-agent sessions one parent run may spawn.',
+  'settings.subagents.timeoutMinutes': 'Timeout minutes',
+  'settings.subagents.timeoutMinutesDescription':
+    'Maximum wait time for blocking sub-agent calls before they fail.',
+  'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',
