@@ -26,10 +26,13 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   reads `<data_dir>/.env` as a fallback credential snapshot without mutating
   `os.environ`, instantiates the central provider credential resolver (process
   environment takes precedence over the data-dir fallback), copies prompt
-  fragments, wires services, registers built-in tools, and ensures a usable
-  default Agent exists. Writes `Runtime started` at info level. Second call is
-  no-op (debug log) and preserves service instances.
-- `stop()` — writes "Runtime stopped" at info level if logger exists. Resets started state and clears service references. Safe to call before `start()`.
+  fragments, wires services, starts the `ProcessManager` sweeper when startup
+  happens inside a running asyncio loop, registers built-in tools, and ensures a
+  usable default Agent exists. Writes `Runtime started` at info level. Second
+  call is no-op (debug log) and preserves service instances.
+- `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
+  `ProcessManager` sweeper, resets started state, and clears service references.
+  Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed
@@ -37,7 +40,10 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `get_provider_credentials(provider_id)`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`edit`, `glob`, `grep`, `read`, `write`) plus the internal `skill` tool when skills are loaded.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `edit`, `glob`, `grep`, `process`, `read`, `write`) plus the internal `skill` tool when skills are loaded.
+- `process_manager` — shared in-memory `ProcessManager` service used by `bash`
+  and `process` tools. It owns process sessions, output buffers, TTL sweeping,
+  and Run-scoped cancellation.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.

@@ -4,6 +4,7 @@ The ``Runtime`` class is the single entry point that wires together
 all core services and manages the application lifecycle.
 """
 
+import asyncio
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -24,13 +25,16 @@ from core.runtime.interfaces import (
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools import (
+    register_bash_tool,
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
+    register_process_tool,
     register_read_tool,
     register_skill_tool,
     register_write_tool,
 )
+from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -94,6 +98,7 @@ class Runtime:
         self._storage: StorageManager | None = None
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
+        self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._system_prompts: SystemPromptManager | None = None
@@ -131,12 +136,16 @@ class Runtime:
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
         )
+        self._process_manager = ProcessManager()
+        self._start_process_manager()
         self._tools = ToolRegistry()
         register_read_tool(self._tools)
         register_edit_tool(self._tools)
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
+        register_bash_tool(self._tools, self._process_manager)
+        register_process_tool(self._tools, self._process_manager)
         settings = self._storage.load_settings()
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
@@ -180,6 +189,9 @@ class Runtime:
         self._storage = None
         self._agents = None
         self._tools = None
+        if self._process_manager is not None:
+            self._process_manager.stop()
+        self._process_manager = None
         self._skills = None
         self._chat_sessions = None
         self._system_prompts = None
@@ -223,6 +235,15 @@ class Runtime:
                 continue
             directories.append(Path(raw_directory).expanduser())
         return directories
+
+    def _start_process_manager(self) -> None:
+        if self._process_manager is None:
+            raise RuntimeError("Process manager service not available")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._process_manager.start()
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
@@ -314,6 +335,14 @@ class Runtime:
         if self._tools is None:
             raise RuntimeError("Tool service not available")
         return self._tools
+
+    @property
+    def process_manager(self) -> ProcessManager:
+        """Access to shared host process lifecycle management."""
+        self._ensure_started()
+        if self._process_manager is None:
+            raise RuntimeError("Process manager service not available")
+        return self._process_manager
 
     @property
     def skills(self) -> SkillRegistry:

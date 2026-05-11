@@ -633,6 +633,9 @@ class ChatLoop:
         _ensure_provider_exists(self._runtime.providers, provider_id)
         adapter = self._runtime.get_adapter(provider_id, connection_id)
         run.add_cancel_callback(lambda: _close_adapter(adapter))
+        process_manager = getattr(self._runtime, "process_manager", None)
+        if process_manager is not None:
+            run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
         session = cast(ChatSessionManager, self._runtime.chat_sessions).get(
             run.agent_id,
             run.session_id,

@@ -1,5 +1,12 @@
 """Tool registry, definitions, result envelopes, and execution scheduling."""
 
+from core.tools.bash import (
+    BASH_TOOL_DESCRIPTION,
+    BASH_TOOL_NAME,
+    BASH_TOOL_PARAMETERS,
+    bash_handler,
+    register_bash_tool,
+)
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -20,6 +27,13 @@ from core.tools.grep import (
     GREP_TOOL_PARAMETERS,
     grep_handler,
     register_grep_tool,
+)
+from core.tools.process import (
+    PROCESS_TOOL_DESCRIPTION,
+    PROCESS_TOOL_NAME,
+    PROCESS_TOOL_PARAMETERS,
+    make_process_handler,
+    register_process_tool,
 )
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
@@ -67,6 +81,9 @@ from core.tools.write import (
 )
 
 __all__ = [
+    "BASH_TOOL_DESCRIPTION",
+    "BASH_TOOL_NAME",
+    "BASH_TOOL_PARAMETERS",
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
     "EDIT_TOOL_DESCRIPTION",
@@ -79,6 +96,9 @@ __all__ = [
     "GREP_TOOL_NAME",
     "GREP_TOOL_PARAMETERS",
     "JsonObject",
+    "PROCESS_TOOL_DESCRIPTION",
+    "PROCESS_TOOL_NAME",
+    "PROCESS_TOOL_PARAMETERS",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
@@ -103,15 +123,19 @@ __all__ = [
     "WRITE_TOOL_DESCRIPTION",
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
+    "bash_handler",
     "edit_handler",
     "glob_handler",
     "grep_handler",
     "is_tool_result_envelope",
+    "make_process_handler",
     "make_skill_handler",
     "read_handler",
     "register_edit_tool",
     "register_glob_tool",
+    "register_bash_tool",
     "register_grep_tool",
+    "register_process_tool",
     "register_read_tool",
     "register_skill_tool",
     "register_write_tool",
