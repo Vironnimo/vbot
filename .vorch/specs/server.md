@@ -133,8 +133,8 @@ Clients call the vBot server contract; provider wire details stay behind
 - Public history payloads include `role: "error"` messages so failed Runs remain
   visible after reload.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
-  `tool_call_delta`) are SSE-only. They must not be bridged to WebSocket
-  lifecycle summaries.
+  `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr`) are SSE-only.
+  They must not be bridged to WebSocket lifecycle summaries.
 
 ## Constraints & gotchas
 
