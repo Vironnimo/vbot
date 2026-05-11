@@ -56,6 +56,10 @@ Clients call the vBot server contract; provider wire details stay behind
   normal history response; persisted `role: "error"` messages are included.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model.
+- `automation.trigger` starts a programmatic Run through
+  `runtime.trigger_service`. It accepts `{ agent_id, message, session_id? }` and
+  returns `{ run_id, agent_id, session_id, status }`; when `session_id` is
+  omitted, the automation layer creates a new Session.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
@@ -69,8 +73,9 @@ Clients call the vBot server contract; provider wire details stay behind
 ## Interfaces
 
 - `server.app.create_app(runtime=None, config=None)` — creates the FastAPI app,
-  starts/stops `Runtime` during lifespan, and wires `runtime`, `ChatRunManager`,
-  `ChatLoop`, and the server event bus into `app.state`.
+  starts/stops `Runtime` during lifespan, and wires `runtime`, the Runtime-owned
+  `ChatRunManager`, the server streaming `ChatLoop`, and the server event bus
+  into `app.state`.
 - `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC
   methods to transport-only delegates.
 - `GET /api/runs/{run_id}/events` — streams one Run timeline as SSE using
