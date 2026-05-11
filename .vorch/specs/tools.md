@@ -98,7 +98,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   associated with a Run regardless of Agent owner.
 - `register_skill_tool(registry, skill_registry) -> None` — registers the internal `skill` tool.
 - `register_subagent_tools(registry, runtime, trigger_service, batch_tracker) -> None` — registers the built-in sub-agent tools.
-- `SubAgentBatchTracker(trigger_service)` — tracks in-memory sub-agent batches by parent `(agent_id, session_id, run_id)` and sends one automation trigger when all unfetched sub-agent Runs finish.
+- `SubAgentBatchTracker(trigger_service)` — tracks in-memory sub-agent batches by parent `(agent_id, session_id, run_id)` and sends one internal automation trigger when all unfetched sub-agent Runs finish. The trigger continues the parent Agent but is stored as a system-reminder note so normal history/WebUI do not show it as a user turn.
 
 ## Conventions
 
