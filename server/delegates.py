@@ -56,6 +56,11 @@ JsonObject = dict[str, Any]
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
+SUBAGENT_SETTING_FIELDS = (
+    "max_subagent_depth",
+    "max_subagents_per_turn",
+    "subagent_timeout_minutes",
+)
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
@@ -483,6 +488,8 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             reload_skills = getattr(state.runtime, "reload_skills", None)
             if callable(reload_skills):
                 reload_skills()
+        if "subagents" in settings_update:
+            _update_subagent_settings(state.runtime.storage, settings_update["subagents"])
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -587,7 +594,7 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
 
 
 def _parse_settings_update(params: JsonObject) -> JsonObject:
-    supported_sections = {"appearance", "skills"}
+    supported_sections = {"appearance", "skills", "subagents"}
     unsupported_sections = sorted(set(params) - supported_sections)
     if unsupported_sections:
         raise RpcError(
@@ -605,6 +612,9 @@ def _parse_settings_update(params: JsonObject) -> JsonObject:
 
     if "skills" in params:
         parsed_update["skills"] = _parse_skills_update(params["skills"])
+
+    if "subagents" in params:
+        parsed_update["subagents"] = _parse_subagents_update(params["subagents"])
 
     return parsed_update
 
@@ -653,6 +663,39 @@ def _parse_skills_update(skills: Any) -> JsonObject:
     return {"directories": list(directories)}
 
 
+def _parse_subagents_update(subagents: Any) -> JsonObject:
+    if not isinstance(subagents, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.subagents must be an object")
+
+    supported_fields = set(SUBAGENT_SETTING_FIELDS)
+    unsupported_fields = sorted(set(subagents) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported sub-agent settings: {', '.join(unsupported_fields)}",
+        )
+
+    missing_fields = [field for field in SUBAGENT_SETTING_FIELDS if field not in subagents]
+    if missing_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"missing sub-agent settings: {', '.join(missing_fields)}",
+        )
+
+    return {
+        field: _positive_integer(subagents[field], f"params.subagents.{field}")
+        for field in SUBAGENT_SETTING_FIELDS
+    }
+
+
+def _positive_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a positive integer")
+    if value <= 0:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a positive integer")
+    return cast("int", value)
+
+
 def _required_string(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -663,6 +706,7 @@ def _required_string(params: JsonObject, key: str) -> str:
 def _settings_response(state: Any) -> JsonObject:
     runtime = state.runtime
     appearance = runtime.storage.load_appearance_settings()
+    subagents = runtime.storage.load_subagent_settings()
     server_bind = _server_bind_response(state)
 
     response = {
@@ -684,6 +728,7 @@ def _settings_response(state: Any) -> JsonObject:
             "language": appearance["language"],
             "available_languages": runtime.storage.supported_appearance_languages(),
         },
+        "subagents": {field: subagents[field] for field in SUBAGENT_SETTING_FIELDS},
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
     if callable(skill_directory_loader):
@@ -692,6 +737,14 @@ def _settings_response(state: Any) -> JsonObject:
             "directories": skill_directory_loader(),
         }
     return response
+
+
+def _update_subagent_settings(storage: Any, subagents: JsonObject) -> None:
+    settings = storage.load_settings()
+    merged_settings = dict(settings)
+    for field in SUBAGENT_SETTING_FIELDS:
+        merged_settings[field] = subagents[field]
+    storage.save_settings(merged_settings)
 
 
 def _server_bind_response(state: Any) -> JsonObject:
