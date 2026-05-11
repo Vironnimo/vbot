@@ -86,6 +86,8 @@ The WebUI is an Agent-first chat surface with a two-pane layout:
 - Use `playwright-cli snapshot` to read the page state before interacting
 - Elements are referenced by `e` refs from the snapshot (e.g., `e15`), CSS selectors, or Playwright locators
 - After actions that trigger SSE/WebSocket updates (sending a message, creating an agent), take a snapshot to verify the UI reflects the change
+- For every browser-visible pass/fail claim, capture and report at least one screenshot path. Screenshots are required evidence for visual UI checks; do not rely only on DOM snapshots or text assertions.
+- When testing that content should be hidden from the normal UI, capture a screenshot of the relevant view and explicitly report whether the hidden content is absent.
 - For streaming tests: send a message, then take multiple snapshots to observe progressive output (requires provider with API credentials)
 
 ## What Can Be Tested Without API Credentials
