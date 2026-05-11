@@ -47,7 +47,7 @@ container; a Run is one active execution inside that session.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
 - `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
-  - `start_run(agent_id, content, session_id=...) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager.
+  - `start_run(agent_id, content, session_id=..., internal=False) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager. Internal runs persist `content` as a `role: "note"` system reminder rather than a visible `role: "user"` message.
 
 ## Phase 3 Server Contract Alignment
 

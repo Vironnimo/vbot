@@ -9,11 +9,12 @@ Automation owns kernel-level primitives for starting Runs without going through 
 ## Interfaces
 
 - `TriggerService(chat_loop, chat_run_manager, runtime)` — constructed through dependency injection with the Chat loop and Run manager it will use.
-- `await TriggerService.trigger_run(agent_id: str, message: str, session_id: str | None = None) -> Run` — creates a new Session when `session_id` is omitted, otherwise starts or queues a Run in the existing Session.
+- `await TriggerService.trigger_run(agent_id: str, message: str, session_id: str | None = None, *, internal: bool = False) -> Run` — creates a new Session when `session_id` is omitted, otherwise starts or queues a Run in the existing Session. When `internal=True`, the Run still starts/queues normally, but the trigger message is persisted as a kernel-internal note and embedded into the provider request as a `<system-reminder>` instead of a visible user message.
 
 ## Conventions
 
 - Queues are keyed by `(agent_id, session_id)` and are in-memory only.
+- Queued triggers preserve whether they are internal or visible.
 - Busy Sessions are detected through `ActiveRunError`; the service then subscribes to the active Run and drains queued triggers after terminal Run events.
 - Only one subscriber task should exist per `(agent_id, session_id)` queue.
 

@@ -349,6 +349,41 @@ async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
 
 
 @pytest.mark.asyncio
+async def test_internal_start_run_embeds_content_without_visible_user_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Continuing parent work", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    content = "Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done"
+
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        content,
+        session_id="session-one",
+        internal=True,
+    )
+    await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    request_messages = adapter.requests[0]["messages"]
+    assert [message.role for message in messages] == ["note", "assistant"]
+    assert messages[0].content == content
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "assistant_output",
+        "run_completed",
+    ]
+    assert all(event.type != "user_message_persisted" for event in run.events)
+    assert request_messages[1] == {
+        "role": "user",
+        "content": f"<system-reminder>\n{content}\n</system-reminder>",
+    }
+    assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
 async def test_multiple_consecutive_notes_are_embedded_as_one_synthetic_user_message(
     tmp_path: Path,
 ) -> None:
