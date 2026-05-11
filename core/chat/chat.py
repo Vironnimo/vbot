@@ -604,9 +604,16 @@ class ChatLoop:
         content: str,
         *,
         session_id: str,
+        internal: bool = False,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers."""
-        return await self._start_run(agent_id, content, session_id=session_id, create_missing=False)
+        return await self._start_run(
+            agent_id,
+            content,
+            session_id=session_id,
+            create_missing=False,
+            internal=internal,
+        )
 
     async def _start_run(
         self,
@@ -615,6 +622,7 @@ class ChatLoop:
         *,
         session_id: str | None,
         create_missing: bool,
+        internal: bool = False,
     ) -> Run:
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -624,10 +632,16 @@ class ChatLoop:
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content),
+            executor=lambda run: self._execute_run(run, content, internal=internal),
         )
 
-    async def _execute_run(self, run: Run, content: str) -> ChatMessage:
+    async def _execute_run(
+        self,
+        run: Run,
+        content: str,
+        *,
+        internal: bool = False,
+    ) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
         provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -644,10 +658,13 @@ class ChatLoop:
 
         try:
             run.raise_if_cancelled()
-            user_message = ChatMessage.user(content)
-            session.append(user_message)
-            _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
-            self._activate_triggered_skills(agent, session, content)
+            if internal:
+                session.add_note(content)
+            else:
+                user_message = ChatMessage.user(content)
+                session.append(user_message)
+                _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+                self._activate_triggered_skills(agent, session, content)
             run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)

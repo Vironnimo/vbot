@@ -26,6 +26,8 @@ DEFAULT_MAX_SUBAGENTS_PER_TURN = 8
 DEFAULT_SUBAGENT_TIMEOUT_MINUTES = 60
 SECONDS_PER_MINUTE = 60
 RESULT_PREVIEW_LIMIT = 300
+SESSION_RESULT_RETRY_ATTEMPTS = 3
+SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
 
 _LOGGER = get_logger("tools.subagent")
 
@@ -143,7 +145,12 @@ class SubAgentBatchTracker:
 
         message = _batch_completion_message(pending_entries)
         task = asyncio.create_task(
-            self._trigger_service.trigger_run(parent_key[0], message, session_id=parent_key[1])
+            self._trigger_service.trigger_run(
+                parent_key[0],
+                message,
+                session_id=parent_key[1],
+                internal=True,
+            )
         )
         task.add_done_callback(
             lambda completed: _log_background_task_result(
@@ -161,6 +168,16 @@ class SubAgentBatchTracker:
         for entry in batch.entries.values():
             if entry.session_id == sub_session_id:
                 entry.fetched = True
+
+    def run_id_for_session(self, parent_key: ParentKey, sub_session_id: str) -> str | None:
+        """Return the registered run id for a sub-agent session in a parent batch."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return None
+        for entry in batch.entries.values():
+            if entry.session_id == sub_session_id:
+                return entry.run_id
+        return None
 
     def spawn_count(self, parent_key: ParentKey) -> int:
         """Return the number of sub-agents spawned by the parent run."""
@@ -271,15 +288,15 @@ async def _handle_subagent(
             status=RunStatus.FAILED.value,
             message=f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
         )
-        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         batch_tracker.mark_fetched(parent_key, session.id)
+        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         return tool_failure(
             "subagent_timeout",
             f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
         )
 
-    batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
     batch_tracker.mark_fetched(parent_key, session.id)
+    batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
     return tool_success(result)
 
 
@@ -302,18 +319,29 @@ async def _handle_subagent_result(
     if run_id is not None and not isinstance(run_id, str):
         return tool_failure("invalid_arguments", "run_id must be a string")
 
+    parent_key = _parent_key(context)
+    batch_tracker.mark_fetched(parent_key, session_id)
+
+    resolved_run_id = run_id or batch_tracker.run_id_for_session(parent_key, session_id)
     result: JsonObject
-    if run_id:
+    if resolved_run_id:
         try:
-            run = _chat_run_manager(runtime).get(run_id)
+            run = _chat_run_manager(runtime).get(resolved_run_id)
         except RunNotFoundError:
-            result = _result_from_session(runtime, agent_id, session_id, run_id=run_id)
+            result = await _poll_result_from_session(
+                runtime, agent_id, session_id, run_id=resolved_run_id
+            )
         else:
             result = await _wait_for_subagent_result(run)
+            if _should_poll_session_result(result):
+                session_result = await _poll_result_from_session(
+                    runtime, agent_id, session_id, run_id=resolved_run_id
+                )
+                if _session_result_has_output(session_result) or not result.get("result"):
+                    result = session_result
     else:
-        result = _result_from_session(runtime, agent_id, session_id, run_id=None)
+        result = await _poll_result_from_session(runtime, agent_id, session_id, run_id=None)
 
-    batch_tracker.mark_fetched(_parent_key(context), session_id)
     return tool_success(result)
 
 
@@ -418,6 +446,25 @@ def _result_from_session(
     }
 
 
+async def _poll_result_from_session(
+    runtime: Any,
+    agent_id: str,
+    session_id: str,
+    run_id: str | None,
+    *,
+    attempts: int = SESSION_RESULT_RETRY_ATTEMPTS,
+    delay_seconds: float = SESSION_RESULT_RETRY_DELAY_SECONDS,
+) -> JsonObject:
+    bounded_attempts = max(1, attempts)
+    result = _result_from_session(runtime, agent_id, session_id, run_id)
+    for _ in range(1, bounded_attempts):
+        if _session_result_has_output(result):
+            return result
+        await asyncio.sleep(delay_seconds)
+        result = _result_from_session(runtime, agent_id, session_id, run_id)
+    return result
+
+
 def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
     content: str | None
     usage: JsonObject | None
@@ -442,6 +489,16 @@ def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
     if status == RunStatus.FAILED.value and not content:
         data["note"] = "No assistant output found in sub-agent session."
     return data
+
+
+def _should_poll_session_result(result: JsonObject) -> bool:
+    if result.get("status") == RunStatus.FAILED.value:
+        return True
+    return result.get("status") == RunStatus.COMPLETED.value and not result.get("result")
+
+
+def _session_result_has_output(result: JsonObject) -> bool:
+    return result.get("status") == RunStatus.COMPLETED.value and bool(result.get("result"))
 
 
 def _last_assistant_with_content(messages: list[ChatMessage]) -> ChatMessage | None:
