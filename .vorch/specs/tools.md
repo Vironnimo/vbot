@@ -11,7 +11,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `Tool`: `name`, `description`, `parameters`, `handler`, and `internal`.
 - `parameters` is a JSON Schema object for provider tool definitions.
 - `handler` receives `(ToolContext, arguments)` and returns a JSON result envelope, synchronously or asynchronously.
-- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, plus small runtime hooks.
+- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, plus small runtime hooks.
 - Tool runtime hooks include lifecycle event emission, cancellation checks, and an optional note hook for adding kernel-internal background reminders to the current chat Session without exposing the Session object to tools.
 - Tool runtime hooks also include an optional skill activation hook plus `allowed_skills` for the internal `skill` tool.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.

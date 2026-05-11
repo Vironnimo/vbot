@@ -585,6 +585,7 @@ class ChatLoop:
         self._runtime = runtime
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
+        self._nesting_depth = 0
 
     async def send(
         self,
@@ -881,6 +882,7 @@ class ChatLoop:
                 cancellation_hook=lambda: run.cancel_requested,
                 note_hook=session.add_note,
                 skill_activation_hook=session.activate_skill_context,
+                nesting_depth=self._nesting_depth,
             ),
         )
         run.raise_if_cancelled()
