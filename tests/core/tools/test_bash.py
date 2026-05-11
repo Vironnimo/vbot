@@ -1,0 +1,277 @@
+"""Tests for the bash tool's process-manager integration."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+import core.tools.bash as bash_module
+from core.tools.bash import BASH_TOOL_PARAMETERS, bash_handler, register_bash_tool
+from core.tools.process_manager import ProcessManager
+from core.tools.tools import ToolContext, ToolRegistry
+
+AGENT_ID = "agent-a"
+RUN_ID = "run-a"
+
+
+@pytest.fixture(autouse=True)
+def shell_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "original-path"})
+
+
+@pytest.fixture
+def manager() -> ProcessManager:
+    return ProcessManager(sweep_interval_seconds=3600)
+
+
+def make_context(
+    tmp_path: Path,
+    *,
+    emit_hook: Any = None,
+    cancellation_hook: Any = None,
+) -> ToolContext:
+    return ToolContext(
+        agent_id=AGENT_ID,
+        session_id="session-a",
+        run_id=RUN_ID,
+        tool_call_id="call-a",
+        tool_name="bash",
+        tool_call_index=0,
+        workspace=tmp_path,
+        app_root=tmp_path,
+        data_root=tmp_path,
+        emit_hook=emit_hook,
+        cancellation_hook=cancellation_hook,
+    )
+
+
+def python_command(command: str) -> list[str]:
+    return [sys.executable, "-c", command]
+
+
+async def kill_background(manager: ProcessManager, result: dict[str, Any]) -> None:
+    data = result["data"]
+    assert isinstance(data, dict)
+    session_id = data["session_id"]
+    assert isinstance(session_id, str)
+    await manager.kill(session_id, AGENT_ID)
+
+
+@pytest.mark.asyncio
+async def test_short_command_completes_and_streams_stdout(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit_hook(event_type: str, payload: dict[str, Any]) -> None:
+        events.append((event_type, payload))
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path, emit_hook=emit_hook)
+
+    result = await bash_handler(context, {"command": "print('hello')"}, manager)
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["stdout"].replace("\r\n", "\n") == "hello\n"
+    assert result["data"]["stderr"] == ""
+    assert "hello" in result["data"]["output"]
+    assert events == [
+        (
+            "tool_call_stdout",
+            {
+                "tool_call_id": "call-a",
+                "session_id": events[0][1]["session_id"],
+                "data": events[0][1]["data"],
+            },
+        )
+    ]
+    assert events[0][1]["data"].replace("\r\n", "\n") == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_background_flag_returns_running_session(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "background": True},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert isinstance(result["data"]["session_id"], str)
+
+    await kill_background(manager, result)
+
+
+@pytest.mark.asyncio
+async def test_yield_after_expiry_backgrounds_running_process(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "yield_after": 0.01},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+
+    await kill_background(manager, result)
+
+
+@pytest.mark.asyncio
+async def test_non_zero_exit_code_is_successful_tool_result(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; print('bad', file=sys.stderr); raise SystemExit(7)"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 7
+    assert "bad" in result["data"]["stderr"]
+
+
+@pytest.mark.asyncio
+async def test_spawn_failure_returns_failure_envelope(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", lambda command: ["missing-vbot-shell"])
+    context = make_context(tmp_path)
+
+    result = await bash_handler(context, {"command": "ignored"}, manager)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "process_spawn_failed"
+
+
+@pytest.mark.asyncio
+async def test_env_overrides_are_sanitised(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+    command = "import os; print(os.environ['SAFE_VALUE']); print(os.environ['PATH'])"
+
+    result = await bash_handler(
+        context,
+        {"command": command, "env": {"SAFE_VALUE": "allowed", "PATH": "blocked-path"}},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert "allowed" in result["data"]["stdout"]
+    assert "original-path" in result["data"]["stdout"]
+    assert "blocked-path" not in result["data"]["stdout"]
+
+
+@pytest.mark.asyncio
+async def test_workdir_defaults_to_workspace(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(context, {"command": "import os; print(os.getcwd())"}, manager)
+
+    assert result["ok"] is True
+    assert result["data"]["stdout"].strip() == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_process(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "timeout": 0.01, "yield_after": 1},
+        manager,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "process_timeout"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_exits_foreground_without_waiting_for_poll_interval(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    monkeypatch.setattr(bash_module, "FOREGROUND_POLL_INTERVAL_SECONDS", 10.0)
+    context = make_context(tmp_path, cancellation_hook=lambda: True)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "yield_after": 30},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+
+    await kill_background(manager, result)
+
+
+def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bash_module.sys, "platform", "win32")
+
+    assert bash_module._shell_argv("Write-Output hello") == [
+        "pwsh",
+        "-Command",
+        "Write-Output hello",
+    ]
+
+    monkeypatch.setattr(bash_module.sys, "platform", "linux")
+
+    assert bash_module._shell_argv("echo hello") == ["bash", "-c", "echo hello"]
+
+
+def test_register_bash_tool() -> None:
+    registry = ToolRegistry()
+    manager = ProcessManager(sweep_interval_seconds=3600)
+
+    register_bash_tool(registry, manager)
+
+    tool = registry.get("bash")
+    assert tool.parameters == BASH_TOOL_PARAMETERS
+    assert tool.parameters["additionalProperties"] is False

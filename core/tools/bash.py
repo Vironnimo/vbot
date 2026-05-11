@@ -1,0 +1,424 @@
+"""Built-in bash tool backed by the shared process manager."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from collections.abc import Mapping
+from pathlib import Path
+
+from core.tools.process_manager import ProcessManager
+from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+
+BASH_TOOL_NAME = "bash"
+BASH_TOOL_DESCRIPTION = (
+    "Run a shell command on the host system. Short commands complete in the foreground; "
+    "long-running commands return a process session_id for later process-tool management."
+)
+BASH_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "Shell command to run.",
+        },
+        "workdir": {
+            "type": "string",
+            "description": "Working directory. Relative paths resolve from the workspace.",
+        },
+        "env": {
+            "type": "object",
+            "description": (
+                "Additional environment variables. Dangerous loader/path keys are ignored."
+            ),
+            "additionalProperties": {"type": "string"},
+        },
+        "yield_after": {
+            "type": "number",
+            "description": "Seconds to wait for foreground completion before backgrounding.",
+            "default": 30,
+        },
+        "background": {
+            "type": "boolean",
+            "description": "Return a background session immediately.",
+        },
+        "timeout": {
+            "type": "number",
+            "description": "Seconds after which the process is killed.",
+        },
+    },
+    "required": ["command"],
+    "additionalProperties": False,
+}
+
+BLOCKED_ENV_KEYS = {"PATH", "LD_PRELOAD", "BASH_ENV", "DYLD_INSERT_LIBRARIES"}
+DEFAULT_YIELD_AFTER_SECONDS = 30.0
+FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
+SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
+
+_cached_shell_env: dict[str, str] | None = None
+
+
+async def bash_handler(
+    context: ToolContext,
+    arguments: JsonObject,
+    process_manager: ProcessManager,
+) -> JsonObject:
+    """Run a shell command and return a stable tool result envelope."""
+    parsed = _parse_arguments(arguments)
+    if isinstance(parsed, str):
+        return tool_failure("invalid_arguments", parsed)
+
+    command = parsed["command"]
+    workdir = _resolve_workdir(context, parsed.get("workdir"))
+    env = await _build_process_env(parsed.get("env"))
+    argv = _shell_argv(command)
+
+    try:
+        session_id = await process_manager.spawn(
+            context.run_id,
+            context.agent_id,
+            argv,
+            env=env,
+            cwd=workdir,
+        )
+    except (OSError, ValueError) as error:
+        return tool_failure("process_spawn_failed", f"failed to start process: {error}")
+
+    timeout_task, timeout_state = _schedule_timeout(
+        process_manager,
+        session_id,
+        context.agent_id,
+        parsed.get("timeout"),
+    )
+
+    if parsed["background"]:
+        return await _background_result(process_manager, context, session_id)
+
+    result = await _run_foreground_phase(
+        process_manager,
+        context,
+        session_id,
+        parsed["yield_after"],
+        timeout_state,
+    )
+
+    if result["data"] is not None and result["data"].get("status") == "running":
+        return result
+
+    if timeout_state["timed_out"]:
+        return tool_failure(
+            "process_timeout", f"process timed out after {parsed['timeout']} seconds"
+        )
+
+    if timeout_task is not None:
+        timeout_task.cancel()
+
+    return result
+
+
+def register_bash_tool(registry: ToolRegistry, process_manager: ProcessManager) -> None:
+    """Register the bash tool with a vBot tool registry."""
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await bash_handler(context, arguments, process_manager)
+
+    registry.register(
+        BASH_TOOL_NAME,
+        BASH_TOOL_DESCRIPTION,
+        BASH_TOOL_PARAMETERS,
+        handler,
+    )
+
+
+def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
+    unknown_arguments = set(arguments) - {
+        "command",
+        "workdir",
+        "env",
+        "yield_after",
+        "background",
+        "timeout",
+    }
+    if unknown_arguments:
+        names = ", ".join(sorted(unknown_arguments))
+        return f"Unknown argument(s): {names}"
+
+    command = arguments.get("command")
+    if not isinstance(command, str) or not command:
+        return "command must be a non-empty string"
+
+    workdir = arguments.get("workdir")
+    if workdir is not None and not isinstance(workdir, str):
+        return "workdir must be a string"
+
+    background = arguments.get("background", False)
+    if not isinstance(background, bool):
+        return "background must be a boolean"
+
+    try:
+        yield_after = _coerce_non_negative_float(
+            arguments.get("yield_after", DEFAULT_YIELD_AFTER_SECONDS),
+            field_name="yield_after",
+        )
+        timeout = _coerce_optional_positive_float(arguments.get("timeout"), field_name="timeout")
+    except ValueError as error:
+        return str(error)
+
+    env = arguments.get("env")
+    if env is not None:
+        if not isinstance(env, dict):
+            return "env must be an object"
+        for key, value in env.items():
+            if not isinstance(key, str) or not key:
+                return "env keys must be non-empty strings"
+            if not isinstance(value, str):
+                return "env values must be strings"
+
+    return {
+        "command": command,
+        "workdir": workdir,
+        "env": env,
+        "yield_after": yield_after,
+        "background": background,
+        "timeout": timeout,
+    }
+
+
+def _coerce_non_negative_float(value: object, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be a number")
+    coerced = float(value)
+    if coerced < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return coerced
+
+
+def _coerce_optional_positive_float(value: object, *, field_name: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{field_name} must be a number")
+    coerced = float(value)
+    if coerced <= 0:
+        raise ValueError(f"{field_name} must be > 0")
+    return coerced
+
+
+def _resolve_workdir(context: ToolContext, workdir: object) -> Path:
+    if workdir is None:
+        return context.workspace.resolve()
+
+    candidate = Path(str(workdir)).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (context.workspace / candidate).resolve()
+
+
+def _shell_argv(command: str) -> list[str]:
+    if sys.platform == "win32":
+        return ["pwsh", "-Command", command]
+    return ["bash", "-c", command]
+
+
+async def _build_process_env(overrides: object) -> dict[str, str]:
+    env = await _get_shell_env()
+    if overrides is None:
+        return env
+
+    assert isinstance(overrides, dict)
+    for key, value in overrides.items():
+        if key.upper() in BLOCKED_ENV_KEYS:
+            continue
+        env[key] = value
+    return env
+
+
+async def _get_shell_env() -> dict[str, str]:
+    global _cached_shell_env
+
+    if _cached_shell_env is None:
+        _cached_shell_env = await _probe_shell_env()
+    return dict(_cached_shell_env)
+
+
+async def _probe_shell_env() -> dict[str, str]:
+    try:
+        if sys.platform == "win32":
+            proc = await asyncio.create_subprocess_exec(
+                "pwsh",
+                "-NoProfile",
+                "-Command",
+                'Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=SHELL_ENV_PROBE_TIMEOUT_SECONDS,
+            )
+            if proc.returncode != 0:
+                return os.environ.copy()
+            return _parse_line_env(stdout.decode("utf-8", errors="replace"))
+
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            "-l",
+            "-c",
+            "env -0",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=SHELL_ENV_PROBE_TIMEOUT_SECONDS,
+        )
+        if proc.returncode != 0:
+            return os.environ.copy()
+        return _parse_null_env(stdout.decode("utf-8", errors="replace"))
+    except (OSError, TimeoutError):
+        return os.environ.copy()
+
+
+def _parse_line_env(output: str) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key:
+            env[key] = value
+    return env
+
+
+def _parse_null_env(output: str) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for item in output.split("\0"):
+        key, separator, value = item.partition("=")
+        if separator and key:
+            env[key] = value
+    return env
+
+
+def _schedule_timeout(
+    process_manager: ProcessManager,
+    session_id: str,
+    agent_id: str,
+    timeout: float | None,
+) -> tuple[asyncio.Task[None] | None, dict[str, bool]]:
+    state = {"timed_out": False}
+    if timeout is None:
+        return None, state
+
+    async def kill_after_timeout() -> None:
+        await asyncio.sleep(timeout)
+        state["timed_out"] = True
+        await process_manager.kill(session_id, agent_id)
+
+    return asyncio.create_task(kill_after_timeout(), name=f"bash-timeout:{session_id}"), state
+
+
+async def _run_foreground_phase(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+    yield_after: float,
+    timeout_state: Mapping[str, bool],
+) -> JsonObject:
+    deadline = asyncio.get_running_loop().time() + yield_after
+
+    while True:
+        poll_result = await process_manager.poll(session_id, context.agent_id, timeout_ms=0)
+        await _emit_output_chunks(context, session_id, poll_result)
+
+        if timeout_state["timed_out"] and poll_result["status"] != "running":
+            return tool_failure("process_timeout", "process timed out")
+
+        if poll_result["status"] != "running":
+            return await _completion_result(process_manager, context, session_id)
+
+        if context.is_cancelled() or asyncio.get_running_loop().time() >= deadline:
+            return await _background_result(process_manager, context, session_id)
+
+        sleep_seconds = min(
+            FOREGROUND_POLL_INTERVAL_SECONDS, deadline - asyncio.get_running_loop().time()
+        )
+        if sleep_seconds > 0:
+            await asyncio.sleep(sleep_seconds)
+
+
+async def _emit_output_chunks(
+    context: ToolContext,
+    session_id: str,
+    poll_result: JsonObject,
+) -> None:
+    chunks = poll_result.get("chunks", [])
+    if not isinstance(chunks, list):
+        return
+
+    for chunk in chunks:
+        if not isinstance(chunk, dict):
+            continue
+        stream = chunk.get("stream")
+        data = chunk.get("data")
+        if stream not in {"stdout", "stderr"} or not isinstance(data, str) or not data:
+            continue
+        await context.emit(
+            f"tool_call_{stream}",
+            {
+                "tool_call_id": context.tool_call_id,
+                "session_id": session_id,
+                "data": data,
+            },
+        )
+
+
+async def _background_result(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> JsonObject:
+    process_manager.mark_backgrounded(session_id, context.agent_id)
+    output = await _combined_output(process_manager, context, session_id)
+    return tool_success({"status": "running", "session_id": session_id, "output": output})
+
+
+async def _completion_result(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> JsonObject:
+    session = process_manager.get_session(session_id, context.agent_id)
+    output = await _combined_output(process_manager, context, session_id)
+    return tool_success(
+        {
+            "status": "completed",
+            "exit_code": session.exit_code,
+            "stdout": _decode_foreground(session.stdout_lines),
+            "stderr": _decode_foreground(session.stderr_lines),
+            "output": output,
+            "truncated": session.truncated,
+        }
+    )
+
+
+async def _combined_output(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> str:
+    log_result = await process_manager.log(session_id, context.agent_id, offset=0, limit=None)
+    output = log_result.get("output", "")
+    return output if isinstance(output, str) else ""
+
+
+def _decode_foreground(chunks: list[bytes]) -> str:
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+__all__ = [
+    "BASH_TOOL_DESCRIPTION",
+    "BASH_TOOL_NAME",
+    "BASH_TOOL_PARAMETERS",
+    "bash_handler",
+    "register_bash_tool",
+]
