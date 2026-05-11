@@ -99,9 +99,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
 - `webui/src/components/LogsView.svelte`
   - Loads the daily logs catalog on mount, selects the newest file by default,
-    reads one file at a time through `log.read`, applies local level/search
-    filtering, and owns a dedicated `/ws/logs` subscription with reconnect and
-    cleanup scoped to the currently selected file.
+    reads one file at a time through `log.read`, applies local level/search/sort
+    controls in the accessor, and owns a dedicated `/ws/logs` subscription with
+    reconnect and cleanup scoped to the currently selected file.
+  - Uses the shared simple dropdown style for file selection, level filtering,
+    and newest/oldest order controls.
   - Uses the `cursor` from each `log.read` response when opening the live log
     socket so append events are not lost during the read→subscribe handoff.
 - `webui/src/App.svelte`
@@ -157,5 +159,6 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
-  applies level filtering plus free-text search locally in the accessor.
+  applies level filtering, newest/oldest local ordering, and free-text search
+  locally in the accessor.
 - The production build emits `webui/dist`, which FastAPI serves when present.
