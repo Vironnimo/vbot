@@ -194,6 +194,56 @@ describe('LogsView', () => {
     expect(document.body.textContent).toContain('Loaded 2026-05-10');
   });
 
+  it('resets an invalid level selection when switching to a file with different levels', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11', '2026-05-10'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockImplementation(async (file) => {
+      if (file === '2026-05-11') {
+        return {
+          file,
+          entries: [entry({ level: 'warn', message: 'Warn row' })],
+          cursor: 'cursor-2026-05-11',
+        };
+      }
+
+      return {
+        file,
+        entries: [entry({ level: 'info', message: 'Info row' })],
+        cursor: 'cursor-2026-05-10',
+      };
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Warn row'),
+    );
+
+    openSimpleDropdown('logs-level-filter');
+    selectSimpleOption('logs-level-filter', 'WARN');
+    await waitForCondition(
+      () => simpleTriggerLabel('logs-level-filter') === 'WARN',
+    );
+
+    openSimpleDropdown('logs-file');
+    selectSimpleOption('logs-file', '2026-05-10');
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('Info row'),
+    );
+
+    expect(simpleTriggerLabel('logs-level-filter')).toBe('All levels');
+
+    openSimpleDropdown('logs-level-filter');
+    expect(simpleOptionLabels('logs-level-filter')).toEqual([
+      'All levels',
+      'INFO',
+    ]);
+    expect(logEntryMessages()).toEqual(['Info row']);
+  });
+
   it('uses the read cursor when opening the live log stream', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
@@ -266,6 +316,30 @@ describe('LogsView', () => {
     expect(document.body.querySelector('select')).toBeNull();
     expect(document.body.textContent).toContain('Live');
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
+  });
+
+  it('shows a fallback stream error message when the error event has no message', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-reconnect',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1);
+
+    streamConnections[0].emitError(new Event('error'));
+    flushSync();
+
+    expect(document.body.textContent).toContain(
+      'Live log updates failed. Connection closed unexpectedly.',
+    );
+    expect(document.body.textContent).not.toContain('undefined');
   });
 
   it('cleans up the active stream on destroy', async () => {

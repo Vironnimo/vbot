@@ -16,6 +16,7 @@
     deriveSortOptions,
     levelOptionValue,
     mergeLogStreamEvent,
+    normalizeLevelFilter,
     replaceLogEntries,
     selectLogFile,
     setLevelFilter,
@@ -108,7 +109,7 @@
         await loadSelectedFile(selectedFile);
       }
     } catch (error) {
-      viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${error.message}`;
+      viewState.catalogError = `${t('logs.catalogLoadError', 'Log files could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
       viewState.loadingCatalog = false;
     }
@@ -142,7 +143,7 @@
         return;
       }
 
-      viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${error.message}`;
+      viewState.readError = `${t('logs.readError', 'Log file could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
       viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
     } finally {
       if (requestId === activeReadRequest) {
@@ -182,7 +183,7 @@
             return;
           }
 
-          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${error.message}`;
+          viewState.streamError = `${t('logs.streamError', 'Live log updates failed.')} ${errorMessageText(error, t('logs.streamErrorUnknown', 'Connection closed unexpectedly.'))}`;
           viewState.streamStatus = LOGS_STREAM_STATUS_ERROR;
         },
         onClose: () => {
@@ -256,6 +257,7 @@
 
   function handleLevelChange(level) {
     setLevelFilter(viewState, level);
+    normalizeLevelFilter(viewState);
   }
 
   function handleSortChange(sortOrder) {
@@ -333,6 +335,18 @@
 
   function entryPreview(entry) {
     return entryBody(entry).replace(/\s+/g, ' ').trim();
+  }
+
+  function errorMessageText(error, fallback) {
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message.trim();
+    }
+
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+
+    return fallback;
   }
 </script>
 

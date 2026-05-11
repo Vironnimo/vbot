@@ -56,6 +56,7 @@ export function replaceLogEntries(state, result) {
   state.selectedFile =
     typeof result?.file === 'string' ? result.file : state.selectedFile;
   state.entries = Array.isArray(result?.entries) ? result.entries : [];
+  normalizeLevelFilter(state);
   state.readError = '';
   return state.entries;
 }
@@ -69,6 +70,7 @@ export function mergeLogStreamEvent(state, event) {
 
   if (event?.type === 'reset') {
     state.entries = nextEntries;
+    normalizeLevelFilter(state);
     return state.entries;
   }
 
@@ -82,6 +84,16 @@ export function mergeLogStreamEvent(state, event) {
 export function setLevelFilter(state, level) {
   state.levelFilter =
     typeof level === 'string' && level ? level : ALL_LEVELS_FILTER;
+  return state.levelFilter;
+}
+
+export function normalizeLevelFilter(state) {
+  const levelOptions = deriveLevelOptions(state?.entries);
+
+  if (!levelOptions.includes(state?.levelFilter)) {
+    state.levelFilter = ALL_LEVELS_FILTER;
+  }
+
   return state.levelFilter;
 }
 
