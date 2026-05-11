@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Any
@@ -231,6 +232,27 @@ async def test_timeout_kills_process(
 
 
 @pytest.mark.asyncio
+async def test_large_foreground_stdout_is_bounded_and_truncated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["stdout"] == "a" * 32
+    assert result["data"]["output"] == "a" * 32
+    assert result["data"]["truncated"] is True
+
+
+@pytest.mark.asyncio
 async def test_cancellation_exits_foreground_without_waiting_for_poll_interval(
     manager: ProcessManager,
     tmp_path: Path,
@@ -264,6 +286,52 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
 
     assert bash_module._shell_argv("echo hello") == ["bash", "-c", "echo hello"]
+
+
+@pytest.mark.asyncio
+async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed_process_groups: list[tuple[int, int]] = []
+
+    class HungProbe:
+        pid = 12345
+        returncode = None
+
+        def __init__(self) -> None:
+            self.communicate_calls = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                await asyncio.Future()
+            self.returncode = -9
+            return b"", b""
+
+    probe = HungProbe()
+
+    async def create_probe(*_args: Any, **_kwargs: Any) -> HungProbe:
+        return probe
+
+    monkeypatch.setattr(bash_module.sys, "platform", "linux")
+    monkeypatch.setattr(bash_module.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(bash_module, "SHELL_ENV_PROBE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(bash_module.asyncio, "create_subprocess_exec", create_probe)
+    monkeypatch.setattr(
+        bash_module.os,
+        "killpg",
+        lambda process_group_id, signal_number: killed_process_groups.append(
+            (process_group_id, signal_number)
+        ),
+        raising=False,
+    )
+    monkeypatch.setenv("VBOT_PROBE_FALLBACK", "fallback")
+
+    env = await bash_module._probe_shell_env()
+
+    assert env["VBOT_PROBE_FALLBACK"] == "fallback"
+    assert killed_process_groups == [(12345, 9)]
+    assert probe.communicate_calls == 2
 
 
 def test_register_bash_tool() -> None:

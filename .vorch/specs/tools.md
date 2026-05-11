@@ -48,7 +48,9 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ProcessManager` is the in-memory service behind host process execution. It
   stores process sessions by process `session_id`, isolates access by
   `ToolContext.agent_id`, scopes cancellation by `ToolContext.run_id`, keeps a
-  capped combined output buffer, and reaps finished sessions after its TTL.
+  capped combined output buffer, caps foreground stdout/stderr capture to the
+  same budget, kills process trees for explicit kill/timeout/cancel operations,
+  and reaps finished sessions after its TTL.
 - Internal `skill` tool: flat name `skill`; schema includes required `name`.
   It loads an allowed skill's `SKILL.md` body, wraps it in `<skill_content>`,
   stores the context in the current Session, and returns only a minimal status
@@ -141,6 +143,9 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   accepts absolute working directories unchanged. It uses the platform-native
   shell (`pwsh` on Windows, `bash -c` elsewhere) and blocks sensitive environment
   overrides such as `PATH`, loader hooks, and shell startup hooks.
+- `bash` probes a login shell environment once per process and falls back to
+  `os.environ` on failure or timeout. Timed-out probe processes are killed and
+  reaped best-effort before the fallback is returned.
 - `bash` non-zero process exits are successful tool results with an exit code;
   only spawn failures and tool-enforced timeouts are failure envelopes.
 - `process poll` output is incremental since the previous poll. `process log`

@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import signal
+import subprocess
 import uuid
 from asyncio.subprocess import PIPE, Process
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 from core.utils.errors import VBotError
 
@@ -19,6 +22,7 @@ FINISHED_SESSION_TTL = timedelta(minutes=30)
 SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
 SUBMIT_BYTES = b"\r\n"
+HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 
 ProcessStatus = Literal["running", "completed", "failed", "killed"]
 OutputStreamName = Literal["stdout", "stderr"]
@@ -62,6 +66,8 @@ class ProcessSession:
     truncated: bool
     stdout_lines: list[bytes]
     stderr_lines: list[bytes]
+    foreground_stdout_bytes: int
+    foreground_stderr_bytes: int
     status: ProcessStatus
     exit_code: int | None
     started_at: datetime
@@ -136,6 +142,13 @@ class ProcessManager:
             process_env.update(env)
         process_env["PYTHONIOENCODING"] = "utf-8"
 
+        if os.name == "nt":
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            start_new_session = False
+        else:
+            creationflags = 0
+            start_new_session = True
+
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdin=PIPE,
@@ -143,6 +156,8 @@ class ProcessManager:
             stderr=PIPE,
             env=process_env,
             cwd=str(cwd) if cwd is not None else None,
+            creationflags=creationflags,
+            start_new_session=start_new_session,
         )
         session_id = uuid.uuid4().hex
         session = ProcessSession(
@@ -154,6 +169,8 @@ class ProcessManager:
             truncated=False,
             stdout_lines=[],
             stderr_lines=[],
+            foreground_stdout_bytes=0,
+            foreground_stderr_bytes=0,
             status="running",
             exit_code=None,
             started_at=_utc_now(),
@@ -204,6 +221,10 @@ class ProcessManager:
                 return poll_result
 
             session.output_event.clear()
+            poll_result = await self._poll_once(session)
+            if poll_result["output"] or session.status != "running":
+                return poll_result
+
             try:
                 await asyncio.wait_for(session.output_event.wait(), timeout=remaining_seconds)
             except TimeoutError:
@@ -370,8 +391,59 @@ class ProcessManager:
         if session.foreground_capture_open:
             target = session.stdout_lines if stream_name == "stdout" else session.stderr_lines
             target.append(chunk)
+            if stream_name == "stdout":
+                session.foreground_stdout_bytes += len(chunk)
+            else:
+                session.foreground_stderr_bytes += len(chunk)
+            self._enforce_foreground_capture_cap(session, stream_name)
         session.last_output_at = _utc_now()
         self._enforce_buffer_cap(session)
+
+    def _enforce_foreground_capture_cap(
+        self,
+        session: ProcessSession,
+        newest_stream_name: OutputStreamName,
+    ) -> None:
+        overflow = (
+            session.foreground_stdout_bytes
+            + session.foreground_stderr_bytes
+            - self._buffer_cap_bytes
+        )
+        if overflow <= 0:
+            return
+
+        first_stream_name: OutputStreamName = (
+            "stderr" if newest_stream_name == "stdout" else "stdout"
+        )
+        overflow = self._trim_foreground_stream(session, first_stream_name, overflow)
+        if overflow > 0:
+            self._trim_foreground_stream(session, newest_stream_name, overflow)
+        session.truncated = True
+
+    @staticmethod
+    def _trim_foreground_stream(
+        session: ProcessSession,
+        stream_name: OutputStreamName,
+        bytes_to_remove: int,
+    ) -> int:
+        chunks = session.stdout_lines if stream_name == "stdout" else session.stderr_lines
+        while bytes_to_remove > 0 and chunks:
+            chunk = chunks[0]
+            if len(chunk) <= bytes_to_remove:
+                chunks.pop(0)
+                bytes_to_remove -= len(chunk)
+                removed = len(chunk)
+            else:
+                chunks[0] = chunk[bytes_to_remove:]
+                removed = bytes_to_remove
+                bytes_to_remove = 0
+
+            if stream_name == "stdout":
+                session.foreground_stdout_bytes -= removed
+            else:
+                session.foreground_stderr_bytes -= removed
+
+        return bytes_to_remove
 
     def _enforce_buffer_cap(self, session: ProcessSession) -> None:
         overflow = len(session.combined_buffer) - self._buffer_cap_bytes
@@ -402,11 +474,40 @@ class ProcessManager:
         session.status = "killed"
         self._close_stdin(session)
         try:
-            session.proc.kill()
+            self._kill_process_tree(session.proc)
         except ProcessLookupError:
             session.finished_at = _utc_now()
             session.stdin_open = False
         session.output_event.set()
+
+    @staticmethod
+    def _kill_process_tree(proc: Process) -> None:
+        if os.name == "nt":
+            try:
+                completed = subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+                if completed.returncode == 0:
+                    return
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            return
+
+        try:
+            kill_process_group = cast(Any, os).__dict__["killpg"]
+            kill_process_group(proc.pid, HARD_KILL_SIGNAL)
+        except ProcessLookupError:
+            raise
+        except OSError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
 
     @staticmethod
     def _close_stdin(session: ProcessSession) -> None:
