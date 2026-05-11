@@ -103,6 +103,9 @@ class TriggerService:
                 if next_run is None:
                     return
                 current_run = next_run
+        except asyncio.CancelledError:
+            self._cancel_queued_triggers(key)
+            raise
         except Exception as error:
             self._fail_queued_triggers(key, error)
             raise
@@ -121,13 +124,24 @@ class TriggerService:
             self._queues.pop(key, None)
             return None
 
-        message, future = queue.popleft()
-        if not queue:
-            self._queues.pop(key, None)
+        message, future = queue[0]
 
         try:
             run = await self._chat_loop.start_run(key[0], message, session_id=key[1])
+        except ActiveRunError as error:
+            active_run = self._chat_run_manager.active_run(agent_id=key[0], session_id=key[1])
+            if active_run is not None:
+                return active_run
+            queue.popleft()
+            if not queue:
+                self._queues.pop(key, None)
+            if not future.done():
+                future.set_exception(error)
+            return await self._start_next_queued_run(key)
         except Exception as error:
+            queue.popleft()
+            if not queue:
+                self._queues.pop(key, None)
             _LOGGER.error(
                 "Failed to start queued trigger for agent=%s session=%s: %s",
                 key[0],
@@ -139,15 +153,24 @@ class TriggerService:
                 future.set_exception(error)
             return await self._start_next_queued_run(key)
 
+        queue.popleft()
+        if not queue:
+            self._queues.pop(key, None)
         if not future.done():
             future.set_result(run)
         return run if self._queues.get(key) else None
 
-    def _fail_queued_triggers(self, key: SessionKey, error: Exception) -> None:
+    def _fail_queued_triggers(self, key: SessionKey, error: BaseException) -> None:
         queue = self._queues.pop(key, deque())
         for _message, future in queue:
             if not future.done():
                 future.set_exception(error)
+
+    def _cancel_queued_triggers(self, key: SessionKey) -> None:
+        queue = self._queues.pop(key, deque())
+        for _message, future in queue:
+            if not future.done():
+                future.cancel()
 
     def _log_subscriber_result(
         self,
@@ -155,6 +178,9 @@ class TriggerService:
         task: asyncio.Task[None],
     ) -> None:
         if task.cancelled():
+            self._cancel_queued_triggers(key)
+            if self._subscriber_tasks.get(key) is task:
+                self._subscriber_tasks.pop(key, None)
             return
         error = task.exception()
         if error is None:
@@ -164,5 +190,5 @@ class TriggerService:
             key[0],
             key[1],
             error,
-            exc_info=error,
+            exc_info=(type(error), error, error.__traceback__),
         )

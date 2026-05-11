@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ import pytest
 
 from core.chat import Run, RunStatus
 from server.delegates import dispatch_rpc
+from server.events import ServerEventBus
 
 
 def make_state(run: Run) -> SimpleNamespace:
@@ -105,3 +107,37 @@ async def test_automation_trigger_allows_omitted_session_id() -> None:
         "Start",
         session_id=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_automation_trigger_bridges_run_events_to_event_bus() -> None:
+    # Arrange
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    state = make_state(run)
+    state.event_bus = ServerEventBus()
+
+    # Act
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "automation.trigger",
+            "params": {
+                "agent_id": "coder",
+                "message": "Start work",
+                "session_id": "session-one",
+            },
+        },
+    )
+    await asyncio.sleep(0)
+    run.emit("assistant_output", {"content": "Done", "reasoning_meta": {"hidden": True}})
+    run.mark_completed("done")
+    await asyncio.sleep(0)
+
+    # Assert
+    assert response["ok"] is True
+    assert [event["type"] for event in state.event_bus.events] == ["run_output", "run_completed"]
+    output_payload = state.event_bus.events[0]["payload"]
+    assert output_payload["run_id"] == "run-one"
+    assert output_payload["output"] == {"content": "Done"}
+    completed_payload = state.event_bus.events[1]["payload"]
+    assert completed_payload["status"] == RunStatus.COMPLETED.value
