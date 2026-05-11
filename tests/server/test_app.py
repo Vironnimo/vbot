@@ -44,6 +44,8 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
             "port_source": "default",
         }
         assert runtime.chat_runs is app.state.chat_runs
+        assert runtime.chat_run_manager is app.state.chat_runs
+        assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
 
@@ -105,6 +107,7 @@ def test_create_app_lifecycle_stops_runtime_on_shutdown(tmp_path: Path) -> None:
         assert "not started" in str(exc)
     else:
         raise AssertionError("runtime storage should be unavailable after shutdown")
+    assert runtime.chat_runs is None
 
 
 def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:

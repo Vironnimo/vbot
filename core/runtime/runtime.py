@@ -104,6 +104,7 @@ class Runtime:
         self._skills: SkillRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._chat_run_manager: ChatRunManager | None = None
+        self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
         self._system_prompts: SystemPromptManager | None = None
@@ -206,6 +207,7 @@ class Runtime:
         self._trigger_service = None
         self._chat_loop = None
         self._chat_run_manager = None
+        self.chat_runs = None
         self._system_prompts = None
 
     def _resolve_resources_path(self) -> Path:
