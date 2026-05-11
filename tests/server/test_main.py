@@ -286,6 +286,86 @@ def test_managed_logger_proxy_handler_suppresses_app_websocket_lifecycle_noise()
     assert captured_records == []
 
 
+def test_managed_logger_proxy_handler_suppresses_runtime_app_websocket_open_noise() -> None:
+    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
+    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
+    logger = logging.getLogger("uvicorn.error")
+    target_logger = logging.getLogger("vbot.server.uvicorn")
+    captured_records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    capture_handler = CaptureHandler()
+    original_target_level = target_logger.level
+    original_target_propagate = target_logger.propagate
+    logger.handlers = []
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    target_logger.addHandler(capture_handler)
+    target_logger.setLevel(logging.INFO)
+    target_logger.propagate = True
+
+    try:
+        logger.info("connection open")
+    finally:
+        target_logger.removeHandler(capture_handler)
+        target_logger.setLevel(original_target_level)
+        target_logger.propagate = original_target_propagate
+        logger.removeHandler(handler)
+        handler.close()
+        capture_handler.close()
+
+    assert captured_records == []
+
+
+def test_proxy_handler_suppresses_runtime_accepted_handshake_message() -> None:
+    handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
+    handler.addFilter(QuietLogsWebSocketLifecycleFilter())
+    logger = logging.getLogger("uvicorn.error")
+    target_logger = logging.getLogger("vbot.server.uvicorn")
+    captured_records: list[logging.LogRecord] = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    capture_handler = CaptureHandler()
+    original_target_level = target_logger.level
+    original_target_propagate = target_logger.propagate
+    logger.handlers = []
+    logger.propagate = False
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    target_logger.addHandler(capture_handler)
+    target_logger.setLevel(logging.INFO)
+    target_logger.propagate = True
+
+    record = logger.makeRecord(
+        name="uvicorn.error",
+        level=logging.INFO,
+        fn=__file__,
+        lno=1,
+        msg='127.0.0.1:55090 - "WebSocket /ws" [accepted]',
+        args=(),
+        exc_info=None,
+    )
+
+    try:
+        logger.handle(record)
+    finally:
+        target_logger.removeHandler(capture_handler)
+        target_logger.setLevel(original_target_level)
+        target_logger.propagate = original_target_propagate
+        logger.removeHandler(handler)
+        handler.close()
+        capture_handler.close()
+
+    assert captured_records == []
+
+
 def test_managed_logger_proxy_handler_keeps_logs_websocket_errors() -> None:
     handler = ManagedLoggerProxyHandler("vbot.server.uvicorn")
     handler.addFilter(QuietLogsWebSocketLifecycleFilter())
