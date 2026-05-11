@@ -139,6 +139,9 @@ export const englishCatalog = Object.freeze({
   'chat.subagent.viewSession': 'view session',
   'chat.subagent.running': 'running',
   'chat.subagent.resultStatus': 'Status: {status}',
+  'chat.subagentSessionReadOnly': 'Viewing a sub-agent session',
+  'chat.subagentSessionReadOnlyHint':
+    'This historical session is read-only. Start a new session or send from the current agent session to continue chatting.',
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow': 'skills',
