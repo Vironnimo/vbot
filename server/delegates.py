@@ -33,6 +33,7 @@ from core.chat import (
     RunEvent,
     RunNotFoundError,
 )
+from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.storage.storage import PROMPT_FRAGMENT_NAMES
@@ -1059,6 +1060,8 @@ RUN_DELTA_EVENT_TYPES = {
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
+    TOOL_CALL_STDOUT_EVENT,
+    TOOL_CALL_STDERR_EVENT,
 }
 RUN_TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_CANCELLED_EVENT, RUN_FAILED_EVENT}
 SERVER_EVENT_TYPES = {
