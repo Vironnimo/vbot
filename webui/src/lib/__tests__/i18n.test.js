@@ -227,6 +227,9 @@ describe('i18n t()', () => {
       'logs.file',
       'logs.emptyOption',
       'logs.levelFilter',
+      'logs.sort',
+      'logs.sort.newest',
+      'logs.sort.oldest',
       'logs.level.all',
       'logs.level.info',
       'logs.level.warn',
@@ -266,6 +269,9 @@ describe('i18n t()', () => {
     );
     expect(t('logs.level.warn')).toBe('WARN');
     expect(t('logs.level.error')).toBe('ERROR');
+    expect(t('logs.sort')).toBe('Order');
+    expect(t('logs.sort.newest')).toBe('Newest first');
+    expect(t('logs.sort.oldest')).toBe('Oldest first');
     expect(t('logs.searchPlaceholder')).toContain('logger');
     expect(t('logs.stream.connected')).toBe('Live');
     expect(t('logs.stream.error')).toBe('Live update error');

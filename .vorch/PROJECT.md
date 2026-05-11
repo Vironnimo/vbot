@@ -175,6 +175,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   returns a short-lived cursor so the log socket can replay anything appended
   between the initial file read and websocket connect. It does not reuse the
   shared app event bus.
+- **Logs view filtering and ordering stay local.** The WebUI Logs tab loads one
+  selected daily file, then applies level filtering, text search, and
+  newest/oldest ordering in-memory without re-reading the file for those UI
+  controls.
 - **Provider usability for model selection is credential-based, not
   health-based.** A provider is considered usable when its configured
   credential is present and non-empty. Missing or empty credentials mean the
