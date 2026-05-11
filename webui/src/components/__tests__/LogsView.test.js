@@ -77,10 +77,10 @@ describe('LogsView', () => {
       { cursor: 'cursor-initial' },
     );
     expect(document.body.textContent).toContain('Ready');
-    expect(selectByLabel('File').value).toBe('2026-05-11');
+    expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
   });
 
-  it('filters entries by level and search text without extra backend calls', async () => {
+  it('filters and sorts entries locally through simple dropdown controls', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
       default_file: '2026-05-11',
@@ -88,8 +88,21 @@ describe('LogsView', () => {
     readLogFileMock.mockResolvedValue({
       file: '2026-05-11',
       entries: [
-        entry({ level: 'info', message: 'Ready' }),
-        entry({ level: 'error', message: 'Failed to boot' }),
+        entry({
+          timestamp: '2026-05-11 09:00:00',
+          level: 'info',
+          message: 'Ready',
+        }),
+        entry({
+          timestamp: '2026-05-11 09:01:00',
+          level: 'warn',
+          message: 'Config drift',
+        }),
+        entry({
+          timestamp: '2026-05-11 09:02:00',
+          level: 'error',
+          message: 'Failed to boot',
+        }),
       ],
     });
 
@@ -99,23 +112,51 @@ describe('LogsView', () => {
       document.body.textContent.includes('Failed to boot'),
     );
 
+    expect(logEntryMessages()).toEqual([
+      'Failed to boot',
+      'Config drift',
+      'Ready',
+    ]);
+
     const initialReadCalls = readLogFileMock.mock.calls.length;
 
-    selectByLabel('Level').value = 'error';
-    selectByLabel('Level').dispatchEvent(
-      new Event('change', { bubbles: true }),
-    );
-    flushSync();
+    openSimpleDropdown('logs-level-filter');
+    expect(simpleOptionLabels('logs-level-filter')).toEqual([
+      'All levels',
+      'ERROR',
+      'INFO',
+      'WARN',
+    ]);
+    selectSimpleOption('logs-level-filter', 'ERROR');
 
     await waitForCondition(() => !document.body.textContent.includes('Ready'));
     expect(document.body.textContent).toContain('Failed to boot');
+    expect(document.body.textContent).not.toContain('Config drift');
 
     inputByLabel('Search').value = 'boot';
     inputByLabel('Search').dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
 
+    openSimpleDropdown('logs-level-filter');
+    selectSimpleOption('logs-level-filter', 'All levels');
+    inputByLabel('Search').value = '';
+    inputByLabel('Search').dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    openSimpleDropdown('logs-sort-order');
+    expect(simpleOptionLabels('logs-sort-order')).toEqual([
+      'Newest first',
+      'Oldest first',
+    ]);
+    selectSimpleOption('logs-sort-order', 'Oldest first');
+
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
-    expect(document.body.textContent).toContain('Failed to boot');
+    expect(logEntryMessages()).toEqual([
+      'Ready',
+      'Config drift',
+      'Failed to boot',
+    ]);
+    expect(simpleTriggerLabel('logs-sort-order')).toBe('Oldest first');
   });
 
   it('switches files and resubscribes to the selected file only', async () => {
@@ -136,9 +177,8 @@ describe('LogsView', () => {
     );
 
     const firstConnection = streamConnections[0];
-    selectByLabel('File').value = '2026-05-10';
-    selectByLabel('File').dispatchEvent(new Event('change', { bubbles: true }));
-    flushSync();
+    openSimpleDropdown('logs-file');
+    selectSimpleOption('logs-file', '2026-05-10');
 
     await waitForCondition(
       () => subscribeLogEventsMock.mock.calls.length === 2,
@@ -179,7 +219,7 @@ describe('LogsView', () => {
     );
   });
 
-  it('applies live append events and renders continuation lines', async () => {
+  it('renders dense rows and applies live append events without extra reads', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
       default_file: '2026-05-11',
@@ -193,6 +233,7 @@ describe('LogsView', () => {
     mountedComponent = mount(LogsView, { target: document.body });
     flushSync();
     await waitForCondition(() => streamConnections.length === 1);
+    const initialReadCalls = readLogFileMock.mock.calls.length;
 
     streamConnections[0].emitOpen();
     streamConnections[0].emitEvent({
@@ -212,9 +253,19 @@ describe('LogsView', () => {
       document.body.textContent.includes('Traceback line'),
     );
 
-    expect(document.body.textContent).toContain('Failed');
-    expect(document.body.textContent).toContain('Traceback line');
+    const rows = Array.from(document.querySelectorAll('.logs-entry'));
+    const errorRow = rows.find((row) =>
+      row.classList.contains('logs-entry--error'),
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelectorAll('span')).toHaveLength(4);
+    expect(errorRow).toBeTruthy();
+    expect(errorRow?.textContent).toContain('Failed Traceback line');
+    expect(errorRow?.getAttribute('title')).toBe('Failed\nTraceback line');
+    expect(document.body.querySelector('select')).toBeNull();
     expect(document.body.textContent).toContain('Live');
+    expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
   });
 
   it('cleans up the active stream on destroy', async () => {
@@ -313,16 +364,59 @@ function entry(overrides = {}) {
   };
 }
 
-function selectByLabel(label) {
+function inputByLabel(label) {
   const element = document.body.querySelector(`[aria-label="${label}"]`);
   expect(element).toBeTruthy();
   return element;
 }
 
-function inputByLabel(label) {
-  const element = document.body.querySelector(`[aria-label="${label}"]`);
-  expect(element).toBeTruthy();
-  return element;
+function logEntryMessages() {
+  return Array.from(document.querySelectorAll('.logs-entry__message')).map(
+    (element) => element.textContent.trim(),
+  );
+}
+
+function openSimpleDropdown(id) {
+  const trigger = getSimpleTrigger(id);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function selectSimpleOption(id, label) {
+  const option = Array.from(
+    getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
+  ).find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function simpleOptionLabels(id) {
+  return Array.from(
+    getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
+  ).map((option) => option.textContent.trim());
+}
+
+function simpleTriggerLabel(id) {
+  return (
+    getSimpleTrigger(id)
+      .querySelector('.dropdown-primitive__trigger-label')
+      ?.textContent?.trim() ?? ''
+  );
+}
+
+function getSimpleRoot(id) {
+  return getSimpleTrigger(id)?.closest('.dropdown-primitive');
+}
+
+function getSimpleTrigger(id) {
+  const trigger = document.body.querySelector(`button#${id}`);
+  expect(trigger).toBeTruthy();
+  return trigger;
+}
+
+function getSimpleList(id) {
+  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
 }
 
 async function waitForCondition(check, attempts = 20, withTimers = false) {

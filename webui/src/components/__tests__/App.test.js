@@ -117,9 +117,11 @@ describe('App', () => {
       'Logs',
     );
     expect(listLogsMock).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('select[aria-label="File"]')?.value).toBe(
-      '2026-05-11.log',
-    );
+    expect(
+      document
+        .querySelector('button#logs-file .dropdown-primitive__trigger-label')
+        ?.textContent?.trim(),
+    ).toBe('2026-05-11.log');
     expect(document.body.textContent).toContain('Current file: 2026-05-11.log');
   });
 });
