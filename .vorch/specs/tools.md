@@ -56,6 +56,15 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   stores the context in the current Session, and returns only a minimal status
   envelope with the skill name, activation status, message, and resource list.
   It is system-managed and not part of user-managed tool catalogs.
+- Built-in `subagent` tool: flat name `subagent`; schema includes required
+  `content`, optional `agent_id`, and optional `blocking`. It creates a new
+  persisted Session for the target Agent, starts a sub-agent Run, enforces
+  configured depth/per-turn limits, and returns either a running descriptor or a
+  completed result envelope.
+- Built-in `subagent_result` tool: flat name `subagent_result`; schema includes
+  required `session_id` plus optional `agent_id` and `run_id`. It fetches a
+  live Run result when available or falls back to the last non-empty assistant
+  message in the target JSONL Session.
 
 ## Interfaces
 
@@ -88,6 +97,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ProcessManager.cancel_scope(scope_key) -> None` — kills all active sessions
   associated with a Run regardless of Agent owner.
 - `register_skill_tool(registry, skill_registry) -> None` — registers the internal `skill` tool.
+- `register_subagent_tools(registry, runtime, trigger_service, batch_tracker) -> None` — registers the built-in sub-agent tools.
+- `SubAgentBatchTracker(trigger_service)` — tracks in-memory sub-agent batches by parent `(agent_id, session_id, run_id)` and sends one automation trigger when all unfetched sub-agent Runs finish.
 
 ## Conventions
 
@@ -100,6 +111,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - The internal `skill` tool result must not include the full `<skill_content>` payload or raw skill body. The session-scoped skill note is the single source of full instructions for the next provider request.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
 - Tool execution failures are represented as failure envelopes where possible.
+- Sub-agent batch tracking is in-memory only; it does not persist across process restarts.
 - `read` is the authoritative read-like tool. It is the vControl-derived
   implementation adapted for vBot module naming, `ToolContext` path resolution,
   registry metadata/schema, and stable result envelopes.
