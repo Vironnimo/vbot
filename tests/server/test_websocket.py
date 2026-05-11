@@ -329,6 +329,107 @@ def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Pat
     }
 
 
+def test_log_websocket_filters_routine_websocket_noise_from_append_events(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
+    ):
+        log_file.write_text(
+            "\n".join(
+                [
+                    "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                    "2026-05-11 09:00:01 [INFO] vbot.server.uvicorn - "
+                    '127.0.0.1:55090 - "WebSocket /ws" [accepted]',
+                    "2026-05-11 09:00:02 [INFO] vbot.server.uvicorn - connection open",
+                    "2026-05-11 09:00:03 [WARN] vbot.server.uvicorn - keepalive ping timeout",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
+
+    assert event == {
+        "type": "append",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:03",
+                "level": "warn",
+                "logger_name": "vbot.server.uvicorn",
+                "message": "keepalive ping timeout",
+                "continuation": "",
+            }
+        ],
+    }
+
+
+def test_log_websocket_filters_routine_websocket_noise_from_reset_events(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    log_file.write_text(
+        "\n".join(
+            [
+                "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
+                "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with (
+        TestClient(app) as client,
+        client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
+    ):
+        log_file.write_text(
+            "\n".join(
+                [
+                    "2026-05-11 09:00:02 [INFO] vbot.server.uvicorn - "
+                    '127.0.0.1:60756 - "WebSocket /ws/logs?cursor=abc" [accepted]',
+                    "2026-05-11 09:00:03 [INFO] vbot.server.uvicorn - connection closed",
+                    "2026-05-11 09:00:04 [ERROR] vbot.server.uvicorn - opening handshake failed",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        event = websocket.receive_json()
+        websocket.close()
+
+    _close_log_viewer_now(app)
+
+    assert event == {
+        "type": "reset",
+        "file": "2026-05-11",
+        "entries": [
+            {
+                "timestamp": "2026-05-11 09:00:04",
+                "level": "error",
+                "logger_name": "vbot.server.uvicorn",
+                "message": "opening handshake failed",
+                "continuation": "",
+            }
+        ],
+    }
+
+
 def test_log_websocket_disconnect_releases_watcher_resources(tmp_path: Path) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()

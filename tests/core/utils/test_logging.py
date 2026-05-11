@@ -10,7 +10,31 @@ from core.utils.logging import (
     LogManager,
     QuietLogsWebSocketLifecycleFilter,
     is_logs_websocket_lifecycle_record,
+    is_routine_websocket_lifecycle_message,
 )
+
+
+def make_websocket_record(
+    *,
+    level: int = logging.INFO,
+    message: str,
+    path: str | None = None,
+    args: tuple[object, ...] = (),
+) -> logging.LogRecord:
+    """Build a websocket-flavored log record for filter tests."""
+
+    record = logging.LogRecord(
+        name="websockets.server",
+        level=level,
+        pathname=__file__,
+        lineno=1,
+        msg=message,
+        args=args,
+        exc_info=None,
+    )
+    if path is not None:
+        record.websocket = SimpleNamespace(request=SimpleNamespace(path=path))
+    return record
 
 
 class DateSequence:
@@ -107,16 +131,14 @@ def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
 
 
 def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_log_stream() -> None:
-    record = logging.LogRecord(
-        name="websockets.server",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="connection open",
-        args=(),
-        exc_info=None,
-    )
-    record.websocket = SimpleNamespace(request=SimpleNamespace(path="/ws/logs?cursor=abc"))
+    record = make_websocket_record(message="connection open", path="/ws/logs?cursor=abc")
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_app_socket() -> None:
+    record = make_websocket_record(message="connection closed", path="/ws?after_sequence=4")
 
     assert is_logs_websocket_lifecycle_record(record) is True
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
@@ -125,78 +147,124 @@ def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_log_stream(
 def test_logs_websocket_lifecycle_filter_suppresses_accepted_handshake_info_for_log_stream() -> (
     None
 ):
-    record = logging.LogRecord(
-        name="websockets.server",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg='%s - "WebSocket %s" [accepted]',
+    record = make_websocket_record(
+        message='%s - "WebSocket %s" [accepted]',
         args=("127.0.0.1", "/ws/logs?cursor=abc"),
-        exc_info=None,
     )
 
     assert is_logs_websocket_lifecycle_record(record) is True
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
 
 
-def test_logs_websocket_lifecycle_filter_keeps_debug_diagnostics_for_log_stream() -> None:
-    record = logging.LogRecord(
-        name="websockets.server",
-        level=logging.DEBUG,
-        pathname=__file__,
-        lineno=1,
-        msg="connection open",
-        args=(),
-        exc_info=None,
+def test_logs_websocket_lifecycle_filter_suppresses_accepted_handshake_info_for_app_socket() -> (
+    None
+):
+    record = make_websocket_record(
+        message='%s - "WebSocket %s" [accepted]',
+        args=("127.0.0.1", "/ws?after_sequence=9"),
     )
-    record.websocket = SimpleNamespace(request=SimpleNamespace(path="/ws/logs"))
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_open_without_path() -> None:
+    record = make_websocket_record(message="connection open")
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_connection_closed_without_path() -> (
+    None
+):
+    record = make_websocket_record(message="connection closed")
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_logs_websocket_lifecycle_filter_suppresses_runtime_accepted_handshake_without_args() -> (
+    None
+):
+    record = make_websocket_record(message='127.0.0.1:55090 - "WebSocket /ws" [accepted]')
+    record.name = "uvicorn.error"
+
+    assert is_logs_websocket_lifecycle_record(record) is True
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is False
+
+
+def test_routine_websocket_lifecycle_matcher_suppresses_persisted_app_socket_accept_message() -> (
+    None
+):
+    assert (
+        is_routine_websocket_lifecycle_message(
+            level="INFO",
+            logger_name="vbot.server.uvicorn",
+            message='127.0.0.1:55090 - "WebSocket /ws" [accepted]',
+        )
+        is True
+    )
+
+
+def test_routine_websocket_lifecycle_matcher_keeps_persisted_log_socket_error_message() -> None:
+    assert (
+        is_routine_websocket_lifecycle_message(
+            level="ERROR",
+            logger_name="vbot.server.uvicorn",
+            message='127.0.0.1:60756 - "WebSocket /ws/logs?cursor=abc" handshake failed',
+        )
+        is False
+    )
+
+
+def test_logs_websocket_lifecycle_filter_keeps_debug_diagnostics_for_log_stream() -> None:
+    record = make_websocket_record(level=logging.DEBUG, message="connection open", path="/ws/logs")
 
     assert is_logs_websocket_lifecycle_record(record) is False
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
 
 
 def test_logs_websocket_lifecycle_filter_keeps_errors_for_log_stream() -> None:
-    record = logging.LogRecord(
-        name="websockets.server",
+    record = make_websocket_record(
         level=logging.ERROR,
-        pathname=__file__,
-        lineno=1,
-        msg="opening handshake failed",
-        args=(),
-        exc_info=None,
+        message="opening handshake failed",
+        path="/ws/logs",
     )
-    record.websocket = SimpleNamespace(request=SimpleNamespace(path="/ws/logs"))
 
     assert is_logs_websocket_lifecycle_record(record) is False
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
 
 
-def test_logs_websocket_lifecycle_filter_keeps_non_log_stream_websocket_info() -> None:
-    record = logging.LogRecord(
-        name="uvicorn.error",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg='%s - "WebSocket %s" [accepted]',
-        args=("127.0.0.1", "/ws"),
-        exc_info=None,
-    )
+def test_logs_websocket_lifecycle_filter_keeps_non_lifecycle_info_for_app_socket() -> None:
+    record = make_websocket_record(message="keepalive ping timeout", path="/ws")
 
     assert is_logs_websocket_lifecycle_record(record) is False
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
 
 
 def test_logs_websocket_lifecycle_filter_keeps_non_lifecycle_info_for_log_stream() -> None:
-    record = logging.LogRecord(
-        name="websockets.server",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="keepalive ping timeout",
-        args=(),
-        exc_info=None,
+    record = make_websocket_record(message="keepalive ping timeout", path="/ws/logs")
+
+    assert is_logs_websocket_lifecycle_record(record) is False
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
+
+
+def test_logs_websocket_lifecycle_filter_keeps_other_websocket_path_info() -> None:
+    record = make_websocket_record(
+        message='%s - "WebSocket %s" [accepted]',
+        args=("127.0.0.1", "/ws/other"),
     )
-    record.websocket = SimpleNamespace(request=SimpleNamespace(path="/ws/logs"))
+
+    assert is_logs_websocket_lifecycle_record(record) is False
+    assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
+
+
+def test_logs_websocket_lifecycle_filter_keeps_non_websocket_connection_open_info() -> None:
+    record = make_websocket_record(message="connection open")
+    record.name = "some.other.logger"
 
     assert is_logs_websocket_lifecycle_record(record) is False
     assert QuietLogsWebSocketLifecycleFilter().filter(record) is True
