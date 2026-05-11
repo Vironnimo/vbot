@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
@@ -44,8 +45,41 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
             "port_source": "default",
         }
         assert runtime.chat_runs is app.state.chat_runs
+        assert runtime.chat_run_manager is app.state.chat_runs
+        assert runtime.trigger_service is not None
 
     assert runtime.logger is not None
+
+
+def test_create_app_wires_runtime_owned_chat_runs_for_lazy_stub_runtime(tmp_path: Path) -> None:
+    runtime = _LazyChatRunRuntime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app):
+        assert isinstance(app.state.chat_runs, ChatRunManager)
+        assert runtime.chat_runs is app.state.chat_runs
+
+
+def test_create_app_falls_back_to_chat_runs_for_stub_runtime_error(tmp_path: Path) -> None:
+    runtime = _UnavailableChatRunRuntime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app):
+        assert isinstance(app.state.chat_runs, ChatRunManager)
+        assert runtime.chat_runs is app.state.chat_runs
+
+
+def test_runtime_chat_runs_reraises_runtime_lifecycle_error(tmp_path: Path) -> None:
+    import server.app as server_app
+
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+
+    try:
+        server_app._runtime_chat_runs(runtime)
+    except RuntimeError as exc:
+        assert "Runtime not started" in str(exc)
+    else:
+        raise AssertionError("real Runtime lifecycle error should not be swallowed")
 
 
 def test_create_app_uses_explicit_server_bind_state(tmp_path: Path) -> None:
@@ -105,6 +139,7 @@ def test_create_app_lifecycle_stops_runtime_on_shutdown(tmp_path: Path) -> None:
         assert "not started" in str(exc)
     else:
         raise AssertionError("runtime storage should be unavailable after shutdown")
+    assert runtime.chat_runs is None
 
 
 def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:
@@ -156,3 +191,36 @@ def _write_webui_build(tmp_path: Path) -> Path:
     )
     (assets_dir / "app.js").write_text("console.log('webui');", encoding="utf-8")
     return dist_dir
+
+
+class _LazyChatRunRuntime:
+    def __init__(self, data_dir: Path) -> None:
+        self.chat_runs = None
+        self._chat_run_manager = ChatRunManager()
+        self.storage = type("Storage", (), {"data_dir": data_dir})()
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        return self._chat_run_manager
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None
+
+
+class _UnavailableChatRunRuntime:
+    def __init__(self, data_dir: Path) -> None:
+        self.chat_runs = None
+        self.storage = type("Storage", (), {"data_dir": data_dir})()
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        raise RuntimeError("stub chat run manager unavailable")
+
+    def start(self) -> None:
+        return None
+
+    def stop(self) -> None:
+        return None

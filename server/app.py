@@ -95,7 +95,6 @@ def create_app(
             app_runtime.stop()
 
     app = FastAPI(lifespan=lifespan)
-    _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
 
     @app.get("/health")
     async def health() -> JsonObject:
@@ -108,8 +107,9 @@ def create_app(
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
+        chat_runs = _app_chat_runs(request.app.state)
         try:
-            run = request.app.state.chat_runs.get(run_id)
+            run = chat_runs.get(run_id)
         except RunNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         after_sequence = _replay_after_sequence(request)
@@ -157,13 +157,48 @@ def _initialize_app_state(
     app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
 ) -> None:
     app.state.runtime = runtime
-    app.state.chat_runs = ChatRunManager()
+    app.state.chat_runs = _runtime_chat_runs(runtime)
     app.state.chat_loop = ChatLoop(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
-    _attach_run_manager(runtime, app.state.chat_runs)
+
+
+def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
+    run_manager = getattr(runtime, "chat_runs", None)
+    if isinstance(run_manager, ChatRunManager):
+        return run_manager
+
+    try:
+        run_manager = runtime.chat_run_manager
+    except AttributeError:
+        run_manager = None
+    except RuntimeError:
+        if isinstance(runtime, Runtime):
+            raise
+        run_manager = None
+    if isinstance(run_manager, ChatRunManager):
+        runtime.chat_runs = run_manager
+        return run_manager
+
+    run_manager = ChatRunManager()
+    runtime.chat_runs = run_manager
+    return run_manager
+
+
+def _app_chat_runs(state: Any) -> ChatRunManager:
+    run_manager = getattr(state, "chat_runs", None)
+    if isinstance(run_manager, ChatRunManager):
+        return run_manager
+
+    runtime = getattr(state, "runtime", None)
+    runtime_run_manager = getattr(runtime, "chat_runs", None)
+    if isinstance(runtime_run_manager, ChatRunManager):
+        state.chat_runs = runtime_run_manager
+        return runtime_run_manager
+
+    raise HTTPException(status_code=503, detail="Chat run manager is unavailable")
 
 
 def _resolve_server_bind(
@@ -282,10 +317,6 @@ def _mount_webui(app: FastAPIType) -> None:
         if requested_file is not None:
             return FileResponse(requested_file)
         return FileResponse(webui_index_file)
-
-
-def _attach_run_manager(runtime: Any, run_manager: ChatRunManager) -> None:
-    runtime.chat_runs = run_manager
 
 
 async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
