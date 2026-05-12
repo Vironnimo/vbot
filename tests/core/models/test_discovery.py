@@ -14,6 +14,7 @@ from core.models.discovery import (
     PassthroughModelFilter,
     PassthroughRawFilter,
     apply_overrides,
+    normalize_openai_compatible_tolerant,
     normalize_openrouter,
     refresh_models,
 )
@@ -21,6 +22,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
 API_KEY = "test-openrouter-key"
 
 
@@ -52,6 +54,31 @@ def openrouter_config() -> ProviderConfig:
         ],
         defaults={"max_tokens": 8192},
         extra_headers={"X-Title": "vBot"},
+        models_endpoint="/models",
+    )
+
+
+@pytest.fixture()
+def github_copilot_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="github-copilot",
+        name="GitHub Copilot",
+        adapter="openai_compatible",
+        base_url="https://api.githubcopilot.com",
+        connections=[
+            ConnectionConfig(
+                id="oauth",
+                type="oauth",
+                label="GitHub OAuth",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="GITHUB_COPILOT_TOKEN",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
+        extra_headers={"Copilot-Integration-Id": "vbot"},
         models_endpoint="/models",
     )
 
@@ -159,6 +186,66 @@ class TestNormalizeOpenRouter:
 
         model = normalize_openrouter(raw_model, {})
         assert model.capabilities.vision is vision
+
+
+class TestNormalizeOpenAICompatibleTolerant:
+    def test_missing_architecture_uses_top_level_fields_and_defaults_tools(self):
+        raw_model = {
+            "id": "gpt-4.1",
+            "context_window": 1047576,
+            "max_output_tokens": 32768,
+            "supported_parameters": ["response_format"],
+        }
+
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
+
+        assert model == Model(
+            model_id="gpt-4.1",
+            name="gpt-4.1",
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=1047576,
+            max_output_tokens=32768,
+        )
+
+    def test_non_object_architecture_is_ignored_for_copilot_payloads(self):
+        raw_model = {
+            "id": "claude-sonnet-4",
+            "name": "Claude Sonnet 4",
+            "architecture": "unknown",
+            "contextLength": "ignored",
+            "contextWindow": 200000,
+            "top_provider": {"maxCompletionTokens": 64000},
+            "input_modalities": ["text", {"type": "image"}],
+        }
+
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
+
+        assert model.name == "Claude Sonnet 4"
+        assert model.context_window == 200000
+        assert model.max_output_tokens == 64000
+        assert model.capabilities.vision is True
+
+    def test_tolerant_normalization_uses_explicit_metadata_for_capabilities(self):
+        raw_model = {
+            "id": "o4-mini",
+            "name": "o4-mini",
+            "context_length": 128000,
+            "top_provider": {"tools": False},
+            "supports_json_mode": False,
+            "reasoning": {"supported": True},
+        }
+
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
+
+        assert model.capabilities.tools is False
+        assert model.capabilities.json_mode is False
+        assert model.capabilities.reasoning.supported is True
+        assert model.max_output_tokens == 8192
 
 
 class TestApplyOverrides:
@@ -366,6 +453,50 @@ class TestRefreshModels:
 
         assert route.calls.last.request.headers["x-api-key"] == f"Token {API_KEY}"
         assert "Authorization" not in route.calls.last.request.headers
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_uses_tolerant_normalizer_for_github_copilot(
+        self,
+        tmp_path: Path,
+        github_copilot_config: ProviderConfig,
+    ):
+        route = respx.get(GITHUB_COPILOT_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "gpt-4.1",
+                            "context_window": 1047576,
+                            "max_output_tokens": 32768,
+                        },
+                        {
+                            "id": "claude-sonnet-4",
+                            "name": "Claude Sonnet 4",
+                            "architecture": "not-an-object",
+                            "contextWindow": 200000,
+                            "top_provider": {"max_completion_tokens": 64000},
+                        },
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(github_copilot_config, API_KEY, tmp_path / "resources")
+
+        registry = ModelRegistry.load(tmp_path / "resources")
+        model_without_name = registry.get("github-copilot", "gpt-4.1")
+        model_with_non_object_architecture = registry.get(
+            "github-copilot",
+            "claude-sonnet-4",
+        )
+        assert result["model_count"] == 2
+        assert model_without_name.name == "gpt-4.1"
+        assert model_with_non_object_architecture.context_window == 200000
+        assert model_with_non_object_architecture.max_output_tokens == 64000
+        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+        assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
 
     @respx.mock
     @pytest.mark.asyncio
