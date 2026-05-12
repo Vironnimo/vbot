@@ -2,23 +2,74 @@
   "data": [
     {
       "capabilities": {
+        "family": "claude-sonnet-4.6",
+        "limits": {
+          "max_context_window_tokens": 200000,
+          "max_output_tokens": 32000
+        },
+        "supports": {
+          "adaptive_thinking": true,
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "reasoning_effort": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "tool_calls": true,
+          "vision": true
+        }
+      },
+      "id": "claude-sonnet-4.6",
+      "name": "Claude Sonnet 4.6",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/v1/messages"
+      ],
+      "vendor": "Anthropic",
+      "version": "claude-sonnet-4.6"
+    },
+    {
+      "capabilities": {
+        "family": "gpt-5.2",
+        "limits": {
+          "max_context_window_tokens": 264000,
+          "max_output_tokens": 64000
+        },
+        "supports": {
+          "parallel_tool_calls": true,
+          "reasoning_effort": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "tool_calls": true,
+          "vision": true
+        }
+      },
+      "id": "gpt-5.2",
+      "name": "GPT-5.2",
+      "supported_endpoints": [
+        "/chat/completions",
+        "/responses",
+        "ws:/responses"
+      ],
+      "vendor": "OpenAI",
+      "version": "gpt-5.2"
+    },
+    {
+      "capabilities": {
         "family": "gpt-5-mini",
         "limits": {
           "max_context_window_tokens": 264000,
-          "max_output_tokens": 64000,
-          "max_prompt_tokens": 128000,
-          "vision": {
-            "max_prompt_image_size": 3145728,
-            "max_prompt_images": 1,
-            "supported_media_types": [
-              "image/jpeg",
-              "image/png",
-              "image/webp",
-              "image/gif"
-            ]
-          }
+          "max_output_tokens": 64000
         },
-        "object": "model_capabilities",
         "supports": {
           "parallel_tool_calls": true,
           "reasoning_effort": [
@@ -30,20 +81,10 @@
           "structured_outputs": true,
           "tool_calls": true,
           "vision": true
-        },
-        "tokenizer": "o200k_base",
-        "type": "chat"
+        }
       },
       "id": "gpt-5-mini",
-      "model_picker_category": "lightweight",
-      "model_picker_enabled": true,
       "name": "GPT-5 mini",
-      "object": "model",
-      "policy": {
-        "state": "enabled",
-        "terms": "Enable access to the latest GPT-5 mini model from OpenAI. [Learn more about how GitHub Copilot serves GPT-5 mini](https://gh.io/copilot-openai)."
-      },
-      "preview": false,
       "supported_endpoints": [
         "/chat/completions",
         "/responses",
@@ -57,21 +98,8 @@
         "family": "gemini-2.5-pro",
         "limits": {
           "max_context_window_tokens": 128000,
-          "max_output_tokens": 64000,
-          "max_prompt_tokens": 128000,
-          "vision": {
-            "max_prompt_image_size": 3145728,
-            "max_prompt_images": 10,
-            "supported_media_types": [
-              "image/jpeg",
-              "image/png",
-              "image/webp",
-              "image/heic",
-              "image/heif"
-            ]
-          }
+          "max_output_tokens": 64000
         },
-        "object": "model_capabilities",
         "supports": {
           "max_thinking_budget": 32768,
           "min_thinking_budget": 128,
@@ -79,20 +107,10 @@
           "streaming": true,
           "tool_calls": true,
           "vision": true
-        },
-        "tokenizer": "o200k_base",
-        "type": "chat"
+        }
       },
       "id": "gemini-2.5-pro",
-      "model_picker_category": "powerful",
-      "model_picker_enabled": true,
       "name": "Gemini 2.5 Pro",
-      "object": "model",
-      "policy": {
-        "state": "enabled",
-        "terms": "Enable access to the latest Gemini 2.5 Pro model from Google. [Learn more about how GitHub Copilot serves Gemini 2.5 Pro](https://docs.github.com/en/copilot/using-github-copilot/ai-models/choosing-the-right-ai-model-for-your-task#gemini-25-pro)."
-      },
-      "preview": false,
       "vendor": "Google",
       "version": "gemini-2.5-pro"
     },
@@ -101,35 +119,17 @@
         "family": "gpt-4o",
         "limits": {
           "max_context_window_tokens": 128000,
-          "max_output_tokens": 4096,
-          "max_prompt_tokens": 64000,
-          "vision": {
-            "max_prompt_image_size": 3145728,
-            "max_prompt_images": 1,
-            "supported_media_types": [
-              "image/jpeg",
-              "image/png",
-              "image/webp",
-              "image/gif"
-            ]
-          }
+          "max_output_tokens": 4096
         },
-        "object": "model_capabilities",
         "supports": {
           "parallel_tool_calls": true,
           "streaming": true,
           "tool_calls": true,
           "vision": true
-        },
-        "tokenizer": "o200k_base",
-        "type": "chat"
+        }
       },
       "id": "gpt-4o",
-      "model_picker_category": "versatile",
-      "model_picker_enabled": true,
       "name": "GPT-4o",
-      "object": "model",
-      "preview": false,
       "vendor": "Azure OpenAI",
       "version": "gpt-4o-2024-11-20"
     }

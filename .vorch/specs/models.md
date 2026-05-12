@@ -37,10 +37,14 @@ class Model:
     capabilities: Capabilities  # Provider-specific capability flags
     context_window: int         # Total context window in tokens
     max_output_tokens: int      # Maximum output tokens
+    metadata: Mapping[str, Any] # Optional provider-specific runtime facts
 ```
 
 - `model_id` is the exact string the API expects. `"anthropic/claude-sonnet-4"` at OpenRouter is sent as `"model": "anthropic/claude-sonnet-4"`. No rewriting, no overrides, no indirection.
 - `context_window` and `max_output_tokens` are provider-specific. Not canonical values.
+- `metadata` is optional provider-specific data needed at runtime. It must stay
+  sanitized and small; do not store full raw provider catalog entries or
+  credentials here.
 
 ### ModelRegistry
 
@@ -91,7 +95,17 @@ One JSON file per provider at `resources/models/<provider>.json`:
         }
       },
       "context_window": 128000,
-      "max_output_tokens": 64000
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "vendor": "Anthropic",
+          "family": "claude-sonnet-4.6",
+          "supported_endpoints": ["/chat/completions", "/v1/messages"],
+          "reasoning_efforts": ["low", "medium", "high"],
+          "tool_calls": true,
+          "streaming": true
+        }
+      }
     }
   }
 }
@@ -104,6 +118,9 @@ One JSON file per provider at `resources/models/<provider>.json`:
 - Generated files may include top-level `source` and `fetched_at` metadata.
   `ModelRegistry.load()` ignores those fields and reads only `provider_id` and
   `models`.
+- Individual model entries may include optional `metadata`. `ModelRegistry.load()`
+  preserves this on `Model.metadata` for runtime consumers and freezes nested
+  mappings/lists so loaded model data remains immutable.
 
 Optional override files live beside generated model files as
 `resources/models/<provider>.overrides.json`:
@@ -126,8 +143,9 @@ the generated output and must provide the full `Model` shape.
 parsed as model catalogs.
 
 Current provider files include `openai.json`, `openrouter.json`,
-`anthropic.json`, and `github-copilot.json`. The bundled GitHub Copilot catalog
-is marked with top-level `"source": "bundled"` so model refresh can replace it.
+`anthropic.json`, and `github-copilot.json`. Generated catalogs may be marked
+with top-level `"source": "discovery"`; bundled/static catalogs may use other
+source labels. Model refresh can replace generated provider catalogs.
 
 ## Capabilities Structure
 
@@ -148,6 +166,13 @@ All are provider-specific. A model through OpenRouter may have `reasoning.suppor
 - OpenRouter: `reasoning` (object) + `include_reasoning` (boolean)
 
 The adapter translates vBot's internal reasoning configuration into the provider's format.
+
+For GitHub Copilot, `reasoning.supported` still means only that Copilot advertises
+some reasoning/thinking capability for that model. Runtime request compatibility
+is decided by `GitHubCopilotAdapter` through `metadata.github_copilot` and the
+central Copilot policy, because a model can be reasoning-capable but reject a
+specific control field such as OpenAI-style `reasoning_effort` on a specific
+endpoint.
 
 ## Integration with Runtime
 
@@ -208,6 +233,16 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   support.** `reasoning.supported` in the catalog means the model is advertised
   as reasoning-capable through Copilot; it does not by itself authorize the
   adapter to send OpenAI-style `reasoning_effort`. Runtime request shaping is a
-  provider-adapter concern and is currently policy-driven per Copilot model.
+  provider-adapter concern and is policy-driven per Copilot model.
+- **GitHub Copilot stores sanitized runtime metadata.**
+  `GitHubCopilotAdapter.normalize_catalog_entry()` preserves only the subset the
+  runtime policy needs under `metadata.github_copilot`: vendor/family/version,
+  supported endpoints, advertised reasoning effort values, thinking budget
+  bounds, adaptive thinking, tools, parallel tool calls, streaming, and
+  structured-output support. Full raw Copilot `/models` entries are not stored.
+- **GitHub Copilot routing is dynamic-first.** Runtime passes Copilot adapters a
+  lookup for exact-model `Model.metadata`. When `metadata.github_copilot` exists,
+  endpoint selection and optional request-feature gating are driven by those
+  catalog facts. Static policy entries are fallback/override rules only.
 
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.
