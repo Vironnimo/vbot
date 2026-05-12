@@ -14,7 +14,7 @@ from core.models.discovery import (
     PassthroughModelFilter,
     PassthroughRawFilter,
     apply_overrides,
-    normalize_openai_compatible,
+    normalize_openai_compatible_tolerant,
     normalize_openrouter,
     refresh_models,
 )
@@ -23,7 +23,6 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
-GENERIC_OPENAI_MODELS_URL = "https://generic.example/v1/models"
 API_KEY = "test-openrouter-key"
 
 
@@ -56,7 +55,6 @@ def openrouter_config() -> ProviderConfig:
         defaults={"max_tokens": 8192},
         extra_headers={"X-Title": "vBot"},
         models_endpoint="/models",
-        model_discovery="openrouter",
     )
 
 
@@ -81,32 +79,6 @@ def github_copilot_config() -> ProviderConfig:
         ],
         defaults={"max_tokens": 8192},
         extra_headers={"Copilot-Integration-Id": "vbot"},
-        models_endpoint="/models",
-        model_discovery="openai_compatible",
-    )
-
-
-@pytest.fixture()
-def generic_openai_config() -> ProviderConfig:
-    return ProviderConfig(
-        id="generic-openai",
-        name="Generic OpenAI-Compatible",
-        adapter="openai_compatible",
-        base_url="https://generic.example/v1",
-        connections=[
-            ConnectionConfig(
-                id="api-key",
-                type="api_key",
-                label="API Key",
-                auth=AuthConfig(
-                    header="Authorization",
-                    prefix="Bearer ",
-                    credential_key="GENERIC_OPENAI_API_KEY",
-                ),
-            )
-        ],
-        defaults={"max_tokens": 8192},
-        extra_headers={"X-Test": "generic"},
         models_endpoint="/models",
     )
 
@@ -216,15 +188,16 @@ class TestNormalizeOpenRouter:
         assert model.capabilities.vision is vision
 
 
-class TestNormalizeOpenAICompatible:
-    def test_missing_openrouter_only_fields_uses_top_level_fields_and_defaults_tools(self):
+class TestNormalizeOpenAICompatibleTolerant:
+    def test_missing_architecture_uses_top_level_fields_and_defaults_tools(self):
         raw_model = {
             "id": "gpt-4.1",
             "context_window": 1047576,
             "max_output_tokens": 32768,
+            "supported_parameters": ["response_format"],
         }
 
-        model = normalize_openai_compatible(raw_model, {"max_tokens": 8192})
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
 
         assert model == Model(
             model_id="gpt-4.1",
@@ -232,31 +205,12 @@ class TestNormalizeOpenAICompatible:
             capabilities=Capabilities(
                 vision=False,
                 tools=True,
-                json_mode=False,
+                json_mode=True,
                 reasoning=ReasoningCapabilities(supported=False),
             ),
             context_window=1047576,
             max_output_tokens=32768,
         )
-
-    def test_openrouter_only_fields_are_ignored_for_generic_discovery(self):
-        raw_model = {
-            "id": "claude-sonnet-4",
-            "name": "Claude Sonnet 4",
-            "architecture": {"input_modalities": ["text", "image"], "context_length": 200000},
-            "supported_parameters": ["tools", "response_format", "reasoning"],
-            "top_provider": {"max_completion_tokens": 64000, "tools": False},
-        }
-
-        model = normalize_openai_compatible(raw_model, {"max_tokens": 8192})
-
-        assert model.name == "Claude Sonnet 4"
-        assert model.context_window == 0
-        assert model.max_output_tokens == 8192
-        assert model.capabilities.vision is False
-        assert model.capabilities.tools is True
-        assert model.capabilities.json_mode is False
-        assert model.capabilities.reasoning.supported is False
 
     def test_non_object_architecture_is_ignored_for_copilot_payloads(self):
         raw_model = {
@@ -265,28 +219,28 @@ class TestNormalizeOpenAICompatible:
             "architecture": "unknown",
             "contextLength": "ignored",
             "contextWindow": 200000,
-            "maxOutputTokens": 64000,
+            "top_provider": {"maxCompletionTokens": 64000},
             "input_modalities": ["text", {"type": "image"}],
         }
 
-        model = normalize_openai_compatible(raw_model, {"max_tokens": 8192})
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
 
         assert model.name == "Claude Sonnet 4"
         assert model.context_window == 200000
         assert model.max_output_tokens == 64000
         assert model.capabilities.vision is True
 
-    def test_generic_normalization_uses_explicit_top_level_metadata_for_capabilities(self):
+    def test_tolerant_normalization_uses_explicit_metadata_for_capabilities(self):
         raw_model = {
             "id": "o4-mini",
             "name": "o4-mini",
             "context_length": 128000,
-            "tools": False,
+            "top_provider": {"tools": False},
             "supports_json_mode": False,
             "reasoning": {"supported": True},
         }
 
-        model = normalize_openai_compatible(raw_model, {"max_tokens": 8192})
+        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
 
         assert model.capabilities.tools is False
         assert model.capabilities.json_mode is False
@@ -375,37 +329,6 @@ class TestPassthroughFilters:
 
 
 class TestRefreshModels:
-    @pytest.mark.asyncio
-    async def test_refresh_models_reports_model_discovery_selector_for_unimplemented_strategy(
-        self,
-        tmp_path: Path,
-    ):
-        provider_config = ProviderConfig(
-            id="anthropic",
-            name="Anthropic",
-            adapter="anthropic",
-            base_url="https://api.anthropic.com/v1",
-            connections=[
-                ConnectionConfig(
-                    id="api-key",
-                    type="api_key",
-                    label="API Key",
-                    auth=AuthConfig(
-                        header="x-api-key",
-                        prefix="",
-                        credential_key="ANTHROPIC_API_KEY",
-                    ),
-                )
-            ],
-            models_endpoint="/models",
-        )
-
-        with pytest.raises(
-            ModelDiscoveryError,
-            match="No model normalizer registered for model_discovery ''",
-        ):
-            await refresh_models(provider_config, API_KEY, tmp_path / "resources")
-
     @respx.mock
     @pytest.mark.asyncio
     async def test_refresh_models_writes_json_and_registry_reads_it(
@@ -513,7 +436,6 @@ class TestRefreshModels:
             defaults=openrouter_config.defaults,
             extra_headers=openrouter_config.extra_headers,
             models_endpoint=openrouter_config.models_endpoint,
-            model_discovery=openrouter_config.model_discovery,
         )
         route = respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
@@ -554,7 +476,7 @@ class TestRefreshModels:
                             "name": "Claude Sonnet 4",
                             "architecture": "not-an-object",
                             "contextWindow": 200000,
-                            "maxOutputTokens": 64000,
+                            "top_provider": {"max_completion_tokens": 64000},
                         },
                     ]
                 },
@@ -575,74 +497,6 @@ class TestRefreshModels:
         assert model_with_non_object_architecture.max_output_tokens == 64000
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_refresh_models_defaults_discovery_strategy_from_adapter(
-        self,
-        tmp_path: Path,
-        generic_openai_config: ProviderConfig,
-    ):
-        route = respx.get(GENERIC_OPENAI_MODELS_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": "gpt-4.1-mini",
-                            "context_window": 128000,
-                            "max_output_tokens": 16000,
-                        }
-                    ]
-                },
-            )
-        )
-
-        result = await refresh_models(generic_openai_config, API_KEY, tmp_path / "resources")
-
-        registry = ModelRegistry.load(tmp_path / "resources")
-        model = registry.get("generic-openai", "gpt-4.1-mini")
-        assert result["provider_id"] == "generic-openai"
-        assert result["model_count"] == 1
-        assert model.name == "gpt-4.1-mini"
-        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
-        assert route.calls.last.request.headers["X-Test"] == "generic"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_refresh_models_uses_explicit_openrouter_discovery_strategy(
-        self,
-        tmp_path: Path,
-        generic_openai_config: ProviderConfig,
-    ):
-        provider_config = ProviderConfig(
-            id=generic_openai_config.id,
-            name=generic_openai_config.name,
-            adapter=generic_openai_config.adapter,
-            base_url=generic_openai_config.base_url,
-            connections=generic_openai_config.connections,
-            defaults=generic_openai_config.defaults,
-            extra_headers=generic_openai_config.extra_headers,
-            models_endpoint=generic_openai_config.models_endpoint,
-            model_discovery="openrouter",
-        )
-        respx.get(GENERIC_OPENAI_MODELS_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": "gpt-4.1-mini",
-                            "context_window": 128000,
-                            "max_output_tokens": 16000,
-                        }
-                    ]
-                },
-            )
-        )
-
-        with pytest.raises(ModelDiscoveryError, match="Expected 'architecture' to be an object"):
-            await refresh_models(provider_config, API_KEY, tmp_path / "resources")
 
     @respx.mock
     @pytest.mark.asyncio

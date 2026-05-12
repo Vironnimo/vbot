@@ -114,7 +114,6 @@ def make_provider(*, connection: ConnectionConfig) -> ProviderConfig:
         adapter="openai_compatible",
         base_url="https://api.githubcopilot.com",
         connections=[connection],
-        model_discovery="openai_compatible",
     )
 
 
@@ -140,7 +139,6 @@ def make_refreshable_oauth_provider() -> ProviderConfig:
         defaults=provider.defaults,
         extra_headers=provider.extra_headers,
         models_endpoint="/models",
-        model_discovery=provider.model_discovery,
     )
 
 
@@ -399,7 +397,6 @@ async def test_model_refresh_db_preserves_api_key_credential_path(
         defaults=provider.defaults,
         extra_headers=provider.extra_headers,
         models_endpoint="/models",
-        model_discovery=provider.model_discovery,
     )
     state = make_state(tmp_path, provider)
     refreshed: dict[str, Any] = {}
