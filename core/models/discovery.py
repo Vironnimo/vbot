@@ -157,7 +157,8 @@ async def refresh_models(
         normalizer = _normalizer_for_provider(provider_config)
         if normalizer is None:
             raise ValueError(
-                f"No model normalizer registered for adapter '{provider_config.adapter}'"
+                "No model normalizer registered for "
+                f"model_discovery '{provider_config.model_discovery}'"
             )
 
         raw_models = await _fetch_raw_models(
@@ -320,8 +321,7 @@ def _provider_default_max_tokens(provider_defaults: Mapping[str, Any] | None) ->
 
 
 def _normalizer_for_provider(provider_config: ProviderConfig):
-    discovery_strategy = provider_config.model_discovery or provider_config.adapter
-    return _NORMALIZER_MAP.get(discovery_strategy)
+    return _NORMALIZER_MAP.get(provider_config.model_discovery)
 
 
 def _read_non_empty_string(data: Mapping[str, Any], key: str) -> str:

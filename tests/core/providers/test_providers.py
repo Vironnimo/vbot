@@ -269,7 +269,7 @@ class TestConnectionParsing:
         assert connection.auth.credential_key == "OPENROUTER_API_KEY"
 
     def test_model_discovery_defaults_to_adapter_when_omitted(self, providers_dir: Path) -> None:
-        """Providers without model_discovery default to the adapter value."""
+        """Providers without model_discovery only default when the strategy exists."""
         # Arrange
         registry = ProviderRegistry.load(providers_dir)
 
@@ -279,7 +279,22 @@ class TestConnectionParsing:
 
         # Assert
         assert openai_config.model_discovery == "openai_compatible"
-        assert anthropic_config.model_discovery == "anthropic"
+        assert anthropic_config.model_discovery == ""
+
+    def test_anthropic_without_model_discovery_does_not_promise_unimplemented_strategy(
+        self,
+        providers_dir: Path,
+    ) -> None:
+        """Anthropic config stays discovery-unspecified when no normalizer exists."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+
+        # Act
+        anthropic_config = registry.get("anthropic")
+
+        # Assert
+        assert anthropic_config.adapter == "anthropic"
+        assert anthropic_config.model_discovery == ""
 
     def test_model_discovery_parses_explicit_provider_specific_strategy(
         self,

@@ -375,6 +375,37 @@ class TestPassthroughFilters:
 
 
 class TestRefreshModels:
+    @pytest.mark.asyncio
+    async def test_refresh_models_reports_model_discovery_selector_for_unimplemented_strategy(
+        self,
+        tmp_path: Path,
+    ):
+        provider_config = ProviderConfig(
+            id="anthropic",
+            name="Anthropic",
+            adapter="anthropic",
+            base_url="https://api.anthropic.com/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="x-api-key",
+                        prefix="",
+                        credential_key="ANTHROPIC_API_KEY",
+                    ),
+                )
+            ],
+            models_endpoint="/models",
+        )
+
+        with pytest.raises(
+            ModelDiscoveryError,
+            match="No model normalizer registered for model_discovery ''",
+        ):
+            await refresh_models(provider_config, API_KEY, tmp_path / "resources")
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_refresh_models_writes_json_and_registry_reads_it(
