@@ -42,7 +42,10 @@ class AuthConfig:
 
 VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
-VALID_MODEL_DISCOVERY_STRATEGIES = frozenset({"anthropic", "openai_compatible", "openrouter"})
+VALID_MODEL_DISCOVERY_STRATEGIES = frozenset({"openai_compatible", "openrouter"})
+DEFAULT_MODEL_DISCOVERY_BY_ADAPTER = {
+    "openai_compatible": "openai_compatible",
+}
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,15 @@ class ProviderConfig:
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
     model_discovery: str = ""
+
+    def __post_init__(self) -> None:
+        if self.model_discovery:
+            return
+        object.__setattr__(
+            self,
+            "model_discovery",
+            DEFAULT_MODEL_DISCOVERY_BY_ADAPTER.get(self.adapter, ""),
+        )
 
     def get_connection(self, local_id: str) -> ConnectionConfig:
         """Return a connection by its local provider-scoped ID."""
@@ -251,7 +263,7 @@ class ProviderRegistry:
                 raise ConfigError(
                     f"Provider '{data['id']}' field 'adapter' must be a non-empty string"
                 )
-            return adapter
+            return DEFAULT_MODEL_DISCOVERY_BY_ADAPTER.get(adapter, "")
         if not isinstance(model_discovery, str) or not model_discovery:
             raise ConfigError(
                 f"Provider '{data['id']}' field 'model_discovery' must be a non-empty string"
