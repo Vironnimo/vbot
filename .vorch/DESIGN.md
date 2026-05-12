@@ -157,6 +157,17 @@ components:
     rounded: 12px
     typography: "{typography.mono-sm}"
     padding: 3px 9px
+  device-flow-inline:
+    backgroundColor: "{colors.surface-2}"
+    borderColor: "{colors.border-2}"
+    rounded: "{rounded.lg}"
+    padding: "{spacing.md}"
+  device-flow-code:
+    backgroundColor: "{colors.bg}"
+    borderColor: "rgba(232,135,10,0.30)"
+    textColor: "{colors.text-hi}"
+    typography: "{typography.mono-body}"
+    rounded: "{rounded.md}"
   tooltip:
     backgroundColor: "{colors.surface-3}"
     borderColor: "{colors.border-2}"

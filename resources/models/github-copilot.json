@@ -1,0 +1,58 @@
+{
+  "provider_id": "github-copilot",
+  "source": "bundled",
+  "models": {
+    "gpt-4o": {
+      "name": "GPT-4o",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384
+    },
+    "gpt-4.1": {
+      "name": "GPT-4.1",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 32768
+    },
+    "claude-sonnet-4-5": {
+      "name": "Claude Sonnet 4.5",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 200000,
+      "max_output_tokens": 8096
+    },
+    "o3": {
+      "name": "o3",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        }
+      },
+      "context_window": 200000,
+      "max_output_tokens": 100000
+    }
+  }
+}

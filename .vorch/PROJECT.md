@@ -206,6 +206,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   event. Polling, token exchange, token refresh, and token persistence stay in
   backend provider code; token values must never appear in logs or public event
   payloads.
+- **Provider connection identifiers in public RPC/UI payloads are compositional.**
+  Use `<provider_id>:<connection.id>` (for example `github-copilot:oauth`) for
+  `connection_id` values in Settings, provider RPC methods, and WebSocket
+  events. Backend internals may derive the provider-local connection ID only
+  after validating that prefix.
 - **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
   provider model files under `resources/models/` and may include `source` and
   `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional

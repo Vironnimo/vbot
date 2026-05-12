@@ -125,7 +125,9 @@ the generated output and must provide the full `Model` shape.
 `ModelRegistry.load()` skips `*.overrides.json` files so overrides are never
 parsed as model catalogs.
 
-Current provider files: `openai.json`, `openrouter.json`, `anthropic.json`.
+Current provider files include `openai.json`, `openrouter.json`,
+`anthropic.json`, and `github-copilot.json`. The bundled GitHub Copilot catalog
+is marked with top-level `"source": "bundled"` so model refresh can replace it.
 
 ## Capabilities Structure
 

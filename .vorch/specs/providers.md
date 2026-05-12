@@ -63,6 +63,11 @@ class ProviderConfig:
 
 Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
 
+Bundled provider configs now include `resources/providers/github-copilot.json`,
+which uses an OAuth Device Flow connection (`github-copilot:oauth`) with public
+GitHub Copilot OAuth app client ID `Iv1.b507a08c87ecfe98` and Copilot token
+exchange URL `https://api.github.com/copilot_internal/v2/token`.
+
 **Adapter field** selects the class at runtime:
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
 - `"anthropic"` → `AnthropicAdapter`

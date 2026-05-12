@@ -119,6 +119,55 @@ export function getProviderItems(settings) {
     : [];
 }
 
+export function isOAuthConnection(connection) {
+  return connection?.type === 'oauth';
+}
+
+export function getPublicConnectionId(connection) {
+  return typeof connection?.id === 'string' ? connection.id : '';
+}
+
+export function getOAuthConnectionStatus(
+  providerItems,
+  connectionId,
+  flowActive = false,
+) {
+  if (flowActive) {
+    return 'pending';
+  }
+
+  const connection = getOAuthConnection(providerItems, connectionId);
+
+  return connection?.configured === true || connection?.usable === true
+    ? 'connected'
+    : 'disconnected';
+}
+
+function getOAuthConnection(providerItems, connectionId) {
+  const providers = Array.isArray(providerItems) ? providerItems : [];
+
+  for (const provider of providers) {
+    const connections = Array.isArray(provider?.connections)
+      ? provider.connections
+      : [];
+    const connection = connections.find((item) => item.id === connectionId);
+
+    if (connection) {
+      return connection;
+    }
+  }
+
+  return null;
+}
+
+export function buildProviderConnectPayload(providerId, connectionId) {
+  return { provider_id: providerId, connection_id: connectionId };
+}
+
+export function buildProviderDisconnectPayload(providerId, connectionId) {
+  return { provider_id: providerId, connection_id: connectionId };
+}
+
 export function getPersistedLanguageId(settings) {
   return settings?.appearance?.language ?? '';
 }

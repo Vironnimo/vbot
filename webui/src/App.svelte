@@ -68,6 +68,7 @@
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
   let pendingSubAgentNavigation = $state(null);
+  let providerAuthEvent = $state(null);
 
   const selectView = (viewId) => {
     activeViewId = viewId;
@@ -126,6 +127,11 @@
       return;
     }
 
+    if (event.type === 'provider_auth_completed') {
+      providerAuthEvent = event;
+      return;
+    }
+
     const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
     if (!agentEventTypes.includes(event.type)) {
       return;
@@ -169,7 +175,7 @@
   {:else if activeViewId === 'system-prompt'}
     <SystemPromptView />
   {:else if activeViewId === 'settings'}
-    <SettingsView />
+    <SettingsView {providerAuthEvent} />
   {:else if activeViewId === 'logs'}
     <LogsView />
   {/if}
