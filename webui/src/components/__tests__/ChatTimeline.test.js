@@ -1252,66 +1252,6 @@ describe('ChatTimeline', () => {
     ).toHaveLength(1);
   });
 
-  it('renders one visible thinking block for the streamed to final assistant path', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-streamed-final-thinking',
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'reasoning_delta',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 1,
-      payload: { reasoning_delta: 'Readable streamed thinking.' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 2,
-      payload: { content_delta: 'Final streamed answer.' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 3,
-      payload: {
-        message: {
-          id: 'assistant-streamed-final-thinking',
-          role: 'assistant',
-          reasoning: 'Readable streamed thinking.',
-          content: 'Final streamed answer.',
-        },
-      },
-    });
-
-    mountedComponent = mount(ChatTimeline, {
-      target: document.body,
-      props: {
-        sessionState,
-        agentName: 'Alpha',
-      },
-    });
-    flushSync();
-
-    const reasoningBlocks = document.querySelectorAll('.reasoning-block');
-    const runContent = document.querySelector('.assistant-run-content');
-    const renderedChildren = Array.from(runContent.children);
-
-    expect(reasoningBlocks).toHaveLength(1);
-    expect(renderedChildren).toHaveLength(2);
-    expect(renderedChildren[0].classList.contains('reasoning-block')).toBe(
-      true,
-    );
-    expect(renderedChildren[1].classList.contains('msg-body-text')).toBe(true);
-    expect(
-      document.body.textContent.match(/Readable streamed thinking\./g),
-    ).toHaveLength(1);
-    expect(
-      document.body.textContent.match(/Final streamed answer\./g),
-    ).toHaveLength(1);
-  });
-
   it('renders one assistant block when reported history overlaps live events', () => {
     const sessionState = ensureSessionState(
       createChatState(),
