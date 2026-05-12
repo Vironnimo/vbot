@@ -120,7 +120,8 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
-keys), `settings.json`, `logs/`, and all runtime data.
+keys), `settings.json`, `logs/`, OAuth tokens under `oauth/`, and all runtime
+data.
 
 ## Testing
 
@@ -194,6 +195,22 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   has higher precedence than the data-dir `.env`, but backend code should ask a
   central provider-credential path whether credentials exist and what value to
   use, rather than reading `os.environ` directly.
+- **OAuth provider credentials are token-store based when an OAuth block is
+  configured.** `type: "oauth"` connections with an `oauth` block, or without an
+  `auth.credential_key`, read persisted tokens from `<data_dir>/oauth/` through
+  the central provider credential path. Existing OAuth stubs with a
+  `credential_key` and no OAuth metadata continue to resolve through
+  environment or data-dir `.env` credentials.
+- **OAuth Device Flow is server-side.** Clients request a provider connection,
+  display the returned user code and verification URL, and wait for a WebSocket
+  event. Polling, token exchange, token refresh, and token persistence stay in
+  backend provider code; token values must never appear in logs or public event
+  payloads.
+- **Provider connection identifiers in public RPC/UI payloads are compositional.**
+  Use `<provider_id>:<connection.id>` (for example `github-copilot:oauth`) for
+  `connection_id` values in Settings, provider RPC methods, and WebSocket
+  events. Backend internals may derive the provider-local connection ID only
+  after validating that prefix.
 - **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
   provider model files under `resources/models/` and may include `source` and
   `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional

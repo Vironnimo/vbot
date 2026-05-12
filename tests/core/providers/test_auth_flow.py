@@ -1,0 +1,310 @@
+"""Tests for OAuth Device Flow provider authentication."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+import respx
+
+from core.providers.auth_flow import DeviceFlowEngine
+from core.providers.providers import OAuthConfig
+from core.providers.token_store import TokenStore
+
+DEVICE_AUTH_URL = "https://github.com/login/device/code"
+TOKEN_URL = "https://github.com/login/oauth/access_token"
+TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
+
+
+def _oauth_config(*, token_exchange_url: str | None = None) -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="client-id",
+        device_auth_url=DEVICE_AUTH_URL,
+        token_url=TOKEN_URL,
+        scopes=["copilot"],
+        token_exchange_url=token_exchange_url,
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_start_device_flow_posts_client_id_and_scope(tmp_path: Path) -> None:
+    """Starting a device flow returns the user-facing session data."""
+    # Arrange
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    route = respx.post(DEVICE_AUTH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "device_code": "device-code",
+                "user_code": "ABCD-EFGH",
+                "verification_uri": "https://github.com/login/device",
+                "expires_in": 900,
+                "interval": 3,
+            },
+        )
+    )
+
+    # Act
+    session = await engine.start_device_flow("github-copilot", "oauth", _oauth_config())
+
+    # Assert
+    assert session.device_code == "device-code"
+    assert session.user_code == "ABCD-EFGH"
+    assert session.verification_uri == "https://github.com/login/device"
+    assert session.expires_in == 900
+    assert session.interval == 3
+    assert route.calls.last.request.content == b"client_id=client-id&scope=copilot"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_success_stores_token_and_fires_on_complete(tmp_path: Path) -> None:
+    """A successful poll response is persisted and reports completion."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    on_complete = AsyncMock()
+    expires_at = datetime.now(UTC) + timedelta(minutes=10)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "provider-access-secret",
+                "refresh_token": "provider-refresh-secret",
+                "expires_in": 600,
+            },
+        )
+    )
+
+    # Act
+    with patch("core.providers.auth_flow.datetime") as datetime_mock:
+        datetime_mock.now.return_value = expires_at - timedelta(seconds=600)
+        datetime_mock.fromisoformat.side_effect = datetime.fromisoformat
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            on_complete,
+        )
+
+    # Assert
+    token = token_store.load("github-copilot", "oauth")
+    assert token is not None
+    assert token.access_token == "provider-access-secret"
+    assert token.refresh_token == "provider-refresh-secret"
+    assert token.expires_at == expires_at
+    on_complete.assert_awaited_once_with(success=True)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_waits_on_authorization_pending(tmp_path: Path) -> None:
+    """authorization_pending keeps polling until a token is available."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    route = respx.post(TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(200, json={"error": "authorization_pending"}),
+            httpx.Response(200, json={"access_token": "provider-access-secret"}),
+        ]
+    )
+    on_complete = AsyncMock()
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            7,
+            900,
+            on_complete,
+        )
+
+    # Assert
+    assert route.call_count == 2
+    sleep_mock.assert_awaited_once_with(7)
+    assert token_store.load("github-copilot", "oauth") is not None
+    on_complete.assert_awaited_once_with(success=True)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_stops_when_device_flow_session_expires(tmp_path: Path) -> None:
+    """authorization_pending stops polling after the device-code session expires."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"error": "authorization_pending"})
+    )
+    on_complete = AsyncMock()
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            7,
+            0,
+            on_complete,
+        )
+
+    # Assert
+    sleep_mock.assert_not_awaited()
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=False)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_increases_interval_on_slow_down(tmp_path: Path) -> None:
+    """slow_down increases the poll interval before the next request."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    respx.post(TOKEN_URL).mock(
+        side_effect=[
+            httpx.Response(200, json={"error": "slow_down"}),
+            httpx.Response(200, json={"access_token": "provider-access-secret"}),
+        ]
+    )
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            7,
+            900,
+            AsyncMock(),
+        )
+
+    # Assert
+    sleep_mock.assert_awaited_once_with(12)
+
+
+@pytest.mark.parametrize("error_code", ["expired_token", "access_denied"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_terminal_errors_fire_failure(
+    tmp_path: Path,
+    error_code: str,
+) -> None:
+    """Terminal Device Flow errors report unsuccessful completion."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    on_complete = AsyncMock()
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"error": error_code}))
+
+    # Act
+    await engine._poll_for_token(
+        "github-copilot",
+        "oauth",
+        _oauth_config(),
+        "device-code",
+        1,
+        900,
+        on_complete,
+    )
+
+    # Assert
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=False)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
+    tmp_path: Path,
+) -> None:
+    """Copilot exchanges the GitHub OAuth token before storing provider auth."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    expires_at = datetime(2026, 5, 12, 12, 0, tzinfo=UTC)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "github-oauth-secret"})
+    )
+    exchange_route = respx.get(TOKEN_EXCHANGE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"token": "copilot-api-secret", "expires_at": expires_at.isoformat()},
+        )
+    )
+
+    # Act
+    await engine._poll_for_token(
+        "github-copilot",
+        "oauth",
+        _oauth_config(token_exchange_url=TOKEN_EXCHANGE_URL),
+        "device-code",
+        1,
+        900,
+        AsyncMock(),
+    )
+
+    # Assert
+    token = token_store.load("github-copilot", "oauth")
+    assert token is not None
+    assert token.access_token == "copilot-api-secret"
+    assert token.refresh_token is None
+    assert token.expires_at == expires_at
+    assert token.extra == {"github_oauth_token": "github-oauth-secret"}
+    assert exchange_route.calls.last.request.headers["Authorization"] == "token github-oauth-secret"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> None:
+    """Cancelling an active flow cancels its polling task."""
+    # Arrange
+    engine = DeviceFlowEngine(TokenStore(tmp_path))
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"error": "authorization_pending"})
+    )
+    sleep_started = asyncio.Event()
+    release_sleep = asyncio.Event()
+
+    async def sleep_until_released(_interval: int) -> None:
+        sleep_started.set()
+        await release_sleep.wait()
+
+    task = asyncio.create_task(
+        engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            AsyncMock(),
+        )
+    )
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", side_effect=sleep_until_released):
+        await sleep_started.wait()
+        engine.cancel_flow("github-copilot", "oauth")
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    # Assert
+    assert task.cancelled()

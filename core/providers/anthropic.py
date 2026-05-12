@@ -29,6 +29,7 @@ from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
 # ---------------------------------------------------------------------------
@@ -68,18 +69,20 @@ class AnthropicAdapter(ProviderAdapter):
 
     Args:
         config: Immutable provider configuration.
-        api_key: API key for authentication (sent via the header from config).
+        token_getter: Async callable that returns the current auth token.
     """
 
     def __init__(
         self,
         config: ProviderConfig,
-        api_key: str,
+        token_getter: TokenGetter | str,
         base_url: str | None = None,
         auth_config: AuthConfig | None = None,
     ) -> None:
         self._config = config
-        self._api_key = api_key
+        self._token_getter = (
+            StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
+        )
         self._auth_config = auth_config or config.connections[0].auth
         self._client = httpx.AsyncClient(
             base_url=base_url or config.base_url,
@@ -104,14 +107,15 @@ class AnthropicAdapter(ProviderAdapter):
     # Header / payload helpers
     # ------------------------------------------------------------------
 
-    def _build_headers(self) -> dict[str, str]:
+    async def _build_headers(self) -> dict[str, str]:
         """Build request headers for the Anthropic API.
 
         Includes the auth header from provider config, the required
         ``anthropic-version`` header, and any ``extra_headers``.
         """
+        token = await self._token_getter()
         headers: dict[str, str] = {
-            self._auth_config.header: f"{self._auth_config.prefix}{self._api_key}",
+            self._auth_config.header: f"{self._auth_config.prefix}{token}",
             "anthropic-version": ANTHROPIC_VERSION,
         }
         if self._config.extra_headers:
@@ -246,7 +250,7 @@ class AnthropicAdapter(ProviderAdapter):
         """
 
         async def _do_request() -> dict[str, Any]:
-            headers = self._build_headers()
+            headers = await self._build_headers()
             payload = self._build_payload(messages, model_id, **kwargs)
             try:
                 response = await self._client.post(
@@ -306,7 +310,7 @@ class AnthropicAdapter(ProviderAdapter):
             ProviderTimeoutError: Connection / timeout errors.
             ProviderError: Other HTTP errors.
         """
-        headers = self._build_headers()
+        headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
 

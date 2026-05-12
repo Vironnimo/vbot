@@ -1,3 +1,8 @@
+import {
+  buildProviderConnectPayload,
+  buildProviderDisconnectPayload,
+} from './settingsView.js';
+
 const RPC_ENDPOINT = '/api/rpc';
 const WEBSOCKET_ENDPOINT = '/ws';
 const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
@@ -141,6 +146,35 @@ export function readLogFile(file, options = {}) {
   }
 
   return rpc('log.read', { file }, options);
+}
+
+export async function connectProvider(providerId, connectionId, options = {}) {
+  return (options.rpc ?? rpc)(
+    'provider.connect',
+    buildProviderConnectPayload(providerId, connectionId),
+  );
+}
+
+export async function disconnectProvider(
+  providerId,
+  connectionId,
+  options = {},
+) {
+  return (options.rpc ?? rpc)(
+    'provider.disconnect',
+    buildProviderDisconnectPayload(providerId, connectionId),
+  );
+}
+
+export async function getProviderConnectionStatus(
+  providerId,
+  connectionId,
+  options = {},
+) {
+  return (options.rpc ?? rpc)('provider.connection_status', {
+    provider_id: providerId,
+    connection_id: connectionId,
+  });
 }
 
 export function normalizeRpcError(error, options = {}) {

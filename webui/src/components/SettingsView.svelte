@@ -18,9 +18,22 @@
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
+    getOAuthConnectionStatus,
+    getPublicConnectionId,
     getPersistedLanguageId,
+    isOAuthConnection,
     isLanguageSaveDisabled,
   } from '$lib/settingsView.js';
+
+  let {
+    providerAuthEvent = null,
+    connectProvider = null,
+    disconnectProvider = null,
+  } = $props();
+
+  export function handleProviderAuthCompleted(event) {
+    handleProviderAuthEvent(event);
+  }
 
   const panels = [
     {
@@ -90,6 +103,12 @@
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
   let modelRefreshError = $state('');
+  let oauthConnectionStates = $state({});
+  let toastMessage = $state('');
+  let toastVariant = $state('success');
+  let toastTimer = null;
+  let handledProviderAuthEvent = null;
+  let copiedDeviceFlowConnectionId = $state('');
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -133,6 +152,19 @@
 
   onMount(() => {
     loadSettings();
+
+    return () => {
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+      }
+    };
+  });
+
+  $effect(() => {
+    if (providerAuthEvent && providerAuthEvent !== handledProviderAuthEvent) {
+      handledProviderAuthEvent = providerAuthEvent;
+      handleProviderAuthEvent(providerAuthEvent);
+    }
   });
 
   function selectPanel(panelId) {
@@ -319,6 +351,225 @@
     );
   }
 
+  function getOAuthState(connectionId) {
+    return (
+      oauthConnectionStates[connectionId] ?? {
+        flowActive: false,
+        showDialog: false,
+        dialogData: null,
+      }
+    );
+  }
+
+  function updateOAuthState(connectionId, patch) {
+    oauthConnectionStates = {
+      ...oauthConnectionStates,
+      [connectionId]: {
+        ...getOAuthState(connectionId),
+        ...patch,
+      },
+    };
+  }
+
+  function isConnectionConfigured(connection) {
+    return connection?.configured === true || connection?.usable === true;
+  }
+
+  function oauthStatus(connection) {
+    return getOAuthConnectionStatus(
+      providerItems,
+      connection.id,
+      getOAuthState(connection.id).flowActive,
+    );
+  }
+
+  async function startOAuthConnect(provider, connection) {
+    const connectionId = getPublicConnectionId(connection);
+
+    saveError = '';
+    saveNotice = '';
+    copiedDeviceFlowConnectionId = '';
+    updateOAuthState(connection.id, {
+      flowActive: true,
+      showDialog: false,
+      dialogData: null,
+    });
+
+    try {
+      const response = await callConnectProvider(provider.id, connectionId);
+      updateOAuthState(connection.id, {
+        flowActive: true,
+        showDialog: Boolean(response?.user_code),
+        dialogData: response,
+      });
+    } catch (error) {
+      updateOAuthState(connection.id, {
+        flowActive: false,
+        showDialog: false,
+        dialogData: null,
+      });
+      saveError = `${t('settings.providers.connectError', 'Provider connection could not be started.')} ${error.message}`;
+    }
+  }
+
+  async function cancelOAuthFlow(provider, connection) {
+    await disconnectOAuthProvider(provider, connection, { reload: false });
+  }
+
+  async function disconnectOAuthProvider(provider, connection, options = {}) {
+    const connectionId = getPublicConnectionId(connection);
+    saveError = '';
+    saveNotice = '';
+    copiedDeviceFlowConnectionId = '';
+
+    try {
+      await callDisconnectProvider(provider.id, connectionId);
+      updateOAuthState(connection.id, {
+        flowActive: false,
+        showDialog: false,
+        dialogData: null,
+      });
+
+      if (options.reload ?? true) {
+        await loadSettings();
+      }
+    } catch (error) {
+      saveError = `${t('settings.providers.disconnectError', 'Provider connection could not be disconnected.')} ${error.message}`;
+    }
+  }
+
+  async function completeOAuthFlow(connectionId) {
+    copiedDeviceFlowConnectionId = '';
+    updateOAuthState(connectionId, {
+      flowActive: false,
+      showDialog: false,
+      dialogData: null,
+    });
+    showLocalToast(
+      t(
+        'settings.providers.device_flow.success_toast',
+        'GitHub Copilot connected successfully',
+      ),
+      'success',
+    );
+    await loadSettings();
+  }
+
+  function failOAuthFlow(connectionId) {
+    copiedDeviceFlowConnectionId = '';
+    updateOAuthState(connectionId, {
+      flowActive: false,
+      showDialog: false,
+      dialogData: null,
+    });
+    showLocalToast(
+      t(
+        'settings.providers.device_flow.error_toast',
+        'Authorization failed or timed out',
+      ),
+      'error',
+    );
+  }
+
+  function showLocalToast(message, variant = 'success') {
+    if (toastTimer) {
+      clearTimeout(toastTimer);
+    }
+
+    toastMessage = message;
+    toastVariant = variant;
+    toastTimer = setTimeout(() => {
+      toastMessage = '';
+    }, 4000);
+  }
+
+  async function copyDeviceFlowUserCode(connection, userCode) {
+    if (!userCode) {
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      showLocalToast(
+        t(
+          'settings.providers.device_flow.copy_error',
+          'Device code could not be copied.',
+        ),
+        'error',
+      );
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(userCode);
+      copiedDeviceFlowConnectionId = connection.id;
+      showLocalToast(
+        t('settings.providers.device_flow.copy_success', 'Device code copied.'),
+        'success',
+      );
+    } catch {
+      showLocalToast(
+        t(
+          'settings.providers.device_flow.copy_error',
+          'Device code could not be copied.',
+        ),
+        'error',
+      );
+    }
+  }
+
+  async function callConnectProvider(providerId, connectionId) {
+    if (typeof connectProvider === 'function') {
+      return connectProvider(providerId, connectionId, { rpc });
+    }
+
+    return rpc('provider.connect', {
+      provider_id: providerId,
+      connection_id: connectionId,
+    });
+  }
+
+  async function callDisconnectProvider(providerId, connectionId) {
+    if (typeof disconnectProvider === 'function') {
+      return disconnectProvider(providerId, connectionId, { rpc });
+    }
+
+    return rpc('provider.disconnect', {
+      provider_id: providerId,
+      connection_id: connectionId,
+    });
+  }
+
+  function handleProviderAuthEvent(event) {
+    const payload = event.payload ?? event;
+    const connectionStateId = findConnectionStateId(
+      payload.provider_id,
+      payload.connection_id,
+    );
+
+    if (!connectionStateId || !getOAuthState(connectionStateId).flowActive) {
+      return;
+    }
+
+    if (payload.success === true) {
+      completeOAuthFlow(connectionStateId);
+      return;
+    }
+
+    failOAuthFlow(connectionStateId);
+  }
+
+  function findConnectionStateId(providerId, connectionId) {
+    const provider = providerItems.find((item) => item.id === providerId);
+    const connections = Array.isArray(provider?.connections)
+      ? provider.connections
+      : [];
+    const connection = connections.find(
+      (item) => getPublicConnectionId(item) === connectionId,
+    );
+
+    return connection?.id ?? '';
+  }
+
   async function refreshModelDatabase() {
     if (!hasRefreshEligibleProvider || refreshingModels) {
       return;
@@ -494,6 +745,15 @@
           <div class="s-feedback s-feedback--error">{saveError}</div>
         {:else if saveNotice}
           <div class="s-feedback s-feedback--success">{saveNotice}</div>
+        {/if}
+
+        {#if toastMessage}
+          <div
+            class={`s-local-toast s-local-toast--${toastVariant}`}
+            role="alert"
+          >
+            {toastMessage}
+          </div>
         {/if}
 
         {#if activePanelId === 'providers' && modelRefreshError}
@@ -741,18 +1001,218 @@
             </div>
           {:else}
             {#each providerItems as provider (provider.id)}
-              <div class="s-row">
-                <div class="s-row-info">
-                  <div class="s-row-label">{provider.name ?? provider.id}</div>
-                  <div class="s-row-desc">{describeProvider(provider, t)}</div>
-                </div>
-                <div class="s-row-control">
-                  <div class="s-row-actions s-row-actions--provider">
-                    <span class={`chip ${providerStatusClass(provider)}`}
-                      >{providerStatusLabel(provider, t)}</span
-                    >
+              <div class="s-provider-card">
+                <div class="s-row s-row--provider">
+                  <div class="s-row-info">
+                    <div class="s-row-label">
+                      {provider.name ?? provider.id}
+                    </div>
+                    <div class="s-row-desc">
+                      {describeProvider(provider, t)}
+                    </div>
+                  </div>
+                  <div class="s-row-control">
+                    <div class="s-row-actions s-row-actions--provider">
+                      <span class={`chip ${providerStatusClass(provider)}`}
+                        >{providerStatusLabel(provider, t)}</span
+                      >
+                    </div>
                   </div>
                 </div>
+
+                {#if provider.connections?.length > 0}
+                  <div class="s-provider-connections">
+                    {#each provider.connections as connection (connection.id)}
+                      <div class="s-provider-connection-row">
+                        <div class="s-row-info">
+                          <div class="s-provider-connection-label">
+                            {connection.label ?? connection.id}
+                          </div>
+                          <div class="s-row-desc">
+                            {isOAuthConnection(connection)
+                              ? t(
+                                  'settings.providers.oauthDescription',
+                                  'OAuth device authorization managed by the provider.',
+                                )
+                              : t(
+                                  'settings.providers.apiKeyDescription',
+                                  'Static credential configured from environment or data directory.',
+                                )}
+                          </div>
+                        </div>
+
+                        <div class="s-row-control">
+                          {#if isOAuthConnection(connection)}
+                            {@const state = getOAuthState(connection.id)}
+                            {@const status = oauthStatus(connection)}
+                            <div class="s-row-actions s-row-actions--provider">
+                              {#if status === 'pending'}
+                                <span class="s-inline-waiting">
+                                  <span
+                                    class="s-inline-spinner"
+                                    aria-hidden="true"
+                                  ></span>
+                                  {t(
+                                    'settings.providers.device_flow.waiting',
+                                    'Waiting for authorization in GitHub…',
+                                  )}
+                                </span>
+                                <button
+                                  class="btn-outline"
+                                  type="button"
+                                  onclick={() =>
+                                    cancelOAuthFlow(provider, connection)}
+                                >
+                                  {t(
+                                    'settings.providers.device_flow.cancel',
+                                    'Cancel',
+                                  )}
+                                </button>
+                              {:else if status === 'connected'}
+                                <span class="chip chip-green">
+                                  {t(
+                                    'settings.providers.connected',
+                                    'Connected',
+                                  )}
+                                </span>
+                                <button
+                                  class="btn-outline"
+                                  type="button"
+                                  onclick={() =>
+                                    disconnectOAuthProvider(
+                                      provider,
+                                      connection,
+                                    )}
+                                >
+                                  {t(
+                                    'settings.providers.disconnect',
+                                    'Disconnect',
+                                  )}
+                                </button>
+                              {:else}
+                                <button
+                                  class="btn-primary"
+                                  type="button"
+                                  onclick={() =>
+                                    startOAuthConnect(provider, connection)}
+                                >
+                                  {t('settings.providers.connect', 'Connect')}
+                                </button>
+                              {/if}
+                            </div>
+
+                            {#if state.showDialog && state.dialogData}
+                              <div
+                                class="device-flow-inline"
+                                role="dialog"
+                                aria-modal="false"
+                                aria-labelledby={`device-flow-title-${connection.id}`}
+                              >
+                                <div class="device-flow-header">
+                                  <p class="device-flow-eyebrow">
+                                    {t(
+                                      'settings.providers.device_flow.eyebrow',
+                                      'OAuth',
+                                    )}
+                                  </p>
+                                  <h3 id={`device-flow-title-${connection.id}`}>
+                                    {t(
+                                      'settings.providers.device_flow.title',
+                                      'Connect GitHub Copilot',
+                                    )}
+                                  </h3>
+                                </div>
+                                <p class="device-flow-instructions">
+                                  {t(
+                                    'settings.providers.device_flow.instructions',
+                                    'Enter this code at the link below:',
+                                  )}
+                                </p>
+                                <div class="device-flow-code-row">
+                                  <code class="device-flow-code"
+                                    >{state.dialogData.user_code}</code
+                                  >
+                                  <button
+                                    class="btn-outline device-flow-copy"
+                                    type="button"
+                                    aria-label={t(
+                                      'settings.providers.device_flow.copy_aria',
+                                      'Copy device code {code}',
+                                      { code: state.dialogData.user_code },
+                                    )}
+                                    onclick={() =>
+                                      copyDeviceFlowUserCode(
+                                        connection,
+                                        state.dialogData.user_code,
+                                      )}
+                                  >
+                                    {copiedDeviceFlowConnectionId ===
+                                    connection.id
+                                      ? t(
+                                          'settings.providers.device_flow.copied',
+                                          'Copied',
+                                        )
+                                      : t('common.copy', 'Copy')}
+                                  </button>
+                                </div>
+                                <a
+                                  class="device-flow-link"
+                                  href={state.dialogData.verification_uri}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {state.dialogData.verification_uri}
+                                </a>
+                                <div
+                                  class="device-flow-waiting"
+                                  aria-live="polite"
+                                >
+                                  <span
+                                    class="s-inline-spinner"
+                                    aria-hidden="true"
+                                  ></span>
+                                  <span>
+                                    {t(
+                                      'settings.providers.device_flow.waiting',
+                                      'Waiting for authorization in GitHub…',
+                                    )}
+                                  </span>
+                                </div>
+                                <div class="device-flow-actions">
+                                  <button
+                                    class="btn-outline"
+                                    type="button"
+                                    onclick={() =>
+                                      cancelOAuthFlow(provider, connection)}
+                                  >
+                                    {t(
+                                      'settings.providers.device_flow.cancel',
+                                      'Cancel',
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            {/if}
+                          {:else}
+                            <span
+                              class={`chip ${isConnectionConfigured(connection) ? 'chip-green' : 'chip-amber'}`}
+                            >
+                              {isConnectionConfigured(connection)
+                                ? t(
+                                    'settings.providers.status.configured',
+                                    'Configured',
+                                  )
+                                : t(
+                                    'settings.providers.status.missingCredentials',
+                                    'Missing credentials',
+                                  )}
+                            </span>
+                          {/if}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/each}
           {/if}
@@ -976,6 +1436,18 @@
     border-bottom: 0;
   }
 
+  .s-provider-card {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .s-provider-card:last-of-type {
+    border-bottom: 0;
+  }
+
+  .s-row--provider {
+    border-bottom: 0;
+  }
+
   .s-row--stacked {
     align-items: stretch;
     flex-direction: column;
@@ -1077,6 +1549,171 @@
     justify-content: flex-end;
   }
 
+  .s-provider-connections {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: -2px 0 14px;
+    padding-left: 14px;
+    border-left: 1px solid var(--border);
+  }
+
+  .s-provider-connection-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.015);
+  }
+
+  .s-provider-connection-label {
+    color: var(--text-med);
+    font-size: 12.5px;
+    font-weight: 500;
+  }
+
+  .s-inline-waiting {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-med);
+    font-size: 12.5px;
+  }
+
+  .s-inline-spinner {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    border: 2px solid rgba(245, 158, 11, 0.22);
+    border-top-color: var(--amber);
+    border-radius: 50%;
+    animation: s-oauth-spin 800ms linear infinite;
+  }
+
+  .device-flow-inline {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    background: var(--surface-2);
+  }
+
+  .device-flow-header {
+    margin-bottom: 12px;
+  }
+
+  .device-flow-eyebrow {
+    margin: 0 0 6px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .device-flow-header h3 {
+    margin: 0;
+    color: var(--text-hi);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .device-flow-instructions {
+    margin: 0 0 10px;
+    color: var(--text-med);
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .device-flow-code-row {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .device-flow-copy {
+    flex-shrink: 0;
+    min-width: 72px;
+  }
+
+  .device-flow-code {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid rgba(232, 135, 10, 0.3);
+    border-radius: var(--r-md);
+    color: var(--text-hi);
+    background: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+  }
+
+  .device-flow-link {
+    display: inline-flex;
+    margin-top: 12px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    text-decoration: none;
+  }
+
+  .device-flow-link:hover,
+  .device-flow-link:focus-visible {
+    text-decoration: underline;
+  }
+
+  .device-flow-waiting {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 14px;
+    color: var(--text-med);
+    font-size: 12.5px;
+  }
+
+  .device-flow-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 14px;
+  }
+
+  .s-local-toast {
+    margin-bottom: 20px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-2);
+    border-left-width: 2px;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-hi);
+    font-size: 12.5px;
+  }
+
+  .s-local-toast--success {
+    border-left-color: var(--green);
+  }
+
+  .s-local-toast--error {
+    border-left-color: var(--red);
+    color: var(--red);
+  }
+
+  @keyframes s-oauth-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   .s-skill-directory-list {
     display: flex;
     flex-direction: column;
@@ -1164,6 +1801,17 @@
       max-width: none;
     }
 
+    .s-provider-connection-row,
+    .s-row-actions--provider {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .s-provider-connections {
+      padding-left: 0;
+      border-left: 0;
+    }
+
     .s-row-control--appearance {
       width: 100%;
       min-width: 0;
@@ -1172,7 +1820,8 @@
     }
 
     .s-skill-directory-add,
-    .s-skill-directory-item {
+    .s-skill-directory-item,
+    .device-flow-code-row {
       align-items: stretch;
       flex-direction: column;
     }

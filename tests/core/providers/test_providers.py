@@ -644,6 +644,46 @@ class TestProviderRegistryConnectionTypes:
             "api_key",
         ]
 
+    def test_api_key_connection_without_credential_key_raises_config_error(
+        self, tmp_path: Path
+    ) -> None:
+        """API key connections still require a credential_key."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        auth = dict(connection["auth"])
+        auth.pop("credential_key")
+        connection["auth"] = auth
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="requires 'credential_key'"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_unknown_oauth_flow_raises_config_error(self, tmp_path: Path) -> None:
+        """Only Device Flow OAuth configs are accepted in this phase."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][0])
+        connection["oauth"] = {
+            "flow": "authorization_code",
+            "client_id": "client-id",
+            "device_auth_url": "https://github.com/login/device/code",
+            "token_url": "https://github.com/login/oauth/access_token",
+            "scopes": ["copilot"],
+        }
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="Unknown OAuth flow"):
+            ProviderRegistry.load(tmp_path)
+
 
 # ---------------------------------------------------------------------------
 # Registry: empty directory

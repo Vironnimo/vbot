@@ -21,6 +21,17 @@ Clients call the vBot server contract; provider wire details stay behind
   `chat.history`, `chat.send`, `chat.stream`, `chat.cancel`, `log.list`, and
   `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
+- OAuth provider RPCs use the same public compositional `connection_id` format as
+  `connection.list`: `provider.connect`, `provider.disconnect`, and
+  `provider.connection_status` accept `{ provider_id, connection_id }`, where
+  `connection_id` is for example `github-copilot:oauth`. `provider.connect`
+  returns `{ user_code, verification_uri, expires_in }` for Device Flow;
+  `provider.disconnect` deletes the stored token and cancels any in-flight flow;
+  `provider.connection_status` returns `{ connected, flow_active }` alongside
+  the identifiers. Non-OAuth connections return RPC error code
+  `oauth_not_supported`. OAuth-backed model refresh obtains a fresh provider
+  token through `OAuthTokenGetter` before calling the model discovery pipeline;
+  API-key refresh keeps using the central static credential resolver.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
   `<provider>/<model-id-at-provider>` format.
@@ -69,6 +80,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `agent.deleted` (full agent payload via `_agent_response`). Run output
   includes persisted error-message events bridged as `run_output`. App-level
   background failures use `app_error` with an error payload for WebSocket clients.
+  Provider OAuth completion uses `provider_auth_completed` with provider and
+  public compositional connection identifiers plus a success flag; it must not
+  include token values.
 
 ## Interfaces
 
