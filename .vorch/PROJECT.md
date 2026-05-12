@@ -232,7 +232,16 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   envelope. Model capabilities live under `capabilities.limits` and
   `capabilities.supports`; `gpt-4o` may legitimately report
   `max_output_tokens: 4096`, so agents must read the source value rather than
-  assume a value greater than the old fallback.
+  assume a value greater than the old fallback. The top-level `capabilities`
+  object is required, but nested `limits` and `supports` sections may be
+  missing or non-object per model and should be treated as empty mappings.
+- **GitHub Copilot runtime request support is model-specific.** Catalog facts
+  such as `reasoning.supported: true` do not guarantee that Copilot
+  `/chat/completions` accepts OpenAI-style `reasoning_effort` for that model.
+  `GitHubCopilotAdapter` owns a per-model runtime policy; unknown Copilot models
+  default to conservative request shaping and omit explicit reasoning controls
+  until validated. Future Copilot endpoint selection should live in that same
+  policy layer.
 - **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
