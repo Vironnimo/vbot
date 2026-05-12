@@ -278,7 +278,19 @@ Observed Copilot `/models` shape:
 `capabilities.limits.max_output_tokens`, and `capabilities.supports`. Reasoning
 is supported when Copilot advertises `reasoning_effort` or thinking-budget
 support. The normalizer must use the reported source values; for example,
-`gpt-4o` may legitimately report `max_output_tokens: 4096`.
+`gpt-4o` may legitimately report `max_output_tokens: 4096`. The top-level
+`capabilities` object is required structural shape, but nested `limits` and
+`supports` sections are optional per model and fall back to empty mappings.
+Individual numeric limit fields are also optional: missing or non-numeric
+context limits fall back to `0`, and missing or non-numeric output limits fall
+back to provider `max_tokens` or the hard default.
+
+Runtime request shaping is controlled by a per-model
+`GitHubCopilotModelPolicy` in `core/providers/github_copilot.py`. The policy is
+the place to evolve Copilot-specific behavior such as endpoint selection,
+parameter allow/deny lists, and allowed `reasoning_effort` values. Unknown
+Copilot models use a conservative default policy that omits explicit
+OpenAI-style reasoning controls until a model is validated.
 
 ### AnthropicAdapter
 
