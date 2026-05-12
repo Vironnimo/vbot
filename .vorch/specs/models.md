@@ -198,6 +198,16 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   `capabilities.limits.max_output_tokens`. Vision/tools/structured output and
   reasoning indicators come from `capabilities.supports`. The reported value is
   authoritative even when it equals an old fallback value, such as `gpt-4o`
-  reporting `max_output_tokens: 4096`.
+  reporting `max_output_tokens: 4096`. The top-level `capabilities` object is
+  required, but nested `limits` and `supports` sections may be missing or
+  malformed and are treated as empty mappings. Individual numeric limit fields
+  are also optional per model; missing context limits fall back to `0`, and
+  missing output limits fall back to provider `max_tokens` or the hard default
+  so one partial Copilot entry does not fail the whole refresh.
+- **GitHub Copilot capability facts are not the same as runtime control
+  support.** `reasoning.supported` in the catalog means the model is advertised
+  as reasoning-capable through Copilot; it does not by itself authorize the
+  adapter to send OpenAI-style `reasoning_effort`. Runtime request shaping is a
+  provider-adapter concern and is currently policy-driven per Copilot model.
 
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.
