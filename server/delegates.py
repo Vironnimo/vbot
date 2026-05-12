@@ -36,6 +36,7 @@ from core.chat import (
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
+from core.providers.auth_flow import DeviceFlowEngine
 from core.storage.storage import PROMPT_FRAGMENT_NAMES
 from core.utils.errors import ConfigError, VBotError
 from core.utils.log_viewer import LogViewer
@@ -44,6 +45,7 @@ from server.events import (
     AGENT_CREATED_EVENT,
     AGENT_DELETED_EVENT,
     AGENT_UPDATED_EVENT,
+    PROVIDER_AUTH_COMPLETED_EVENT,
     RUN_CANCELLED_SERVER_EVENT,
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -69,6 +71,7 @@ RPC_ERROR_ACTIVE_RUN = "active_run"
 RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
 RPC_ERROR_LAST_AGENT = "last_agent"
+RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
 
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
@@ -131,6 +134,12 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _list_models(state, params)
         case "model.refresh_db":
             return await _refresh_model_db(state, params)
+        case "provider.connect":
+            return await _connect_provider(state, params)
+        case "provider.disconnect":
+            return _disconnect_provider(state, params)
+        case "provider.connection_status":
+            return _provider_connection_status(state, params)
         case "tool.list":
             return _list_tools(state, params)
         case "skill.list":
@@ -236,6 +245,102 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return result
+
+
+async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported provider connect fields: {', '.join(unsupported_fields)}",
+        )
+
+    provider_id = _required_string(params, "provider_id")
+    connection_id = _required_string(params, "connection_id")
+
+    try:
+        connection = _oauth_device_connection(state.runtime, provider_id, connection_id)
+        engine = _device_flow_engine(state)
+        oauth_config = connection.oauth
+        session = await engine.start_device_flow(provider_id, connection.id, oauth_config)
+
+        async def on_complete(*, success: bool) -> None:
+            _publish_provider_auth_completed_event(
+                state,
+                provider_id=provider_id,
+                connection_id=connection_id,
+                success=success,
+            )
+
+        asyncio.create_task(
+            engine._poll_for_token(
+                provider_id,
+                connection.id,
+                oauth_config,
+                session.device_code,
+                session.interval,
+                on_complete,
+            )
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {
+        "user_code": session.user_code,
+        "verification_uri": session.verification_uri,
+        "expires_in": session.expires_in,
+    }
+
+
+def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported provider disconnect fields: {', '.join(unsupported_fields)}",
+        )
+
+    provider_id = _required_string(params, "provider_id")
+    connection_id = _required_string(params, "connection_id")
+
+    try:
+        connection = _oauth_connection(state.runtime, provider_id, connection_id)
+        _runtime_token_store(state.runtime).delete(provider_id, connection.id)
+        engine = getattr(state, "device_flow_engine", None)
+        if engine is not None:
+            engine.cancel_flow(provider_id, connection.id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {"provider_id": provider_id, "connection_id": connection_id, "status": "disconnected"}
+
+
+def _provider_connection_status(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported provider connection status fields: {', '.join(unsupported_fields)}",
+        )
+
+    provider_id = _required_string(params, "provider_id")
+    connection_id = _required_string(params, "connection_id")
+
+    try:
+        connection = _oauth_connection(state.runtime, provider_id, connection_id)
+        token_store = _runtime_token_store(state.runtime)
+        engine = getattr(state, "device_flow_engine", None)
+        connected = token_store.has_valid_token(provider_id, connection.id)
+        flow_active = _device_flow_active(engine, provider_id, connection.id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {
+        "provider_id": provider_id,
+        "connection_id": connection_id,
+        "connected": connected,
+        "flow_active": flow_active,
+    }
 
 
 async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
@@ -819,6 +924,62 @@ def _runtime_resources_dir(runtime: Any) -> Path:
     raise ConfigError("Runtime resources directory is not available")
 
 
+def _oauth_device_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
+    connection = _oauth_connection(runtime, provider_id, connection_id)
+    oauth_config = getattr(connection, "oauth", None)
+    if oauth_config is None or getattr(oauth_config, "flow", "") != "device":
+        raise RpcError(
+            RPC_ERROR_OAUTH_NOT_SUPPORTED,
+            f"provider connection '{connection_id}' does not support OAuth Device Flow",
+        )
+    return connection
+
+
+def _oauth_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
+    connection = _provider_connection(runtime, provider_id, connection_id)
+    if getattr(connection, "type", "") != "oauth":
+        raise RpcError(
+            RPC_ERROR_OAUTH_NOT_SUPPORTED,
+            f"provider connection '{connection_id}' is not an OAuth connection",
+        )
+    return connection
+
+
+def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
+    provider = runtime.providers.get(provider_id)
+    expected_prefix = f"{provider_id}:"
+    if not connection_id.startswith(expected_prefix):
+        raise ConfigError(
+            f"Connection id '{connection_id}' does not belong to provider '{provider_id}'"
+        )
+    local_connection_id = connection_id.removeprefix(expected_prefix)
+    return provider.get_connection(local_connection_id)
+
+
+def _runtime_token_store(runtime: Any) -> Any:
+    token_store = getattr(runtime, "token_store", None)
+    if token_store is None:
+        raise ConfigError("Runtime OAuth token store is not available")
+    return token_store
+
+
+def _device_flow_engine(state: Any) -> DeviceFlowEngine:
+    engine = getattr(state, "device_flow_engine", None)
+    if engine is not None:
+        return cast(DeviceFlowEngine, engine)
+    engine = DeviceFlowEngine(_runtime_token_store(state.runtime))
+    state.device_flow_engine = engine
+    return engine
+
+
+def _device_flow_active(engine: Any, provider_id: str, local_connection_id: str) -> bool:
+    if engine is None:
+        return False
+    active_flows = getattr(engine, "_active_flows", {})
+    task = active_flows.get((provider_id, local_connection_id))
+    return bool(task is not None and not task.done())
+
+
 def _connection_response(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
     connection_id = f"{provider_id}:{connection.id}"
     return {
@@ -1084,6 +1245,22 @@ def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> No
     if event_bus is None:
         return
     event_bus.publish(event_type, payload)
+
+
+def _publish_provider_auth_completed_event(
+    state: Any,
+    *,
+    provider_id: str,
+    connection_id: str,
+    success: bool,
+) -> None:
+    event_bus = getattr(state, "event_bus", None)
+    if event_bus is None:
+        return
+    event_bus.publish(
+        PROVIDER_AUTH_COMPLETED_EVENT,
+        {"provider_id": provider_id, "connection_id": connection_id, "success": success},
+    )
 
 
 async def _publish_run_events(event_bus: Any, run: Run) -> None:

@@ -90,6 +90,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Normalizes Settings provider metadata that now uses credential-centric
     fields (`credential_key`, `credentials_configured`) rather than env/API-key
     wording.
+  - Provides OAuth provider helpers for Settings: OAuth connection detection,
+    public connection-id payload construction, and local connection status
+    derivation (`connected`, `disconnected`, or `pending`).
   - Settings provider metadata includes `models_endpoint`; when at least one
     provider is refresh-capable and credential-configured, the Providers panel
     shows one global model database refresh control. It calls `model.refresh_db`
@@ -99,6 +102,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/SettingsView.svelte`
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
+  - The Providers panel renders OAuth connections with Connect/Disconnect
+    controls. `provider.connect` opens an inline Device Flow dialog with the user
+    code and verification link; `provider_auth_completed` closes it and refreshes
+    settings. Settings sends public compositional connection IDs such as
+    `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
 - `webui/src/components/LogsView.svelte`
@@ -115,6 +123,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     Chat and Agents views.
   - Routes the top-level `Logs` navigation item to `LogsView`.
   - Handles server-pushed `app_error` WebSocket events as error toasts.
+  - Forwards `provider_auth_completed` WebSocket events to `SettingsView` when
+    the Settings view is active.
 
 ## Conventions
 

@@ -317,6 +317,27 @@ export const englishCatalog = Object.freeze({
   'settings.providers.refreshSuccess':
     'Model DB updated: {providerCount} providers, {count} models available.',
   'settings.providers.refreshError': 'Model DB could not be updated.',
+  'settings.providers.connect': 'Connect',
+  'settings.providers.disconnect': 'Disconnect',
+  'settings.providers.connected': 'Connected',
+  'settings.providers.connectError':
+    'Provider connection could not be started.',
+  'settings.providers.disconnectError':
+    'Provider connection could not be disconnected.',
+  'settings.providers.apiKeyDescription':
+    'Static credential configured from environment or data directory.',
+  'settings.providers.oauthDescription':
+    'OAuth device authorization managed by the provider.',
+  'settings.providers.device_flow.title': 'Connect GitHub Copilot',
+  'settings.providers.device_flow.instructions':
+    'Enter this code at the link below:',
+  'settings.providers.device_flow.waiting':
+    'Waiting for authorization in GitHub…',
+  'settings.providers.device_flow.cancel': 'Cancel',
+  'settings.providers.device_flow.success_toast':
+    'GitHub Copilot connected successfully',
+  'settings.providers.device_flow.error_toast':
+    'Authorization failed or timed out',
   'settings.appearance.title': 'Appearance',
   'settings.appearance.subtitle': 'Language preference.',
   'settings.appearance.language': 'Language',
