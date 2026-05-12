@@ -187,12 +187,13 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   know about provider APIs.
 
 - **Provider discovery schemas differ, and dispatch is explicit.** Dynamic
-  discovery chooses a normalizer from `ProviderConfig.model_discovery` (default:
-  adapter value), not from provider ID. OpenRouter uses an explicit strict
-  `openrouter` normalizer that expects fields such as object-valued
+  discovery chooses a normalizer from `ProviderConfig.model_discovery`, not from
+  provider ID. Providers without a configured/implemented discovery strategy
+  fail refresh instead of inventing a fallback. OpenRouter uses an explicit
+  strict `openrouter` normalizer that expects fields such as object-valued
   `architecture`. Generic OpenAI-compatible discovery is tolerant: entries may
   omit `architecture` or provide it as a non-object, and the normalizer reads
-  top-level model fields first while consulting `architecture` only when it is
-  an object.
+  top-level model fields only. OpenRouter-enriched fields such as `architecture`,
+  `top_provider`, and `supported_parameters` are ignored by the generic path.
 
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.
