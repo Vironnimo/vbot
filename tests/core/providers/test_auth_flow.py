@@ -272,6 +272,67 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_poll_loop_reports_failure_when_copilot_token_exchange_fails(
+    tmp_path: Path,
+) -> None:
+    """A post-authorization Copilot exchange failure notifies the UI waiter."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    on_complete = AsyncMock()
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"access_token": "github-oauth-secret"})
+    )
+    respx.get(TOKEN_EXCHANGE_URL).mock(
+        return_value=httpx.Response(403, json={"message": "forbidden"})
+    )
+
+    # Act
+    await engine._poll_for_token(
+        "github-copilot",
+        "oauth",
+        _oauth_config(token_exchange_url=TOKEN_EXCHANGE_URL),
+        "device-code",
+        1,
+        900,
+        on_complete,
+    )
+
+    # Assert
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=False)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_reports_failure_before_reraising_unexpected_errors(
+    tmp_path: Path,
+) -> None:
+    """Unexpected polling task crashes still release the UI from waiting."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    on_complete = AsyncMock()
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"unexpected": "shape"}))
+
+    # Act / Assert
+    with pytest.raises(KeyError):
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            on_complete,
+        )
+
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=False)
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> None:
     """Cancelling an active flow cancels its polling task."""
     # Arrange
