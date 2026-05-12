@@ -51,6 +51,8 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     """Provider configs have the expected field values."""
     # Act
     openai_config = runtime.providers.get("openai")
+    openrouter_config = runtime.providers.get("openrouter")
+    github_copilot_config = runtime.providers.get("github-copilot")
 
     # Assert
     assert openai_config.id == "openai"
@@ -62,6 +64,8 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
         "api-key",
     ]
     assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
+    assert openrouter_config.adapter == "openrouter"
+    assert github_copilot_config.adapter == "github_copilot"
 
 
 def test_provider_credential_resolver_has_credentials_for_connection(
