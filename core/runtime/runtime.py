@@ -19,6 +19,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -57,7 +58,7 @@ _DEFAULT_APP_VERSION = "0.1.0"
 # ---------------------------------------------------------------------------
 
 _ADAPTER_MAP: dict[
-    str, Callable[[ProviderConfig, str, str | None, AuthConfig], ProviderAdapter]
+    str, Callable[[ProviderConfig, TokenGetter, str | None, AuthConfig], ProviderAdapter]
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "anthropic": AnthropicAdapter,
@@ -451,7 +452,7 @@ class Runtime:
 
         provider_config = self.providers.get(provider_id)
         connection = self._get_connection_config(provider_config, connection_id)
-        api_key = self.provider_credentials.get_credentials(provider_id, connection_id)
+        token_getter = self._get_token_getter(provider_id, connection_id, connection)
 
         adapter_class = _ADAPTER_MAP.get(provider_config.adapter)
         if adapter_class is None:
@@ -459,7 +460,28 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        return adapter_class(provider_config, api_key, connection.base_url, connection.auth)
+        return adapter_class(provider_config, token_getter, connection.base_url, connection.auth)
+
+    def _get_token_getter(
+        self,
+        provider_id: str,
+        connection_id: str,
+        connection: ConnectionConfig,
+    ) -> TokenGetter:
+        if connection.type == "api_key":
+            raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
+            return StaticTokenGetter(raw_token)
+        if connection.type == "oauth":
+            if connection.oauth is None:
+                # OAuth stubs with a credential_key still resolve through the
+                # central credential path until they get token-store metadata.
+                raw_token = self.provider_credentials.get_credentials(provider_id, connection_id)
+                return StaticTokenGetter(raw_token)
+            return OAuthTokenGetter(self.token_store, provider_id, connection.id, connection.oauth)
+        raise ConfigError(
+            f"Unknown connection type '{connection.type}' for provider '{provider_id}' "
+            f"connection '{connection.id}'"
+        )
 
     def _get_connection_config(
         self,

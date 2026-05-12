@@ -69,6 +69,8 @@ Clients call the vBot server contract; provider wire details stay behind
   `agent.deleted` (full agent payload via `_agent_response`). Run output
   includes persisted error-message events bridged as `run_output`. App-level
   background failures use `app_error` with an error payload for WebSocket clients.
+  Provider OAuth completion uses `provider_auth_completed` with provider and
+  connection identifiers plus a success flag; it must not include token values.
 
 ## Interfaces
 
