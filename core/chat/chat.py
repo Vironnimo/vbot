@@ -752,7 +752,7 @@ class ChatLoop:
             session.append(assistant_message)
             if not self._streaming:
                 _emit_assistant_events(run, assistant_message)
-            messages.append(assistant_message.to_dict())
+            messages.append(_assistant_message_to_tool_loop_request_dict(assistant_message))
 
             if not assistant_message.tool_calls:
                 return assistant_message
@@ -1279,6 +1279,12 @@ def _assistant_message_from_response(model: str, response: JsonObject) -> ChatMe
         usage=response.get("usage"),
         tool_calls=tool_calls,
     )
+
+
+def _assistant_message_to_tool_loop_request_dict(message: ChatMessage) -> JsonObject:
+    data = message.to_dict()
+    data.pop("usage", None)
+    return data
 
 
 def _apply_usage_estimation(

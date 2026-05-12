@@ -1902,8 +1902,10 @@ async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_
 
     assert response["ok"] is True
     assert response["result"]["session_id"] == "current-one"
-    assert response["result"]["messages"][0]["reasoning"] == "visible"
-    assert "reasoning_meta" not in response["result"]["messages"][0]
+    message = response["result"]["messages"][0]
+    assert message["content"] == "Hello"
+    assert message["reasoning"] == "visible"
+    assert "reasoning_meta" not in message
 
 
 @pytest.mark.asyncio
@@ -2019,6 +2021,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
     result = response["result"]
     assert result["status"] == "completed"
     assert result["message"]["content"] == "Hello"
+    assert result["message"]["reasoning"] == "Readable thinking"
     assert "reasoning_meta" not in result["message"]
     assert [event["type"] for event in result["events"]] == [
         "run_started",
@@ -2027,6 +2030,15 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
         "assistant_output",
         "run_completed",
     ]
+    reasoning_event = next(event for event in result["events"] if event["type"] == "reasoning")
+    assistant_output_event = next(
+        event for event in result["events"] if event["type"] == "assistant_output"
+    )
+    assert reasoning_event["payload"]["message"]["reasoning"] == "Readable thinking"
+    assert "reasoning_meta" not in reasoning_event["payload"]["message"]
+    assert assistant_output_event["payload"]["message"]["content"] == "Hello"
+    assert assistant_output_event["payload"]["message"]["reasoning"] == "Readable thinking"
+    assert "reasoning_meta" not in assistant_output_event["payload"]["message"]
     assert "reasoning_meta" not in str(result["events"])
 
 

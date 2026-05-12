@@ -226,6 +226,12 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   OpenRouter discovery.** Copilot `/models` entries may omit `architecture` or
   provide it as a non-object. Do not route Copilot through OpenRouter's strict
   schema normalizer.
+- **GitHub Copilot GPT-5 reasoning requests follow the OpenAI-style path.**
+  Copilot GPT-5-family reasoning models use `reasoning_effort` and
+  `max_completion_tokens`, not OpenRouter's `reasoning` object. When Copilot
+  returns readable reasoning text inside `reasoning_details`, adapters must
+  surface that text as visible `reasoning` while keeping the full raw
+  `reasoning_details` payload private in `reasoning_meta` for round-tripping.
 - **Model discovery strategy is config-driven and separate from request
   adapter selection.** `ProviderConfig.adapter` chooses the request/streaming
   protocol implementation. `ProviderConfig.model_discovery` chooses how
@@ -236,7 +242,7 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   leak back into the shared path. Only implemented discovery strategies may
   auto-default; providers without one keep `model_discovery` empty instead of
   advertising an unsupported refresh path.
-- **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
+- **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. Normal request-history serialization strips `usage`, `reasoning`, and `reasoning_meta` from prior assistant messages before sending them to providers, but same-turn tool-loop replay keeps the current assistant message's readable `reasoning` plus opaque `reasoning_meta` and still strips `usage`.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
 - **Skill activation is session-scoped.** Skills may be activated through the internal `skill` tool or deterministic `/skill-name` and `$skill-name` message triggers. Activated `<skill_content>` is persisted as an internal note and restored on later provider requests in the same Session, while normal history/UI responses continue to hide note messages.
