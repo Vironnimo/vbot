@@ -186,4 +186,10 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   invalidates the registry cache. The registry remains the read path and does not
   know about provider APIs.
 
+- **Provider discovery schemas differ.** OpenRouter uses a strict normalizer that
+  expects OpenRouter fields such as an object-valued `architecture`. GitHub
+  Copilot uses tolerant OpenAI-compatible discovery: entries may omit
+  `architecture` or provide it as a non-object, so Copilot discovery reads
+  top-level model fields and only inspects `architecture` when it is an object.
+
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.
