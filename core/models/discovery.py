@@ -30,14 +30,8 @@ MAX_OUTPUT_TOKEN_KEYS = (
     "maxOutputTokens",
     "maxCompletionTokens",
 )
-TOOLS_METADATA_KEYS = ("supports_tools", "tools", "tool_calls", "function_calling")
-JSON_MODE_METADATA_KEYS = (
-    "supports_json_mode",
-    "json_mode",
-    "supports_structured_outputs",
-    "structured_outputs",
-)
-REASONING_METADATA_KEYS = ("supports_reasoning", "reasoning_supported")
+JSON_MODE_PARAMETER_NAMES = {"response_format", "structured_outputs", "json_mode"}
+REASONING_PARAMETER_NAMES = {"reasoning", "include_reasoning", "reasoning_effort"}
 
 
 class ModelDiscoveryError(VBotError):
@@ -108,10 +102,14 @@ def normalize_openrouter(
     )
 
 
-def normalize_openai_compatible(
+def normalize_openai_compatible_tolerant(
     raw_model: Mapping[str, Any], provider_defaults: Mapping[str, Any] | None
 ) -> Model:
-    """Normalize a generic OpenAI-compatible ``/models`` entry into a vBot ``Model``."""
+    """Normalize a tolerant OpenAI-compatible ``/models`` entry into a vBot ``Model``."""
+
+    architecture = _read_optional_mapping(raw_model, "architecture")
+    top_provider = _read_optional_mapping(raw_model, "top_provider")
+    supported_parameters = _read_optional_string_set(raw_model, "supported_parameters")
 
     model_id = _read_non_empty_string(raw_model, "id")
     name = _read_optional_non_empty_string(raw_model, "name") or model_id
@@ -120,18 +118,27 @@ def normalize_openai_compatible(
         model_id=model_id,
         name=name,
         capabilities=Capabilities(
-            vision=_has_image_modality(raw_model),
-            tools=_supports_tools_by_default(raw_model),
-            json_mode=_supports_json_mode(raw_model),
-            reasoning=ReasoningCapabilities(supported=_supports_reasoning(raw_model)),
+            vision=_has_image_modality(raw_model, architecture),
+            tools=_supports_tools_by_default(raw_model, top_provider, architecture),
+            json_mode=_supports_json_mode(
+                raw_model, top_provider, architecture, supported_parameters
+            ),
+            reasoning=ReasoningCapabilities(
+                supported=_supports_reasoning(
+                    raw_model,
+                    top_provider,
+                    architecture,
+                    supported_parameters,
+                ),
+            ),
         ),
-        context_window=(
-            _read_first_optional_int(raw_model, CONTEXT_WINDOW_KEYS) or DEFAULT_CONTEXT_WINDOW
-        ),
-        max_output_tokens=(
-            _read_first_optional_int(raw_model, MAX_OUTPUT_TOKEN_KEYS)
-            or _provider_default_max_tokens(provider_defaults)
-        ),
+        context_window=_read_first_optional_int(raw_model, CONTEXT_WINDOW_KEYS)
+        or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS)
+        or DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens=_read_first_optional_int(top_provider, MAX_OUTPUT_TOKEN_KEYS)
+        or _read_first_optional_int(raw_model, MAX_OUTPUT_TOKEN_KEYS)
+        or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS)
+        or _provider_default_max_tokens(provider_defaults),
     )
 
 
@@ -157,8 +164,7 @@ async def refresh_models(
         normalizer = _normalizer_for_provider(provider_config)
         if normalizer is None:
             raise ValueError(
-                "No model normalizer registered for "
-                f"model_discovery '{provider_config.model_discovery}'"
+                f"No model normalizer registered for adapter '{provider_config.adapter}'"
             )
 
         raw_models = await _fetch_raw_models(
@@ -321,7 +327,16 @@ def _provider_default_max_tokens(provider_defaults: Mapping[str, Any] | None) ->
 
 
 def _normalizer_for_provider(provider_config: ProviderConfig):
-    return _NORMALIZER_MAP.get(provider_config.model_discovery)
+    if provider_config.id == "github-copilot":
+        return normalize_openai_compatible_tolerant
+    return _NORMALIZER_MAP.get(provider_config.adapter)
+
+
+def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = data.get(key)
+    if isinstance(value, dict):
+        return value
+    return {}
 
 
 def _read_non_empty_string(data: Mapping[str, Any], key: str) -> str:
@@ -336,6 +351,13 @@ def _read_optional_non_empty_string(data: Mapping[str, Any], key: str) -> str | 
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _read_optional_string_set(data: Mapping[str, Any], key: str) -> set[str]:
+    value = data.get(key)
+    if not isinstance(value, list):
+        return set()
+    return {item for item in value if isinstance(item, str)}
 
 
 def _read_first_optional_int(data: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
@@ -357,8 +379,8 @@ def _parse_optional_int(value: Any) -> int | None:
     return None
 
 
-def _has_image_modality(raw_model: Mapping[str, Any]) -> bool:
-    return _modalities_include_image(raw_model)
+def _has_image_modality(raw_model: Mapping[str, Any], architecture: Mapping[str, Any]) -> bool:
+    return _modalities_include_image(raw_model) or _modalities_include_image(architecture)
 
 
 def _modalities_include_image(data: Mapping[str, Any]) -> bool:
@@ -377,20 +399,48 @@ def _modality_is_image(value: Any) -> bool:
     return False
 
 
-def _supports_tools_by_default(raw_model: Mapping[str, Any]) -> bool:
-    explicit_value = _read_first_optional_bool((raw_model,), TOOLS_METADATA_KEYS)
+def _supports_tools_by_default(*metadata_sources: Mapping[str, Any]) -> bool:
+    explicit_value = _read_first_optional_bool(
+        metadata_sources,
+        ("supports_tools", "tools", "tool_calls", "function_calling"),
+    )
     return explicit_value is not False
 
 
-def _supports_json_mode(raw_model: Mapping[str, Any]) -> bool:
-    explicit_value = _read_first_optional_bool((raw_model,), JSON_MODE_METADATA_KEYS)
+def _supports_json_mode(
+    raw_model: Mapping[str, Any],
+    top_provider: Mapping[str, Any],
+    architecture: Mapping[str, Any],
+    supported_parameters: set[str],
+) -> bool:
+    if supported_parameters & JSON_MODE_PARAMETER_NAMES:
+        return True
+    explicit_value = _read_first_optional_bool(
+        (raw_model, top_provider, architecture),
+        (
+            "supports_json_mode",
+            "json_mode",
+            "supports_structured_outputs",
+            "structured_outputs",
+        ),
+    )
     return explicit_value is True
 
 
-def _supports_reasoning(raw_model: Mapping[str, Any]) -> bool:
-    if _read_reasoning_supported(raw_model):
+def _supports_reasoning(
+    raw_model: Mapping[str, Any],
+    top_provider: Mapping[str, Any],
+    architecture: Mapping[str, Any],
+    supported_parameters: set[str],
+) -> bool:
+    if supported_parameters & REASONING_PARAMETER_NAMES:
         return True
-    explicit_value = _read_first_optional_bool((raw_model,), REASONING_METADATA_KEYS)
+    if _read_reasoning_supported(raw_model) or _read_reasoning_supported(architecture):
+        return True
+    explicit_value = _read_first_optional_bool(
+        (raw_model, top_provider, architecture),
+        ("supports_reasoning", "reasoning_supported"),
+    )
     if explicit_value is True:
         return True
     return _has_non_empty_list(raw_model, "reasoning_efforts") or _has_non_empty_list(
@@ -456,6 +506,5 @@ def _read_bool(data: Mapping[str, Any], key: str) -> bool:
 
 
 _NORMALIZER_MAP = {
-    "openai_compatible": normalize_openai_compatible,
-    "openrouter": normalize_openrouter,
+    "openai_compatible": normalize_openrouter,
 }
