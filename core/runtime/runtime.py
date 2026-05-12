@@ -19,6 +19,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.token_store import TokenStore
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,
@@ -97,6 +98,7 @@ class Runtime:
         self._started: bool = False
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
+        self._token_store: TokenStore | None = None
         self._models: ModelRegistry | None = None
         self._storage: StorageManager | None = None
         self._agents: AgentStore | None = None
@@ -135,9 +137,11 @@ class Runtime:
         self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)
+        self._token_store = TokenStore(self._storage.data_dir)
         self._provider_credentials = ProviderCredentialResolver(
             self._providers,
             fallback_credentials=data_dir_credentials,
+            token_store=self._token_store,
         )
         self._models = ModelRegistry.load(resources_path)
         self._agents = AgentStore(
@@ -204,6 +208,7 @@ class Runtime:
         self._started = False
         self._providers = None
         self._provider_credentials = None
+        self._token_store = None
         self._models = None
         self._storage = None
         self._agents = None
@@ -335,6 +340,14 @@ class Runtime:
         if self._provider_credentials is None:
             raise RuntimeError("Provider credential service not available")
         return self._provider_credentials
+
+    @property
+    def token_store(self) -> TokenStore:
+        """Access to persisted OAuth provider tokens."""
+        self._ensure_started()
+        if self._token_store is None:
+            raise RuntimeError("Token store not available")
+        return self._token_store
 
     @property
     def storage(self) -> StorageManager:

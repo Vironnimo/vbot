@@ -37,10 +37,23 @@ class AuthConfig:
 
     header: str
     prefix: str
-    credential_key: str
+    credential_key: str = ""
 
 
 VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
+VALID_OAUTH_FLOWS = frozenset({"device"})
+
+
+@dataclass(frozen=True)
+class OAuthConfig:
+    """OAuth flow metadata for a provider connection."""
+
+    flow: str
+    client_id: str
+    device_auth_url: str
+    token_url: str
+    scopes: list[str]
+    token_exchange_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,7 @@ class ConnectionConfig:
     label: str
     auth: AuthConfig
     base_url: str | None = None
+    oauth: OAuthConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +261,18 @@ class ProviderRegistry:
                 )
 
             auth_data = connection_data["auth"]
+            credential_key = auth_data.get("credential_key", "")
+            if connection_type == "api_key" and not credential_key:
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection '{local_id}' api_key auth "
+                    "requires 'credential_key'"
+                )
             auth = AuthConfig(
                 header=auth_data["header"],
                 prefix=auth_data["prefix"],
-                credential_key=auth_data["credential_key"],
+                credential_key=credential_key,
             )
+            oauth = ProviderRegistry._parse_oauth_config(provider_id, local_id, connection_data)
             connections.append(
                 ConnectionConfig(
                     id=local_id,
@@ -259,7 +280,33 @@ class ProviderRegistry:
                     label=connection_data["label"],
                     auth=auth,
                     base_url=connection_data.get("base_url"),
+                    oauth=oauth,
                 )
             )
 
         return connections
+
+    @staticmethod
+    def _parse_oauth_config(
+        provider_id: str,
+        local_id: str,
+        connection_data: dict[str, Any],
+    ) -> OAuthConfig | None:
+        oauth_data = connection_data.get("oauth")
+        if oauth_data is None:
+            return None
+
+        flow = oauth_data["flow"]
+        if flow not in VALID_OAUTH_FLOWS:
+            raise ConfigError(
+                f"Unknown OAuth flow '{flow}' for provider '{provider_id}' connection '{local_id}'"
+            )
+
+        return OAuthConfig(
+            flow=flow,
+            client_id=oauth_data["client_id"],
+            device_auth_url=oauth_data["device_auth_url"],
+            token_url=oauth_data["token_url"],
+            scopes=list(oauth_data.get("scopes", [])),
+            token_exchange_url=oauth_data.get("token_exchange_url"),
+        )
