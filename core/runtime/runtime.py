@@ -5,7 +5,7 @@ all core services and manages the application lifecycle.
 """
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,7 +20,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
-from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
 from core.runtime.interfaces import (
@@ -60,7 +60,11 @@ _DEFAULT_APP_VERSION = "0.1.0"
 # ---------------------------------------------------------------------------
 
 _ADAPTER_MAP: dict[
-    str, Callable[[ProviderConfig, TokenGetter, str | None, AuthConfig], ProviderAdapter]
+    str,
+    type[OpenAICompatibleAdapter]
+    | type[OpenRouterAdapter]
+    | type[GitHubCopilotAdapter]
+    | type[AnthropicAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openrouter": OpenRouterAdapter,
@@ -464,7 +468,22 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
+        if adapter_class is GitHubCopilotAdapter:
+            return GitHubCopilotAdapter(
+                provider_config,
+                token_getter,
+                connection.base_url,
+                connection.auth,
+                self._github_copilot_model_metadata,
+            )
+
         return adapter_class(provider_config, token_getter, connection.base_url, connection.auth)
+
+    def _github_copilot_model_metadata(self, model_id: str) -> Mapping[str, Any] | None:
+        try:
+            return self.models.get("github-copilot", model_id).metadata
+        except KeyError:
+            return None
 
     def _get_token_getter(
         self,
