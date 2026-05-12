@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-08T18:39:50.541895+00:00",
+  "fetched_at": "2026-05-12T17:12:57.589194+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -105,19 +105,6 @@
       "max_output_tokens": 65536,
       "name": "AllenAI: Olmo 3 32B Think"
     },
-    "alpindale/goliath-120b": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        },
-        "tools": false,
-        "vision": false
-      },
-      "context_window": 6144,
-      "max_output_tokens": 1024,
-      "name": "Goliath 120B"
-    },
     "amazon/nova-2-lite-v1": {
       "capabilities": {
         "json_mode": false,
@@ -221,32 +208,6 @@
       "context_window": 200000,
       "max_output_tokens": 8192,
       "name": "Anthropic: Claude 3.5 Haiku"
-    },
-    "anthropic/claude-3.7-sonnet": {
-      "capabilities": {
-        "json_mode": false,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 200000,
-      "max_output_tokens": 64000,
-      "name": "Anthropic: Claude 3.7 Sonnet"
-    },
-    "anthropic/claude-3.7-sonnet:thinking": {
-      "capabilities": {
-        "json_mode": false,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 200000,
-      "max_output_tokens": 64000,
-      "name": "Anthropic: Claude 3.7 Sonnet (thinking)"
     },
     "anthropic/claude-haiku-4.5": {
       "capabilities": {
@@ -442,6 +403,19 @@
       "context_window": 262144,
       "max_output_tokens": 262144,
       "name": "Arcee AI: Trinity Large Thinking"
+    },
+    "arcee-ai/trinity-large-thinking:free": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "max_output_tokens": 80000,
+      "name": "Arcee AI: Trinity Large Thinking (free)"
     },
     "arcee-ai/trinity-mini": {
       "capabilities": {
@@ -738,8 +712,8 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 32768,
-      "max_output_tokens": 7168,
+      "context_window": 163840,
+      "max_output_tokens": 32768,
       "name": "DeepSeek: DeepSeek V3.1"
     },
     "deepseek/deepseek-r1": {
@@ -1714,7 +1688,7 @@
         "vision": false
       },
       "context_window": 196608,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 196608,
       "name": "MiniMax: MiniMax M2.5"
     },
     "minimax/minimax-m2.5:free": {
@@ -1740,7 +1714,7 @@
         "vision": false
       },
       "context_window": 196608,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 4096,
       "name": "MiniMax: MiniMax M2.7"
     },
     "mistralai/codestral-2508": {
@@ -2116,8 +2090,8 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 262144,
-      "max_output_tokens": 16384,
+      "context_window": 32768,
+      "max_output_tokens": 32768,
       "name": "MoonshotAI: Kimi K2.6"
     },
     "morph/morph-v3-fast": {
@@ -3260,9 +3234,22 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 200000,
+      "context_window": 2000000,
       "max_output_tokens": 4096,
       "name": "Pareto Code Router"
+    },
+    "perceptron/perceptron-mk1": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 32768,
+      "max_output_tokens": 8192,
+      "name": "Perceptron: Perceptron Mk1"
     },
     "perplexity/sonar": {
       "capabilities": {
@@ -4187,7 +4174,7 @@
       "max_output_tokens": 131072,
       "name": "Tencent: Hunyuan A13B Instruct"
     },
-    "tencent/hy3-preview:free": {
+    "tencent/hy3-preview": {
       "capabilities": {
         "json_mode": false,
         "reasoning": {
@@ -4198,7 +4185,7 @@
       },
       "context_window": 262144,
       "max_output_tokens": 262144,
-      "name": "Tencent: Hy3 preview (free)"
+      "name": "Tencent: Hy3 preview"
     },
     "thedrummer/cydonia-24b-v4.1": {
       "capabilities": {
@@ -4496,7 +4483,7 @@
         "vision": false
       },
       "context_window": 1048576,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 16384,
       "name": "Xiaomi: MiMo-V2.5-Pro"
     },
     "z-ai/glm-4-32b": {
@@ -4652,7 +4639,7 @@
         "vision": false
       },
       "context_window": 202752,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 4096,
       "name": "Z.ai: GLM 5.1"
     },
     "z-ai/glm-5v-turbo": {
@@ -4742,8 +4729,8 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 262144,
-      "max_output_tokens": 16384,
+      "context_window": 32768,
+      "max_output_tokens": 32768,
       "name": "MoonshotAI Kimi Latest"
     },
     "~openai/gpt-latest": {

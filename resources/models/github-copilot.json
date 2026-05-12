@@ -1,58 +1,501 @@
 {
-  "provider_id": "github-copilot",
-  "source": "bundled",
+  "fetched_at": "2026-05-12T17:12:56.659208+00:00",
   "models": {
-    "gpt-4o": {
-      "name": "GPT-4o",
+    "accounts/msft/routers/f185i3v4": {
       "capabilities": {
-        "vision": true,
-        "tools": true,
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        }
-      },
-      "context_window": 128000,
-      "max_output_tokens": 16384
-    },
-    "gpt-4.1": {
-      "name": "GPT-4.1",
-      "capabilities": {
-        "vision": true,
-        "tools": true,
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        }
-      },
-      "context_window": 128000,
-      "max_output_tokens": 32768
-    },
-    "claude-sonnet-4-5": {
-      "name": "Claude Sonnet 4.5",
-      "capabilities": {
-        "vision": true,
-        "tools": true,
         "json_mode": false,
         "reasoning": {
           "supported": false
-        }
-      },
-      "context_window": 200000,
-      "max_output_tokens": 8096
-    },
-    "o3": {
-      "name": "o3",
-      "capabilities": {
-        "vision": false,
+        },
         "tools": true,
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        }
+        "vision": false
       },
-      "context_window": 200000,
-      "max_output_tokens": 100000
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Search Agent A"
+    },
+    "accounts/msft/routers/fmfeto88": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Search Agent B"
+    },
+    "accounts/msft/routers/gdjv4v2v": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Search Agent C"
+    },
+    "claude-haiku-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Claude Haiku 4.5"
+    },
+    "claude-opus-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Claude Opus 4.5"
+    },
+    "claude-opus-4.7": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Claude Opus 4.7"
+    },
+    "claude-sonnet-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Claude Sonnet 4.5"
+    },
+    "claude-sonnet-4.6": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Claude Sonnet 4.6"
+    },
+    "gemini-2.5-pro": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Gemini 2.5 Pro"
+    },
+    "gemini-3-flash-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Gemini 3 Flash (Preview)"
+    },
+    "gemini-3.1-pro-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Gemini 3.1 Pro"
+    },
+    "gpt-3.5-turbo": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT 3.5 Turbo"
+    },
+    "gpt-3.5-turbo-0613": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT 3.5 Turbo"
+    },
+    "gpt-4": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT 4"
+    },
+    "gpt-4-0125-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT 4 Turbo"
+    },
+    "gpt-4-0613": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT 4"
+    },
+    "gpt-4-o-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o"
+    },
+    "gpt-4.1": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4.1"
+    },
+    "gpt-4.1-2025-04-14": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4.1"
+    },
+    "gpt-4o": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-05-13": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-08-06": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-11-20": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o"
+    },
+    "gpt-4o-mini": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o mini"
+    },
+    "gpt-4o-mini-2024-07-18": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-4o mini"
+    },
+    "gpt-5-mini": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5 mini"
+    },
+    "gpt-5.2": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.2"
+    },
+    "gpt-5.2-codex": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.2-Codex"
+    },
+    "gpt-5.3-codex": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.3-Codex"
+    },
+    "gpt-5.4": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.4"
+    },
+    "gpt-5.4-mini": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.4 mini"
+    },
+    "gpt-5.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "GPT-5.5"
+    },
+    "grok-code-fast-1": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Grok Code Fast 1"
+    },
+    "oswe-vscode-prime": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Raptor mini (Preview)"
+    },
+    "oswe-vscode-secondary": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Raptor mini (Preview)"
+    },
+    "text-embedding-3-small": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Embedding V3 small"
+    },
+    "text-embedding-3-small-inference": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Embedding V3 small (Inference)"
+    },
+    "text-embedding-ada-002": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "name": "Embedding V2 Ada"
     }
-  }
+  },
+  "provider_id": "github-copilot",
+  "source": "discovery"
 }
