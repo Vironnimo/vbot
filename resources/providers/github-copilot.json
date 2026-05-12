@@ -17,10 +17,14 @@
         "client_id": "Iv1.b507a08c87ecfe98",
         "device_auth_url": "https://github.com/login/device/code",
         "token_url": "https://github.com/login/oauth/access_token",
-        "scopes": ["copilot"],
+        "scopes": ["read:user"],
         "token_exchange_url": "https://api.github.com/copilot_internal/v2/token"
       }
     }
   ],
+  "extra_headers": {
+    "Copilot-Integration-Id": "vscode-chat",
+    "Editor-Version": "vBot/0.1.0"
+  },
   "models_endpoint": "/models"
 }

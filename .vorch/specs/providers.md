@@ -68,6 +68,13 @@ which uses an OAuth Device Flow connection (`github-copilot:oauth`) with public
 GitHub Copilot OAuth app client ID `Iv1.b507a08c87ecfe98` and Copilot token
 exchange URL `https://api.github.com/copilot_internal/v2/token`.
 
+GitHub Copilot's Device Flow scope is `read:user`. After GitHub returns the
+OAuth token, Copilot exchange is a `GET` to the exchange URL with these headers:
+`Accept: application/json`, `Authorization: Bearer <github_oauth_token>`,
+`Copilot-Integration-Id: vscode-chat`, and `Editor-Version: vBot/0.1.0`.
+Do not use GitHub's older `Authorization: token ...` scheme for this exchange;
+Copilot rejects it.
+
 **Adapter field** selects the class at runtime:
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
 - `"anthropic"` → `AnthropicAdapter`
@@ -117,6 +124,9 @@ failure first and then re-raise so the UI does not wait forever while logs still
 surface the bug.
 
 For GitHub Copilot, the OAuth token is exchanged through `OAuthConfig.token_exchange_url`. The Token Store persists the Copilot API token as `access_token`, its expiry as `expires_at`, and the GitHub OAuth token in token `extra.github_oauth_token` so later refreshes can exchange it again. Device Flow logs provider/connection IDs and state only, never token values.
+
+Copilot token refresh uses the same Bearer authorization and Copilot integration
+headers as initial token exchange.
 
 ### Token Getters
 

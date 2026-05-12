@@ -18,6 +18,8 @@ TOKEN_EXPIRY_BUFFER_SECONDS = 30
 TOKEN_EXCHANGE_FALLBACK_MINUTES = 25
 GITHUB_OAUTH_TOKEN_EXTRA_KEY = "github_oauth_token"
 TOKEN_EXCHANGE_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503})
+COPILOT_INTEGRATION_ID = "vscode-chat"
+COPILOT_EDITOR_VERSION = "vBot/0.1.0"
 
 
 class TokenGetter(Protocol):
@@ -118,7 +120,12 @@ class OAuthTokenGetter:
             try:
                 response = await client.get(
                     token_exchange_url,
-                    headers={"Authorization": f"token {github_oauth_token}"},
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {github_oauth_token}",
+                        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+                        "Editor-Version": COPILOT_EDITOR_VERSION,
+                    },
                 )
             except httpx.TimeoutException as exc:
                 raise wrap_network_error(exc) from exc
