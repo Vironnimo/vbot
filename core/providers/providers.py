@@ -42,10 +42,6 @@ class AuthConfig:
 
 VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
-VALID_MODEL_DISCOVERY_STRATEGIES = frozenset({"openai_compatible", "openrouter"})
-DEFAULT_MODEL_DISCOVERY_BY_ADAPTER = {
-    "openai_compatible": "openai_compatible",
-}
 
 
 @dataclass(frozen=True)
@@ -102,7 +98,6 @@ class ProviderConfig:
         extra_headers: Optional provider-specific HTTP headers.
         models_endpoint: Optional path to the models listing endpoint
             (e.g. ``"/models"``).  Reserved for future dynamic model refresh.
-        model_discovery: Explicit model discovery strategy selector.
     """
 
     id: str
@@ -113,16 +108,6 @@ class ProviderConfig:
     defaults: dict[str, Any] | None = None
     extra_headers: dict[str, str] | None = None
     models_endpoint: str | None = None
-    model_discovery: str = ""
-
-    def __post_init__(self) -> None:
-        if self.model_discovery:
-            return
-        object.__setattr__(
-            self,
-            "model_discovery",
-            DEFAULT_MODEL_DISCOVERY_BY_ADAPTER.get(self.adapter, ""),
-        )
 
     def get_connection(self, local_id: str) -> ConnectionConfig:
         """Return a connection by its local provider-scoped ID."""
@@ -251,28 +236,7 @@ class ProviderRegistry:
             defaults=data.get("defaults"),
             extra_headers=data.get("extra_headers"),
             models_endpoint=data.get("models_endpoint"),
-            model_discovery=ProviderRegistry._parse_model_discovery(data),
         )
-
-    @staticmethod
-    def _parse_model_discovery(data: dict[str, Any]) -> str:
-        model_discovery = data.get("model_discovery")
-        if model_discovery is None:
-            adapter = data["adapter"]
-            if not isinstance(adapter, str) or not adapter:
-                raise ConfigError(
-                    f"Provider '{data['id']}' field 'adapter' must be a non-empty string"
-                )
-            return DEFAULT_MODEL_DISCOVERY_BY_ADAPTER.get(adapter, "")
-        if not isinstance(model_discovery, str) or not model_discovery:
-            raise ConfigError(
-                f"Provider '{data['id']}' field 'model_discovery' must be a non-empty string"
-            )
-        if model_discovery not in VALID_MODEL_DISCOVERY_STRATEGIES:
-            raise ConfigError(
-                f"Unknown model discovery strategy '{model_discovery}' for provider '{data['id']}'"
-            )
-        return model_discovery
 
     @staticmethod
     def _parse_connections(data: dict[str, Any]) -> list[ConnectionConfig]:

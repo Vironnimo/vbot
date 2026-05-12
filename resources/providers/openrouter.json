@@ -19,7 +19,6 @@
     "max_tokens": 4096,
     "temperature": 0.7
   },
-  "model_discovery": "openrouter",
   "extra_headers": {
     "HTTP-Referer": "https://vbot.app",
     "X-Title": "vBot"
