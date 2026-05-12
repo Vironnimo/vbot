@@ -107,6 +107,12 @@ container; a Run is one active execution inside that session.
 - `_message_to_request_dict()` strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before they are sent to provider APIs. Usage is vBot-internal metadata and must not leak into provider request payloads.
 - The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal events for failed or cancelled runs do not include usage.
 - In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
+- GitHub Copilot endpoint helpers must emit the same normalized streaming shapes
+  as other adapters. Copilot `/responses` usage is normalized from completed
+  response events or response payloads. Copilot `/v1/messages` follows the
+  Anthropic-like message usage shape when available. Raw provider SSE events and
+  opaque reasoning metadata stay inside adapters and must not be exposed as Run
+  event payloads.
 - Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
 - Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.
 
