@@ -52,6 +52,7 @@ class ProviderConfig:
     id: str                              # Unique provider identifier, used as registry key
     name: str                            # Human-readable name
     adapter: str                         # Adapter class selector: "openai_compatible" or "anthropic"
+    model_discovery: str                 # Model discovery selector: defaults to adapter when omitted
     base_url: str                        # Base URL for the provider API
     connections: list[ConnectionConfig]  # Authentication connections in display/preference order
     defaults: dict[str, Any] | None      # Default request params (max_tokens, temperature)
@@ -75,10 +76,16 @@ OAuth token, Copilot exchange is a `GET` to the exchange URL with these headers:
 Do not use GitHub's older `Authorization: token ...` scheme for this exchange;
 Copilot rejects it.
 
-**Adapter field** selects the class at runtime:
+**Adapter field** selects the request/streaming class at runtime:
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
+
+**model_discovery** selects how `/models` responses are normalized during model
+database refresh. When omitted, it defaults to the `adapter` value. Current
+valid values are `"openai_compatible"`, `"openrouter"`, and `"anthropic"`.
+This field is separate from `adapter` because request wire protocol and model
+catalog schema are related but not identical concerns.
 
 **Connections field** replaces the old single provider-level auth field. Each connection owns its auth metadata and credential key. Unknown connection `type` values are rejected with `ConfigError` during provider config load. Connection array order is display order and preference order when a caller needs the first usable connection. `api_key` connections must define `auth.credential_key`; `oauth` connections may omit it when an `oauth` block defines the token-store backed flow. Unknown OAuth flow values are rejected with `ConfigError`; only `device` is currently valid.
 
@@ -90,7 +97,8 @@ Copilot rejects it.
 
 **models_endpoint** is used by dynamic model refresh to fetch the provider's
 catalog endpoint. Providers without a configured endpoint do not support manual
-model refresh.
+model refresh. The response is normalized using `model_discovery`, not inferred
+implicitly from provider ID.
 
 ### ProviderRegistry
 

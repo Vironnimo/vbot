@@ -226,6 +226,12 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   OpenRouter discovery.** Copilot `/models` entries may omit `architecture` or
   provide it as a non-object. Do not route Copilot through OpenRouter's strict
   schema normalizer.
+- **Model discovery strategy is config-driven and separate from request
+  adapter selection.** `ProviderConfig.adapter` chooses the request/streaming
+  protocol implementation. `ProviderConfig.model_discovery` chooses how
+  `/models` responses are normalized. OpenRouter now declares an explicit
+  `openrouter` discovery strategy; normal OpenAI-compatible providers use the
+  generic `openai_compatible` strategy.
 - **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
