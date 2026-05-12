@@ -104,8 +104,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - The Providers panel renders OAuth connections with Connect/Disconnect
     controls. `provider.connect` opens an inline Device Flow dialog with the user
-    code and verification link; `provider_auth_completed` closes it and refreshes
-    settings. Settings sends public compositional connection IDs such as
+    code, copy control, and verification link; `provider_auth_completed` closes
+    it and refreshes settings. Settings sends public compositional connection IDs such as
     `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.

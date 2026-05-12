@@ -18,7 +18,7 @@ from server.events import PROVIDER_AUTH_COMPLETED_EVENT, ServerEventBus
 class StubDeviceFlowEngine:
     def __init__(self) -> None:
         self.started: list[tuple[str, str, OAuthConfig]] = []
-        self.polls: list[tuple[str, str, OAuthConfig, str, int, Any]] = []
+        self.polls: list[tuple[str, str, OAuthConfig, str, int, int, Any]] = []
         self.cancelled: list[tuple[str, str]] = []
         self._active_flows: dict[tuple[str, str], asyncio.Task[None]] = {}
 
@@ -44,10 +44,19 @@ class StubDeviceFlowEngine:
         oauth_config: OAuthConfig,
         device_code: str,
         interval: int,
+        expires_in: int,
         on_complete: Any,
     ) -> None:
         self.polls.append(
-            (provider_id, local_connection_id, oauth_config, device_code, interval, on_complete)
+            (
+                provider_id,
+                local_connection_id,
+                oauth_config,
+                device_code,
+                interval,
+                expires_in,
+                on_complete,
+            )
         )
 
     def cancel_flow(self, provider_id: str, local_connection_id: str) -> None:
@@ -62,6 +71,29 @@ class StubProviderRegistry:
         if provider_id != self._provider.id:
             raise KeyError(provider_id)
         return self._provider
+
+    def list_ids(self) -> list[str]:
+        return [self._provider.id]
+
+
+class StubProviderCredentials:
+    def __init__(self, usable_connection_ids: set[str]) -> None:
+        self._usable_connection_ids = usable_connection_ids
+        self.requested_credentials: list[str] = []
+
+    def has_credentials(self, provider_id: str, connection_id: str) -> bool:
+        return provider_id == "github-copilot" and connection_id in self._usable_connection_ids
+
+    def get_credentials(self, provider_id: str, connection_id: str) -> str:
+        self.requested_credentials.append(connection_id)
+        if self.has_credentials(provider_id, connection_id):
+            return "api-key-secret"
+        raise KeyError(connection_id)
+
+
+class StubModelRegistry:
+    def list_for_provider(self, _provider_id: str) -> list[Any]:
+        return []
 
 
 def oauth_config() -> OAuthConfig:
@@ -92,6 +124,21 @@ def make_oauth_connection() -> ConnectionConfig:
         label="Sign in with GitHub",
         auth=AuthConfig(header="Authorization", prefix="Bearer "),
         oauth=oauth_config(),
+        base_url=None,
+    )
+
+
+def make_refreshable_oauth_provider() -> ProviderConfig:
+    provider = make_provider(connection=make_oauth_connection())
+    return ProviderConfig(
+        id=provider.id,
+        name=provider.name,
+        adapter=provider.adapter,
+        base_url=provider.base_url,
+        connections=provider.connections,
+        defaults=provider.defaults,
+        extra_headers=provider.extra_headers,
+        models_endpoint="/models",
     )
 
 
@@ -105,6 +152,7 @@ def make_api_key_connection() -> ConnectionConfig:
             prefix="Bearer ",
             credential_key="GITHUB_COPILOT_API_KEY",
         ),
+        base_url=None,
     )
 
 
@@ -113,6 +161,11 @@ def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
         runtime=SimpleNamespace(
             providers=StubProviderRegistry(provider),
             token_store=TokenStore(tmp_path),
+            provider_credentials=StubProviderCredentials(
+                {f"{provider.id}:{connection.id}" for connection in provider.connections}
+            ),
+            models=StubModelRegistry(),
+            _resolve_resources_path=lambda: tmp_path / "resources",
         ),
         event_bus=ServerEventBus(),
     )
@@ -147,7 +200,7 @@ async def test_provider_connect_starts_device_flow_and_polling(tmp_path: Any) ->
     assert engine.started == [("github-copilot", "oauth", oauth_config())]
     assert len(engine.polls) == 1
     poll = engine.polls[0]
-    assert poll[:5] == ("github-copilot", "oauth", oauth_config(), "device-code", 5)
+    assert poll[:6] == ("github-copilot", "oauth", oauth_config(), "device-code", 5, 900)
 
 
 @pytest.mark.asyncio
@@ -167,7 +220,7 @@ async def test_provider_connect_completion_callback_publishes_event(tmp_path: An
         },
     )
     await asyncio.sleep(0)
-    on_complete = engine.polls[0][5]
+    on_complete = engine.polls[0][6]
 
     await on_complete(success=True)
 
@@ -269,3 +322,103 @@ async def test_provider_connection_status_reports_token_and_active_flow(tmp_path
             "flow_active": True,
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_uses_oauth_token_getter_for_fresh_token(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, make_refreshable_oauth_provider())
+    state.runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="stale-token", extra={"github_oauth_token": "github-secret"}),
+    )
+    refreshed: dict[str, Any] = {}
+
+    class StubOAuthTokenGetter:
+        def __init__(
+            self, token_store: Any, provider_id: str, connection_id: str, config: Any
+        ) -> None:
+            self.args = (token_store, provider_id, connection_id, config)
+
+        async def __aenter__(self) -> StubOAuthTokenGetter:
+            refreshed["entered"] = True
+            return self
+
+        async def __aexit__(self, *_exc_info: object) -> None:
+            refreshed["closed"] = True
+
+        async def __call__(self) -> str:
+            refreshed["getter_args"] = self.args
+            return "fresh-runtime-token"
+
+    async def fake_refresh_models(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        refreshed["credential"] = _args[1]
+        refreshed["connection"] = _kwargs["credential_connection"]
+        return {
+            "provider_id": "github-copilot",
+            "model_count": 0,
+            "fetched_at": "2026-05-12T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("server.delegates.OAuthTokenGetter", StubOAuthTokenGetter)
+    monkeypatch.setattr("server.delegates.refresh_models", fake_refresh_models)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.refresh_db",
+            "params": {"provider_id": "github-copilot"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert refreshed["credential"] == "fresh-runtime-token"
+    assert refreshed["connection"].id == "oauth"
+    assert refreshed["entered"] is True
+    assert refreshed["closed"] is True
+    assert state.runtime.provider_credentials.requested_credentials == []
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_preserves_api_key_credential_path(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = make_provider(connection=make_api_key_connection())
+    provider = ProviderConfig(
+        id=provider.id,
+        name=provider.name,
+        adapter=provider.adapter,
+        base_url=provider.base_url,
+        connections=provider.connections,
+        defaults=provider.defaults,
+        extra_headers=provider.extra_headers,
+        models_endpoint="/models",
+    )
+    state = make_state(tmp_path, provider)
+    refreshed: dict[str, Any] = {}
+
+    async def fake_refresh_models(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        refreshed["credential"] = _args[1]
+        return {
+            "provider_id": "github-copilot",
+            "model_count": 0,
+            "fetched_at": "2026-05-12T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("server.delegates.refresh_models", fake_refresh_models)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.refresh_db",
+            "params": {"provider_id": "github-copilot"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert refreshed["credential"] == "api-key-secret"
+    assert state.runtime.provider_credentials.requested_credentials == ["github-copilot:api-key"]

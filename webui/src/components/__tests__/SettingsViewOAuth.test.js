@@ -28,6 +28,11 @@ describe('SettingsView OAuth providers', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    });
     init('en');
     mountedComponent = null;
     currentSettings = settingsPayload({ oauthConfigured: false });
@@ -70,6 +75,19 @@ describe('SettingsView OAuth providers', () => {
     expect(document.body.textContent).toContain(
       'https://github.com/login/device',
     );
+  });
+
+  it('copies the displayed device flow user code from an explicit copy control', async () => {
+    mountedComponent = mountSettingsView();
+    await openProvidersPanel();
+
+    buttonByText('Connect').click();
+    await waitForCondition(() => buttonByText('Copy'));
+    buttonByText('Copy').click();
+    await waitForCondition(() => document.body.textContent.includes('Copied'));
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('ABCD-1234');
+    expect(document.body.textContent).toContain('Device code copied.');
   });
 
   it('closes the dialog and shows a success toast after auth completion', async () => {

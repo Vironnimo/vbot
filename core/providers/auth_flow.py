@@ -90,6 +90,7 @@ class DeviceFlowEngine:
         oauth_config: OAuthConfig,
         device_code: str,
         interval: int,
+        expires_in: int,
         on_complete: OnCompleteCallback,
     ) -> None:
         """Poll for Device Flow completion, store the token, and notify the caller."""
@@ -106,6 +107,7 @@ class DeviceFlowEngine:
                 oauth_config,
                 device_code,
                 interval,
+                expires_in,
             )
         except asyncio.CancelledError:
             raise
@@ -137,14 +139,19 @@ class DeviceFlowEngine:
         oauth_config: OAuthConfig,
         device_code: str,
         interval: int,
+        expires_in: int,
     ) -> None:
         poll_interval = interval
+        expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as client:
             while True:
+                if datetime.now(UTC) >= expires_at:
+                    raise DeviceFlowTerminalError(EXPIRED_TOKEN_ERROR)
+
                 data = await self._request_device_token(client, oauth_config, device_code)
                 if self._is_pending_response(data):
                     poll_interval = self._next_interval(data, poll_interval)
-                    await asyncio.sleep(poll_interval)
+                    await asyncio.sleep(self._bounded_poll_sleep(poll_interval, expires_at))
                     continue
 
                 if self._is_terminal_error(data):
@@ -288,6 +295,12 @@ class DeviceFlowEngine:
         if data.get("error") == SLOW_DOWN_ERROR:
             return current_interval + SLOW_DOWN_INTERVAL_INCREMENT_SECONDS
         return current_interval
+
+    def _bounded_poll_sleep(self, poll_interval: int, expires_at: datetime) -> float:
+        remaining_seconds = (expires_at - datetime.now(UTC)).total_seconds()
+        if remaining_seconds <= 0:
+            return 0.0
+        return min(float(poll_interval), remaining_seconds)
 
     def _expires_at_from_response(self, data: dict[str, Any]) -> datetime | None:
         expires_at = self._parse_expires_at(data.get("expires_at"))

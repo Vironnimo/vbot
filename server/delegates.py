@@ -37,6 +37,7 @@ from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.providers.auth_flow import DeviceFlowEngine
+from core.providers.token_getter import OAuthTokenGetter
 from core.storage.storage import PROMPT_FRAGMENT_NAMES
 from core.utils.errors import ConfigError, VBotError
 from core.utils.log_viewer import LogViewer
@@ -279,6 +280,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 oauth_config,
                 session.device_code,
                 session.interval,
+                session.expires_in,
                 on_complete,
             )
         )
@@ -351,7 +353,7 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
             continue
 
         try:
-            credential_connection, credential_value = _first_usable_provider_credential(
+            credential_connection, credential_value = await _first_usable_provider_credential(
                 runtime,
                 provider_id,
                 provider,
@@ -387,7 +389,7 @@ async def _refresh_provider_model_db(
             f"provider '{provider_id}' does not support model refresh",
         )
 
-    credential_connection, credential_value = _first_usable_provider_credential(
+    credential_connection, credential_value = await _first_usable_provider_credential(
         runtime,
         provider_id,
         provider,
@@ -901,7 +903,7 @@ def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: s
     return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
 
 
-def _first_usable_provider_credential(
+async def _first_usable_provider_credential(
     runtime: Any,
     provider_id: str,
     provider: Any,
@@ -909,9 +911,26 @@ def _first_usable_provider_credential(
     for connection in provider.connections:
         connection_id = f"{provider_id}:{connection.id}"
         if runtime.provider_credentials.has_credentials(provider_id, connection_id):
-            credential = runtime.provider_credentials.get_credentials(provider_id, connection_id)
+            credential = await _runtime_provider_credential(
+                runtime, provider_id, connection_id, connection
+            )
             return connection, str(credential)
     raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
+
+
+async def _runtime_provider_credential(
+    runtime: Any,
+    provider_id: str,
+    connection_id: str,
+    connection: Any,
+) -> str:
+    if getattr(connection, "type", "") != "oauth" or getattr(connection, "oauth", None) is None:
+        return str(runtime.provider_credentials.get_credentials(provider_id, connection_id))
+
+    token_store = _runtime_token_store(runtime)
+    getter = OAuthTokenGetter(token_store, provider_id, connection.id, connection.oauth)
+    async with getter:
+        return await getter()
 
 
 def _runtime_resources_dir(runtime: Any) -> Path:

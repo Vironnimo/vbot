@@ -29,7 +29,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `provider.disconnect` deletes the stored token and cancels any in-flight flow;
   `provider.connection_status` returns `{ connected, flow_active }` alongside
   the identifiers. Non-OAuth connections return RPC error code
-  `oauth_not_supported`.
+  `oauth_not_supported`. OAuth-backed model refresh obtains a fresh provider
+  token through `OAuthTokenGetter` before calling the model discovery pipeline;
+  API-key refresh keeps using the central static credential resolver.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
   `<provider>/<model-id-at-provider>` format.

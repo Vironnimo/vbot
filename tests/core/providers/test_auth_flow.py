@@ -92,6 +92,7 @@ async def test_poll_loop_success_stores_token_and_fires_on_complete(tmp_path: Pa
             _oauth_config(),
             "device-code",
             1,
+            900,
             on_complete,
         )
 
@@ -127,6 +128,7 @@ async def test_poll_loop_waits_on_authorization_pending(tmp_path: Path) -> None:
             _oauth_config(),
             "device-code",
             7,
+            900,
             on_complete,
         )
 
@@ -135,6 +137,36 @@ async def test_poll_loop_waits_on_authorization_pending(tmp_path: Path) -> None:
     sleep_mock.assert_awaited_once_with(7)
     assert token_store.load("github-copilot", "oauth") is not None
     on_complete.assert_awaited_once_with(success=True)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_poll_loop_stops_when_device_flow_session_expires(tmp_path: Path) -> None:
+    """authorization_pending stops polling after the device-code session expires."""
+    # Arrange
+    token_store = TokenStore(tmp_path)
+    engine = DeviceFlowEngine(token_store)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(200, json={"error": "authorization_pending"})
+    )
+    on_complete = AsyncMock()
+
+    # Act
+    with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            7,
+            0,
+            on_complete,
+        )
+
+    # Assert
+    sleep_mock.assert_not_awaited()
+    assert token_store.load("github-copilot", "oauth") is None
+    on_complete.assert_awaited_once_with(success=False)
 
 
 @respx.mock
@@ -159,6 +191,7 @@ async def test_poll_loop_increases_interval_on_slow_down(tmp_path: Path) -> None
             _oauth_config(),
             "device-code",
             7,
+            900,
             AsyncMock(),
         )
 
@@ -187,6 +220,7 @@ async def test_poll_loop_terminal_errors_fire_failure(
         _oauth_config(),
         "device-code",
         1,
+        900,
         on_complete,
     )
 
@@ -222,6 +256,7 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
         _oauth_config(token_exchange_url=TOKEN_EXCHANGE_URL),
         "device-code",
         1,
+        900,
         AsyncMock(),
     )
 
@@ -258,6 +293,7 @@ async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> Non
             _oauth_config(),
             "device-code",
             1,
+            900,
             AsyncMock(),
         )
     )

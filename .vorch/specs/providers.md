@@ -108,7 +108,7 @@ Source: `core/providers/providers.py`.
 
 ### OAuth Device Flow
 
-`core/providers/auth_flow.py` owns server-side OAuth Device Flow polling. `DeviceFlowEngine.start_device_flow()` requests `{ device_code, user_code, verification_uri, expires_in, interval }` from the provider; `_poll_for_token()` polls the configured token URL until success or terminal failure, persists the result through `TokenStore`, and calls an injected completion callback. Active polling tasks are process-local and keyed by `(provider_id, local_connection_id)`.
+`core/providers/auth_flow.py` owns server-side OAuth Device Flow polling. `DeviceFlowEngine.start_device_flow()` requests `{ device_code, user_code, verification_uri, expires_in, interval }` from the provider; `_poll_for_token()` polls the configured token URL until success, terminal failure, or local session expiry, persists the result through `TokenStore`, and calls an injected completion callback. Active polling tasks are process-local and keyed by `(provider_id, local_connection_id)`.
 
 For GitHub Copilot, the OAuth token is exchanged through `OAuthConfig.token_exchange_url`. The Token Store persists the Copilot API token as `access_token`, its expiry as `expires_at`, and the GitHub OAuth token in token `extra.github_oauth_token` so later refreshes can exchange it again. Device Flow logs provider/connection IDs and state only, never token values.
 
@@ -124,7 +124,7 @@ class TokenGetter(Protocol):
 - `StaticTokenGetter` wraps static `api_key` credentials.
 - `OAuthTokenGetter` loads OAuth tokens from `TokenStore`, returns unexpired tokens, refreshes expiring Copilot tokens through `token_exchange_url` using `extra.github_oauth_token`, and raises `ProviderAuthError("OAuth token expired — please reconnect")` when no refresh path exists.
 
-`OAuthTokenGetter` serializes refresh work with an `asyncio.Lock` so concurrent provider requests do not perform duplicate refreshes for the same adapter instance.
+`OAuthTokenGetter` serializes refresh work with an `asyncio.Lock` so concurrent provider requests do not perform duplicate refreshes for the same adapter instance. It can be used as an async context manager; internally created HTTP clients are closed on exit, while injected clients remain caller-owned.
 
 ## Adapter Hierarchy
 
@@ -335,6 +335,8 @@ Source: `core/runtime/runtime.py`.
 - **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
 - **Credential resolution for API keys happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called, then wraps it in `StaticTokenGetter`. Process environment currently has precedence over the data-dir `.env` fallback snapshot for `api_key` credentials. Token-store backed OAuth adapters receive `OAuthTokenGetter` and can refresh short-lived API tokens during requests. If the credential is empty or missing, `ConfigError`/`ProviderAuthError` is raised. Credentials are not stored on the `ProviderConfig`.
+
+- **Token Store filenames are validated.** Provider IDs and local connection IDs used for OAuth token files may contain only ASCII letters, numbers, underscores, and hyphens, and must start with a letter or number. Invalid values are rejected before a token path is constructed.
 
 - **`get_adapter()` requires a connection ID.** There is no runtime fallback to the first usable connection. The chat loop or RPC caller is responsible for selecting a connection before adapter creation.
 

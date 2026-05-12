@@ -20,6 +20,26 @@ CONNECTION_ID = "oauth"
 TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
 
 
+class StubAsyncClient:
+    def __init__(self, response: httpx.Response | None = None, **_kwargs: object) -> None:
+        self.closed = False
+        self.requests: list[tuple[str, dict[str, str]]] = []
+        self._response = response or httpx.Response(
+            200,
+            json={
+                "token": "fresh-copilot-token",
+                "expires_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat(),
+            },
+        )
+
+    async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+        self.requests.append((url, headers))
+        return self._response
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 @pytest.fixture()
 def oauth_config() -> OAuthConfig:
     return OAuthConfig(
@@ -185,3 +205,72 @@ async def test_oauth_token_getter_concurrent_refresh_uses_single_http_call(
 
     assert tokens == ["fresh-copilot-token", "fresh-copilot-token"]
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_getter_preserves_injected_client_lifecycle(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+) -> None:
+    """OAuthTokenGetter does not close caller-injected clients."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(
+            access_token="expired-copilot-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"github_oauth_token": "github-oauth-secret"},
+        ),
+    )
+    client = StubAsyncClient()
+
+    async with OAuthTokenGetter(
+        token_store,
+        PROVIDER_ID,
+        CONNECTION_ID,
+        oauth_config,
+        client=client,  # type: ignore[arg-type]
+    ) as getter:
+        token = await getter()
+
+    assert token == "fresh-copilot-token"
+    assert client.closed is False
+    assert client.requests[0][0] == TOKEN_EXCHANGE_URL
+
+
+@pytest.mark.asyncio
+async def test_oauth_token_getter_aclose_closes_owned_created_client(
+    tmp_path: Path,
+    oauth_config: OAuthConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internally-created clients are closed by the async context manager."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        PROVIDER_ID,
+        CONNECTION_ID,
+        OAuthToken(
+            access_token="expired-copilot-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"github_oauth_token": "github-oauth-secret"},
+        ),
+    )
+    clients: list[StubAsyncClient] = []
+
+    def make_client(**_kwargs: object) -> StubAsyncClient:
+        client = StubAsyncClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("core.providers.token_getter.httpx.AsyncClient", make_client)
+    getter = OAuthTokenGetter(token_store, PROVIDER_ID, CONNECTION_ID, oauth_config)
+
+    async with getter:
+        token = await getter()
+
+    assert token == "fresh-copilot-token"
+    assert len(clients) == 1
+    assert clients[0].closed is True
