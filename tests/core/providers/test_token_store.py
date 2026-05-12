@@ -7,6 +7,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.providers.token_store import OAuthToken, TokenStore
 
 
@@ -152,3 +154,29 @@ def test_token_store_does_not_log_token_values(tmp_path: Path, caplog: Any) -> N
     assert "access-secret" not in log_output
     assert "refresh-secret" not in log_output
     assert "github-secret" not in log_output
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "connection_id"),
+    [
+        ("../outside", "oauth"),
+        ("github-copilot", "../oauth"),
+        ("github/copilot", "oauth"),
+        ("github-copilot", "oauth.json"),
+        ("", "oauth"),
+    ],
+)
+def test_token_store_rejects_unsafe_token_ids(
+    tmp_path: Path,
+    provider_id: str,
+    connection_id: str,
+) -> None:
+    """Provider and connection IDs cannot escape the oauth token directory."""
+    # Arrange
+    store = TokenStore(tmp_path)
+
+    # Act / Assert
+    with pytest.raises(ValueError, match="OAuth token"):
+        store.save(provider_id, connection_id, OAuthToken(access_token="access-secret"))
+
+    assert not (tmp_path / "outside-oauth.json").exists()

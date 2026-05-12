@@ -328,9 +328,15 @@ export const englishCatalog = Object.freeze({
     'Static credential configured from environment or data directory.',
   'settings.providers.oauthDescription':
     'OAuth device authorization managed by the provider.',
+  'settings.providers.device_flow.eyebrow': 'OAuth',
   'settings.providers.device_flow.title': 'Connect GitHub Copilot',
   'settings.providers.device_flow.instructions':
     'Enter this code at the link below:',
+  'settings.providers.device_flow.copy_aria': 'Copy device code {code}',
+  'settings.providers.device_flow.copied': 'Copied',
+  'settings.providers.device_flow.copy_success': 'Device code copied.',
+  'settings.providers.device_flow.copy_error':
+    'Device code could not be copied.',
   'settings.providers.device_flow.waiting':
     'Waiting for authorization in GitHub…',
   'settings.providers.device_flow.cancel': 'Cancel',

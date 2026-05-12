@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,8 @@ from uuid import uuid4
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.token_store")
+
+TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,25 @@ class TokenStore:
         return bool(token.refresh_token or token.extra.get("github_oauth_token"))
 
     def _token_path(self, provider_id: str, local_connection_id: str) -> Path:
-        return self._oauth_dir / f"{provider_id}-{local_connection_id}.json"
+        safe_provider_id = self._validate_token_id("provider_id", provider_id)
+        safe_connection_id = self._validate_token_id(
+            "local_connection_id",
+            local_connection_id,
+        )
+        token_path = self._oauth_dir / f"{safe_provider_id}-{safe_connection_id}.json"
+        oauth_root = self._oauth_dir.resolve()
+        resolved_path = token_path.resolve()
+        if resolved_path.parent != oauth_root:
+            raise ValueError("OAuth token path must stay within the token store directory")
+        return token_path
+
+    def _validate_token_id(self, field_name: str, value: str) -> str:
+        if not TOKEN_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                f"OAuth token {field_name} must contain only letters, numbers, underscores, "
+                "or hyphens, and must start with a letter or number"
+            )
+        return value
 
     def _token_to_dict(self, token: OAuthToken) -> dict[str, object]:
         return {

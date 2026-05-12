@@ -53,8 +53,22 @@ class OAuthTokenGetter:
         self._provider_id = provider_id
         self._local_connection_id = local_connection_id
         self._oauth_config = oauth_config
-        self._client = client or httpx.AsyncClient(timeout=60.0)
+        self._client = client
+        self._owns_client = client is None
         self._lock = asyncio.Lock()
+
+    async def __aenter__(self) -> OAuthTokenGetter:
+        return self
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        """Close the internally-owned HTTP client, if one was created."""
+
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+            self._client = None
 
     async def __call__(self) -> str:
         """Return a valid OAuth-backed API token, refreshing when needed."""
@@ -95,15 +109,24 @@ class OAuthTokenGetter:
     async def _exchange_token(
         self, token_exchange_url: str, github_oauth_token: str
     ) -> dict[str, object]:
+        client = self._client
+        close_client = False
+        if client is None:
+            client = httpx.AsyncClient(timeout=60.0)
+            close_client = True
         try:
-            response = await self._client.get(
-                token_exchange_url,
-                headers={"Authorization": f"token {github_oauth_token}"},
-            )
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
-        except httpx.ConnectError as exc:
-            raise wrap_network_error(exc) from exc
+            try:
+                response = await client.get(
+                    token_exchange_url,
+                    headers={"Authorization": f"token {github_oauth_token}"},
+                )
+            except httpx.TimeoutException as exc:
+                raise wrap_network_error(exc) from exc
+            except httpx.ConnectError as exc:
+                raise wrap_network_error(exc) from exc
+        finally:
+            if close_client:
+                await client.aclose()
 
         _classify_token_exchange_status(response.status_code, response.text)
         data = response.json()

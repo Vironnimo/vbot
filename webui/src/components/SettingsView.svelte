@@ -108,6 +108,7 @@
   let toastVariant = $state('success');
   let toastTimer = null;
   let handledProviderAuthEvent = null;
+  let copiedDeviceFlowConnectionId = $state('');
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -387,6 +388,7 @@
 
     saveError = '';
     saveNotice = '';
+    copiedDeviceFlowConnectionId = '';
     updateOAuthState(connection.id, {
       flowActive: true,
       showDialog: false,
@@ -418,6 +420,7 @@
     const connectionId = getPublicConnectionId(connection);
     saveError = '';
     saveNotice = '';
+    copiedDeviceFlowConnectionId = '';
 
     try {
       await callDisconnectProvider(provider.id, connectionId);
@@ -436,6 +439,7 @@
   }
 
   async function completeOAuthFlow(connectionId) {
+    copiedDeviceFlowConnectionId = '';
     updateOAuthState(connectionId, {
       flowActive: false,
       showDialog: false,
@@ -452,6 +456,7 @@
   }
 
   function failOAuthFlow(connectionId) {
+    copiedDeviceFlowConnectionId = '';
     updateOAuthState(connectionId, {
       flowActive: false,
       showDialog: false,
@@ -476,6 +481,40 @@
     toastTimer = setTimeout(() => {
       toastMessage = '';
     }, 4000);
+  }
+
+  async function copyDeviceFlowUserCode(connection, userCode) {
+    if (!userCode) {
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      showLocalToast(
+        t(
+          'settings.providers.device_flow.copy_error',
+          'Device code could not be copied.',
+        ),
+        'error',
+      );
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(userCode);
+      copiedDeviceFlowConnectionId = connection.id;
+      showLocalToast(
+        t('settings.providers.device_flow.copy_success', 'Device code copied.'),
+        'success',
+      );
+    } catch {
+      showLocalToast(
+        t(
+          'settings.providers.device_flow.copy_error',
+          'Device code could not be copied.',
+        ),
+        'error',
+      );
+    }
   }
 
   async function callConnectProvider(providerId, connectionId) {
@@ -1070,7 +1109,12 @@
                                 aria-labelledby={`device-flow-title-${connection.id}`}
                               >
                                 <div class="device-flow-header">
-                                  <p class="device-flow-eyebrow">OAuth</p>
+                                  <p class="device-flow-eyebrow">
+                                    {t(
+                                      'settings.providers.device_flow.eyebrow',
+                                      'OAuth',
+                                    )}
+                                  </p>
                                   <h3 id={`device-flow-title-${connection.id}`}>
                                     {t(
                                       'settings.providers.device_flow.title',
@@ -1088,6 +1132,28 @@
                                   <code class="device-flow-code"
                                     >{state.dialogData.user_code}</code
                                   >
+                                  <button
+                                    class="btn-outline device-flow-copy"
+                                    type="button"
+                                    aria-label={t(
+                                      'settings.providers.device_flow.copy_aria',
+                                      'Copy device code {code}',
+                                      { code: state.dialogData.user_code },
+                                    )}
+                                    onclick={() =>
+                                      copyDeviceFlowUserCode(
+                                        connection,
+                                        state.dialogData.user_code,
+                                      )}
+                                  >
+                                    {copiedDeviceFlowConnectionId ===
+                                    connection.id
+                                      ? t(
+                                          'settings.providers.device_flow.copied',
+                                          'Copied',
+                                        )
+                                      : t('common.copy', 'Copy')}
+                                  </button>
                                 </div>
                                 <a
                                   class="device-flow-link"
@@ -1571,6 +1637,11 @@
     gap: 10px;
   }
 
+  .device-flow-copy {
+    flex-shrink: 0;
+    min-width: 72px;
+  }
+
   .device-flow-code {
     display: flex;
     flex: 1;
@@ -1749,7 +1820,8 @@
     }
 
     .s-skill-directory-add,
-    .s-skill-directory-item {
+    .s-skill-directory-item,
+    .device-flow-code-row {
       align-items: stretch;
       flex-direction: column;
     }
