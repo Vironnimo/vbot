@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -192,10 +191,30 @@ def _join_url(base_url: str, endpoint: str) -> str:
 
 def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(model, Model):
-        data = asdict(model)
-        data.pop("model_id")
+        data = {
+            "name": model.name,
+            "capabilities": {
+                "vision": model.capabilities.vision,
+                "tools": model.capabilities.tools,
+                "json_mode": model.capabilities.json_mode,
+                "reasoning": {"supported": model.capabilities.reasoning.supported},
+            },
+            "context_window": model.context_window,
+            "max_output_tokens": model.max_output_tokens,
+        }
+        metadata = _plain_data(model.metadata)
+        if metadata:
+            data["metadata"] = metadata
         return data
     return dict(model)
+
+
+def _plain_data(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _plain_data(item) for key, item in value.items()}
+    if isinstance(value, tuple | list):
+        return [_plain_data(item) for item in value]
+    return value
 
 
 def _overrides_path(resources_dir: Path, provider_id: str) -> Path:
