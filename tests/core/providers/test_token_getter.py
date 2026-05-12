@@ -47,7 +47,7 @@ def oauth_config() -> OAuthConfig:
         client_id="client-id",
         device_auth_url="https://github.com/login/device/code",
         token_url="https://github.com/login/oauth/access_token",
-        scopes=["copilot"],
+        scopes=["read:user"],
         token_exchange_url=TOKEN_EXCHANGE_URL,
     )
 
@@ -117,7 +117,11 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
 
     assert token == "fresh-copilot-token"
     assert route.call_count == 1
-    assert route.calls.last.request.headers.get("authorization") == "token github-oauth-secret"
+    exchange_headers = route.calls.last.request.headers
+    assert exchange_headers.get("accept") == "application/json"
+    assert exchange_headers.get("authorization") == "Bearer github-oauth-secret"
+    assert exchange_headers.get("copilot-integration-id") == "vscode-chat"
+    assert exchange_headers.get("editor-version") == "vBot/0.1.0"
     stored = token_store.load(PROVIDER_ID, CONNECTION_ID)
     assert stored is not None
     assert stored.access_token == "fresh-copilot-token"
@@ -151,7 +155,7 @@ async def test_oauth_token_getter_expired_without_refresh_path_raises(
             client_id="client-id",
             device_auth_url="https://github.com/login/device/code",
             token_url="https://github.com/login/oauth/access_token",
-            scopes=["copilot"],
+            scopes=["read:user"],
         ),
     )
 
@@ -238,6 +242,12 @@ async def test_oauth_token_getter_preserves_injected_client_lifecycle(
     assert token == "fresh-copilot-token"
     assert client.closed is False
     assert client.requests[0][0] == TOKEN_EXCHANGE_URL
+    assert client.requests[0][1] == {
+        "Accept": "application/json",
+        "Authorization": "Bearer github-oauth-secret",
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Version": "vBot/0.1.0",
+    }
 
 
 @pytest.mark.asyncio
