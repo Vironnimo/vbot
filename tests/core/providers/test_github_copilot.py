@@ -557,6 +557,58 @@ async def test_stream_responses_yields_normalized_deltas(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_stream_responses_preserves_tool_call_id_across_sse_events(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        "event: response.output_item.added\n"
+        'data: {"type":"response.output_item.added","output_index":0,'
+        '"item":{"type":"function_call","call_id":"call_stable","name":"search"}}\n\n'
+        "event: response.function_call_arguments.delta\n"
+        'data: {"type":"response.function_call_arguments.delta","output_index":0,'
+        '"delta":"{\\"q\\""}\n\n'
+        "event: response.function_call_arguments.delta\n"
+        'data: {"type":"response.function_call_arguments.delta","output_index":0,'
+        '"delta":":\\"docs\\"}"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"status":"completed",'
+        '"output":[{"type":"function_call","call_id":"call_stable"}]}}\n\n'
+    )
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    chunks = []
+    async for chunk in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+        chunks.append(chunk)
+
+    tool_call_chunks = [chunk for chunk in chunks if chunk["type"] == "tool_call_delta"]
+    assert tool_call_chunks == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_stable",
+            "name_delta": "search",
+            "arguments_delta": "",
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_stable",
+            "name_delta": "",
+            "arguments_delta": '{"q"',
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_stable",
+            "name_delta": "",
+            "arguments_delta": ':"docs"}',
+        },
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_stream_messages_yields_normalized_deltas(
     metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:

@@ -24,14 +24,6 @@ REASONING_SUMMARY_DELTA_EVENTS = {
     "response.output_item.reasoning_summary_text.delta",
 }
 RESPONSES_ERROR_EVENTS = {"error", "response.failed", "response.incomplete"}
-_REQUEST_CONTROL_KEYS = {
-    "include_reasoning",
-    "json_mode",
-    "reasoning_effort",
-    "response_format",
-    "structured_outputs",
-    "thinking_effort",
-}
 _REASONING_META_KEYS = ("reasoning_items", "response_output")
 
 
@@ -68,7 +60,7 @@ def build_responses_payload(
     _apply_responses_tools(payload, request_kwargs, policy)
     _apply_responses_reasoning(payload, request_kwargs, policy)
     _apply_responses_text_format(payload, request_kwargs, policy)
-    _apply_remaining_kwargs(payload, request_kwargs)
+    _apply_remaining_kwargs(payload, request_kwargs, policy)
     return payload
 
 
@@ -92,7 +84,15 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
 def iter_responses_sse_deltas(lines: Iterable[str]) -> Iterator[dict[str, Any]]:
     """Parse Responses SSE lines and yield normalized vBot stream deltas."""
 
-    state = ResponsesStreamState()
+    yield from iter_responses_sse_deltas_with_state(lines, ResponsesStreamState())
+
+
+def iter_responses_sse_deltas_with_state(
+    lines: Iterable[str],
+    state: ResponsesStreamState,
+) -> Iterator[dict[str, Any]]:
+    """Parse Responses SSE lines using caller-owned stream state."""
+
     for event_name, event_data in _iter_sse_events(lines):
         yield from normalize_responses_stream_event(event_name, event_data, state)
 
@@ -274,18 +274,27 @@ def _apply_responses_text_format(
         payload["text"] = {**existing_text, "format": response_format}
 
 
-def _apply_remaining_kwargs(payload: dict[str, Any], request_kwargs: dict[str, Any]) -> None:
-    include = request_kwargs.pop("include", None)
-    if isinstance(include, list):
-        for item in include:
-            if isinstance(item, str):
-                _append_include(payload, item)
+def _apply_remaining_kwargs(
+    payload: dict[str, Any],
+    request_kwargs: dict[str, Any],
+    policy: GitHubCopilotModelPolicy,
+) -> None:
+    request_kwargs.pop("include", None)
+    request_kwargs.pop("cache_control", None)
+    request_kwargs.pop("prompt_cache_key", None)
+    request_kwargs.pop("prompt_cache_retention", None)
     max_tokens = request_kwargs.pop("max_tokens", None)
     if max_tokens is not None and "max_output_tokens" not in request_kwargs:
         payload["max_output_tokens"] = max_tokens
-    for key, value in request_kwargs.items():
-        if key not in _REQUEST_CONTROL_KEYS:
-            payload[key] = value
+    max_output_tokens = request_kwargs.pop("max_output_tokens", None)
+    if max_output_tokens is not None:
+        payload["max_output_tokens"] = max_output_tokens
+    for key in ("temperature", "top_p"):
+        if key in request_kwargs:
+            payload[key] = request_kwargs[key]
+    parallel_tool_calls = request_kwargs.pop("parallel_tool_calls", None)
+    if policy.supports_parallel_tool_calls and isinstance(parallel_tool_calls, bool):
+        payload["parallel_tool_calls"] = parallel_tool_calls
 
 
 def _append_include(payload: dict[str, Any], include_item: str) -> None:
@@ -458,6 +467,7 @@ def _output_item_event_deltas(
     if item.get("type") != "function_call":
         return []
     tool_call_id = _function_call_id(item)
+    _remember_stream_tool_call_id(event_data, tool_call_id, state)
     deltas: list[dict[str, Any]] = []
     name = item.get("name")
     if isinstance(name, str) and name and tool_call_id not in state.emitted_tool_names:
@@ -539,6 +549,16 @@ def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamSt
         state.tool_call_ids_by_output_index[output_index] = generated_id
         return generated_id
     return "tool_call_0"
+
+
+def _remember_stream_tool_call_id(
+    event_data: Mapping[str, Any],
+    tool_call_id: str,
+    state: ResponsesStreamState,
+) -> None:
+    output_index = event_data.get("output_index")
+    if isinstance(output_index, int):
+        state.tool_call_ids_by_output_index[output_index] = tool_call_id
 
 
 def _function_call_id(item: Mapping[str, Any]) -> str:
