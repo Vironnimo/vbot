@@ -1,0 +1,26 @@
+{
+  "id": "github-copilot",
+  "name": "GitHub Copilot",
+  "adapter": "openai_compatible",
+  "base_url": "https://api.githubcopilot.com",
+  "connections": [
+    {
+      "id": "oauth",
+      "type": "oauth",
+      "label": "Sign in with GitHub",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "oauth": {
+        "flow": "device",
+        "client_id": "Iv1.b507a08c87ecfe98",
+        "device_auth_url": "https://github.com/login/device/code",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "scopes": ["copilot"],
+        "token_exchange_url": "https://api.github.com/copilot_internal/v2/token"
+      }
+    }
+  ],
+  "models_endpoint": "/models"
+}
