@@ -210,7 +210,7 @@ class ProviderAdapter(ABC):
 - `extra_headers` added to request headers
 - Auth: `Authorization: Bearer <api_key>` (configurable via `AuthConfig`)
 
-**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
+**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text (including readable reasoning nested inside `reasoning_details`) becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
 
 **Error format** — standard OpenAI error:
 ```json
@@ -230,9 +230,9 @@ Errors are classified by HTTP status code (not by parsing the body):
 - Other 4xx/5xx → `ProviderError(retryable=False)`
 - Timeout/ConnectError → `ProviderTimeoutError` (retryable)
 
-**Reasoning:** vBot `thinking_effort` is adapter-translated. OpenAI receives `reasoning_effort: "low" | "medium" | "high"`. OpenRouter receives `reasoning: {"effort": ...}` and `include_reasoning: true` for supported non-`none` values.
+**Reasoning:** vBot `thinking_effort` is adapter-translated. OpenAI and GitHub Copilot GPT-5-family reasoning models receive `reasoning_effort: "low" | "medium" | "high"`. OpenRouter receives `reasoning: {"effort": ...}` and `include_reasoning: true` for supported non-`none` values. GitHub Copilot GPT-5-family reasoning requests also use `max_completion_tokens` instead of `max_tokens`; non-reasoning Copilot chat models keep the normal `max_tokens` field.
 
-**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
+**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, readable text embedded inside `reasoning_details`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields. Readable reasoning text is promoted to visible `reasoning`; full raw provider metadata remains in `reasoning_meta` for round-tripping.
 
 ### AnthropicAdapter
 
