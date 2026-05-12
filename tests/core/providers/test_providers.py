@@ -74,6 +74,7 @@ OPENROUTER_DATA: dict[str, Any] = {
         }
     ],
     "defaults": {"max_tokens": 4096, "temperature": 0.7},
+    "model_discovery": "openrouter",
     "extra_headers": {"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
     "models_endpoint": "/models",
 }
@@ -267,6 +268,48 @@ class TestConnectionParsing:
         assert connection.auth.prefix == "Bearer "
         assert connection.auth.credential_key == "OPENROUTER_API_KEY"
 
+    def test_model_discovery_defaults_to_adapter_when_omitted(self, providers_dir: Path) -> None:
+        """Providers without model_discovery only default when the strategy exists."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+
+        # Act
+        openai_config = registry.get("openai")
+        anthropic_config = registry.get("anthropic")
+
+        # Assert
+        assert openai_config.model_discovery == "openai_compatible"
+        assert anthropic_config.model_discovery == ""
+
+    def test_anthropic_without_model_discovery_does_not_promise_unimplemented_strategy(
+        self,
+        providers_dir: Path,
+    ) -> None:
+        """Anthropic config stays discovery-unspecified when no normalizer exists."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+
+        # Act
+        anthropic_config = registry.get("anthropic")
+
+        # Assert
+        assert anthropic_config.adapter == "anthropic"
+        assert anthropic_config.model_discovery == ""
+
+    def test_model_discovery_parses_explicit_provider_specific_strategy(
+        self,
+        providers_dir: Path,
+    ) -> None:
+        """Providers can declare provider-specific model discovery explicitly."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+
+        # Act
+        config = registry.get("openrouter")
+
+        # Assert
+        assert config.model_discovery == "openrouter"
+
     def test_get_connection_returns_matching_local_id(self, providers_dir: Path) -> None:
         """ProviderConfig.get_connection() returns the matching local ID."""
         # Arrange
@@ -375,6 +418,7 @@ class TestOptionalFields:
 
         # Assert
         assert config.models_endpoint == "/models"
+        assert config.model_discovery == "openrouter"
 
     def test_anthropic_no_extra_headers(self, providers_dir: Path) -> None:
         """Anthropic has no extra_headers (field is None)."""
@@ -682,6 +726,19 @@ class TestProviderRegistryConnectionTypes:
 
         # Act / Assert
         with pytest.raises(ConfigError, match="Unknown OAuth flow"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_unknown_model_discovery_strategy_raises_config_error(self, tmp_path: Path) -> None:
+        """Unknown explicit model discovery strategies are rejected."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        data["model_discovery"] = "custom"
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="Unknown model discovery strategy"):
             ProviderRegistry.load(tmp_path)
 
 
