@@ -548,7 +548,7 @@ def _extract_openai_reasoning(
 ) -> str | None:
     for key in OPENAI_REASONING_KEYS:
         value = message.get(key)
-        if isinstance(value, str):
+        if isinstance(value, str) and value:
             return value
     if reasoning_meta is None:
         reasoning_meta = _extract_openai_reasoning_meta(message)
