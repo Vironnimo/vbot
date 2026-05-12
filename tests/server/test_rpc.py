@@ -256,6 +256,7 @@ def openrouter_provider() -> SimpleNamespace:
         id="openrouter",
         name="OpenRouter",
         adapter="openai_compatible",
+        model_discovery="openrouter",
         base_url="https://openrouter.ai/api/v1",
         defaults={"max_tokens": 8192},
         extra_headers={"X-Title": "vBot"},
@@ -1134,6 +1135,7 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     }
     assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openrouter"]
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
+    assert state.runtime.providers.get("openrouter").model_discovery == "openrouter"
     refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
     assert refreshed_model.name == "Fresh Model"
 
