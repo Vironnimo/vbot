@@ -17,7 +17,9 @@ from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
+from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
@@ -61,6 +63,8 @@ _ADAPTER_MAP: dict[
     str, Callable[[ProviderConfig, TokenGetter, str | None, AuthConfig], ProviderAdapter]
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
+    "openrouter": OpenRouterAdapter,
+    "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
 }
 

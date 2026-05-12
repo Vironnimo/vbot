@@ -1,19 +1,21 @@
 """OpenAI-compatible provider adapter.
 
-Handles the ``/chat/completions`` endpoint format used by OpenAI, OpenRouter,
-Groq, Together, and other providers that follow the OpenAI API convention.
+Handles the ``/chat/completions`` endpoint format used by OpenAI, Groq,
+Together, and other providers that follow the OpenAI API convention.
 Differences in base URL, auth headers, and default parameters are expressed
-through ``ProviderConfig`` — no subclassing needed.
+through ``ProviderConfig``. Providers that are mostly OpenAI-compatible but need
+provider-specific behavior can subclass this adapter.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
@@ -29,12 +31,21 @@ SSE_DATA_PREFIX = "data: "
 SSE_DONE_MARKER = "[DONE]"
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
-OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
-STREAM_USAGE_PROVIDER_IDS = {"openai", "openrouter"}
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_CONTEXT_WINDOW = 0
+CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
+MAX_OUTPUT_TOKEN_KEYS = (
+    "max_output_tokens",
+    "max_completion_tokens",
+    "maxOutputTokens",
+    "maxCompletionTokens",
+)
+JSON_MODE_PARAMETER_NAMES = {"response_format", "structured_outputs", "json_mode"}
+REASONING_PARAMETER_NAMES = {"reasoning", "include_reasoning", "reasoning_effort"}
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -85,6 +96,51 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # Header / payload helpers
     # ------------------------------------------------------------------
 
+    @classmethod
+    def normalize_catalog_entry(
+        cls,
+        raw: Mapping[str, Any],
+        defaults: Mapping[str, Any] | None = None,
+    ) -> Model:
+        """Normalize a standard OpenAI-compatible ``/models`` entry."""
+
+        architecture = _read_optional_mapping(raw, "architecture")
+        top_provider = _read_optional_mapping(raw, "top_provider")
+        supported_parameters = _read_optional_string_set(raw, "supported_parameters")
+
+        model_id = _read_non_empty_string(raw, "id")
+        name = _read_optional_non_empty_string(raw, "name") or model_id
+
+        return Model(
+            model_id=model_id,
+            name=name,
+            capabilities=Capabilities(
+                vision=_has_image_modality(raw, architecture),
+                tools=_supports_tools_by_default(raw, top_provider, architecture),
+                json_mode=_supports_json_mode(
+                    raw,
+                    top_provider,
+                    architecture,
+                    supported_parameters,
+                ),
+                reasoning=ReasoningCapabilities(
+                    supported=_supports_reasoning(
+                        raw,
+                        top_provider,
+                        architecture,
+                        supported_parameters,
+                    ),
+                ),
+            ),
+            context_window=_read_first_optional_int(raw, CONTEXT_WINDOW_KEYS)
+            or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS)
+            or DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens=_read_first_optional_int(top_provider, MAX_OUTPUT_TOKEN_KEYS)
+            or _read_first_optional_int(raw, MAX_OUTPUT_TOKEN_KEYS)
+            or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS)
+            or _provider_default_max_tokens(defaults),
+        )
+
     async def _build_headers(self) -> dict[str, str]:
         """Build request headers from selected connection auth and extra_headers."""
         token = await self._token_getter()
@@ -124,7 +180,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             "messages": [_to_openai_message(message) for message in messages],
         }
         _apply_openai_tools(payload, request_kwargs)
-        _apply_openai_reasoning(payload, self._config.id, request_kwargs)
+        _apply_openai_reasoning(payload, request_kwargs)
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
@@ -223,7 +279,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
-        _apply_openai_stream_options(payload, self._config.id)
+        _merge_stream_usage_options(payload)
 
         async def _connect_stream() -> httpx.Response:
             request = self._client.build_request(
@@ -458,26 +514,15 @@ def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None
     ]
 
 
-def _apply_openai_reasoning(
-    payload: dict[str, Any],
-    provider_id: str,
-    kwargs: dict[str, Any],
-) -> None:
+def _apply_openai_reasoning(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
     thinking_effort = kwargs.pop("thinking_effort", "")
     if not thinking_effort or thinking_effort == "none":
-        return
-    if provider_id == "openrouter":
-        if thinking_effort in OPENROUTER_REASONING_EFFORTS:
-            payload["reasoning"] = {"effort": thinking_effort}
-            payload["include_reasoning"] = True
         return
     if thinking_effort in OPENAI_REASONING_EFFORTS:
         payload["reasoning_effort"] = thinking_effort
 
 
-def _apply_openai_stream_options(payload: dict[str, Any], provider_id: str) -> None:
-    if provider_id not in STREAM_USAGE_PROVIDER_IDS:
-        return
+def _merge_stream_usage_options(payload: dict[str, Any]) -> None:
     stream_options = payload.get("stream_options")
     if isinstance(stream_options, dict):
         payload["stream_options"] = {**stream_options, "include_usage": True}
@@ -596,3 +641,178 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
         "input_tokens": prompt_tokens,
         "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
     }
+
+
+def _provider_default_max_tokens(defaults: Mapping[str, Any] | None) -> int:
+    if defaults is None:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    max_tokens = defaults.get("max_tokens")
+    if max_tokens is None:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    return int(max_tokens)
+
+
+def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = data.get(key)
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _read_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = data.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected '{key}' to be an object")
+    return value
+
+
+def _read_non_empty_string(data: Mapping[str, Any], key: str) -> str:
+    value = _read_string(data, key)
+    if not value:
+        raise ValueError(f"Expected '{key}' to be a non-empty string")
+    return value
+
+
+def _read_optional_non_empty_string(data: Mapping[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _read_string(data: Mapping[str, Any], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"Expected '{key}' to be a string")
+    return value
+
+
+def _read_string_list(data: Mapping[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"Expected '{key}' to be a list of strings")
+    return value
+
+
+def _read_optional_string_set(data: Mapping[str, Any], key: str) -> set[str]:
+    value = data.get(key)
+    if not isinstance(value, list):
+        return set()
+    return {item for item in value if isinstance(item, str)}
+
+
+def _read_int(data: Mapping[str, Any], key: str) -> int:
+    value = data.get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"Expected '{key}' to be an integer")
+    return value
+
+
+def _read_first_optional_int(data: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        value = data.get(key)
+        parsed_value = _parse_optional_int(value)
+        if parsed_value is not None:
+            return parsed_value
+    return None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdecimal():
+        return int(value)
+    return None
+
+
+def _has_image_modality(raw: Mapping[str, Any], architecture: Mapping[str, Any]) -> bool:
+    return _modalities_include_image(raw) or _modalities_include_image(architecture)
+
+
+def _modalities_include_image(data: Mapping[str, Any]) -> bool:
+    for key in ("input_modalities", "inputModalities", "modalities"):
+        value = data.get(key)
+        if isinstance(value, list) and any(_modality_is_image(item) for item in value):
+            return True
+    return False
+
+
+def _modality_is_image(value: Any) -> bool:
+    if isinstance(value, str):
+        return "image" in value.lower()
+    if isinstance(value, dict):
+        return any(_modality_is_image(item) for item in value.values())
+    return False
+
+
+def _supports_tools_by_default(*metadata_sources: Mapping[str, Any]) -> bool:
+    explicit_value = _read_first_optional_bool(
+        metadata_sources,
+        ("supports_tools", "tools", "tool_calls", "function_calling"),
+    )
+    return explicit_value is not False
+
+
+def _supports_json_mode(
+    raw: Mapping[str, Any],
+    top_provider: Mapping[str, Any],
+    architecture: Mapping[str, Any],
+    supported_parameters: set[str],
+) -> bool:
+    if supported_parameters & JSON_MODE_PARAMETER_NAMES:
+        return True
+    explicit_value = _read_first_optional_bool(
+        (raw, top_provider, architecture),
+        (
+            "supports_json_mode",
+            "json_mode",
+            "supports_structured_outputs",
+            "structured_outputs",
+        ),
+    )
+    return explicit_value is True
+
+
+def _supports_reasoning(
+    raw: Mapping[str, Any],
+    top_provider: Mapping[str, Any],
+    architecture: Mapping[str, Any],
+    supported_parameters: set[str],
+) -> bool:
+    if supported_parameters & REASONING_PARAMETER_NAMES:
+        return True
+    if _read_reasoning_supported(raw) or _read_reasoning_supported(architecture):
+        return True
+    explicit_value = _read_first_optional_bool(
+        (raw, top_provider, architecture),
+        ("supports_reasoning", "reasoning_supported"),
+    )
+    if explicit_value is True:
+        return True
+    return _has_non_empty_list(raw, "reasoning_efforts") or _has_non_empty_list(
+        raw,
+        "reasoningEfforts",
+    )
+
+
+def _read_reasoning_supported(data: Mapping[str, Any]) -> bool:
+    reasoning = data.get("reasoning")
+    return isinstance(reasoning, dict) and reasoning.get("supported") is True
+
+
+def _read_first_optional_bool(
+    metadata_sources: tuple[Mapping[str, Any], ...], keys: tuple[str, ...]
+) -> bool | None:
+    for source in metadata_sources:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, bool):
+                return value
+    return None
+
+
+def _has_non_empty_list(data: Mapping[str, Any], key: str) -> bool:
+    value = data.get(key)
+    return isinstance(value, list) and len(value) > 0

@@ -26,7 +26,8 @@ desktop/       ← pywebview shell. Imports nothing from the project — HTTP on
 **Core modules:** runtime, models, chat, agents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
-`providers/` contains the adapter ABC, OpenAI-compatible and Anthropic adapters,
+`providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
+adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
 shared HTTP utilities, and error classes in addition to the registry.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
@@ -222,10 +223,16 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   `resources/models/<provider>.overrides.json` files patch or supplement
   discovered models, and the registry skips those override files when loading
   catalogs.
-- **GitHub Copilot model discovery is tolerant OpenAI-compatible discovery, not
-  OpenRouter discovery.** Copilot `/models` entries may omit `architecture` or
-  provide it as a non-object. Do not route Copilot through OpenRouter's strict
-  schema normalizer.
+- **Provider-specific model discovery lives on provider adapters.**
+  `core/models/discovery.py` dispatches by provider `adapter` string to the
+  adapter class' `normalize_catalog_entry()` method; it must not branch on
+  provider IDs or contain provider-specific normalizer functions.
+- **GitHub Copilot model discovery uses Copilot's real `/models` schema.**
+  Copilot responses use a top-level `{ "object": "list", "data": [...] }`
+  envelope. Model capabilities live under `capabilities.limits` and
+  `capabilities.supports`; `gpt-4o` may legitimately report
+  `max_output_tokens: 4096`, so agents must read the source value rather than
+  assume a value greater than the old fallback.
 - **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.

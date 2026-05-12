@@ -11,8 +11,11 @@ import pytest
 
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
+from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
+from core.providers.token_store import OAuthToken
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -98,9 +101,26 @@ def test_get_adapter_openrouter_returns_wired_adapter(
     adapter = runtime_with_openrouter_key.get_adapter("openrouter", "openrouter:api-key")
 
     # Assert — type check + extra_headers wiring
-    assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert isinstance(adapter, OpenRouterAdapter)
     assert adapter._config.extra_headers is not None  # type: ignore[attr-defined]
     assert "HTTP-Referer" in adapter._config.extra_headers  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_get_adapter_github_copilot_returns_wired_adapter(runtime: Runtime) -> None:
+    """Runtime.get_adapter() returns the GitHub Copilot-specific adapter."""
+
+    runtime.token_store.save(
+        "github-copilot",
+        "oauth",
+        OAuthToken(access_token="copilot-test-token"),
+    )
+
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:oauth")
+
+    assert isinstance(adapter, GitHubCopilotAdapter)
+    assert adapter._config.id == "github-copilot"  # type: ignore[attr-defined]
+    assert await adapter._token_getter() == "copilot-test-token"  # type: ignore[attr-defined]
 
 
 def test_get_adapter_connection_base_url_override_uses_override(

@@ -14,8 +14,6 @@ from core.models.discovery import (
     PassthroughModelFilter,
     PassthroughRawFilter,
     apply_overrides,
-    normalize_openai_compatible_tolerant,
-    normalize_openrouter,
     refresh_models,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
@@ -24,6 +22,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
 API_KEY = "test-openrouter-key"
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +37,7 @@ def openrouter_config() -> ProviderConfig:
     return ProviderConfig(
         id="openrouter",
         name="OpenRouter",
-        adapter="openai_compatible",
+        adapter="openrouter",
         base_url="https://openrouter.ai/api/v1",
         connections=[
             ConnectionConfig(
@@ -63,7 +62,7 @@ def github_copilot_config() -> ProviderConfig:
     return ProviderConfig(
         id="github-copilot",
         name="GitHub Copilot",
-        adapter="openai_compatible",
+        adapter="github_copilot",
         base_url="https://api.githubcopilot.com",
         connections=[
             ConnectionConfig(
@@ -118,134 +117,6 @@ def model_data(name: str = "Model Name") -> dict:
         "context_window": 32000,
         "max_output_tokens": 4096,
     }
-
-
-class TestNormalizeOpenRouter:
-    def test_happy_path_maps_all_fields(self):
-        raw_model = raw_openrouter_model()
-
-        model = normalize_openrouter(raw_model, {"max_tokens": 8192})
-
-        assert model == Model(
-            model_id="anthropic/claude-sonnet-4",
-            name="Anthropic: Claude Sonnet 4",
-            capabilities=Capabilities(
-                vision=True,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=True),
-            ),
-            context_window=128000,
-            max_output_tokens=64000,
-        )
-
-    def test_null_max_completion_tokens_uses_provider_default(self):
-        raw_model = raw_openrouter_model(max_completion_tokens=None)
-
-        model = normalize_openrouter(raw_model, {"max_tokens": 8192})
-
-        assert model.max_output_tokens == 8192
-
-    def test_null_max_completion_tokens_uses_hard_fallback_without_default(self):
-        raw_model = raw_openrouter_model(max_completion_tokens=None)
-
-        model = normalize_openrouter(raw_model, {})
-
-        assert model.max_output_tokens == 4096
-
-    @pytest.mark.parametrize(
-        ("supported_parameters", "tools", "json_mode", "reasoning"),
-        [
-            (["tools"], True, False, False),
-            (["response_format"], False, True, False),
-            (["structured_outputs"], False, True, False),
-            (["reasoning"], False, False, True),
-            (["include_reasoning"], False, False, True),
-            ([], False, False, False),
-        ],
-    )
-    def test_supported_parameters_derive_capabilities(
-        self,
-        supported_parameters: list[str],
-        tools: bool,
-        json_mode: bool,
-        reasoning: bool,
-    ):
-        raw_model = raw_openrouter_model(supported_parameters=supported_parameters)
-
-        model = normalize_openrouter(raw_model, {})
-        assert model.capabilities.tools is tools
-        assert model.capabilities.json_mode is json_mode
-        assert model.capabilities.reasoning.supported is reasoning
-
-    @pytest.mark.parametrize(
-        ("input_modalities", "vision"), [(["text", "image"], True), (["text"], False)]
-    )
-    def test_input_modalities_derive_vision(self, input_modalities: list[str], vision: bool):
-        raw_model = raw_openrouter_model(input_modalities=input_modalities)
-
-        model = normalize_openrouter(raw_model, {})
-        assert model.capabilities.vision is vision
-
-
-class TestNormalizeOpenAICompatibleTolerant:
-    def test_missing_architecture_uses_top_level_fields_and_defaults_tools(self):
-        raw_model = {
-            "id": "gpt-4.1",
-            "context_window": 1047576,
-            "max_output_tokens": 32768,
-            "supported_parameters": ["response_format"],
-        }
-
-        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
-
-        assert model == Model(
-            model_id="gpt-4.1",
-            name="gpt-4.1",
-            capabilities=Capabilities(
-                vision=False,
-                tools=True,
-                json_mode=True,
-                reasoning=ReasoningCapabilities(supported=False),
-            ),
-            context_window=1047576,
-            max_output_tokens=32768,
-        )
-
-    def test_non_object_architecture_is_ignored_for_copilot_payloads(self):
-        raw_model = {
-            "id": "claude-sonnet-4",
-            "name": "Claude Sonnet 4",
-            "architecture": "unknown",
-            "contextLength": "ignored",
-            "contextWindow": 200000,
-            "top_provider": {"maxCompletionTokens": 64000},
-            "input_modalities": ["text", {"type": "image"}],
-        }
-
-        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
-
-        assert model.name == "Claude Sonnet 4"
-        assert model.context_window == 200000
-        assert model.max_output_tokens == 64000
-        assert model.capabilities.vision is True
-
-    def test_tolerant_normalization_uses_explicit_metadata_for_capabilities(self):
-        raw_model = {
-            "id": "o4-mini",
-            "name": "o4-mini",
-            "context_length": 128000,
-            "top_provider": {"tools": False},
-            "supports_json_mode": False,
-            "reasoning": {"supported": True},
-        }
-
-        model = normalize_openai_compatible_tolerant(raw_model, {"max_tokens": 8192})
-
-        assert model.capabilities.tools is False
-        assert model.capabilities.json_mode is False
-        assert model.capabilities.reasoning.supported is True
-        assert model.max_output_tokens == 8192
 
 
 class TestApplyOverrides:
@@ -461,42 +332,41 @@ class TestRefreshModels:
         tmp_path: Path,
         github_copilot_config: ProviderConfig,
     ):
+        raw_fixture = json.loads(
+            (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
+        )
         route = respx.get(GITHUB_COPILOT_MODELS_URL).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": "gpt-4.1",
-                            "context_window": 1047576,
-                            "max_output_tokens": 32768,
-                        },
-                        {
-                            "id": "claude-sonnet-4",
-                            "name": "Claude Sonnet 4",
-                            "architecture": "not-an-object",
-                            "contextWindow": 200000,
-                            "top_provider": {"max_completion_tokens": 64000},
-                        },
-                    ]
-                },
-            )
+            return_value=httpx.Response(200, json=raw_fixture)
         )
 
         result = await refresh_models(github_copilot_config, API_KEY, tmp_path / "resources")
 
         registry = ModelRegistry.load(tmp_path / "resources")
-        model_without_name = registry.get("github-copilot", "gpt-4.1")
-        model_with_non_object_architecture = registry.get(
-            "github-copilot",
-            "claude-sonnet-4",
-        )
-        assert result["model_count"] == 2
-        assert model_without_name.name == "gpt-4.1"
-        assert model_with_non_object_architecture.context_window == 200000
-        assert model_with_non_object_architecture.max_output_tokens == 64000
+        gpt_4o = registry.get("github-copilot", "gpt-4o")
+        gemini_2_5_pro = registry.get("github-copilot", "gemini-2.5-pro")
+        assert result["model_count"] == 3
+        assert gpt_4o.capabilities.vision is True
+        assert gpt_4o.context_window == 128000
+        assert gpt_4o.max_output_tokens == 4096
+        assert gemini_2_5_pro.capabilities.reasoning.supported is True
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
+
+    @pytest.mark.asyncio
+    async def test_refresh_models_rejects_unknown_discovery_adapter(self, tmp_path: Path):
+        provider_config = ProviderConfig(
+            id="unknown-provider",
+            name="Unknown Provider",
+            adapter="unknown_adapter",
+            base_url="https://example.test",
+            connections=[],
+            defaults={},
+            extra_headers={},
+            models_endpoint="/models",
+        )
+
+        with pytest.raises(ModelDiscoveryError, match="unknown_adapter"):
+            await refresh_models(provider_config, API_KEY, tmp_path / "resources")
 
     @respx.mock
     @pytest.mark.asyncio
