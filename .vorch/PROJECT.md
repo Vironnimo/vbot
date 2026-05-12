@@ -206,6 +206,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   event. Polling, token exchange, token refresh, and token persistence stay in
   backend provider code; token values must never appear in logs or public event
   payloads.
+- **GitHub Copilot OAuth has provider-specific exchange requirements.** The
+  working Copilot path uses GitHub Device Flow scope `read:user`, then exchanges
+  the GitHub OAuth token at `https://api.github.com/copilot_internal/v2/token`
+  with `Authorization: Bearer <github_oauth_token>` plus Copilot integration
+  headers. `Authorization: token ...` is rejected by the Copilot exchange.
 - **Provider connection identifiers in public RPC/UI payloads are compositional.**
   Use `<provider_id>:<connection.id>` (for example `github-copilot:oauth`) for
   `connection_id` values in Settings, provider RPC methods, and WebSocket

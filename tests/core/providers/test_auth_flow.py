@@ -26,7 +26,7 @@ def _oauth_config(*, token_exchange_url: str | None = None) -> OAuthConfig:
         client_id="client-id",
         device_auth_url=DEVICE_AUTH_URL,
         token_url=TOKEN_URL,
-        scopes=["copilot"],
+        scopes=["read:user"],
         token_exchange_url=token_exchange_url,
     )
 
@@ -59,7 +59,7 @@ async def test_start_device_flow_posts_client_id_and_scope(tmp_path: Path) -> No
     assert session.verification_uri == "https://github.com/login/device"
     assert session.expires_in == 900
     assert session.interval == 3
-    assert route.calls.last.request.content == b"client_id=client-id&scope=copilot"
+    assert route.calls.last.request.content == b"client_id=client-id&scope=read%3Auser"
 
 
 @respx.mock
@@ -267,7 +267,11 @@ async def test_poll_loop_exchanges_copilot_token_and_stores_github_token(
     assert token.refresh_token is None
     assert token.expires_at == expires_at
     assert token.extra == {"github_oauth_token": "github-oauth-secret"}
-    assert exchange_route.calls.last.request.headers["Authorization"] == "token github-oauth-secret"
+    exchange_headers = exchange_route.calls.last.request.headers
+    assert exchange_headers["Accept"] == "application/json"
+    assert exchange_headers["Authorization"] == "Bearer github-oauth-secret"
+    assert exchange_headers["Copilot-Integration-Id"] == "vscode-chat"
+    assert exchange_headers["Editor-Version"] == "vBot/0.1.0"
 
 
 @respx.mock

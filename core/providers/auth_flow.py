@@ -24,6 +24,8 @@ DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS = 5
 DEFAULT_COPILOT_TOKEN_LIFETIME_MINUTES = 25
 HTTP_TIMEOUT_SECONDS = 60.0
+COPILOT_INTEGRATION_ID = "vscode-chat"
+COPILOT_EDITOR_VERSION = "vBot/0.1.0"
 
 AUTHORIZATION_PENDING_ERROR = "authorization_pending"
 SLOW_DOWN_ERROR = "slow_down"
@@ -292,7 +294,9 @@ class DeviceFlowEngine:
                 token_exchange_url,
                 headers={
                     "Accept": "application/json",
-                    "Authorization": f"token {github_oauth_token}",
+                    "Authorization": f"Bearer {github_oauth_token}",
+                    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+                    "Editor-Version": COPILOT_EDITOR_VERSION,
                 },
             )
         except httpx.HTTPError as error:
