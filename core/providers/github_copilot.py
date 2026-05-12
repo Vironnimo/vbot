@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.github_copilot_policy import (
+    COPILOT_METADATA_KEY,
+    GitHubCopilotModelPolicy,
+    copilot_model_policy,
+)
 from core.providers.openai_compatible import (
-    CHAT_COMPLETIONS_ENDPOINT,
     DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS,
-    OPENAI_REASONING_EFFORTS,
     OpenAICompatibleAdapter,
     _read_mapping,
     _read_non_empty_string,
@@ -19,48 +21,7 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 
-
-@dataclass(frozen=True)
-class GitHubCopilotModelPolicy:
-    """Per-model Copilot runtime policy for request shaping."""
-
-    endpoint_path: str = CHAT_COMPLETIONS_ENDPOINT
-    allowed_parameters: frozenset[str] | None = None
-    denied_parameters: frozenset[str] = frozenset()
-    allowed_reasoning_efforts: frozenset[str] = frozenset()
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered_kwargs = dict(kwargs)
-        if self.allowed_parameters is not None:
-            filtered_kwargs = {
-                key: value
-                for key, value in filtered_kwargs.items()
-                if key in self.allowed_parameters
-            }
-        for parameter_name in self.denied_parameters:
-            filtered_kwargs.pop(parameter_name, None)
-
-        thinking_effort = filtered_kwargs.get("thinking_effort")
-        if isinstance(thinking_effort, str) and not self.allows_openai_reasoning_effort(
-            thinking_effort
-        ):
-            filtered_kwargs.pop("thinking_effort", None)
-        return filtered_kwargs
-
-    def allows_openai_reasoning_effort(self, thinking_effort: str) -> bool:
-        if not thinking_effort or thinking_effort == "none":
-            return True
-        return thinking_effort in self.allowed_reasoning_efforts
-
-
-DEFAULT_COPILOT_MODEL_POLICY = GitHubCopilotModelPolicy()
-OPENAI_REASONING_COPILOT_MODEL_POLICY = GitHubCopilotModelPolicy(
-    allowed_reasoning_efforts=frozenset(OPENAI_REASONING_EFFORTS)
-)
-COPILOT_MODEL_POLICIES_BY_ID = {
-    "gpt-5-mini": OPENAI_REASONING_COPILOT_MODEL_POLICY,
-}
-COPILOT_MODEL_POLICY_PREFIXES: tuple[tuple[str, GitHubCopilotModelPolicy], ...] = ()
+OPENAI_REASONING_COPILOT_MODEL_POLICY = copilot_model_policy("gpt-5-mini")
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
@@ -110,6 +71,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 "max_output_tokens",
                 _provider_default_max_tokens(defaults),
             ),
+            metadata=_copilot_runtime_metadata(raw, capabilities, supports),
         )
 
 
@@ -121,15 +83,51 @@ def _copilot_supports_reasoning(supports: Mapping[str, Any]) -> bool:
 
 
 def _copilot_model_policy(model_id: str) -> GitHubCopilotModelPolicy:
-    exact_match_policy = COPILOT_MODEL_POLICIES_BY_ID.get(model_id)
-    if exact_match_policy is not None:
-        return exact_match_policy
+    return copilot_model_policy(model_id)
 
-    for model_prefix, policy in COPILOT_MODEL_POLICY_PREFIXES:
-        if model_id.startswith(model_prefix):
-            return policy
 
-    return DEFAULT_COPILOT_MODEL_POLICY
+def _copilot_runtime_metadata(
+    raw: Mapping[str, Any],
+    capabilities: Mapping[str, Any],
+    supports: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    metadata: dict[str, Any] = {}
+    for source_key in ("vendor", "version"):
+        value = raw.get(source_key)
+        if isinstance(value, str) and value:
+            metadata[source_key] = value
+    family = capabilities.get("family")
+    if isinstance(family, str) and family:
+        metadata["family"] = family
+
+    supported_endpoints = raw.get("supported_endpoints")
+    if isinstance(supported_endpoints, list):
+        endpoints = [endpoint for endpoint in supported_endpoints if isinstance(endpoint, str)]
+        if endpoints:
+            metadata["supported_endpoints"] = endpoints
+
+    reasoning_effort = supports.get("reasoning_effort")
+    if isinstance(reasoning_effort, list):
+        efforts = [effort for effort in reasoning_effort if isinstance(effort, str)]
+        if efforts:
+            metadata["reasoning_efforts"] = efforts
+
+    for support_key in (
+        "min_thinking_budget",
+        "max_thinking_budget",
+        "adaptive_thinking",
+        "parallel_tool_calls",
+        "streaming",
+        "structured_outputs",
+        "tool_calls",
+    ):
+        value = supports.get(support_key)
+        if isinstance(value, bool | int) and not (
+            isinstance(value, bool) and support_key.endswith("budget")
+        ):
+            metadata[support_key] = value
+
+    return {COPILOT_METADATA_KEY: metadata} if metadata else {}
 
 
 def _read_optional_token_limit(

@@ -13,9 +13,11 @@ lookup.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
+from types import MappingProxyType
+from typing import Any, ClassVar
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,10 @@ class Model:
     capabilities: Capabilities
     context_window: int
     max_output_tokens: int
+    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
 
 
 class ModelRegistry:
@@ -104,6 +110,7 @@ class ModelRegistry:
                     capabilities=capabilities,
                     context_window=model_data["context_window"],
                     max_output_tokens=model_data["max_output_tokens"],
+                    metadata=model_data.get("metadata", {}),
                 )
                 models[(provider_id, model_id)] = model
 
@@ -149,3 +156,13 @@ class ModelRegistry:
             [model for (pid, _), model in self._models.items() if pid == provider_id],
             key=lambda model: model.model_id,
         )
+
+
+def _freeze_metadata_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {str(key): _freeze_metadata_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_metadata_value(item) for item in value)
+    return value

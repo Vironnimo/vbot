@@ -82,6 +82,12 @@ def test_reasoning_effort_list_marks_o_series_model_as_reasoning_capable() -> No
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gpt-5-mini"], {})
 
     assert model.capabilities.reasoning.supported is True
+    assert model.metadata["github_copilot"]["reasoning_efforts"] == ("low", "medium", "high")
+    assert model.metadata["github_copilot"]["supported_endpoints"] == (
+        "/chat/completions",
+        "/responses",
+        "ws:/responses",
+    )
 
 
 def test_thinking_budget_marks_gemini_model_as_reasoning_capable() -> None:
@@ -90,6 +96,8 @@ def test_thinking_budget_marks_gemini_model_as_reasoning_capable() -> None:
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_models["gemini-2.5-pro"], {})
 
     assert model.capabilities.reasoning.supported is True
+    assert model.metadata["github_copilot"]["min_thinking_budget"] == 128
+    assert model.metadata["github_copilot"]["max_thinking_budget"] == 32768
 
 
 def test_supported_flags_map_to_capabilities_from_captured_schema() -> None:
@@ -100,6 +108,8 @@ def test_supported_flags_map_to_capabilities_from_captured_schema() -> None:
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is False
     assert model.capabilities.reasoning.supported is False
+    assert "policy" not in model.metadata.get("github_copilot", {})
+    assert "model_picker_enabled" not in model.metadata.get("github_copilot", {})
 
 
 def test_missing_optional_copilot_limits_fall_back_without_dropping_model() -> None:
@@ -240,6 +250,7 @@ def test_unknown_copilot_model_policy_defaults_to_safe_reasoning_behavior() -> N
 
     assert policy.allows_openai_reasoning_effort("high") is False
     assert policy.endpoint_path == "/chat/completions"
+    assert policy.supports_tools is False
 
 
 def test_gpt_5_mini_copilot_policy_allows_openai_reasoning_efforts() -> None:
