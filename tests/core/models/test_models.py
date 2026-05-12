@@ -98,6 +98,27 @@ class TestModel:
         assert model.capabilities is capabilities
         assert model.context_window == 128000
         assert model.max_output_tokens == 16384
+        assert model.metadata == {}
+
+    def test_metadata_field_is_optional_and_immutable(self):
+        capabilities = Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        )
+        model = Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=capabilities,
+            context_window=128000,
+            max_output_tokens=16384,
+            metadata={"github_copilot": {"supported_endpoints": ["/responses"]}},
+        )
+
+        assert model.metadata["github_copilot"]["supported_endpoints"] == ("/responses",)
+        with pytest.raises(TypeError):
+            model.metadata["github_copilot"] = {}  # type: ignore[index]
 
     def test_frozen(self):
         capabilities = Capabilities(
@@ -185,6 +206,54 @@ class TestModelRegistryLoad:
         assert gamma.name == "Model Gamma"
         assert gamma.capabilities.vision is False
         assert gamma.capabilities.reasoning.supported is False
+
+    def test_load_reads_optional_metadata(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("github-copilot.json").write_text(
+            """
+            {
+              "provider_id": "github-copilot",
+              "models": {
+                "gpt-5.2": {
+                  "name": "GPT-5.2",
+                  "capabilities": {
+                    "vision": true,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 264000,
+                  "max_output_tokens": 64000,
+                  "metadata": {
+                    "github_copilot": {
+                      "vendor": "OpenAI",
+                      "family": "gpt-5.2",
+                      "supported_endpoints": ["/responses", "/chat/completions"]
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("github-copilot", "gpt-5.2")
+
+        assert model.metadata["github_copilot"]["vendor"] == "OpenAI"
+        assert model.metadata["github_copilot"]["supported_endpoints"] == (
+            "/responses",
+            "/chat/completions",
+        )
+
+    def test_load_catalog_without_metadata_keeps_empty_mapping(self):
+        registry = ModelRegistry.load(FIXTURES_DIR)
+
+        model = registry.get("test_provider_a", "model-alpha")
+
+        assert model.metadata == {}
 
     def test_cache_returns_same_instance(self):
         registry_first = ModelRegistry.load(FIXTURES_DIR)
@@ -365,6 +434,14 @@ class TestModelRegistryRealResources:
         assert model.name == "GPT-5.2"
         assert model.context_window == 128000
         assert model.max_output_tokens == 16384
+
+    def test_load_github_copilot_resource_with_optional_metadata(self):
+        registry = ModelRegistry.load(RESOURCES_DIR)
+
+        model = registry.get("github-copilot", "gpt-5-mini")
+
+        assert model.name == "GPT-5 mini"
+        assert model.metadata == {} or "github_copilot" in model.metadata
 
     def test_load_openrouter(self):
         registry = ModelRegistry.load(RESOURCES_DIR)

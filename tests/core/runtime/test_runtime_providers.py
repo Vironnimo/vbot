@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from core.models.models import ModelRegistry
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.credentials import ProviderCredentialResolver
-from core.providers.providers import ProviderRegistry
+from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
 from core.utils.errors import ConfigError
@@ -223,6 +225,105 @@ def test_runtime_model_fields(runtime: Runtime) -> None:
     assert model.context_window == 200000
     assert model.capabilities.vision is True
     assert model.capabilities.reasoning.supported is True
+
+
+def test_runtime_wires_copilot_adapter_with_model_metadata_lookup(runtime: Runtime) -> None:
+    """Copilot adapters receive a narrow runtime metadata lookup."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="github-copilot",
+        name="GitHub Copilot",
+        adapter="github_copilot",
+        base_url="https://api.githubcopilot.com",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="GITHUB_COPILOT_TOKEN",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"github-copilot": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"GITHUB_COPILOT_TOKEN": "copilot-token"},
+    )
+    runtime._models = ModelRegistry(  # type: ignore[attr-defined]
+        {
+            ("github-copilot", "gpt-test"): Model(
+                model_id="gpt-test",
+                name="GPT Test",
+                capabilities=Capabilities(
+                    vision=False,
+                    tools=True,
+                    json_mode=True,
+                    reasoning=ReasoningCapabilities(supported=True),
+                ),
+                context_window=128000,
+                max_output_tokens=4096,
+                metadata={
+                    "github_copilot": {
+                        "vendor": "OpenAI",
+                        "family": "gpt-test",
+                        "supported_endpoints": [RESPONSES_ENDPOINT],
+                        "reasoning_efforts": ["low", "medium", "high"],
+                        "tool_calls": True,
+                        "structured_outputs": True,
+                    }
+                },
+            )
+        }
+    )
+
+    # Act
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:api-key")
+
+    # Assert
+    assert isinstance(adapter, GitHubCopilotAdapter)
+    assert adapter._policy_for_model("gpt-test").endpoint_path == RESPONSES_ENDPOINT  # type: ignore[attr-defined]
+
+
+def test_runtime_copilot_metadata_lookup_falls_back_for_unknown_model(runtime: Runtime) -> None:
+    """Unknown Copilot model IDs use conservative policy instead of failing."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="github-copilot",
+        name="GitHub Copilot",
+        adapter="github_copilot",
+        base_url="https://api.githubcopilot.com",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="GITHUB_COPILOT_TOKEN",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"github-copilot": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"GITHUB_COPILOT_TOKEN": "copilot-token"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("github-copilot", "github-copilot:api-key")
+
+    # Assert
+    assert isinstance(adapter, GitHubCopilotAdapter)
+    unknown_policy = adapter._policy_for_model("unknown-model")  # type: ignore[attr-defined]
+    assert unknown_policy.endpoint_path == "/chat/completions"
+    assert unknown_policy.supports_tools is False
 
 
 # ------------------------------------------------------------------

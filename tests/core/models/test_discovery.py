@@ -162,6 +162,24 @@ class TestApplyOverrides:
         merged = apply_overrides({"model-c": model_data("Original")}, overrides_path)
         assert merged["model-c"] == full_override
 
+    def test_override_validation_tolerates_optional_metadata(self, tmp_path: Path):
+        overrides_path = tmp_path / "github-copilot.overrides.json"
+        override = model_data("GPT-5.2")
+        override["metadata"] = {
+            "github_copilot": {
+                "vendor": "OpenAI",
+                "supported_endpoints": ["/responses"],
+            }
+        }
+        overrides_path.write_text(
+            json.dumps({"provider_id": "github-copilot", "models": {"gpt-5.2": override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert merged["gpt-5.2"]["metadata"] == override["metadata"]
+
     def test_existing_model_override_is_validated_after_nested_replacement(self, tmp_path: Path):
         overrides_path = tmp_path / "openrouter.overrides.json"
         overrides_path.write_text(
@@ -344,11 +362,30 @@ class TestRefreshModels:
         registry = ModelRegistry.load(tmp_path / "resources")
         gpt_4o = registry.get("github-copilot", "gpt-4o")
         gemini_2_5_pro = registry.get("github-copilot", "gemini-2.5-pro")
-        assert result["model_count"] == 3
+        output_data = json.loads(
+            (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
+        )
+        gpt_5_mini_data = output_data["models"]["gpt-5-mini"]
+        assert result["model_count"] == 5
         assert gpt_4o.capabilities.vision is True
         assert gpt_4o.context_window == 128000
         assert gpt_4o.max_output_tokens == 4096
         assert gemini_2_5_pro.capabilities.reasoning.supported is True
+        assert gpt_5_mini_data["metadata"]["github_copilot"] == {
+            "family": "gpt-5-mini",
+            "parallel_tool_calls": True,
+            "reasoning_efforts": ["low", "medium", "high"],
+            "streaming": True,
+            "structured_outputs": True,
+            "supported_endpoints": ["/chat/completions", "/responses", "ws:/responses"],
+            "tool_calls": True,
+            "vendor": "Azure OpenAI",
+            "version": "gpt-5-mini",
+        }
+        assert "policy" not in gpt_5_mini_data["metadata"]["github_copilot"]
+        assert registry.get("github-copilot", "gpt-5-mini").metadata["github_copilot"][
+            "supported_endpoints"
+        ] == ("/chat/completions", "/responses", "ws:/responses")
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
 
