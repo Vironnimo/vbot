@@ -64,11 +64,14 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`.
 `stop()` clears the token-store reference along with other runtime services.
 
 `get_adapter(provider_id, connection_id)` builds an async provider-token getter
-for the selected connection. `api_key` connections resolve the static credential
-through `provider_credentials` and receive `StaticTokenGetter`; OAuth
-connections with `OAuthConfig` receive `OAuthTokenGetter` using `runtime.token_store`.
-OAuth stubs that still have a credential key but no OAuth metadata remain static
-credential connections until configured otherwise.
+for the selected connection and instantiates the class selected by
+`ProviderConfig.adapter`. Current adapter keys include `openai_compatible`,
+`openrouter`, `github_copilot`, and `anthropic`. `api_key` connections resolve
+the static credential through `provider_credentials` and receive
+`StaticTokenGetter`; OAuth connections with `OAuthConfig` receive
+`OAuthTokenGetter` using `runtime.token_store`. OAuth stubs that still have a
+credential key but no OAuth metadata remain static credential connections until
+configured otherwise.
 
 ## Constraints & Gotchas
 

@@ -51,7 +51,7 @@ Connection IDs exposed outside provider config are compositional: `<provider_id>
 class ProviderConfig:
     id: str                              # Unique provider identifier, used as registry key
     name: str                            # Human-readable name
-    adapter: str                         # Adapter class selector: "openai_compatible" or "anthropic"
+    adapter: str                         # Adapter class selector, e.g. "openai_compatible", "openrouter", "github_copilot", or "anthropic"
     base_url: str                        # Base URL for the provider API
     connections: list[ConnectionConfig]  # Authentication connections in display/preference order
     defaults: dict[str, Any] | None      # Default request params (max_tokens, temperature)
@@ -77,6 +77,8 @@ Copilot rejects it.
 
 **Adapter field** selects the class at runtime:
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
+- `"openrouter"` → `OpenRouterAdapter`
+- `"github_copilot"` → `GitHubCopilotAdapter`
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
 
@@ -147,6 +149,8 @@ class TokenGetter(Protocol):
 ```
 ProviderAdapter (ABC)          — core/providers/adapter.py
   ├── OpenAICompatibleAdapter  — core/providers/openai_compatible.py
+  │   ├── OpenRouterAdapter    — core/providers/openrouter.py
+  │   └── GitHubCopilotAdapter — core/providers/github_copilot.py
   └── AnthropicAdapter         — core/providers/anthropic.py
 ```
 
@@ -170,7 +174,10 @@ class ProviderAdapter(ABC):
 
 ### OpenAICompatibleAdapter
 
-**Wire protocol** — used by OpenAI, OpenRouter, Groq, Together, and any `/chat/completions` provider.
+**Wire protocol** — used directly by OpenAI, Groq, Together, and any provider
+that fully follows the `/chat/completions` convention. Providers that are mostly
+compatible but have provider-specific runtime or discovery behavior subclass
+this adapter.
 
 **Endpoint:** `POST /chat/completions`
 
@@ -197,7 +204,7 @@ class ProviderAdapter(ABC):
 - `extra_headers` added to request headers
 - Auth: `Authorization: Bearer <api_key>` (configurable via `AuthConfig`)
 
-**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
+**Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. The base adapter always merges `stream_options: {"include_usage": true}` into streaming payloads so OpenAI-compatible usage chunks can be captured without provider-name checks. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
 
 **Error format** — standard OpenAI error:
 ```json
@@ -217,9 +224,61 @@ Errors are classified by HTTP status code (not by parsing the body):
 - Other 4xx/5xx → `ProviderError(retryable=False)`
 - Timeout/ConnectError → `ProviderTimeoutError` (retryable)
 
-**Reasoning:** vBot `thinking_effort` is adapter-translated. OpenAI receives `reasoning_effort: "low" | "medium" | "high"`. OpenRouter receives `reasoning: {"effort": ...}` and `include_reasoning: true` for supported non-`none` values.
+**Reasoning:** vBot `thinking_effort` is adapter-translated. The generic OpenAI-compatible adapter emits `reasoning_effort: "low" | "medium" | "high"` for supported non-`none` values. Provider-specific subclasses own alternate wire formats.
 
 **Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
+
+**Catalog normalization:** `normalize_catalog_entry(raw, defaults)` reads standard OpenAI-compatible `/models` fields into a `Model`, including context window, max output tokens, vision, tools, JSON mode, and reasoning capability. Missing optional values fall back to provider defaults where applicable.
+
+### OpenRouterAdapter
+
+OpenRouter is OpenAI-compatible for chat completions but has provider-specific
+reasoning and catalog schema.
+
+- Runtime reasoning: non-`none` `thinking_effort` values accepted by OpenRouter
+  (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`) are sent as
+  `reasoning: {"effort": ...}` plus `include_reasoning: true`.
+- Streaming usage: inherited from the generic OpenAI-compatible stream behavior.
+- Catalog normalization: reads OpenRouter `/models` fields such as
+  `architecture.input_modalities`, `supported_parameters`, `context_length`, and
+  `top_provider.max_completion_tokens`.
+
+### GitHubCopilotAdapter
+
+GitHub Copilot is currently fully OpenAI-compatible at runtime, so it does not
+override chat payload construction. It owns Copilot catalog normalization because
+the Copilot `/models` schema is provider-specific.
+
+Observed Copilot `/models` shape:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o",
+      "capabilities": {
+        "limits": {
+          "max_context_window_tokens": 128000,
+          "max_output_tokens": 4096
+        },
+        "supports": {
+          "tool_calls": true,
+          "vision": true
+        }
+      }
+    }
+  ]
+}
+```
+
+`GitHubCopilotAdapter.normalize_catalog_entry()` reads
+`capabilities.limits.max_context_window_tokens`,
+`capabilities.limits.max_output_tokens`, and `capabilities.supports`. Reasoning
+is supported when Copilot advertises `reasoning_effort` or thinking-budget
+support. The normalizer must use the reported source values; for example,
+`gpt-4o` may legitimately report `max_output_tokens: 4096`.
 
 ### AnthropicAdapter
 
@@ -348,7 +407,7 @@ Source: `core/runtime/runtime.py`.
 
 ## Constraints & Gotchas
 
-- **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
+- **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a fully OpenAI-compatible provider requires only a JSON file. Adding a mostly compatible provider with runtime or discovery differences requires an OpenAI-compatible subclass and matching adapter-map entries. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
 - **Credential resolution for API keys happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called, then wraps it in `StaticTokenGetter`. Process environment currently has precedence over the data-dir `.env` fallback snapshot for `api_key` credentials. Token-store backed OAuth adapters receive `OAuthTokenGetter` and can refresh short-lived API tokens during requests. If the credential is empty or missing, `ConfigError`/`ProviderAuthError` is raised. Credentials are not stored on the `ProviderConfig`.
 
