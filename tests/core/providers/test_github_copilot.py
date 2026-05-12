@@ -14,6 +14,7 @@ from core.providers.github_copilot import (
     GitHubCopilotAdapter,
     _copilot_model_policy,
 )
+from core.providers.github_copilot_policy import CHAT_COMPLETIONS_ENDPOINT
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 FIXTURE_PATH = Path("tests/core/models/fixtures/github_copilot_models_raw.json")
@@ -38,6 +39,8 @@ COPILOT_CONFIG = ProviderConfig(
     defaults={"max_tokens": 4096},
 )
 COPILOT_URL = "https://api.githubcopilot.com/chat/completions"
+RESPONSES_URL = "https://api.githubcopilot.com/responses"
+MESSAGES_URL = "https://api.githubcopilot.com/v1/messages"
 SUCCESS_RESPONSE = {
     "id": "chatcmpl-abc123",
     "object": "chat.completion",
@@ -57,9 +60,40 @@ def _raw_copilot_models() -> dict[str, dict]:
     return {entry["id"]: entry for entry in data}
 
 
+def _copilot_metadata(model_id: str) -> dict:
+    raw_models = _raw_copilot_models()
+    return dict(GitHubCopilotAdapter.normalize_catalog_entry(raw_models[model_id], {}).metadata)
+
+
+def _copilot_metadata_lookup(model_id: str) -> dict | None:
+    if model_id == "gemini-3.1-pro-preview":
+        return {
+            "github_copilot": {
+                "vendor": "Google",
+                "family": "gemini-3.1-pro-preview",
+                "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT],
+                "tool_calls": True,
+                "streaming": True,
+            }
+        }
+    raw_models = _raw_copilot_models()
+    if model_id not in raw_models:
+        return None
+    return _copilot_metadata(model_id)
+
+
 @pytest.fixture()
 def copilot_adapter() -> GitHubCopilotAdapter:
     return GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
+
+
+@pytest.fixture()
+def metadata_copilot_adapter() -> GitHubCopilotAdapter:
+    return GitHubCopilotAdapter(
+        COPILOT_CONFIG,
+        API_KEY,
+        model_metadata_lookup=_copilot_metadata_lookup,
+    )
 
 
 def test_gpt_4o_reads_vision_context_and_max_output_from_copilot_capabilities() -> None:
@@ -294,3 +328,259 @@ async def test_send_preserves_reasoning_effort_for_allowed_copilot_model(
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning_effort"] == "high"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp-1",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}],
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+            },
+        )
+    )
+
+    response = await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5-mini",
+        thinking_effort="high",
+        response_format={"type": "json_object"},
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "gpt-5-mini"
+    assert request_body["reasoning"] == {"effort": "high"}
+    assert request_body["max_output_tokens"] == 4096
+    assert request_body["text"] == {"format": {"type": "json_object"}}
+    assert metadata_copilot_adapter.normalize_response(response) == {
+        "role": "assistant",
+        "content": "Hi",
+        "reasoning": None,
+        "reasoning_meta": {"response_id": "resp-1"},
+        "tool_calls": None,
+        "usage": {"input_tokens": 3, "output_tokens": 4},
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_routes_claude_to_messages_from_metadata(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "content": [{"type": "text", "text": "Claude reply"}],
+                "usage": {"input_tokens": 5, "output_tokens": 6},
+            },
+        )
+    )
+
+    response = await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="claude-sonnet-4.6",
+        thinking_effort="high",
+        response_format={"type": "json_object"},
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "claude-sonnet-4.6"
+    assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert request_body["output_config"] == {"effort": "high"}
+    assert "response_format" not in request_body
+    assert metadata_copilot_adapter.normalize_response(response) == {
+        "role": "assistant",
+        "content": "Claude reply",
+        "reasoning": None,
+        "reasoning_meta": None,
+        "tool_calls": None,
+        "usage": {"input_tokens": 5, "output_tokens": 6},
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gemini_3_1_preview_stays_chat_when_metadata_advertises_only_chat(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gemini-3.1-pro-preview",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "gemini-3.1-pro-preview"
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gemini_2_5_pro_without_endpoint_metadata_stays_conservative_chat(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gemini-2.5-pro",
+        thinking_budget=4096,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "gemini-2.5-pro"
+    assert "thinking_budget" not in request_body
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_unknown_model_uses_chat_fallback_and_omits_optional_controls(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(COPILOT_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="unknown-copilot-model",
+        thinking_effort="high",
+        tools=[{"name": "search", "description": "Search", "parameters": {"type": "object"}}],
+        response_format={"type": "json_object"},
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "unknown-copilot-model"
+    assert "reasoning_effort" not in request_body
+    assert "tools" not in request_body
+    assert "response_format" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_static_fallback_applies_only_when_metadata_missing() -> None:
+    fallback_adapter = GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
+    metadata_adapter = GitHubCopilotAdapter(
+        COPILOT_CONFIG,
+        API_KEY,
+        model_metadata_lookup=lambda model_id: _copilot_metadata(model_id),
+    )
+    chat_route = respx.post(COPILOT_URL).mock(
+        return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+    )
+    responses_route = respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json={"output": []})
+    )
+
+    await fallback_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini", thinking_effort="high")
+    await metadata_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini", thinking_effort="high")
+
+    chat_body = json.loads(chat_route.calls.last.request.content)
+    responses_body = json.loads(responses_route.calls.last.request.content)
+    assert chat_body["reasoning_effort"] == "high"
+    assert responses_body["reasoning"] == {"effort": "high"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_headers_include_auth_and_extra_headers_for_all_endpoint_families() -> None:
+    custom_config = ProviderConfig(
+        id="github-copilot",
+        name="GitHub Copilot",
+        adapter="github_copilot",
+        base_url="https://api.githubcopilot.com",
+        connections=COPILOT_CONFIG.connections,
+        defaults={"max_tokens": 4096},
+        extra_headers={"Editor-Version": "vBot/test"},
+    )
+    adapter = GitHubCopilotAdapter(
+        custom_config,
+        API_KEY,
+        model_metadata_lookup=_copilot_metadata_lookup,
+    )
+    chat_route = respx.post(COPILOT_URL).mock(
+        return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+    )
+    responses_route = respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json={"output": []})
+    )
+    messages_route = respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(200, json={"content": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="unknown-copilot-model")
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5-mini")
+    await adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4.6")
+
+    for route in (chat_route, responses_route, messages_route):
+        headers = route.calls.last.request.headers
+        assert headers["Authorization"] == f"Bearer {API_KEY}"
+        assert headers["Editor-Version"] == "vBot/test"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_responses_yields_normalized_deltas(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"Hi"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"status":"completed",'
+        '"usage":{"input_tokens":1,"output_tokens":2}}}\n\n'
+    )
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    chunks = []
+    async for chunk in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+        chunks.append(chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Hi"},
+        {"type": "usage", "input_tokens": 1, "output_tokens": 2},
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_messages_yields_normalized_deltas(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        'data: {"type":"content_block_start","index":0,'
+        '"content_block":{"type":"text","text":""}}\n\n'
+        'data: {"type":"content_block_delta","index":0,'
+        '"delta":{"type":"text_delta","text":"Hi"}}\n\n'
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+        '"usage":{"output_tokens":2}}\n\n'
+    )
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    chunks = []
+    async for chunk in metadata_copilot_adapter.stream(
+        SAMPLE_MESSAGES, model_id="claude-sonnet-4.6"
+    ):
+        chunks.append(chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Hi"},
+        {"type": "finish", "reason": "stop"},
+    ]

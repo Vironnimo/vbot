@@ -28,6 +28,7 @@ class ProviderAdapter(ABC):
     - ``{"type": "reasoning_delta", "text": " thinking"}``
     - ``{"type": "tool_call_delta", "id": "...", "name_delta": "...", "arguments_delta": "..."}``
     - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
+    - ``{"type": "usage", "input_tokens": 1, "output_tokens": 1}``
     - ``{"type": "finish", "reason": "stop" | "tool_calls"}``
 
     ``reasoning_meta`` is internal to the adapter/chat boundary and must
