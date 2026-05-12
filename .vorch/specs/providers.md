@@ -101,6 +101,26 @@ Source: `core/providers/providers.py`.
 
 `TokenStore` writes atomically through `<data_dir>/.tmp/`, loads missing tokens as `None`, deletes tokens idempotently, and considers a token usable when it exists and is either unexpired or has a refresh token. Token values must never be logged.
 
+### OAuth Device Flow
+
+`core/providers/auth_flow.py` owns server-side OAuth Device Flow polling. `DeviceFlowEngine.start_device_flow()` requests `{ device_code, user_code, verification_uri, expires_in, interval }` from the provider; `_poll_for_token()` polls the configured token URL until success or terminal failure, persists the result through `TokenStore`, and calls an injected completion callback. Active polling tasks are process-local and keyed by `(provider_id, local_connection_id)`.
+
+For GitHub Copilot, the OAuth token is exchanged through `OAuthConfig.token_exchange_url`. The Token Store persists the Copilot API token as `access_token`, its expiry as `expires_at`, and the GitHub OAuth token in token `extra.github_oauth_token` so later refreshes can exchange it again. Device Flow logs provider/connection IDs and state only, never token values.
+
+### Token Getters
+
+`core/providers/token_getter.py` defines the async `TokenGetter` protocol used by adapters:
+
+```python
+class TokenGetter(Protocol):
+    async def __call__(self) -> str: ...
+```
+
+- `StaticTokenGetter` wraps static `api_key` credentials.
+- `OAuthTokenGetter` loads OAuth tokens from `TokenStore`, returns unexpired tokens, refreshes expiring Copilot tokens through `token_exchange_url` using `extra.github_oauth_token`, and raises `ProviderAuthError("OAuth token expired — please reconnect")` when no refresh path exists.
+
+`OAuthTokenGetter` serializes refresh work with an `asyncio.Lock` so concurrent provider requests do not perform duplicate refreshes for the same adapter instance.
+
 ## Adapter Hierarchy
 
 ```
@@ -289,7 +309,7 @@ model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Mode
 2. Validates that `connection_id` has the same provider prefix and maps to a known provider-local connection ID
 3. Resolves connection credentials through the central provider credential resolver — `api_key` credentials come from environment or data-dir `.env`; token-store backed `oauth` credentials come from `TokenStore`; missing credential → `ConfigError`
 4. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
-5. Instantiates adapter with `(provider_config, credential_value, connection.base_url)`; adapters use the provider base URL unless the connection overrides it
+5. Instantiates adapter with `(provider_config, token_getter, connection.base_url, connection.auth)`; adapters use the provider base URL unless the connection overrides it
 6. Returns wired `ProviderAdapter` instance
 
 `ProviderCredentialResolver` supports both provider-level and connection-level calls:
@@ -309,7 +329,7 @@ Source: `core/runtime/runtime.py`.
 
 - **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
-- **Credential resolution happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called. Process environment currently has precedence over the data-dir `.env` fallback snapshot for `api_key` credentials. Token-store backed OAuth credentials are read from `<data_dir>/oauth/`. If the credential is empty or missing, `ConfigError` is raised. Credentials are not stored on the `ProviderConfig`.
+- **Credential resolution for API keys happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called, then wraps it in `StaticTokenGetter`. Process environment currently has precedence over the data-dir `.env` fallback snapshot for `api_key` credentials. Token-store backed OAuth adapters receive `OAuthTokenGetter` and can refresh short-lived API tokens during requests. If the credential is empty or missing, `ConfigError`/`ProviderAuthError` is raised. Credentials are not stored on the `ProviderConfig`.
 
 - **`get_adapter()` requires a connection ID.** There is no runtime fallback to the first usable connection. The chat loop or RPC caller is responsible for selecting a connection before adapter creation.
 

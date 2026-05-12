@@ -142,7 +142,8 @@ def test_get_adapter_connection_base_url_override_uses_override(
     assert str(adapter._client.base_url) == "https://enterprise.example.com/v1/"  # type: ignore[attr-defined]
 
 
-def test_get_adapter_passes_selected_connection_auth_metadata(runtime: Runtime) -> None:
+@pytest.mark.asyncio
+async def test_get_adapter_passes_selected_connection_auth_metadata(runtime: Runtime) -> None:
     """Runtime passes the requested connection's auth metadata to the adapter."""
     # Arrange
     provider_config = ProviderConfig(
@@ -185,12 +186,13 @@ def test_get_adapter_passes_selected_connection_auth_metadata(runtime: Runtime) 
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
-    assert adapter._api_key == "service-token"  # type: ignore[attr-defined]
+    assert await adapter._token_getter() == "service-token"  # type: ignore[attr-defined]
     assert adapter._auth_config.header == "x-service-token"  # type: ignore[attr-defined]
     assert adapter._auth_config.prefix == "Token "  # type: ignore[attr-defined]
 
 
-def test_runtime_start_loads_data_dir_env_for_provider_auth(
+@pytest.mark.asyncio
+async def test_runtime_start_loads_data_dir_env_for_provider_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -212,10 +214,11 @@ def test_runtime_start_loads_data_dir_env_for_provider_auth(
     # Assert
     assert runtime.has_provider_credentials("openrouter") is True
     assert runtime.get_provider_credentials("openrouter") == "sk-or-from-data-dir"
-    assert adapter._api_key == "sk-or-from-data-dir"  # type: ignore[attr-defined]
+    assert await adapter._token_getter() == "sk-or-from-data-dir"  # type: ignore[attr-defined]
 
 
-def test_runtime_start_does_not_overwrite_existing_provider_environment(
+@pytest.mark.asyncio
+async def test_runtime_start_does_not_overwrite_existing_provider_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -236,7 +239,7 @@ def test_runtime_start_does_not_overwrite_existing_provider_environment(
 
     # Assert
     assert runtime.get_provider_credentials("openrouter") == "sk-or-from-process"
-    assert adapter._api_key == "sk-or-from-process"  # type: ignore[attr-defined]
+    assert await adapter._token_getter() == "sk-or-from-process"  # type: ignore[attr-defined]
 
 
 def test_runtime_start_does_not_mutate_process_environment_when_loading_credentials(

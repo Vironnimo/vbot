@@ -201,6 +201,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   the central provider credential path. Existing OAuth stubs with a
   `credential_key` and no OAuth metadata continue to resolve through
   environment or data-dir `.env` credentials.
+- **OAuth Device Flow is server-side.** Clients request a provider connection,
+  display the returned user code and verification URL, and wait for a WebSocket
+  event. Polling, token exchange, token refresh, and token persistence stay in
+  backend provider code; token values must never appear in logs or public event
+  payloads.
 - **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
   provider model files under `resources/models/` and may include `source` and
   `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional
