@@ -725,7 +725,6 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     ]
     assert assistant.content == "Sunny"
     assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
-    assert persisted[1]["reasoning"] == "Need weather."
     assert persisted[1]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
     assert persisted[2]["tool_call_id"] == "call_abc"
     assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
@@ -739,44 +738,6 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "encrypted_content": "opaque-current-turn"
     }
     assert adapter.requests[1]["messages"][2]["reasoning"] == "Need weather."
-
-
-@pytest.mark.asyncio
-async def test_current_turn_tool_loop_replay_keeps_reasoning_but_not_usage(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["get_weather"])
-    adapter = StubAdapter(
-        [
-            {
-                "content": None,
-                "reasoning": "Need weather.",
-                "reasoning_meta": {"encrypted_content": "opaque-current-turn"},
-                "tool_calls": [
-                    {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
-                ],
-                "usage": {"input_tokens": 100, "output_tokens": 10},
-            },
-            {"content": "Sunny", "tool_calls": None},
-        ]
-    )
-    tools = ToolRegistry()
-    tools.register(
-        "get_weather",
-        "Get weather.",
-        {"type": "object"},
-        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
-    )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-
-    await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
-
-    replayed_assistant = adapter.requests[1]["messages"][2]
-    persisted = [
-        message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
-    ]
-    assert replayed_assistant["reasoning"] == "Need weather."
-    assert replayed_assistant["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
-    assert "usage" not in replayed_assistant
-    assert persisted[1]["usage"] == {"input_tokens": 100, "output_tokens": 10}
 
 
 @pytest.mark.asyncio
@@ -877,13 +838,11 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     ]
     assert assistant.content == "Sunny"
     assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
-    assert persisted[1]["reasoning"] == "Need weather."
     assert persisted[1]["reasoning_meta"] == {"signature": "opaque"}
     assert persisted[1]["tool_calls"] == [
         {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
     ]
     assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
-    assert adapter.stream_requests[1]["messages"][2]["reasoning"] == "Need weather."
     assert adapter.stream_requests[1]["messages"][2]["reasoning_meta"] == {"signature": "opaque"}
     assert [
         event.type

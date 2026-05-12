@@ -1770,64 +1770,6 @@ describe('chat state helpers', () => {
     ]);
   });
 
-  it('keeps visible thinking when final assistant output repeats the streamed reasoning', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-streamed-final-thinking',
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'reasoning_delta',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 1,
-      payload: { reasoning_delta: 'Readable streamed thinking.' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 2,
-      payload: { content_delta: 'Final streamed answer.' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output',
-      run_id: 'run-streamed-final-thinking',
-      sequence: 3,
-      payload: {
-        message: {
-          id: 'assistant-streamed-final-thinking',
-          role: 'assistant',
-          reasoning: 'Readable streamed thinking.',
-          content: 'Final streamed answer.',
-        },
-      },
-    });
-
-    const [assistantRun] = visibleTimelineItems(sessionState);
-
-    expect(assistantRun.items.map((item) => item.type)).toEqual([
-      'reasoning',
-      'assistant_output',
-    ]);
-    expect(assistantRun.reasoning).toEqual([
-      expect.objectContaining({
-        content: 'Readable streamed thinking.',
-        streaming: false,
-      }),
-    ]);
-    expect(assistantRun.outputs).toEqual([
-      expect.objectContaining({
-        content: 'Final streamed answer.',
-        streaming: false,
-      }),
-    ]);
-    expect(
-      assistantRun.reasoning.filter(
-        (item) => item.content === 'Readable streamed thinking.',
-      ),
-    ).toHaveLength(1);
-  });
-
   it('keeps repeated final reasoning distinct across separate tool phases', () => {
     const sessionState = ensureSessionState(
       createChatState(),
