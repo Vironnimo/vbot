@@ -87,7 +87,7 @@ container; a Run is one active execution inside that session.
   called without an existing `session_id`, or create the named session if it
   does not yet exist. This describes current implementation behavior and should
   not be mistaken for the intended public/server product contract.
-- Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
+- Current-turn readable `reasoning` and opaque `reasoning_meta` must be preserved unchanged during tool-use loops. Same-turn replay still strips `usage`. Old `reasoning_meta` is not resent after completed turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
