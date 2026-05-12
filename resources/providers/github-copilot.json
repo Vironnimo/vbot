@@ -1,7 +1,7 @@
 {
   "id": "github-copilot",
   "name": "GitHub Copilot",
-  "adapter": "openai_compatible",
+  "adapter": "github_copilot",
   "base_url": "https://api.githubcopilot.com",
   "connections": [
     {
