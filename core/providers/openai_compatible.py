@@ -32,9 +32,11 @@ OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
 OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
+OPENAI_VISIBLE_REASONING_DETAIL_TYPES = {"reasoning.text", "reasoning.summary"}
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
 STREAM_USAGE_PROVIDER_IDS = {"openai", "openrouter"}
+COPILOT_REASONING_MODEL_PREFIX = "gpt-5"
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -99,11 +101,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Normalize an OpenAI-compatible response to canonical assistant fields."""
         message = _first_choice_message(response)
         content = message.get("content")
+        reasoning_meta = _extract_openai_reasoning_meta(message)
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
-            "reasoning": _extract_openai_reasoning(message),
-            "reasoning_meta": _extract_openai_reasoning_meta(message),
+            "reasoning": _extract_openai_reasoning(message, reasoning_meta=reasoning_meta),
+            "reasoning_meta": reasoning_meta,
             "tool_calls": _extract_openai_tool_calls(message),
         }
         usage = _extract_openai_usage(response)
@@ -131,6 +134,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
+        _apply_openai_token_limit(payload, self._config.id, model_id)
         return payload
 
     # ------------------------------------------------------------------
@@ -323,11 +327,11 @@ def _normalize_openai_message_delta(
     if isinstance(content, str) and content:
         normalized_deltas.append({"type": "content_delta", "text": content})
 
-    reasoning = _extract_openai_reasoning(delta)
+    reasoning_meta = _extract_openai_reasoning_meta(delta)
+    reasoning = _extract_openai_reasoning(delta, reasoning_meta=reasoning_meta)
     if reasoning:
         normalized_deltas.append({"type": "reasoning_delta", "text": reasoning})
 
-    reasoning_meta = _extract_openai_reasoning_meta(delta)
     if reasoning_meta:
         normalized_deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
 
@@ -475,6 +479,20 @@ def _apply_openai_reasoning(
         payload["reasoning_effort"] = thinking_effort
 
 
+def _apply_openai_token_limit(
+    payload: dict[str, Any],
+    provider_id: str,
+    model_id: str,
+) -> None:
+    if provider_id != "github-copilot":
+        return
+    if not model_id.startswith(COPILOT_REASONING_MODEL_PREFIX):
+        return
+    if "max_completion_tokens" in payload or "max_tokens" not in payload:
+        return
+    payload["max_completion_tokens"] = payload.pop("max_tokens")
+
+
 def _apply_openai_stream_options(payload: dict[str, Any], provider_id: str) -> None:
     if provider_id not in STREAM_USAGE_PROVIDER_IDS:
         return
@@ -523,12 +541,56 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:
+def _extract_openai_reasoning(
+    message: dict[str, Any],
+    *,
+    reasoning_meta: dict[str, Any] | None = None,
+) -> str | None:
     for key in OPENAI_REASONING_KEYS:
         value = message.get(key)
-        if isinstance(value, str):
+        if isinstance(value, str) and value:
             return value
-    return None
+    if reasoning_meta is None:
+        reasoning_meta = _extract_openai_reasoning_meta(message)
+    return _extract_visible_reasoning_from_meta(reasoning_meta)
+
+
+def _extract_visible_reasoning_from_meta(reasoning_meta: dict[str, Any] | None) -> str | None:
+    if not isinstance(reasoning_meta, dict):
+        return None
+    reasoning_details = reasoning_meta.get("reasoning_details")
+    if not isinstance(reasoning_details, list):
+        return None
+    visible_parts = [
+        text
+        for item in reasoning_details
+        for text in _extract_visible_reasoning_texts(item)
+        if text
+    ]
+    if not visible_parts:
+        return None
+    return "".join(visible_parts)
+
+
+def _extract_visible_reasoning_texts(detail: Any) -> list[str]:
+    if not isinstance(detail, dict):
+        return []
+    detail_type = detail.get("type")
+    if detail_type not in OPENAI_VISIBLE_REASONING_DETAIL_TYPES:
+        return []
+    if detail_type == "reasoning.text":
+        text = detail.get("text")
+        return [text] if isinstance(text, str) else []
+    summary = detail.get("summary")
+    if not isinstance(summary, list):
+        return []
+    return [
+        text
+        for summary_item in summary
+        if isinstance(summary_item, dict)
+        for text in [summary_item.get("text")]
+        if isinstance(text, str)
+    ]
 
 
 def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | None:
