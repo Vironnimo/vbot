@@ -97,6 +97,27 @@ OPENROUTER_CONFIG = ProviderConfig(
     extra_headers={"HTTP-Referer": "https://vbot.app", "X-Title": "vBot"},
 )
 
+COPILOT_CONFIG = ProviderConfig(
+    id="github-copilot",
+    name="GitHub Copilot",
+    adapter="openai_compatible",
+    base_url="https://api.githubcopilot.com",
+    connections=[
+        ConnectionConfig(
+            id="oauth",
+            type="oauth",
+            label="Sign in with GitHub",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="GITHUB_COPILOT_TOKEN",
+            ),
+        )
+    ],
+    defaults={"max_tokens": 4096},
+    extra_headers={"Copilot-Integration-Id": "vscode-chat", "Editor-Version": "vBot/0.1.0"},
+)
+
 NO_DEFAULTS_CONFIG = ProviderConfig(
     id="minimal",
     name="Minimal Provider",
@@ -116,6 +137,7 @@ API_KEY = "test-api-key-12345"
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+COPILOT_URL = "https://api.githubcopilot.com/chat/completions"
 MINIMAL_URL = "https://api.minimal.example/v1/chat/completions"
 
 SUCCESS_RESPONSE = {
@@ -198,6 +220,12 @@ def openai_adapter():
 def openrouter_adapter():
     """OpenAI-compatible adapter with OpenRouter config (extra headers)."""
     return OpenAICompatibleAdapter(OPENROUTER_CONFIG, API_KEY)
+
+
+@pytest.fixture()
+def copilot_adapter():
+    """OpenAI-compatible adapter with GitHub Copilot config."""
+    return OpenAICompatibleAdapter(COPILOT_CONFIG, API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +384,40 @@ class TestSendRequestFormat:
         assert request_body["reasoning"] == {"effort": "xhigh"}
         assert request_body["include_reasoning"] is True
         assert "reasoning_effort" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_copilot_reasoning_uses_openai_wire_format_and_completion_tokens(
+        self,
+        copilot_adapter,
+    ):
+        """Copilot GPT-5 models use OpenAI reasoning_effort and max_completion_tokens."""
+        route = respx.post(COPILOT_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await copilot_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.4", thinking_effort="high")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == "high"
+        assert request_body["max_completion_tokens"] == 4096
+        assert "max_tokens" not in request_body
+        assert "reasoning" not in request_body
+        assert "include_reasoning" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_copilot_non_reasoning_models_keep_max_tokens(self, copilot_adapter):
+        """Copilot non-GPT-5 chat models keep the legacy max_tokens field."""
+        route = respx.post(COPILOT_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await copilot_adapter.send(SAMPLE_MESSAGES, model_id="gpt-4o")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["max_tokens"] == 4096
+        assert "max_completion_tokens" not in request_body
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +608,34 @@ class TestSendSuccess:
 
         assert normalized["content"] == "Done"
         assert normalized["reasoning"] == "Visible reasoning"
+        assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
+    def test_normalize_response_extracts_visible_reasoning_from_reasoning_details(
+        self,
+        copilot_adapter,
+    ):
+        """Readable reasoning_details text becomes visible reasoning while metadata stays opaque."""
+        reasoning_details = [
+            {"type": "reasoning.text", "text": "plan-1 "},
+            {"type": "reasoning.summary", "summary": [{"text": "plan-2"}]},
+            {"type": "reasoning.encrypted", "signature": "opaque"},
+        ]
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_details": reasoning_details,
+                    }
+                }
+            ]
+        }
+
+        normalized = copilot_adapter.normalize_response(response)
+
+        assert normalized["content"] == "Done"
+        assert normalized["reasoning"] == "plan-1 plan-2"
         assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
 
 
@@ -1042,6 +1132,38 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_copilot_stream_extracts_visible_reasoning_from_reasoning_details(
+        self,
+        copilot_adapter,
+    ):
+        """Copilot reasoning_details stream readable text while preserving full metadata."""
+        reasoning_details = [
+            {"type": "reasoning.text", "text": "plan-1 "},
+            {"type": "reasoning.summary", "summary": [{"text": "plan-2"}]},
+            {"type": "reasoning.encrypted", "signature": "opaque"},
+        ]
+        chunk = {
+            "id": "chatcmpl-1",
+            "choices": [{"delta": {"reasoning_details": reasoning_details}}],
+        }
+        sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(COPILOT_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        chunks = []
+        async for chunk in copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.4"):
+            chunks.append(chunk)
+
+        assert chunks == [
+            {"type": "reasoning_delta", "text": "plan-1 plan-2"},
+            {"type": "reasoning_meta", "reasoning_meta": {"reasoning_details": reasoning_details}},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_yields_index_keyed_tool_call_deltas_with_stable_ids(
         self,
         openai_adapter,
@@ -1249,6 +1371,33 @@ class TestStreamSSE:
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["stream"] is True
         assert request_body["stream_options"] == {"include_usage": True}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_copilot_stream_uses_completion_tokens_for_gpt5_models(self, copilot_adapter):
+        """Copilot GPT-5 stream payload uses max_completion_tokens and OpenAI effort."""
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(COPILOT_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in copilot_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.4",
+            thinking_effort="medium",
+        ):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["stream"] is True
+        assert request_body["reasoning_effort"] == "medium"
+        assert request_body["max_completion_tokens"] == 4096
+        assert "max_tokens" not in request_body
+        assert "stream_options" not in request_body
 
     @respx.mock
     @pytest.mark.asyncio
