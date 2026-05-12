@@ -119,6 +119,22 @@ class DeviceFlowEngine:
                 error,
             )
             await self._notify_complete(on_complete, success=False)
+        except ProviderError as error:
+            _LOGGER.warning(
+                "OAuth device flow failed for provider '%s' connection '%s': %s",
+                provider_id,
+                local_connection_id,
+                error.__class__.__name__,
+            )
+            await self._notify_complete(on_complete, success=False)
+        except Exception:
+            _LOGGER.error(
+                "OAuth device flow crashed for provider '%s' connection '%s'",
+                provider_id,
+                local_connection_id,
+            )
+            await self._notify_complete(on_complete, success=False)
+            raise
         else:
             await self._notify_complete(on_complete, success=True)
         finally:

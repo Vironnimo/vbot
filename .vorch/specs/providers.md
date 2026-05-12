@@ -110,6 +110,12 @@ Source: `core/providers/providers.py`.
 
 `core/providers/auth_flow.py` owns server-side OAuth Device Flow polling. `DeviceFlowEngine.start_device_flow()` requests `{ device_code, user_code, verification_uri, expires_in, interval }` from the provider; `_poll_for_token()` polls the configured token URL until success, terminal failure, or local session expiry, persists the result through `TokenStore`, and calls an injected completion callback. Active polling tasks are process-local and keyed by `(provider_id, local_connection_id)`.
 
+Polling completion must notify the caller with `success=False` for expected
+provider-side failures that happen after the user authorizes the device code,
+including Copilot token-exchange HTTP/auth failures. Unexpected crashes notify
+failure first and then re-raise so the UI does not wait forever while logs still
+surface the bug.
+
 For GitHub Copilot, the OAuth token is exchanged through `OAuthConfig.token_exchange_url`. The Token Store persists the Copilot API token as `access_token`, its expiry as `expires_at`, and the GitHub OAuth token in token `extra.github_oauth_token` so later refreshes can exchange it again. Device Flow logs provider/connection IDs and state only, never token values.
 
 ### Token Getters
