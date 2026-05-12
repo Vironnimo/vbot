@@ -232,7 +232,7 @@ Errors are classified by HTTP status code (not by parsing the body):
 
 **Reasoning:** vBot `thinking_effort` is adapter-translated. OpenAI and GitHub Copilot GPT-5-family reasoning models receive `reasoning_effort: "low" | "medium" | "high"`. OpenRouter receives `reasoning: {"effort": ...}` and `include_reasoning: true` for supported non-`none` values. GitHub Copilot GPT-5-family reasoning requests also use `max_completion_tokens` instead of `max_tokens`; non-reasoning Copilot chat models keep the normal `max_tokens` field.
 
-**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, readable text embedded inside `reasoning_details`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields. Readable reasoning text is promoted to visible `reasoning`; full raw provider metadata remains in `reasoning_meta` for round-tripping.
+**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, readable text embedded inside `reasoning_details`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields. Empty-string `reasoning` / `reasoning_content` values do not block fallback extraction from readable `reasoning_details`. Readable reasoning text is promoted to visible `reasoning`; full raw provider metadata remains in `reasoning_meta` for round-tripping.
 
 ### AnthropicAdapter
 

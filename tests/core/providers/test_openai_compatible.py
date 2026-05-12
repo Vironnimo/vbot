@@ -638,6 +638,35 @@ class TestSendSuccess:
         assert normalized["reasoning"] == "plan-1 plan-2"
         assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
 
+    def test_normalize_response_falls_back_to_reasoning_details_when_reasoning_string_is_empty(
+        self,
+        copilot_adapter,
+    ):
+        """Empty top-level reasoning strings do not suppress visible reasoning_details text."""
+        reasoning_details = [
+            {"type": "reasoning.text", "text": "plan-1 "},
+            {"type": "reasoning.summary", "summary": [{"text": "plan-2"}]},
+            {"type": "reasoning.encrypted", "signature": "opaque"},
+        ]
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning": "",
+                        "reasoning_details": reasoning_details,
+                    }
+                }
+            ]
+        }
+
+        normalized = copilot_adapter.normalize_response(response)
+
+        assert normalized["content"] == "Done"
+        assert normalized["reasoning"] == "plan-1 plan-2"
+        assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
 
 # ---------------------------------------------------------------------------
 # normalize_response() — usage extraction
@@ -1145,6 +1174,38 @@ class TestStreamSSE:
         chunk = {
             "id": "chatcmpl-1",
             "choices": [{"delta": {"reasoning_details": reasoning_details}}],
+        }
+        sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+        respx.post(COPILOT_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        chunks = []
+        async for chunk in copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.4"):
+            chunks.append(chunk)
+
+        assert chunks == [
+            {"type": "reasoning_delta", "text": "plan-1 plan-2"},
+            {"type": "reasoning_meta", "reasoning_meta": {"reasoning_details": reasoning_details}},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_copilot_stream_falls_back_to_reasoning_details_when_reasoning_string_is_empty(
+        self,
+        copilot_adapter,
+    ):
+        """Empty streamed reasoning strings do not suppress readable reasoning_details text."""
+        reasoning_details = [
+            {"type": "reasoning.text", "text": "plan-1 "},
+            {"type": "reasoning.summary", "summary": [{"text": "plan-2"}]},
+            {"type": "reasoning.encrypted", "signature": "opaque"},
+        ]
+        chunk = {
+            "id": "chatcmpl-1",
+            "choices": [{"delta": {"reasoning": "", "reasoning_details": reasoning_details}}],
         }
         sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
         respx.post(COPILOT_URL).mock(
