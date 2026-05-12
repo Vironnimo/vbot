@@ -25,8 +25,9 @@ from core.providers.github_copilot_policy import (
     copilot_model_policy,
 )
 from core.providers.github_copilot_responses import (
+    ResponsesStreamState,
     build_responses_payload,
-    iter_responses_sse_deltas,
+    iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
 from core.providers.openai_compatible import (
@@ -237,17 +238,18 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
     async def _stream_responses(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_stream(RESPONSES_ENDPOINT, payload)
+        state = ResponsesStreamState()
         event_lines: list[str] = []
         try:
             async for line in response.aiter_lines():
                 if line:
                     event_lines.append(line)
                     continue
-                for delta in iter_responses_sse_deltas(event_lines):
+                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
                     yield delta
                 event_lines = []
             if event_lines:
-                for delta in iter_responses_sse_deltas(event_lines):
+                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
                     yield delta
         finally:
             await response.aclose()

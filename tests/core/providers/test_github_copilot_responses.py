@@ -88,6 +88,29 @@ def test_build_payload_includes_allowed_reasoning_encrypted_content_request() ->
     assert payload["include"] == ["reasoning.encrypted_content"]
 
 
+def test_build_payload_omits_caller_include_cache_controls_and_unknown_extras() -> None:
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        include=["unsupported.trace", "reasoning.encrypted_content"],
+        cache_control={"type": "ephemeral"},
+        prompt_cache_key="cache-key",
+        prompt_cache_retention="24h",
+        unknown_extra="do-not-forward",
+        temperature=0.2,
+        parallel_tool_calls=True,
+    )
+
+    assert "include" not in payload
+    assert "cache_control" not in payload
+    assert "prompt_cache_key" not in payload
+    assert "prompt_cache_retention" not in payload
+    assert "unknown_extra" not in payload
+    assert payload["temperature"] == 0.2
+    assert payload["parallel_tool_calls"] is True
+
+
 def test_build_payload_omits_tools_when_policy_disallows_tools() -> None:
     payload = build_responses_payload(
         [{"role": "user", "content": "Hello"}],
