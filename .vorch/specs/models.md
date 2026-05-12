@@ -186,10 +186,18 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   invalidates the registry cache. The registry remains the read path and does not
   know about provider APIs.
 
-- **Provider discovery schemas differ.** OpenRouter uses a strict normalizer that
-  expects OpenRouter fields such as an object-valued `architecture`. GitHub
-  Copilot uses tolerant OpenAI-compatible discovery: entries may omit
-  `architecture` or provide it as a non-object, so Copilot discovery reads
-  top-level model fields and only inspects `architecture` when it is an object.
+- **Provider discovery schemas differ and are owned by provider adapters.**
+  `core/models/discovery.py` dispatches by provider `adapter` string to
+  `adapter_class.normalize_catalog_entry(raw, defaults)`. OpenRouter catalog
+  normalization lives in `OpenRouterAdapter`; GitHub Copilot catalog
+  normalization lives in `GitHubCopilotAdapter`. Discovery should not branch on
+  provider IDs or contain provider-specific normalizer functions.
+- **GitHub Copilot `/models` entries store capability facts under
+  `capabilities`.** Context and output limits come from
+  `capabilities.limits.max_context_window_tokens` and
+  `capabilities.limits.max_output_tokens`. Vision/tools/structured output and
+  reasoning indicators come from `capabilities.supports`. The reported value is
+  authoritative even when it equals an old fallback value, such as `gpt-4o`
+  reporting `max_output_tokens: 4096`.
 
 - **Immutability.** `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen dataclasses. Once loaded, model data cannot be modified.

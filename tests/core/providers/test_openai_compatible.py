@@ -342,20 +342,16 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_openrouter_reasoning_uses_openrouter_wire_format(self, openrouter_adapter):
-        """OpenRouter gets reasoning object and include_reasoning instead of OpenAI string."""
-        route = respx.post(OPENROUTER_URL).mock(
-            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
-        )
+    async def test_send_ignores_non_openai_reasoning_effort(self, openai_adapter):
+        """Base OpenAI-compatible reasoning only emits OpenAI-supported efforts."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
-        await openrouter_adapter.send(
-            SAMPLE_MESSAGES, model_id="openai/gpt-5.2", thinking_effort="xhigh"
-        )
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="xhigh")
 
         request_body = json.loads(route.calls.last.request.content)
-        assert request_body["reasoning"] == {"effort": "xhigh"}
-        assert request_body["include_reasoning"] is True
         assert "reasoning_effort" not in request_body
+        assert "reasoning" not in request_body
+        assert "include_reasoning" not in request_body
 
 
 # ---------------------------------------------------------------------------
@@ -1229,6 +1225,29 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_merges_usage_request_with_existing_stream_options(self, openai_adapter):
+        """stream() preserves caller stream_options while requesting usage generically."""
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in openai_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.2",
+            stream_options={"foo": "bar", "include_usage": False},
+        ):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["stream_options"] == {"foo": "bar", "include_usage": True}
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_openrouter_stream_requests_usage_in_payload(self, openrouter_adapter):
         """OpenRouter stream payload explicitly requests usage reporting."""
         # Arrange
@@ -1571,3 +1590,40 @@ class TestLifecycle:
         """The context manager yields the adapter instance."""
         async with OpenAICompatibleAdapter(OPENAI_CONFIG, API_KEY) as adapter:
             assert isinstance(adapter, OpenAICompatibleAdapter)
+
+
+class TestNormalizeCatalogEntry:
+    """Verify generic OpenAI-compatible catalog normalization."""
+
+    def test_standard_fields_map_to_model(self):
+        raw_model = {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1",
+            "context_window": 1047576,
+            "max_output_tokens": 32768,
+            "supported_parameters": ["response_format", "reasoning_effort"],
+            "input_modalities": ["text", "image"],
+        }
+
+        model = OpenAICompatibleAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
+
+        assert model.model_id == "gpt-4.1"
+        assert model.name == "GPT-4.1"
+        assert model.context_window == 1047576
+        assert model.max_output_tokens == 32768
+        assert model.capabilities.vision is True
+        assert model.capabilities.tools is True
+        assert model.capabilities.json_mode is True
+        assert model.capabilities.reasoning.supported is True
+
+    def test_missing_optional_fields_use_defaults(self):
+        raw_model = {"id": "minimal-model"}
+
+        model = OpenAICompatibleAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
+
+        assert model.name == "minimal-model"
+        assert model.context_window == 0
+        assert model.max_output_tokens == 8192
+        assert model.capabilities.tools is True
+        assert model.capabilities.json_mode is False
+        assert model.capabilities.reasoning.supported is False

@@ -9,7 +9,9 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     AuthConfig,
     ConnectionConfig,
@@ -21,7 +23,9 @@ __all__ = [
     "AnthropicAdapter",
     "AuthConfig",
     "ConnectionConfig",
+    "GitHubCopilotAdapter",
     "OpenAICompatibleAdapter",
+    "OpenRouterAdapter",
     "ProviderCredentialResolver",
     "ProviderAdapter",
     "ProviderAuthError",

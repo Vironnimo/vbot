@@ -16,22 +16,14 @@ from typing import Any, Protocol
 
 import httpx
 
-from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.models import Model, ModelRegistry
+from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.utils.errors import VBotError
 
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
-DEFAULT_CONTEXT_WINDOW = 0
 OVERRIDE_FILE_SUFFIX = ".overrides.json"
-CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
-MAX_OUTPUT_TOKEN_KEYS = (
-    "max_output_tokens",
-    "max_completion_tokens",
-    "maxOutputTokens",
-    "maxCompletionTokens",
-)
-JSON_MODE_PARAMETER_NAMES = {"response_format", "structured_outputs", "json_mode"}
-REASONING_PARAMETER_NAMES = {"reasoning", "include_reasoning", "reasoning_effort"}
 
 
 class ModelDiscoveryError(VBotError):
@@ -66,82 +58,6 @@ class PassthroughModelFilter:
         return True
 
 
-def normalize_openrouter(
-    raw_model: Mapping[str, Any], provider_defaults: Mapping[str, Any] | None
-) -> Model:
-    """Normalize one OpenRouter ``/models`` entry into a vBot ``Model``."""
-
-    architecture = _read_mapping(raw_model, "architecture")
-    top_provider = _read_mapping(raw_model, "top_provider")
-    supported_parameters = _read_string_list(raw_model, "supported_parameters")
-    input_modalities = _read_string_list(architecture, "input_modalities")
-
-    max_completion_tokens = top_provider.get("max_completion_tokens")
-    if max_completion_tokens is None:
-        max_completion_tokens = _provider_default_max_tokens(provider_defaults)
-
-    return Model(
-        model_id=_read_string(raw_model, "id"),
-        name=_read_string(raw_model, "name"),
-        capabilities=Capabilities(
-            vision="image" in input_modalities,
-            tools="tools" in supported_parameters,
-            json_mode=(
-                "response_format" in supported_parameters
-                or "structured_outputs" in supported_parameters
-            ),
-            reasoning=ReasoningCapabilities(
-                supported=(
-                    "reasoning" in supported_parameters
-                    or "include_reasoning" in supported_parameters
-                ),
-            ),
-        ),
-        context_window=_read_int(raw_model, "context_length"),
-        max_output_tokens=int(max_completion_tokens),
-    )
-
-
-def normalize_openai_compatible_tolerant(
-    raw_model: Mapping[str, Any], provider_defaults: Mapping[str, Any] | None
-) -> Model:
-    """Normalize a tolerant OpenAI-compatible ``/models`` entry into a vBot ``Model``."""
-
-    architecture = _read_optional_mapping(raw_model, "architecture")
-    top_provider = _read_optional_mapping(raw_model, "top_provider")
-    supported_parameters = _read_optional_string_set(raw_model, "supported_parameters")
-
-    model_id = _read_non_empty_string(raw_model, "id")
-    name = _read_optional_non_empty_string(raw_model, "name") or model_id
-
-    return Model(
-        model_id=model_id,
-        name=name,
-        capabilities=Capabilities(
-            vision=_has_image_modality(raw_model, architecture),
-            tools=_supports_tools_by_default(raw_model, top_provider, architecture),
-            json_mode=_supports_json_mode(
-                raw_model, top_provider, architecture, supported_parameters
-            ),
-            reasoning=ReasoningCapabilities(
-                supported=_supports_reasoning(
-                    raw_model,
-                    top_provider,
-                    architecture,
-                    supported_parameters,
-                ),
-            ),
-        ),
-        context_window=_read_first_optional_int(raw_model, CONTEXT_WINDOW_KEYS)
-        or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS)
-        or DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens=_read_first_optional_int(top_provider, MAX_OUTPUT_TOKEN_KEYS)
-        or _read_first_optional_int(raw_model, MAX_OUTPUT_TOKEN_KEYS)
-        or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS)
-        or _provider_default_max_tokens(provider_defaults),
-    )
-
-
 async def refresh_models(
     provider_config: ProviderConfig,
     credential_value: str,
@@ -161,11 +77,7 @@ async def refresh_models(
     fetched_at = datetime.now(UTC).isoformat()
     url = _join_url(provider_config.base_url, provider_config.models_endpoint)
     try:
-        normalizer = _normalizer_for_provider(provider_config)
-        if normalizer is None:
-            raise ValueError(
-                f"No model normalizer registered for adapter '{provider_config.adapter}'"
-            )
+        adapter_class = _adapter_class_for_discovery(provider_config.adapter)
 
         raw_models = await _fetch_raw_models(
             url,
@@ -178,7 +90,7 @@ async def refresh_models(
         for raw_model in raw_models:
             if not raw_filter.accepts(raw_model):
                 continue
-            model = normalizer(raw_model, provider_config.defaults)
+            model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
 
@@ -317,157 +229,11 @@ def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
         raise ValueError("Override-only model id must not be empty")
 
 
-def _provider_default_max_tokens(provider_defaults: Mapping[str, Any] | None) -> int:
-    if provider_defaults is None:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    max_tokens = provider_defaults.get("max_tokens")
-    if max_tokens is None:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    return int(max_tokens)
-
-
-def _normalizer_for_provider(provider_config: ProviderConfig):
-    if provider_config.id == "github-copilot":
-        return normalize_openai_compatible_tolerant
-    return _NORMALIZER_MAP.get(provider_config.adapter)
-
-
-def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    value = data.get(key)
-    if isinstance(value, dict):
-        return value
-    return {}
-
-
-def _read_non_empty_string(data: Mapping[str, Any], key: str) -> str:
-    value = _read_string(data, key)
-    if not value:
-        raise ValueError(f"Expected '{key}' to be a non-empty string")
-    return value
-
-
-def _read_optional_non_empty_string(data: Mapping[str, Any], key: str) -> str | None:
-    value = data.get(key)
-    if isinstance(value, str) and value:
-        return value
-    return None
-
-
-def _read_optional_string_set(data: Mapping[str, Any], key: str) -> set[str]:
-    value = data.get(key)
-    if not isinstance(value, list):
-        return set()
-    return {item for item in value if isinstance(item, str)}
-
-
-def _read_first_optional_int(data: Mapping[str, Any], keys: tuple[str, ...]) -> int | None:
-    for key in keys:
-        value = data.get(key)
-        parsed_value = _parse_optional_int(value)
-        if parsed_value is not None:
-            return parsed_value
-    return None
-
-
-def _parse_optional_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdecimal():
-        return int(value)
-    return None
-
-
-def _has_image_modality(raw_model: Mapping[str, Any], architecture: Mapping[str, Any]) -> bool:
-    return _modalities_include_image(raw_model) or _modalities_include_image(architecture)
-
-
-def _modalities_include_image(data: Mapping[str, Any]) -> bool:
-    for key in ("input_modalities", "inputModalities", "modalities"):
-        value = data.get(key)
-        if isinstance(value, list) and any(_modality_is_image(item) for item in value):
-            return True
-    return False
-
-
-def _modality_is_image(value: Any) -> bool:
-    if isinstance(value, str):
-        return "image" in value.lower()
-    if isinstance(value, dict):
-        return any(_modality_is_image(item) for item in value.values())
-    return False
-
-
-def _supports_tools_by_default(*metadata_sources: Mapping[str, Any]) -> bool:
-    explicit_value = _read_first_optional_bool(
-        metadata_sources,
-        ("supports_tools", "tools", "tool_calls", "function_calling"),
-    )
-    return explicit_value is not False
-
-
-def _supports_json_mode(
-    raw_model: Mapping[str, Any],
-    top_provider: Mapping[str, Any],
-    architecture: Mapping[str, Any],
-    supported_parameters: set[str],
-) -> bool:
-    if supported_parameters & JSON_MODE_PARAMETER_NAMES:
-        return True
-    explicit_value = _read_first_optional_bool(
-        (raw_model, top_provider, architecture),
-        (
-            "supports_json_mode",
-            "json_mode",
-            "supports_structured_outputs",
-            "structured_outputs",
-        ),
-    )
-    return explicit_value is True
-
-
-def _supports_reasoning(
-    raw_model: Mapping[str, Any],
-    top_provider: Mapping[str, Any],
-    architecture: Mapping[str, Any],
-    supported_parameters: set[str],
-) -> bool:
-    if supported_parameters & REASONING_PARAMETER_NAMES:
-        return True
-    if _read_reasoning_supported(raw_model) or _read_reasoning_supported(architecture):
-        return True
-    explicit_value = _read_first_optional_bool(
-        (raw_model, top_provider, architecture),
-        ("supports_reasoning", "reasoning_supported"),
-    )
-    if explicit_value is True:
-        return True
-    return _has_non_empty_list(raw_model, "reasoning_efforts") or _has_non_empty_list(
-        raw_model,
-        "reasoningEfforts",
-    )
-
-
-def _read_reasoning_supported(data: Mapping[str, Any]) -> bool:
-    reasoning = data.get("reasoning")
-    return isinstance(reasoning, dict) and reasoning.get("supported") is True
-
-
-def _read_first_optional_bool(
-    metadata_sources: tuple[Mapping[str, Any], ...], keys: tuple[str, ...]
-) -> bool | None:
-    for source in metadata_sources:
-        for key in keys:
-            value = source.get(key)
-            if isinstance(value, bool):
-                return value
-    return None
-
-
-def _has_non_empty_list(data: Mapping[str, Any], key: str) -> bool:
-    value = data.get(key)
-    return isinstance(value, list) and len(value) > 0
+def _adapter_class_for_discovery(adapter: str):
+    adapter_class = _DISCOVERY_ADAPTER_MAP.get(adapter)
+    if adapter_class is None:
+        raise ValueError(f"No model normalizer registered for adapter '{adapter}'")
+    return adapter_class
 
 
 def _read_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
@@ -481,13 +247,6 @@ def _read_string(data: Mapping[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str):
         raise ValueError(f"Expected '{key}' to be a string")
-    return value
-
-
-def _read_string_list(data: Mapping[str, Any], key: str) -> list[str]:
-    value = data.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"Expected '{key}' to be a list of strings")
     return value
 
 
@@ -505,6 +264,8 @@ def _read_bool(data: Mapping[str, Any], key: str) -> bool:
     return value
 
 
-_NORMALIZER_MAP = {
-    "openai_compatible": normalize_openrouter,
+_DISCOVERY_ADAPTER_MAP = {
+    "openai_compatible": OpenAICompatibleAdapter,
+    "openrouter": OpenRouterAdapter,
+    "github_copilot": GitHubCopilotAdapter,
 }

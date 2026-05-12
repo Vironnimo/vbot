@@ -1,7 +1,7 @@
 {
   "id": "openrouter",
   "name": "OpenRouter",
-  "adapter": "openai_compatible",
+  "adapter": "openrouter",
   "base_url": "https://openrouter.ai/api/v1",
   "connections": [
     {
