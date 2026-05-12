@@ -327,9 +327,8 @@ def _provider_default_max_tokens(provider_defaults: Mapping[str, Any] | None) ->
 
 
 def _normalizer_for_provider(provider_config: ProviderConfig):
-    if provider_config.id == "github-copilot":
-        return normalize_openai_compatible_tolerant
-    return _NORMALIZER_MAP.get(provider_config.adapter)
+    discovery_strategy = provider_config.model_discovery or provider_config.adapter
+    return _NORMALIZER_MAP.get(discovery_strategy)
 
 
 def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
@@ -506,5 +505,6 @@ def _read_bool(data: Mapping[str, Any], key: str) -> bool:
 
 
 _NORMALIZER_MAP = {
-    "openai_compatible": normalize_openrouter,
+    "openai_compatible": normalize_openai_compatible_tolerant,
+    "openrouter": normalize_openrouter,
 }

@@ -23,6 +23,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
+GENERIC_OPENAI_MODELS_URL = "https://generic.example/v1/models"
 API_KEY = "test-openrouter-key"
 
 
@@ -55,6 +56,7 @@ def openrouter_config() -> ProviderConfig:
         defaults={"max_tokens": 8192},
         extra_headers={"X-Title": "vBot"},
         models_endpoint="/models",
+        model_discovery="openrouter",
     )
 
 
@@ -79,6 +81,32 @@ def github_copilot_config() -> ProviderConfig:
         ],
         defaults={"max_tokens": 8192},
         extra_headers={"Copilot-Integration-Id": "vbot"},
+        models_endpoint="/models",
+        model_discovery="openai_compatible",
+    )
+
+
+@pytest.fixture()
+def generic_openai_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="generic-openai",
+        name="Generic OpenAI-Compatible",
+        adapter="openai_compatible",
+        base_url="https://generic.example/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="GENERIC_OPENAI_API_KEY",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
+        extra_headers={"X-Test": "generic"},
         models_endpoint="/models",
     )
 
@@ -436,6 +464,7 @@ class TestRefreshModels:
             defaults=openrouter_config.defaults,
             extra_headers=openrouter_config.extra_headers,
             models_endpoint=openrouter_config.models_endpoint,
+            model_discovery=openrouter_config.model_discovery,
         )
         route = respx.get(OPENROUTER_MODELS_URL).mock(
             return_value=httpx.Response(
@@ -497,6 +526,74 @@ class TestRefreshModels:
         assert model_with_non_object_architecture.max_output_tokens == 64000
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_defaults_discovery_strategy_from_adapter(
+        self,
+        tmp_path: Path,
+        generic_openai_config: ProviderConfig,
+    ):
+        route = respx.get(GENERIC_OPENAI_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "gpt-4.1-mini",
+                            "context_window": 128000,
+                            "max_output_tokens": 16000,
+                        }
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(generic_openai_config, API_KEY, tmp_path / "resources")
+
+        registry = ModelRegistry.load(tmp_path / "resources")
+        model = registry.get("generic-openai", "gpt-4.1-mini")
+        assert result["provider_id"] == "generic-openai"
+        assert result["model_count"] == 1
+        assert model.name == "gpt-4.1-mini"
+        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+        assert route.calls.last.request.headers["X-Test"] == "generic"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_uses_explicit_openrouter_discovery_strategy(
+        self,
+        tmp_path: Path,
+        generic_openai_config: ProviderConfig,
+    ):
+        provider_config = ProviderConfig(
+            id=generic_openai_config.id,
+            name=generic_openai_config.name,
+            adapter=generic_openai_config.adapter,
+            base_url=generic_openai_config.base_url,
+            connections=generic_openai_config.connections,
+            defaults=generic_openai_config.defaults,
+            extra_headers=generic_openai_config.extra_headers,
+            models_endpoint=generic_openai_config.models_endpoint,
+            model_discovery="openrouter",
+        )
+        respx.get(GENERIC_OPENAI_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "gpt-4.1-mini",
+                            "context_window": 128000,
+                            "max_output_tokens": 16000,
+                        }
+                    ]
+                },
+            )
+        )
+
+        with pytest.raises(ModelDiscoveryError, match="Expected 'architecture' to be an object"):
+            await refresh_models(provider_config, API_KEY, tmp_path / "resources")
 
     @respx.mock
     @pytest.mark.asyncio

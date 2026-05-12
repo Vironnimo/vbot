@@ -22,6 +22,7 @@
       }
     }
   ],
+  "model_discovery": "openai_compatible",
   "extra_headers": {
     "Copilot-Integration-Id": "vscode-chat",
     "Editor-Version": "vBot/0.1.0"
