@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-08 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object.
+Last updated: 2026-05-12 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -13,7 +13,20 @@ Provider configuration, registry, and adapters. Translates vBot requests into pr
 class AuthConfig:
     header: str       # HTTP header name for API key (e.g. "Authorization", "x-api-key")
     prefix: str       # Value prefix prepended to the key (e.g. "Bearer ", "" for Anthropic)
-    credential_key: str  # Credential identifier used to resolve provider credentials
+    credential_key: str = ""  # Credential identifier used to resolve provider credentials; required for api_key
+```
+
+### OAuthConfig
+
+```python
+@dataclass(frozen=True)
+class OAuthConfig:
+    flow: str                    # "device" only
+    client_id: str
+    device_auth_url: str
+    token_url: str
+    scopes: list[str]
+    token_exchange_url: str | None = None
 ```
 
 ### ConnectionConfig
@@ -26,6 +39,7 @@ class ConnectionConfig:
     label: str               # Human-readable display label
     auth: AuthConfig         # Credential lookup and auth header metadata
     base_url: str | None     # Optional base URL override for this connection
+    oauth: OAuthConfig | None # Optional OAuth flow metadata
 ```
 
 Connection IDs exposed outside provider config are compositional: `<provider_id>:<connection.id>` (for example, `openai:api-key`). The local `id` only needs to be unique within one provider. Multiple connections may share the same `type`; only duplicate local IDs are rejected.
@@ -54,7 +68,7 @@ Source: `resources/providers/<name>.json`. One file per provider, keyed by `id`.
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
 
-**Connections field** replaces the old single provider-level auth field. Each connection owns its auth metadata and credential key. Unknown connection `type` values are rejected with `ConfigError` during provider config load. Connection array order is display order and preference order when a caller needs the first usable connection.
+**Connections field** replaces the old single provider-level auth field. Each connection owns its auth metadata and credential key. Unknown connection `type` values are rejected with `ConfigError` during provider config load. Connection array order is display order and preference order when a caller needs the first usable connection. `api_key` connections must define `auth.credential_key`; `oauth` connections may omit it when an `oauth` block defines the token-store backed flow. Unknown OAuth flow values are rejected with `ConfigError`; only `device` is currently valid.
 
 **Auth field compatibility:** adapters still read auth header metadata from provider config until the adapter factory becomes fully connection-aware. Provider JSON files use only `connections`; old `auth` JSON is not supported.
 
@@ -80,6 +94,12 @@ class ProviderRegistry:
 Module-level cache keyed by resolved `resources_dir` path. Second call with the same path returns the cached instance. Duplicate provider IDs across JSON files raise `KeyError`.
 
 Source: `core/providers/providers.py`.
+
+### Token Store
+
+`core/providers/token_store.py` persists OAuth tokens below `<data_dir>/oauth/` using filenames of the form `<provider_id>-<local_connection_id>.json`. `OAuthToken` stores `access_token`, optional `refresh_token`, and optional UTC `expires_at`; serialization uses ISO 8601 timestamps with explicit timezone offsets.
+
+`TokenStore` writes atomically through `<data_dir>/.tmp/`, loads missing tokens as `None`, deletes tokens idempotently, and considers a token usable when it exists and is either unexpired or has a refresh token. Token values must never be logged.
 
 ## Adapter Hierarchy
 
@@ -267,7 +287,7 @@ model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Mode
 **`runtime.get_adapter(provider_id, connection_id)`** flow:
 1. Looks up `ProviderConfig` from registry
 2. Validates that `connection_id` has the same provider prefix and maps to a known provider-local connection ID
-3. Resolves connection credentials through the central provider credential resolver — missing credential → `ConfigError`
+3. Resolves connection credentials through the central provider credential resolver — `api_key` credentials come from environment or data-dir `.env`; token-store backed `oauth` credentials come from `TokenStore`; missing credential → `ConfigError`
 4. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
 5. Instantiates adapter with `(provider_config, credential_value, connection.base_url)`; adapters use the provider base URL unless the connection overrides it
 6. Returns wired `ProviderAdapter` instance
@@ -279,7 +299,7 @@ has_credentials(provider_id: str, connection_id: str | None = None) -> bool
 get_credentials(provider_id: str, connection_id: str | None = None) -> str
 ```
 
-When `connection_id` is supplied it must use the compositional `<provider_id>:<local_id>` form and the credential is resolved from that specific connection's `AuthConfig.credential_key`. Unknown connection IDs raise `ConfigError`.
+When `connection_id` is supplied it must use the compositional `<provider_id>:<local_id>` form. For `api_key` connections, the credential is resolved from that specific connection's `AuthConfig.credential_key`. For `oauth` connections with an `oauth` block, or no `credential_key`, the credential resolver uses `TokenStore` and returns the stored access token. Unknown connection IDs raise `ConfigError`.
 
 Protocol interface: `ProviderRegistryProtocol` in `core/runtime/interfaces.py`.
 
@@ -289,7 +309,7 @@ Source: `core/runtime/runtime.py`.
 
 - **Adapter selection is config-driven.** The `adapter` field in `resources/providers/<name>.json` determines which class is instantiated. Adding a new OpenAI-compatible provider requires only a JSON file — no subclassing. Adding a fundamentally different wire protocol requires a new adapter class and an entry in `_ADAPTER_MAP`.
 
-- **Credential resolution happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called. Process environment currently has precedence over the data-dir `.env` fallback snapshot. If the credential is empty or missing, `ConfigError` is raised. Credentials are not stored on the `ProviderConfig`.
+- **Credential resolution happens at adapter creation.** The runtime asks the central provider credential resolver for the configured credential value when `get_adapter()` is called. Process environment currently has precedence over the data-dir `.env` fallback snapshot for `api_key` credentials. Token-store backed OAuth credentials are read from `<data_dir>/oauth/`. If the credential is empty or missing, `ConfigError` is raised. Credentials are not stored on the `ProviderConfig`.
 
 - **`get_adapter()` requires a connection ID.** There is no runtime fallback to the first usable connection. The chat loop or RPC caller is responsible for selecting a connection before adapter creation.
 

@@ -24,8 +24,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `LogManager`, and creates the `vbot.core` logger before normal bootstrap
   logging. Then it loads provider/model registries, prepares data directories,
   reads `<data_dir>/.env` as a fallback credential snapshot without mutating
-  `os.environ`, instantiates the central provider credential resolver (process
-  environment takes precedence over the data-dir fallback), copies prompt
+  `os.environ`, instantiates the OAuth `TokenStore`, instantiates the central
+  provider credential resolver (process environment takes precedence over the
+  data-dir fallback for environment credentials), copies prompt
   fragments, wires services, starts the `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools, creates the
   shared `ChatRunManager`, creates the non-streaming automation `ChatLoop`, wires
@@ -41,6 +42,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `provider_credentials` — central provider credential resolver; also exposed
   through `has_provider_credentials(provider_id)` and
   `get_provider_credentials(provider_id)`.
+- `token_store` — OAuth token persistence service rooted at `<data_dir>/oauth/`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
 - `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `edit`, `glob`, `grep`, `process`, `read`, `subagent`, `subagent_result`, `write`) plus the internal `skill` tool when skills are loaded.
@@ -59,6 +61,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
 
 All service properties raise `RuntimeError` before `start()` and after `stop()`.
+`stop()` clears the token-store reference along with other runtime services.
 
 ## Constraints & Gotchas
 
