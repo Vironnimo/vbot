@@ -166,7 +166,7 @@ class ProviderAdapter(ABC):
 ```
 
 - `send()` — non-streaming request, returns parsed response dict
-- `stream()` — streaming request, yields normalized provider-agnostic delta dicts (`content_delta`, `reasoning_delta`, `tool_call_delta`, internal-only `reasoning_meta`, `finish`), never raw provider SSE chunks
+- `stream()` — streaming request, yields normalized provider-agnostic delta dicts (`content_delta`, `reasoning_delta`, `tool_call_delta`, internal-only `reasoning_meta`, `usage`, `finish`), never raw provider SSE chunks
 - `messages` is a list of dicts — the chat layer serializes `ChatMessage` objects via `.to_dict()` before passing them to the adapter
 - `model_id` is the exact string sent to the provider API (no remapping)
 - `**kwargs` carries provider-specific overrides (temperature, max_tokens, thinking config, etc.)
@@ -245,9 +245,53 @@ reasoning and catalog schema.
 
 ### GitHubCopilotAdapter
 
-GitHub Copilot is currently fully OpenAI-compatible at runtime, so it does not
-override chat payload construction. It owns Copilot catalog normalization because
-the Copilot `/models` schema is provider-specific.
+GitHub Copilot is endpoint-aware at runtime, not treated as one uniform
+OpenAI-compatible provider. `GitHubCopilotAdapter` subclasses
+`OpenAICompatibleAdapter` for shared auth/client/retry behavior and the
+`/chat/completions` fallback path, but Copilot-specific routing and request
+feature gating live in `core/providers/github_copilot_policy.py`.
+
+**Endpoint families:**
+
+- `/chat/completions` — delegated to `OpenAICompatibleAdapter` after the
+  Copilot policy filters request kwargs. This remains the conservative fallback
+  for unknown models and for models that advertise only chat completions.
+- `/responses` — owned by `core/providers/github_copilot_responses.py`. This is
+  OpenAI Responses-like: the helper builds payloads, normalizes `output` items,
+  preserves opaque reasoning metadata when present, extracts usage, and converts
+  semantic SSE events into vBot deltas.
+- `/v1/messages` — owned by `core/providers/github_copilot_messages.py`. This is
+  Anthropic Messages-like but Copilot-specific: the helper builds top-level
+  `system`, content blocks, tools, and thinking/output configuration, then
+  normalizes text/thinking/tool-use responses and SSE events into vBot fields.
+
+`ws:/responses` is deliberately ignored by runtime policy for now; websocket
+Responses frames are not implemented.
+
+**Dynamic-first runtime policy:** Runtime adapter creation passes
+`GitHubCopilotAdapter` a narrow model metadata lookup backed by `ModelRegistry`.
+The adapter calls the policy once per `send()`/`stream()` request. When
+`metadata.github_copilot` exists for the exact model, it is the primary source
+for vendor, family, supported endpoints, allowed reasoning efforts, thinking
+budget bounds, adaptive thinking support, tool support, streaming support, and
+structured-output support. Static policy entries are fallback facts for missing
+metadata or exact-model overrides for validated quirks; they should not hide
+current catalog metadata by default.
+
+Endpoint selection currently follows these rules:
+
+- Claude-like models prefer `/v1/messages` when that endpoint is advertised.
+- Gemini-like models stay chat-first and do not get forced onto `/responses`.
+- OpenAI/GPT-like models prefer `/responses` when that endpoint is advertised.
+- Otherwise the first safe endpoint is used, with `/chat/completions` as the
+  conservative final fallback.
+
+Request shaping is policy-gated per model and endpoint. Unsupported optional
+features are omitted rather than sent optimistically: tools/tool choice,
+parallel tool calls, structured output/JSON-style controls, OpenAI-style
+reasoning efforts, thinking budgets, and adaptive thinking. Unknown Copilot
+models default to `/chat/completions`, no explicit reasoning/thinking controls,
+no tools, and no structured-output controls.
 
 Observed Copilot `/models` shape:
 
@@ -258,7 +302,11 @@ Observed Copilot `/models` shape:
     {
       "id": "gpt-4o",
       "name": "GPT-4o",
+      "vendor": "Azure OpenAI",
+      "version": "gpt-4o-2024-11-20",
+      "supported_endpoints": ["/chat/completions"],
       "capabilities": {
+        "family": "gpt-4o",
         "limits": {
           "max_context_window_tokens": 128000,
           "max_output_tokens": 4096
@@ -285,12 +333,12 @@ Individual numeric limit fields are also optional: missing or non-numeric
 context limits fall back to `0`, and missing or non-numeric output limits fall
 back to provider `max_tokens` or the hard default.
 
-Runtime request shaping is controlled by a per-model
-`GitHubCopilotModelPolicy` in `core/providers/github_copilot.py`. The policy is
-the place to evolve Copilot-specific behavior such as endpoint selection,
-parameter allow/deny lists, and allowed `reasoning_effort` values. Unknown
-Copilot models use a conservative default policy that omits explicit
-OpenAI-style reasoning controls until a model is validated.
+The normalizer stores only a sanitized runtime subset under
+`metadata.github_copilot`: `vendor`, `family`, `version`, `supported_endpoints`,
+`reasoning_efforts`, thinking budget bounds, `adaptive_thinking`,
+`parallel_tool_calls`, `streaming`, `structured_outputs`, and `tool_calls` when
+Copilot advertises them. Full raw `/models` entries, policy terms, credentials,
+and other unsanitized provider data are not stored in model catalogs.
 
 ### AnthropicAdapter
 
@@ -401,7 +449,7 @@ model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Mode
 2. Validates that `connection_id` has the same provider prefix and maps to a known provider-local connection ID
 3. Resolves connection credentials through the central provider credential resolver — `api_key` credentials come from environment or data-dir `.env`; token-store backed `oauth` credentials come from `TokenStore`; missing credential → `ConfigError`
 4. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
-5. Instantiates adapter with `(provider_config, token_getter, connection.base_url, connection.auth)`; adapters use the provider base URL unless the connection overrides it
+5. Instantiates adapter with `(provider_config, token_getter, connection.base_url, connection.auth)`; adapters use the provider base URL unless the connection overrides it. GitHub Copilot additionally receives a narrow model metadata lookup so its runtime policy can read `Model.metadata` for exact model IDs.
 6. Returns wired `ProviderAdapter` instance
 
 `ProviderCredentialResolver` supports both provider-level and connection-level calls:

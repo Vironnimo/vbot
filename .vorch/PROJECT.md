@@ -28,7 +28,8 @@ speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
 adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
-shared HTTP utilities, and error classes in addition to the registry.
+GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities, and
+error classes in addition to the registry.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
 + `/ws/logs` (selected log-file live tail) + SSE (streaming). No auth
@@ -235,13 +236,16 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   assume a value greater than the old fallback. The top-level `capabilities`
   object is required, but nested `limits` and `supports` sections may be
   missing or non-object per model and should be treated as empty mappings.
-- **GitHub Copilot runtime request support is model-specific.** Catalog facts
-  such as `reasoning.supported: true` do not guarantee that Copilot
-  `/chat/completions` accepts OpenAI-style `reasoning_effort` for that model.
-  `GitHubCopilotAdapter` owns a per-model runtime policy; unknown Copilot models
-  default to conservative request shaping and omit explicit reasoning controls
-  until validated. Future Copilot endpoint selection should live in that same
-  policy layer.
+- **GitHub Copilot runtime request support is model-specific and endpoint-aware.**
+  Catalog facts such as `reasoning.supported: true` do not guarantee that any
+  specific Copilot endpoint accepts a specific control field. Generated Copilot
+  catalogs preserve a small sanitized `metadata.github_copilot` subset from
+  `/models`; `GitHubCopilotAdapter` uses that metadata through the central
+  Copilot runtime policy to select `/chat/completions`, `/responses`, or
+  `/v1/messages` and to gate optional features. Static policy entries are
+  fallback/override rules only. Unknown Copilot models default to conservative
+  request shaping: chat completions, no explicit reasoning/thinking controls, no
+  tools, and no structured-output controls until validated.
 - **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
