@@ -550,6 +550,29 @@ async def test_messages_alias_override_wins_over_provider_default_on_wire(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_messages_max_completion_tokens_alias_maps_to_max_tokens_on_wire(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="claude-haiku-4.5",
+        max_completion_tokens=1024,
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 1024,
+        "temperature": 0.25,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_gemini_3_1_preview_stays_chat_when_metadata_advertises_only_chat(
     metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
