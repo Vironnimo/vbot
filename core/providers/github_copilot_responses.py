@@ -250,7 +250,7 @@ def _apply_responses_reasoning(
         and effort != "none"
         and policy.allows_reasoning_effort(effort)
     ):
-        payload["reasoning"] = {"effort": effort}
+        payload["reasoning"] = {"effort": effort, "summary": "auto"}
     if payload.get("reasoning") or include_reasoning is True:
         _append_include(payload, REASONING_ENCRYPTED_CONTENT_INCLUDE)
 
