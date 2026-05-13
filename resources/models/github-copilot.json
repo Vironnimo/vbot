@@ -77,9 +77,8 @@
             "max_output_tokens": 32000,
             "metadata": {
                 "github_copilot": {
+                    "adaptive_thinking": true,
                     "family": "claude-haiku-4.5",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 1024,
                     "parallel_tool_calls": true,
                     "streaming": true,
                     "supported_endpoints": ["/chat/completions", "/v1/messages"],
@@ -254,7 +253,6 @@
                     "max_thinking_budget": 32000,
                     "min_thinking_budget": 256,
                     "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high"],
                     "streaming": true,
                     "supported_endpoints": ["/chat/completions"],
                     "tool_calls": true,

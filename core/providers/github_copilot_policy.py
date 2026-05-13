@@ -156,6 +156,7 @@ class GitHubCopilotModelPolicy:
     supports_parallel_tool_calls: bool = False
     supports_streaming: bool = False
     supports_structured_outputs: bool = False
+    omit_temperature_when_thinking_active: bool = False
 
     @classmethod
     def from_metadata(
@@ -203,7 +204,9 @@ class GitHubCopilotModelPolicy:
             for parameter_name in _STRUCTURED_OUTPUT_PARAMETER_NAMES:
                 filtered_kwargs.pop(parameter_name, None)
 
-        if not self.allows_any_reasoning_controls:
+        if self.endpoint_path == MESSAGES_ENDPOINT:
+            self._filter_messages_reasoning_kwargs(filtered_kwargs)
+        elif not self.allows_any_reasoning_controls:
             for parameter_name in _REASONING_PARAMETER_NAMES:
                 filtered_kwargs.pop(parameter_name, None)
         else:
@@ -227,6 +230,9 @@ class GitHubCopilotModelPolicy:
             thinking = filtered_kwargs.get("thinking")
             if isinstance(thinking, Mapping) and thinking.get("type") == "adaptive":
                 filtered_kwargs.pop("thinking", None)
+
+        if self._should_omit_temperature(filtered_kwargs):
+            filtered_kwargs.pop("temperature", None)
 
         for parameter_name in _OPTIONAL_REQUEST_PARAMETER_NAMES:
             if (
@@ -256,6 +262,91 @@ class GitHubCopilotModelPolicy:
 
     def supports_request_parameter(self, parameter_name: str) -> bool:
         return parameter_name in self.supported_request_parameters
+
+    def _should_omit_temperature(self, kwargs: Mapping[str, Any]) -> bool:
+        if not self.omit_temperature_when_thinking_active:
+            return False
+        if self.endpoint_path != MESSAGES_ENDPOINT:
+            return False
+        if "temperature" not in kwargs:
+            return False
+        return self._has_active_thinking(kwargs)
+
+    def _has_active_thinking(self, kwargs: Mapping[str, Any]) -> bool:
+        thinking = kwargs.get("thinking")
+        if isinstance(thinking, Mapping):
+            thinking_type = thinking.get("type")
+            if thinking_type in {"adaptive", "enabled"}:
+                return True
+
+        thinking_budget = kwargs.get("thinking_budget")
+        if isinstance(thinking_budget, int) and not isinstance(thinking_budget, bool):
+            return True
+
+        thinking_effort = kwargs.get("thinking_effort")
+        if self._is_active_reasoning_effort(thinking_effort):
+            return True
+
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if self._is_active_reasoning_effort(reasoning_effort):
+            return True
+
+        output_config = kwargs.get("output_config")
+        if isinstance(output_config, Mapping):
+            effort = output_config.get("effort")
+            if self._is_active_reasoning_effort(effort):
+                return True
+
+        return False
+
+    def _is_active_reasoning_effort(self, effort: Any) -> bool:
+        if not isinstance(effort, str):
+            return False
+        if effort in {"", "none", "minimal"}:
+            return False
+        return self.allows_reasoning_effort(effort)
+
+    def _filter_messages_reasoning_kwargs(self, filtered_kwargs: dict[str, Any]) -> None:
+        filtered_kwargs.pop("reasoning", None)
+        filtered_kwargs.pop("include_reasoning", None)
+
+        reasoning_effort = filtered_kwargs.get("reasoning_effort")
+        if isinstance(reasoning_effort, str) and not self.allows_reasoning_effort(reasoning_effort):
+            filtered_kwargs.pop("reasoning_effort", None)
+
+        output_config = filtered_kwargs.get("output_config")
+        if isinstance(output_config, Mapping):
+            effort = output_config.get("effort")
+            if not isinstance(effort, str) or not self.allows_reasoning_effort(effort):
+                filtered_kwargs.pop("output_config", None)
+        else:
+            filtered_kwargs.pop("output_config", None)
+
+        thinking = filtered_kwargs.get("thinking")
+        if isinstance(thinking, Mapping):
+            thinking_type = thinking.get("type")
+            if (
+                (thinking_type == "adaptive" and not self.supports_adaptive_thinking)
+                or (thinking_type == "enabled" and not self.supports_thinking_budget)
+                or thinking_type not in {"adaptive", "enabled", "disabled"}
+            ):
+                filtered_kwargs.pop("thinking", None)
+        else:
+            filtered_kwargs.pop("thinking", None)
+
+        thinking_effort = filtered_kwargs.get("thinking_effort")
+        if isinstance(thinking_effort, str):
+            if not self._messages_accepts_thinking_effort_trigger(thinking_effort):
+                filtered_kwargs.pop("thinking_effort", None)
+        else:
+            filtered_kwargs.pop("thinking_effort", None)
+
+    def _messages_accepts_thinking_effort_trigger(self, thinking_effort: str) -> bool:
+        if not thinking_effort or thinking_effort == "minimal":
+            return False
+        if thinking_effort == "none":
+            return self.supports_adaptive_thinking or self.supports_thinking_budget
+        return self.allows_reasoning_effort(thinking_effort)
 
 
 def copilot_model_policy(
@@ -367,4 +458,10 @@ _STATIC_FALLBACK_FACTS_BY_ID = {
     ),
 }
 
-_STATIC_EXACT_OVERRIDES_BY_ID: dict[str, dict[str, Any]] = {}
+_STATIC_EXACT_OVERRIDES_BY_ID: dict[str, dict[str, Any]] = {
+    "claude-haiku-4.5": {
+        "allowed_reasoning_efforts": frozenset(),
+        "supports_thinking_budget": False,
+    },
+    "claude-sonnet-4.6": {"omit_temperature_when_thinking_active": True},
+}
