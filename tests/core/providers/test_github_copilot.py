@@ -9,6 +9,8 @@ import httpx
 import pytest
 import respx
 
+from core.chat.chat import _assistant_message_from_response
+from core.chat.streaming import StreamingAccumulator
 from core.providers.github_copilot import (
     OPENAI_REASONING_COPILOT_MODEL_POLICY,
     GitHubCopilotAdapter,
@@ -1301,6 +1303,45 @@ async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
             "arguments_delta": '{"q":"docs"}',
         },
         {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_gpt_5_4_family_item_id_only_delta_parses_into_valid_chat_tool_call(
+    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+) -> None:
+    sse_body = (
+        "event: response.output_item.added\n"
+        'data: {"type":"response.output_item.added","output_index":0,'
+        '"item":{"type":"function_call","id":"fc_1","call_id":"call_1",'
+        '"name":"tool","arguments":"","function":{"name":"bash"}}}\n\n'
+        "event: response.function_call_arguments.delta\n"
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1",'
+        '"delta":"{\\"command\\":\\"pwd\\"}"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    accumulator = StreamingAccumulator()
+    async for chunk in bundled_metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
+        accumulator.add_delta(chunk)
+
+    assistant = _assistant_message_from_response(
+        f"github-copilot/{model_id}",
+        accumulator.finalize_assistant_fields().to_response_dict(),
+    )
+
+    assert assistant.tool_calls is not None
+    assert [tool_call.to_dict() for tool_call in assistant.tool_calls] == [
+        {"id": "call_1", "name": "bash", "arguments": {"command": "pwd"}}
     ]
 
 
