@@ -9,16 +9,15 @@ import httpx
 import pytest
 import respx
 
+from core.chat.chat import _assistant_message_from_response
+from core.chat.streaming import StreamingAccumulator
 from core.providers.github_copilot import (
-    OPENAI_REASONING_COPILOT_MODEL_POLICY,
     GitHubCopilotAdapter,
-    _copilot_model_policy,
 )
 from core.providers.github_copilot_policy import CHAT_COMPLETIONS_ENDPOINT
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 FIXTURE_PATH = Path("tests/core/models/fixtures/github_copilot_models_raw.json")
-BUNDLED_MODELS_PATH = Path("resources/models/github-copilot.json")
 API_KEY = "test-api-key-12345"
 COPILOT_CONFIG = ProviderConfig(
     id="github-copilot",
@@ -90,6 +89,19 @@ SYNTHETIC_COPILOT_METADATA_BY_MODEL_ID = {
             "tool_calls": True,
         }
     },
+    "gpt-5.4-mini": {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4-mini",
+            "version": "gpt-5.4-mini",
+            "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, "/responses", "ws:/responses"],
+            "reasoning_efforts": ["low", "medium", "high"],
+            "parallel_tool_calls": True,
+            "streaming": True,
+            "structured_outputs": True,
+            "tool_calls": True,
+        }
+    },
     "gpt-5.4-partial": {
         "github_copilot": {
             "vendor": "OpenAI",
@@ -123,23 +135,6 @@ def _copilot_metadata_lookup(model_id: str) -> dict | None:
     return _copilot_metadata(model_id)
 
 
-def _bundled_copilot_models() -> dict[str, dict]:
-    payload = json.loads(BUNDLED_MODELS_PATH.read_text(encoding="utf-8"))
-    models = payload.get("models")
-    if not isinstance(models, dict):
-        return {}
-    return {str(model_id): entry for model_id, entry in models.items() if isinstance(entry, dict)}
-
-
-def _bundled_copilot_metadata_lookup(model_id: str) -> dict | None:
-    bundled_models = _bundled_copilot_models()
-    model_entry = bundled_models.get(model_id)
-    if not isinstance(model_entry, dict):
-        return None
-    metadata = model_entry.get("metadata")
-    return dict(metadata) if isinstance(metadata, dict) else None
-
-
 @pytest.fixture()
 def copilot_adapter() -> GitHubCopilotAdapter:
     return GitHubCopilotAdapter(COPILOT_CONFIG, API_KEY)
@@ -151,15 +146,6 @@ def metadata_copilot_adapter() -> GitHubCopilotAdapter:
         COPILOT_CONFIG,
         API_KEY,
         model_metadata_lookup=_copilot_metadata_lookup,
-    )
-
-
-@pytest.fixture()
-def bundled_metadata_copilot_adapter() -> GitHubCopilotAdapter:
-    return GitHubCopilotAdapter(
-        COPILOT_CONFIG,
-        API_KEY,
-        model_metadata_lookup=_bundled_copilot_metadata_lookup,
     )
 
 
@@ -346,22 +332,6 @@ def test_invalid_copilot_capabilities_shape_still_fails() -> None:
         raise AssertionError("Expected invalid capabilities shape to fail")
 
 
-def test_unknown_copilot_model_policy_defaults_to_safe_reasoning_behavior() -> None:
-    policy = _copilot_model_policy("claude-haiku-4.5")
-
-    assert policy.allows_openai_reasoning_effort("high") is False
-    assert policy.endpoint_path == "/chat/completions"
-    assert policy.supports_tools is False
-
-
-def test_gpt_5_mini_copilot_policy_allows_openai_reasoning_efforts() -> None:
-    policy = _copilot_model_policy("gpt-5-mini")
-
-    assert policy == OPENAI_REASONING_COPILOT_MODEL_POLICY
-    assert policy.allows_openai_reasoning_effort("high") is True
-    assert policy.allows_openai_reasoning_effort("xhigh") is False
-
-
 @respx.mock
 @pytest.mark.asyncio
 async def test_send_omits_reasoning_effort_for_safe_default_copilot_model(
@@ -422,7 +392,7 @@ async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["model"] == "gpt-5-mini"
-    assert request_body["reasoning"] == {"effort": "high"}
+    assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
     assert request_body["max_output_tokens"] == 4096
     assert request_body["text"] == {"format": {"type": "json_object"}}
     assert metadata_copilot_adapter.normalize_response(response) == {
@@ -521,7 +491,7 @@ async def test_responses_models_send_exact_on_wire_payload_without_temperature(
     assert request_body == {
         "model": model_id,
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
-        "reasoning": {"effort": "high"},
+        "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "max_output_tokens": 4096,
@@ -678,7 +648,7 @@ async def test_static_fallback_applies_only_when_metadata_missing() -> None:
     chat_body = json.loads(chat_route.calls.last.request.content)
     responses_body = json.loads(responses_route.calls.last.request.content)
     assert chat_body["reasoning_effort"] == "high"
-    assert responses_body["reasoning"] == {"effort": "high"}
+    assert responses_body["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
 @respx.mock
@@ -912,7 +882,7 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
                 },
             }
         ],
-        "reasoning": {"effort": "high"},
+        "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "max_output_tokens": 4096,
     }
@@ -940,7 +910,7 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
 @respx.mock
 @pytest.mark.asyncio
 async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     route = respx.post(RESPONSES_URL).mock(
@@ -968,7 +938,7 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
         )
     )
 
-    response = await bundled_metadata_copilot_adapter.send(
+    response = await metadata_copilot_adapter.send(
         [{"role": "user", "content": "Look up docs"}],
         model_id=model_id,
         thinking_effort="high",
@@ -1004,11 +974,11 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
                 },
             }
         ],
-        "reasoning": {"effort": "high"},
+        "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "max_output_tokens": 4096,
     }
-    assert bundled_metadata_copilot_adapter.normalize_response(response) == {
+    assert metadata_copilot_adapter.normalize_response(response) == {
         "role": "assistant",
         "content": None,
         "reasoning": "Need docs lookup.",
@@ -1032,12 +1002,12 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
 @respx.mock
 @pytest.mark.asyncio
 async def test_send_routes_gpt_5_4_family_responses_with_blank_top_level_tool_name_and_arguments(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
 
-    await bundled_metadata_copilot_adapter.send(
+    await metadata_copilot_adapter.send(
         [{"role": "user", "content": "Look up docs"}],
         model_id=model_id,
         tools=[
@@ -1119,12 +1089,12 @@ async def test_send_replays_nested_tool_call_name_shape_for_gpt_5_4_responses(
 @respx.mock
 @pytest.mark.asyncio
 async def test_send_replays_nested_tool_call_arguments_when_top_level_values_are_blank(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
 
-    await bundled_metadata_copilot_adapter.send(
+    await metadata_copilot_adapter.send(
         [
             {
                 "role": "assistant",
@@ -1165,13 +1135,13 @@ async def test_send_replays_nested_tool_call_arguments_when_top_level_values_are
 @pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
 @respx.mock
 @pytest.mark.asyncio
-async def test_send_replays_nested_tool_call_name_shape_for_gpt_5_4_family_from_bundled_metadata(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+async def test_send_replays_nested_tool_call_name_shape_for_gpt_5_4_family(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
 
-    await bundled_metadata_copilot_adapter.send(
+    await metadata_copilot_adapter.send(
         [
             {
                 "role": "assistant",
@@ -1211,7 +1181,7 @@ async def test_send_replays_nested_tool_call_name_shape_for_gpt_5_4_family_from_
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_gpt_5_4_family_responses_surfaces_nested_tool_name(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     sse_body = (
@@ -1234,7 +1204,7 @@ async def test_stream_gpt_5_4_family_responses_surfaces_nested_tool_name(
     )
 
     chunks = []
-    async for chunk in bundled_metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
+    async for chunk in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
         chunks.append(chunk)
 
     assert chunks == [
@@ -1269,7 +1239,7 @@ async def test_stream_gpt_5_4_family_responses_surfaces_nested_tool_name(
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
 ) -> None:
     sse_body = (
@@ -1290,7 +1260,7 @@ async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
     )
 
     chunks = []
-    async for chunk in bundled_metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
+    async for chunk in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
         chunks.append(chunk)
 
     assert chunks == [
@@ -1301,6 +1271,45 @@ async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
             "arguments_delta": '{"q":"docs"}',
         },
         {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_gpt_5_4_family_item_id_only_delta_parses_into_valid_chat_tool_call(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+) -> None:
+    sse_body = (
+        "event: response.output_item.added\n"
+        'data: {"type":"response.output_item.added","output_index":0,'
+        '"item":{"type":"function_call","id":"fc_1","call_id":"call_1",'
+        '"name":"tool","arguments":"","function":{"name":"bash"}}}\n\n'
+        "event: response.function_call_arguments.delta\n"
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1",'
+        '"delta":"{\\"command\\":\\"pwd\\"}"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    accumulator = StreamingAccumulator()
+    async for chunk in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id=model_id):
+        accumulator.add_delta(chunk)
+
+    assistant = _assistant_message_from_response(
+        f"github-copilot/{model_id}",
+        accumulator.finalize_assistant_fields().to_response_dict(),
+    )
+
+    assert assistant.tool_calls is not None
+    assert [tool_call.to_dict() for tool_call in assistant.tool_calls] == [
+        {"id": "call_1", "name": "bash", "arguments": {"command": "pwd"}}
     ]
 
 
@@ -1396,8 +1405,8 @@ async def test_send_routes_haiku_messages_visible_thinking_text_block(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_send_routes_haiku_with_bundled_metadata_should_request_visible_thinking_controls(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+async def test_send_routes_haiku_requests_visible_thinking_controls(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     route = respx.post(MESSAGES_URL).mock(
         return_value=httpx.Response(
@@ -1411,7 +1420,7 @@ async def test_send_routes_haiku_with_bundled_metadata_should_request_visible_th
         )
     )
 
-    await bundled_metadata_copilot_adapter.send(
+    await metadata_copilot_adapter.send(
         SAMPLE_MESSAGES,
         model_id="claude-haiku-4.5",
         thinking_effort="high",
@@ -1430,12 +1439,12 @@ async def test_send_routes_haiku_with_bundled_metadata_should_request_visible_th
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_send_routes_haiku_with_bundled_metadata_omits_budget_and_output_config(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+async def test_send_routes_haiku_omits_budget_and_output_config(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
 
-    await bundled_metadata_copilot_adapter.send(
+    await metadata_copilot_adapter.send(
         SAMPLE_MESSAGES,
         model_id="claude-haiku-4.5",
         thinking_effort="high",
@@ -1522,7 +1531,7 @@ async def test_send_routes_haiku_visible_thinking_without_reasoning_effort_suppo
 
 
 def test_normalize_response_extracts_gemini_visible_thinking_from_reasoning_details(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     response = {
         "id": "chatcmpl-gemini-1",
@@ -1539,7 +1548,7 @@ def test_normalize_response_extracts_gemini_visible_thinking_from_reasoning_deta
         ],
     }
 
-    assert bundled_metadata_copilot_adapter.normalize_response(response) == {
+    assert copilot_adapter.normalize_response(response) == {
         "role": "assistant",
         "content": "Gemini reply",
         "reasoning": "Need docs lookup.",
@@ -1553,7 +1562,7 @@ def test_normalize_response_extracts_gemini_visible_thinking_from_reasoning_deta
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_gemini_3_1_preview_extracts_visible_thinking_from_reasoning_details(
-    bundled_metadata_copilot_adapter: GitHubCopilotAdapter,
+    metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     sse_body = (
         'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text",'
@@ -1568,7 +1577,7 @@ async def test_stream_gemini_3_1_preview_extracts_visible_thinking_from_reasonin
     )
 
     chunks = []
-    async for chunk in bundled_metadata_copilot_adapter.stream(
+    async for chunk in metadata_copilot_adapter.stream(
         SAMPLE_MESSAGES,
         model_id="gemini-3.1-pro-preview",
         thinking_effort="high",

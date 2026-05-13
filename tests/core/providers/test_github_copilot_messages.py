@@ -221,8 +221,9 @@ def test_build_payload_gates_thinking_by_exact_policy() -> None:
 
 
 def test_build_payload_omits_unsupported_tools_and_reasoning_controls() -> None:
+    model_id = "claude-haiku-4.5-runtime-metadata"
     policy = _messages_policy(
-        "claude-haiku-4.5",
+        model_id,
         reasoning_efforts=[],
         min_thinking_budget=None,
         max_thinking_budget=None,
@@ -232,7 +233,7 @@ def test_build_payload_omits_unsupported_tools_and_reasoning_controls() -> None:
 
     payload = build_copilot_messages_payload(
         [{"role": "user", "content": "Hello"}],
-        model_id="claude-haiku-4.5",
+        model_id=model_id,
         policy=policy,
         thinking_effort="high",
         tools=[{"name": "search", "description": "Search", "parameters": {}}],
@@ -242,7 +243,7 @@ def test_build_payload_omits_unsupported_tools_and_reasoning_controls() -> None:
     )
 
     assert payload == {
-        "model": "claude-haiku-4.5",
+        "model": model_id,
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
         "max_tokens": 4096,
     }
@@ -365,23 +366,24 @@ def test_build_payload_haiku_ignores_budget_controls_from_bundled_metadata_shape
     assert "output_config" not in payload
 
 
-def test_build_payload_haiku_runtime_metadata_misses_visible_thinking_request_shape() -> None:
+def test_build_payload_runtime_metadata_without_adaptive_thinking_omits_visible_thinking() -> None:
+    model_id = "claude-haiku-4.5-runtime-metadata"
     policy = _messages_policy(
-        model_id="claude-haiku-4.5",
+        model_id=model_id,
         reasoning_efforts=[],
         adaptive_thinking=False,
     )
 
     payload = build_copilot_messages_payload(
         [{"role": "user", "content": "Think."}],
-        model_id="claude-haiku-4.5",
+        model_id=model_id,
         policy=policy,
         thinking_effort="high",
         temperature=0.25,
     )
 
     assert payload == {
-        "model": "claude-haiku-4.5",
+        "model": model_id,
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
         "max_tokens": 4096,
         "temperature": 0.25,

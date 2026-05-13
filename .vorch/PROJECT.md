@@ -167,97 +167,21 @@ browser strategy, which features need API credentials, shutdown — live in
 Use this section only for important strategic decisions, unusual global
 constraints, or things an agent would otherwise likely assume incorrectly.
 
-- The Toasted `Components` showcase is a design/reference artifact only. It must
-  not ship as a live WebUI tab.
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel
   (token-by-token output for one Run). WebSocket is the persistent app-wide
   signalling channel (connection status, agent CRUD, run lifecycle summaries).
   SSE and WS serve different purposes and should not be merged.
 - **WebSocket is server-push only.** Clients send requests via `POST /api/rpc`.
   The WS channel broadcasts server events; it does not accept client commands.
-- **WebSocket reconnect uses `after_sequence` replay.** Clients send the last
-  sequence number they saw, and the server replays missed events.
-- **Logs view transport is file-backed and isolated.** The WebUI log tab reads
-  daily files from `<data_dir>/logs/` through dedicated `log.list`/`log.read`
-  RPC methods plus `/ws/logs` for live updates of one selected file. `log.read`
-  returns a short-lived cursor so the log socket can replay anything appended
-  between the initial file read and websocket connect. It does not reuse the
-  shared app event bus.
-- **Logs view filtering and ordering stay local.** The WebUI Logs tab loads one
-  selected daily file, then applies level filtering, text search, and
-  newest/oldest ordering in-memory without re-reading the file for those UI
-  controls.
-- **Provider usability for model selection is credential-based, not
-  health-based.** A provider is considered usable when its configured
-  credential is present and non-empty. Missing or empty credentials mean the
-  provider is ignored by model-selection UI. This applies to local providers
-  too (for example, Ollama or LM Studio): no special-casing, no runtime
-  reachability checks.
-- **Provider credentials are source-agnostic.** Process environment currently
-  has higher precedence than the data-dir `.env`, but backend code should ask a
-  central provider-credential path whether credentials exist and what value to
-  use, rather than reading `os.environ` directly.
-- **OAuth provider credentials are token-store based when an OAuth block is
-  configured.** `type: "oauth"` connections with an `oauth` block, or without an
-  `auth.credential_key`, read persisted tokens from `<data_dir>/oauth/` through
-  the central provider credential path. Existing OAuth stubs with a
-  `credential_key` and no OAuth metadata continue to resolve through
-  environment or data-dir `.env` credentials.
-- **OAuth Device Flow is server-side.** Clients request a provider connection,
-  display the returned user code and verification URL, and wait for a WebSocket
-  event. Polling, token exchange, token refresh, and token persistence stay in
-  backend provider code; token values must never appear in logs or public event
-  payloads.
-- **GitHub Copilot OAuth has provider-specific exchange requirements.** The
-  working Copilot path uses GitHub Device Flow scope `read:user`, then exchanges
-  the GitHub OAuth token at `https://api.github.com/copilot_internal/v2/token`
-  with `Authorization: Bearer <github_oauth_token>` plus Copilot integration
-  headers. `Authorization: token ...` is rejected by the Copilot exchange.
-- **Provider connection identifiers in public RPC/UI payloads are compositional.**
-  Use `<provider_id>:<connection.id>` (for example `github-copilot:oauth`) for
-  `connection_id` values in Settings, provider RPC methods, and WebSocket
-  events. Backend internals may derive the provider-local connection ID only
-  after validating that prefix.
-- **Model catalogs can be generated from provider APIs.** Dynamic refresh writes
-  provider model files under `resources/models/` and may include `source` and
-  `fetched_at` metadata that `ModelRegistry.load()` ignores. Optional
-  `resources/models/<provider>.overrides.json` files patch or supplement
-  discovered models, and the registry skips those override files when loading
-  catalogs.
-- **Provider-specific model discovery lives on provider adapters.**
-  `core/models/discovery.py` dispatches by provider `adapter` string to the
-  adapter class' `normalize_catalog_entry()` method; it must not branch on
-  provider IDs or contain provider-specific normalizer functions.
-- **GitHub Copilot model discovery uses Copilot's real `/models` schema.**
-  Copilot responses use a top-level `{ "object": "list", "data": [...] }`
-  envelope. Model capabilities live under `capabilities.limits` and
-  `capabilities.supports`; `gpt-4o` may legitimately report
-  `max_output_tokens: 4096`, so agents must read the source value rather than
-  assume a value greater than the old fallback. The top-level `capabilities`
-  object is required, but nested `limits` and `supports` sections may be
-  missing or non-object per model and should be treated as empty mappings.
-- **GitHub Copilot runtime request support is model-specific and endpoint-aware.**
-  Catalog facts such as `reasoning.supported: true` do not guarantee that any
-  specific Copilot endpoint accepts a specific control field. Generated Copilot
-  catalogs preserve a small sanitized `metadata.github_copilot` subset from
-  `/models`; `GitHubCopilotAdapter` uses that metadata through the central
-  Copilot runtime policy to select `/chat/completions`, `/responses`, or
-  `/v1/messages` and to gate optional features. Static policy entries are
-  fallback/override rules only. Unknown Copilot models default to conservative
-  request shaping: chat completions, no explicit reasoning/thinking controls, no
-  tools, and no structured-output controls until validated.
-- **GitHub Copilot exact-model quirks override family assumptions.**
-  `claude-haiku-4.5` may surface adaptive visible thinking on `/v1/messages`
-  without accepting reasoning-effort or thinking-budget controls, while
-  `/responses` tool-call payloads may carry the callable name and arguments only
-  under nested `function.{name,arguments}` fields. Adapter policy and
-  normalization must follow the exact runtime shape rather than generic family
-  expectations.
-- **Token usage flows from providers through to the frontend.** Adapters extract `input_tokens`/`output_tokens` from provider responses (OpenAI: `prompt_tokens`/`completion_tokens`; Anthropic: `input_tokens`/`output_tokens`). Usage is persisted on assistant messages in JSONL sessions. The `run_completed` event includes usage in its payload. If a provider doesn't supply usage, the backend falls back to a 4-chars-per-token estimation and marks it with `"estimated": true`. The `_message_to_request_dict` function strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before sending them to providers.
+- **Do not hand-edit provider-generated model catalogs for durable Copilot fixes.**
+  `resources/models/<provider>.json` is refreshable provider data and may be
+  overwritten by model-db updates. Durable Copilot metadata corrections belong
+  in the runtime policy layer. For GitHub Copilot specifically, bundled
+  metadata tests and some lookup paths read `resources/models/github-copilot.json`
+  directly and therefore bypass `resources/models/github-copilot.overrides.json`;
+  exact invariants that must survive refresh belong in
+  `core/providers/github_copilot_policy.py` via exact-model overrides.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
-- **Skill catalogs expose no local paths.** The prompt-visible `<available_skills>` block contains only each skill's `name` and `description`; local `SKILL.md` paths are internal registry data used by activation code. Invalid or partially valid skill directories should remain visible through diagnostics so the WebUI can explain why a skill is unavailable.
-- **Skill activation is session-scoped.** Skills may be activated through the internal `skill` tool or deterministic `/skill-name` and `$skill-name` message triggers. Activated `<skill_content>` is persisted as an internal note and restored on later provider requests in the same Session, while normal history/UI responses continue to hide note messages.
-- **Programmatic run triggers queue in memory only.** Automation triggers can start runs without a WebUI send flow; when a target Session already has an active Run, triggers are queued FIFO in memory and are not persisted across process restarts.
 
 ## Specs
 

@@ -115,7 +115,7 @@ def test_build_payload_includes_allowed_reasoning_encrypted_content_request() ->
         thinking_effort="xhigh",
     )
 
-    assert payload["reasoning"] == {"effort": "xhigh"}
+    assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
     assert payload["include"] == ["reasoning.encrypted_content"]
 
 
@@ -441,6 +441,30 @@ def test_normalize_response_prefers_nested_function_arguments_when_top_level_val
     ]
 
 
+def test_normalize_response_prefers_nested_function_name_over_top_level_placeholder() -> None:
+    normalized = normalize_responses_response(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "tool",
+                    "arguments": "",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"pwd"}',
+                    },
+                }
+            ]
+        }
+    )
+
+    assert normalized["tool_calls"] == [
+        {"id": "call_1", "name": "bash", "arguments": {"command": "pwd"}}
+    ]
+
+
 def test_normalize_response_extracts_reasoning_text_from_reasoning_content_blocks() -> None:
     response = {
         "id": "resp_1",
@@ -599,6 +623,105 @@ def test_stream_deduplicates_replayed_argument_delta_when_item_id_differs(model_
             "arguments_delta": '{"q":"docs"}',
         },
     ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_stream_item_id_only_delta_resolves_to_call_id_canonical_slot(model_id: str) -> None:
+    lines = [
+        _sse(
+            "response.output_item.added",
+            {
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "",
+                    "arguments": "",
+                    "function": {
+                        "name": "search",
+                    },
+                },
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "item_id": "fc_1",
+                "delta": '{"q":"docs"}',
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": "",
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": '{"q":"docs"}',
+        },
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_stream_combined_placeholder_name_and_item_id_only_delta_emits_single_canonical_tool_call(
+    model_id: str,
+) -> None:
+    lines = [
+        _sse(
+            "response.output_item.added",
+            {
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "tool",
+                    "arguments": "",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"pwd"}',
+                    },
+                },
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "item_id": "fc_1",
+                "delta": '{"command":"pwd"}',
+            },
+        ),
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": f"resp_{model_id}",
+                    "status": "completed",
+                    "output": [],
+                }
+            },
+        ),
+    ]
+
+    deltas = list(iter_responses_sse_deltas(lines))
+    tool_call_deltas = [delta for delta in deltas if delta.get("type") == "tool_call_delta"]
+
+    assert tool_call_deltas == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "bash",
+            "arguments_delta": '{"command":"pwd"}',
+        }
+    ]
+    assert deltas[-1] == {"type": "finish", "reason": "tool_calls"}
 
 
 def test_stream_backfills_only_missing_argument_suffix_after_added_item() -> None:

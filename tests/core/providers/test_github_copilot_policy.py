@@ -1,16 +1,11 @@
 """Tests for GitHub Copilot runtime policy."""
 
-import json
-from pathlib import Path
-
 from core.providers.github_copilot_policy import (
     CHAT_COMPLETIONS_ENDPOINT,
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
     copilot_model_policy,
 )
-
-BUNDLED_MODELS_PATH = Path("resources/models/github-copilot.json")
 
 
 def copilot_metadata(**overrides):
@@ -29,18 +24,6 @@ def copilot_metadata(**overrides):
     }
     metadata["github_copilot"].update(overrides)
     return metadata
-
-
-def bundled_copilot_metadata(model_id: str) -> dict:
-    payload = json.loads(BUNDLED_MODELS_PATH.read_text(encoding="utf-8"))
-    bundled_models = payload.get("models")
-    if not isinstance(bundled_models, dict):
-        return {}
-    model_entry = bundled_models.get(model_id)
-    if not isinstance(model_entry, dict):
-        return {}
-    metadata = model_entry.get("metadata")
-    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def test_openai_like_model_prefers_responses_from_metadata() -> None:
@@ -278,8 +261,21 @@ def test_messages_policy_keeps_temperature_for_haiku_when_thinking_active() -> N
     }
 
 
-def test_messages_policy_haiku_drops_budget_and_reasoning_effort_from_bundled_metadata() -> None:
-    policy = copilot_model_policy("claude-haiku-4.5", bundled_copilot_metadata("claude-haiku-4.5"))
+def test_exact_override_strips_haiku_budget_even_when_metadata_declares_budget() -> None:
+    policy = copilot_model_policy(
+        "claude-haiku-4.5",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-haiku-4.5",
+            version="claude-haiku-4.5",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            adaptive_thinking=True,
+            min_thinking_budget=1024,
+            max_thinking_budget=32000,
+            reasoning_efforts=[],
+            tool_calls=True,
+        ),
+    )
 
     filtered = policy.filter_request_kwargs(
         {
@@ -334,8 +330,19 @@ def test_messages_policy_keeps_adaptive_thinking_for_haiku_without_reasoning_eff
     }
 
 
-def test_bundled_haiku_metadata_supports_visible_thinking_request_controls() -> None:
-    policy = copilot_model_policy("claude-haiku-4.5", bundled_copilot_metadata("claude-haiku-4.5"))
+def test_haiku_policy_supports_visible_thinking_controls() -> None:
+    policy = copilot_model_policy(
+        "claude-haiku-4.5",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-haiku-4.5",
+            version="claude-haiku-4.5",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            adaptive_thinking=True,
+            reasoning_efforts=[],
+            tool_calls=True,
+        ),
+    )
 
     filtered = policy.filter_request_kwargs(
         {
@@ -357,10 +364,15 @@ def test_bundled_haiku_metadata_supports_visible_thinking_request_controls() -> 
     }
 
 
-def test_bundled_gemini_3_1_metadata_routes_chat_and_keeps_reasoning_effort() -> None:
+def test_gemini_exact_override_clears_reasoning_efforts_and_stays_chat() -> None:
     policy = copilot_model_policy(
         "gemini-3.1-pro-preview",
-        bundled_copilot_metadata("gemini-3.1-pro-preview"),
+        copilot_metadata(
+            vendor="Google",
+            family="gemini-3.1-pro-preview",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT],
+            tool_calls=True,
+        ),
     )
 
     filtered = policy.filter_request_kwargs(
@@ -375,6 +387,7 @@ def test_bundled_gemini_3_1_metadata_routes_chat_and_keeps_reasoning_effort() ->
     assert policy.allows_reasoning_effort("high") is False
     assert filtered == {
         "temperature": 0.2,
+        "response_format": {"type": "json_object"},
     }
 
 
