@@ -26,6 +26,23 @@ _STRUCTURED_OUTPUT_PARAMETER_NAMES = frozenset(
     {"response_format", "structured_outputs", "json_mode"}
 )
 _TOOL_PARAMETER_NAMES = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
+_OPTIONAL_REQUEST_PARAMETER_NAMES = frozenset(
+    {
+        "max_tokens",
+        "max_output_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop_sequences",
+    }
+)
+_CHAT_COMPLETIONS_REQUEST_PARAMETERS = frozenset({"max_tokens", "temperature", "top_p"})
+_RESPONSES_REQUEST_PARAMETERS = frozenset(
+    {"max_tokens", "max_output_tokens", "temperature", "top_p"}
+)
+_MESSAGES_REQUEST_PARAMETERS = frozenset(
+    {"max_tokens", "temperature", "top_p", "top_k", "stop_sequences"}
+)
 
 
 @dataclass(frozen=True)
@@ -123,6 +140,7 @@ class GitHubCopilotModelPolicy:
 
     facts: CopilotModelFacts
     endpoint_path: str = CHAT_COMPLETIONS_ENDPOINT
+    supported_request_parameters: frozenset[str] = frozenset()
     allowed_reasoning_efforts: frozenset[str] = frozenset()
     supports_thinking_budget: bool = False
     supports_adaptive_thinking: bool = False
@@ -143,6 +161,7 @@ class GitHubCopilotModelPolicy:
         policy = cls(
             facts=facts,
             endpoint_path=_select_endpoint(facts),
+            supported_request_parameters=frozenset(),
             allowed_reasoning_efforts=facts.allowed_reasoning_efforts,
             supports_thinking_budget=(
                 facts.min_thinking_budget is not None and facts.max_thinking_budget is not None
@@ -152,6 +171,13 @@ class GitHubCopilotModelPolicy:
             supports_parallel_tool_calls=facts.supports_parallel_tool_calls,
             supports_streaming=facts.supports_streaming,
             supports_structured_outputs=facts.supports_structured_outputs,
+        )
+        policy = replace(
+            policy,
+            supported_request_parameters=_supported_request_parameters(
+                facts,
+                policy.endpoint_path,
+            ),
         )
         return _apply_exact_override(policy)
 
@@ -193,6 +219,13 @@ class GitHubCopilotModelPolicy:
             thinking = filtered_kwargs.get("thinking")
             if isinstance(thinking, Mapping) and thinking.get("type") == "adaptive":
                 filtered_kwargs.pop("thinking", None)
+
+        for parameter_name in _OPTIONAL_REQUEST_PARAMETER_NAMES:
+            if (
+                parameter_name in filtered_kwargs
+                and parameter_name not in self.supported_request_parameters
+            ):
+                filtered_kwargs.pop(parameter_name, None)
         return filtered_kwargs
 
     @property
@@ -212,6 +245,9 @@ class GitHubCopilotModelPolicy:
         """Compatibility alias used by existing Copilot tests and adapter code."""
 
         return self.allows_reasoning_effort(thinking_effort)
+
+    def supports_request_parameter(self, parameter_name: str) -> bool:
+        return parameter_name in self.supported_request_parameters
 
 
 def copilot_model_policy(
@@ -262,6 +298,24 @@ def _apply_exact_override(policy: GitHubCopilotModelPolicy) -> GitHubCopilotMode
     if override is None:
         return policy
     return replace(policy, **override)
+
+
+def _supported_request_parameters(
+    facts: CopilotModelFacts,
+    endpoint_path: str,
+) -> frozenset[str]:
+    if endpoint_path == MESSAGES_ENDPOINT:
+        return _MESSAGES_REQUEST_PARAMETERS
+    if endpoint_path == RESPONSES_ENDPOINT:
+        parameters = set(_RESPONSES_REQUEST_PARAMETERS)
+        if _responses_temperature_is_unsupported(facts):
+            parameters.discard("temperature")
+        return frozenset(parameters)
+    return _CHAT_COMPLETIONS_REQUEST_PARAMETERS
+
+
+def _responses_temperature_is_unsupported(facts: CopilotModelFacts) -> bool:
+    return facts.is_openai_like and bool(facts.allowed_reasoning_efforts)
 
 
 def _copilot_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]:
