@@ -461,7 +461,11 @@ _STATIC_FALLBACK_FACTS_BY_ID = {
 _STATIC_EXACT_OVERRIDES_BY_ID: dict[str, dict[str, Any]] = {
     "claude-haiku-4.5": {
         "allowed_reasoning_efforts": frozenset(),
+        "supports_adaptive_thinking": True,
         "supports_thinking_budget": False,
+    },
+    "gemini-3.1-pro-preview": {
+        "allowed_reasoning_efforts": frozenset(),
     },
     "claude-sonnet-4.6": {"omit_temperature_when_thinking_active": True},
 }

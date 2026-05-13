@@ -32,6 +32,7 @@ class ResponsesStreamState:
     """State needed to normalize one Responses SSE stream."""
 
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
+    item_id_to_call_id: dict[str, str] = field(default_factory=dict)
     emitted_tool_names: set[str] = field(default_factory=set)
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
     emitted_reasoning_text: str = ""
@@ -249,7 +250,7 @@ def _apply_responses_reasoning(
         and effort != "none"
         and policy.allows_reasoning_effort(effort)
     ):
-        payload["reasoning"] = {"effort": effort}
+        payload["reasoning"] = {"effort": effort, "summary": "auto"}
     if payload.get("reasoning") or include_reasoning is True:
         _append_include(payload, REASONING_ENCRYPTED_CONTENT_INCLUDE)
 
@@ -499,6 +500,9 @@ def _output_item_event_deltas(
         return []
     tool_call_id = _function_call_id(item)
     _remember_stream_tool_call_id(event_data, tool_call_id, state)
+    item_own_id = _non_empty_string_or_none(item.get("id"))
+    if item_own_id is not None and item_own_id != tool_call_id:
+        state.item_id_to_call_id[item_own_id] = tool_call_id
     deltas: list[dict[str, Any]] = []
     name = _function_call_name(item)
     arguments = item.get("arguments")
@@ -647,7 +651,9 @@ def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamSt
         return call_id
     item_id = _non_empty_string_or_none(event_data.get("item_id"))
     if item_id is not None:
-        return item_id
+        canonical_id = state.item_id_to_call_id.get(item_id)
+        if canonical_id:
+            return canonical_id
     output_index = event_data.get("output_index")
     if isinstance(output_index, int):
         existing_id = state.tool_call_ids_by_output_index.get(output_index)
@@ -656,6 +662,8 @@ def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamSt
         generated_id = f"tool_call_{output_index}"
         state.tool_call_ids_by_output_index[output_index] = generated_id
         return generated_id
+    if item_id is not None:
+        return item_id
     return "tool_call_0"
 
 
@@ -683,14 +691,13 @@ def _function_mapping(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
 
 
 def _function_call_name(item: Mapping[str, Any]) -> str:
-    name = _non_empty_string_or_none(item.get("name"))
-    if name is not None:
-        return name
     function = _function_mapping(item)
-    if function is None:
-        return ""
-    nested_name = _non_empty_string_or_none(function.get("name"))
-    return nested_name if nested_name is not None else ""
+    if function is not None:
+        nested_name = _non_empty_string_or_none(function.get("name"))
+        if nested_name is not None:
+            return nested_name
+    name = _non_empty_string_or_none(item.get("name"))
+    return name if name is not None else ""
 
 
 def _function_description(item: Mapping[str, Any]) -> str:
