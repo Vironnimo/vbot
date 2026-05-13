@@ -76,6 +76,37 @@ def test_build_payload_gates_reasoning_tools_and_structured_output() -> None:
     assert "text" not in payload
 
 
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_build_payload_prefers_nested_function_tool_definition_when_top_level_name_is_blank(
+    model_id: str,
+) -> None:
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Search docs"}],
+        model_id=model_id,
+        policy=responses_policy(model_id),
+        tools=[
+            {
+                "type": "function",
+                "name": "",
+                "function": {
+                    "name": "search",
+                    "description": "Search docs",
+                    "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                },
+            }
+        ],
+    )
+
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "name": "search",
+            "description": "Search docs",
+            "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+    ]
+
+
 def test_build_payload_includes_allowed_reasoning_encrypted_content_request() -> None:
     payload = build_responses_payload(
         [{"role": "user", "content": "Think"}],
@@ -192,6 +223,104 @@ def test_build_payload_replays_tool_calls_tool_results_and_reasoning_meta() -> N
     ]
 
 
+def test_build_payload_replays_nested_function_tool_call_name_shape() -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q":"docs"}',
+                        },
+                    }
+                ],
+            }
+        ],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+    )
+
+    assert payload["input"] == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "search",
+            "arguments": '{"q":"docs"}',
+        }
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_build_payload_replays_nested_function_arguments_when_top_level_arguments_are_blank(
+    model_id: str,
+) -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "",
+                        "arguments": "",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q":"docs"}',
+                        },
+                    }
+                ],
+            }
+        ],
+        model_id=model_id,
+        policy=responses_policy(model_id),
+    )
+
+    assert payload["input"] == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "search",
+            "arguments": '{"q":"docs"}',
+        }
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_build_payload_preserves_nested_function_tool_call_name_shape_for_gpt_5_4_family(
+    model_id: str,
+) -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q":"docs"}',
+                        },
+                    }
+                ],
+            }
+        ],
+        model_id=model_id,
+        policy=responses_policy(model_id),
+    )
+
+    assert payload["input"] == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "search",
+            "arguments": '{"q":"docs"}',
+        }
+    ]
+
+
 def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() -> None:
     reasoning_item = {
         "type": "reasoning",
@@ -245,6 +374,94 @@ def test_normalize_response_uses_empty_arguments_for_malformed_function_json() -
     )
 
     assert normalized["tool_calls"] == [{"id": "call_1", "name": "search", "arguments": {}}]
+
+
+def test_normalize_response_extracts_nested_function_call_name_and_visible_reasoning() -> None:
+    response = {
+        "id": "resp_1",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+                "encrypted_content": "opaque",
+            },
+            {"type": "message", "content": [{"type": "output_text", "text": "Calling tool."}]},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "function": {
+                    "name": "search",
+                    "arguments": '{"q":"docs"}',
+                },
+            },
+        ],
+    }
+
+    normalized = normalize_responses_response(response)
+
+    assert normalized == {
+        "role": "assistant",
+        "content": "Calling tool.",
+        "reasoning": "Need docs lookup.",
+        "reasoning_meta": {
+            "response_id": "resp_1",
+            "reasoning_items": [response["output"][0]],
+            "encrypted_content": ["opaque"],
+        },
+        "tool_calls": [{"id": "call_1", "name": "search", "arguments": {"q": "docs"}}],
+    }
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_normalize_response_prefers_nested_function_arguments_when_top_level_values_are_blank(
+    model_id: str,
+) -> None:
+    normalized = normalize_responses_response(
+        {
+            "id": f"resp_{model_id}",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "",
+                    "arguments": "",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q":"docs"}',
+                    },
+                }
+            ],
+        }
+    )
+
+    assert normalized["tool_calls"] == [
+        {"id": "call_1", "name": "search", "arguments": {"q": "docs"}}
+    ]
+
+
+def test_normalize_response_extracts_reasoning_text_from_reasoning_content_blocks() -> None:
+    response = {
+        "id": "resp_1",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "reasoning_text", "text": "Need docs lookup."}],
+                "encrypted_content": "opaque",
+            }
+        ],
+    }
+
+    normalized = normalize_responses_response(response)
+
+    assert normalized["reasoning"] == "Need docs lookup."
+    assert normalized["reasoning_meta"] == {
+        "response_id": "resp_1",
+        "reasoning_items": [response["output"][0]],
+        "encrypted_content": ["opaque"],
+    }
 
 
 def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
@@ -315,6 +532,326 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
             },
         },
         {"type": "usage", "input_tokens": 5, "output_tokens": 3},
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+def test_stream_emits_tool_name_from_nested_function_call_item() -> None:
+    lines = [
+        _sse(
+            "response.output_item.added",
+            {
+                "item": {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "function": {"name": "search"},
+                }
+            },
+        )
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": "",
+        }
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_stream_deduplicates_replayed_argument_delta_when_item_id_differs(model_id: str) -> None:
+    lines = [
+        _sse(
+            "response.output_item.added",
+            {
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "",
+                    "arguments": "",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q":"docs"}',
+                    },
+                },
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "output_index": 0,
+                "item_id": "fc_1",
+                "call_id": "call_1",
+                "delta": '{"q":"docs"}',
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": '{"q":"docs"}',
+        },
+    ]
+
+
+def test_stream_backfills_only_missing_argument_suffix_after_added_item() -> None:
+    lines = [
+        _sse(
+            "response.output_item.added",
+            {
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q"',
+                    },
+                },
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "output_index": 0,
+                "call_id": "call_1",
+                "delta": '{"q":"docs"}',
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": '{"q"',
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": ':"docs"}',
+        },
+    ]
+
+
+def test_stream_emits_visible_reasoning_from_completed_response_output() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+        "encrypted_content": "opaque",
+    }
+    lines = [
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning_item],
+                    "usage": {"input_tokens": 5, "output_tokens": 3},
+                }
+            },
+        )
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": "resp_1",
+                "reasoning_items": [reasoning_item],
+                "encrypted_content": ["opaque"],
+            },
+        },
+        {"type": "usage", "input_tokens": 5, "output_tokens": 3},
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status() -> None:
+    lines = [
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_tool",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "function": {"name": "search", "arguments": '{"q":"docs"}'},
+                        }
+                    ],
+                }
+            },
+        )
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {"type": "reasoning_meta", "reasoning_meta": {"response_id": "resp_tool"}},
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])
+def test_responses_policy_variants_cover_same_nested_tool_name_and_visible_reasoning_paths(
+    model_id: str,
+) -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+        "encrypted_content": "opaque",
+    }
+
+    normalized = normalize_responses_response(
+        {
+            "id": "resp_1",
+            "output": [
+                reasoning_item,
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q":"docs"}',
+                    },
+                },
+            ],
+        }
+    )
+    streamed = list(
+        iter_responses_sse_deltas(
+            [
+                _sse(
+                    "response.output_item.added",
+                    {
+                        "item": {
+                            "type": "function_call",
+                            "call_id": "call_1",
+                            "function": {"name": "search"},
+                        }
+                    },
+                ),
+                _sse(
+                    "response.completed",
+                    {
+                        "response": {
+                            "id": f"resp_{model_id}",
+                            "status": "completed",
+                            "output": [reasoning_item],
+                        }
+                    },
+                ),
+            ]
+        )
+    )
+
+    assert responses_policy(model_id).endpoint_path == RESPONSES_ENDPOINT
+    assert normalized["tool_calls"] == [
+        {"id": "call_1", "name": "search", "arguments": {"q": "docs"}}
+    ]
+    assert normalized["reasoning"] == "Need docs lookup."
+    assert streamed == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "search",
+            "arguments_delta": "",
+        },
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": f"resp_{model_id}",
+                "reasoning_items": [reasoning_item],
+                "encrypted_content": ["opaque"],
+            },
+        },
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+def test_stream_does_not_duplicate_reasoning_when_completed_repeats_streamed_text() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+        "encrypted_content": "opaque",
+    }
+    lines = [
+        _sse("response.reasoning_summary_text.delta", {"delta": "Need docs lookup."}),
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning_item],
+                }
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": "resp_1",
+                "reasoning_items": [reasoning_item],
+                "encrypted_content": ["opaque"],
+            },
+        },
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs"}],
+        "content": [{"type": "reasoning_text", "text": " lookup."}],
+        "encrypted_content": "opaque",
+    }
+    lines = [
+        _sse("response.reasoning_summary_text.delta", {"delta": "Need docs"}),
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning_item],
+                }
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {"type": "reasoning_delta", "text": "Need docs"},
+        {"type": "reasoning_delta", "text": " lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": "resp_1",
+                "reasoning_items": [reasoning_item],
+                "encrypted_content": ["opaque"],
+            },
+        },
         {"type": "finish", "reason": "stop"},
     ]
 
