@@ -115,7 +115,7 @@ def test_build_payload_includes_allowed_reasoning_encrypted_content_request() ->
         thinking_effort="xhigh",
     )
 
-    assert payload["reasoning"] == {"effort": "xhigh"}
+    assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
     assert payload["include"] == ["reasoning.encrypted_content"]
 
 
