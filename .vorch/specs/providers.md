@@ -296,7 +296,14 @@ no tools, and no structured-output controls.
 For `/responses`, `temperature` is currently treated as unsupported unless a
 future Copilot policy explicitly adds positive support. Partial or incomplete
 Copilot metadata must stay on that conservative omission path rather than
-forwarding `temperature` optimistically.
+forwarding `temperature` optimistically. Copilot Responses tool-call payloads
+may use nested `function.{name,arguments}` shapes; helper code must preserve a
+non-empty tool name from either the top-level or nested form.
+
+Validated exact-model quirks can keep one safe feature while stripping adjacent
+unsupported controls. `claude-haiku-4.5`, for example, keeps adaptive visible
+thinking on `/v1/messages` but must omit reasoning-effort and thinking-budget
+controls unless Copilot explicitly proves support.
 
 Observed Copilot `/models` shape:
 
@@ -391,6 +398,12 @@ Copilot's `/v1/messages` helper must always send top-level `max_tokens`.
 Caller-provided `max_output_tokens` and `max_completion_tokens` aliases may be
 accepted for convenience, but they are normalized to on-wire `max_tokens` and
 are never forwarded as raw top-level keys.
+
+Copilot Claude Messages responses may expose readable thinking text under either
+`thinking` or `text` on a `thinking` content block. Streaming can likewise send
+visible thinking through `text_delta` on a thinking block, which must normalize
+to visible `reasoning_delta` while preserving the opaque thinking block and
+signature in `reasoning_meta` for round-tripping.
 
 **Response format:** content blocks array, each with a `type` field:
 - `type: "text"` — regular text content
