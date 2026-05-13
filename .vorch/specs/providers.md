@@ -305,6 +305,19 @@ unsupported controls. `claude-haiku-4.5`, for example, keeps adaptive visible
 thinking on `/v1/messages` but must omit reasoning-effort and thinking-budget
 controls unless Copilot explicitly proves support.
 
+### Catalog Guardrail
+
+`resources/models/<provider>.json` is refreshable provider data. Model-db
+updates may overwrite it at any time, so durable product fixes must not depend
+on hand-edited catalog entries. For GitHub Copilot specifically, permanent
+behavioral corrections belong in `_STATIC_EXACT_OVERRIDES_BY_ID` in
+`core/providers/github_copilot_policy.py`, not in
+`resources/models/github-copilot.json`.
+
+Tests that verify permanent routing, reasoning, tool-call, or exact-model
+behavior must use synthetic metadata or frozen raw-fixture inputs. Do not bind
+behavioral tests to the refreshable bundled Copilot catalog.
+
 Observed Copilot `/models` shape:
 
 ```json
