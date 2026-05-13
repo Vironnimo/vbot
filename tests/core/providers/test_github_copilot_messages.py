@@ -261,6 +261,133 @@ def test_build_payload_supports_enabled_budget_when_policy_allows_budget() -> No
     assert payload["thinking"] == {"type": "enabled", "budget_tokens": 2048}
 
 
+def test_build_payload_omits_temperature_for_sonnet_when_adaptive_thinking_is_active() -> None:
+    policy = _messages_policy(model_id="claude-sonnet-4.6")
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-sonnet-4.6",
+        policy=policy,
+        thinking_effort="high",
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    assert payload == {
+        "model": "claude-sonnet-4.6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "high"},
+        "max_tokens": 4096,
+        "top_p": 0.9,
+    }
+    assert "temperature" not in payload
+
+
+def test_build_payload_keeps_temperature_for_haiku_when_adaptive_thinking_is_active() -> None:
+    policy = _messages_policy(model_id="claude-haiku-4.5")
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-haiku-4.5",
+        policy=policy,
+        thinking_effort="high",
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    assert payload == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "max_tokens": 4096,
+        "temperature": 0.25,
+        "top_p": 0.9,
+    }
+
+
+def test_build_payload_haiku_requests_visible_thinking_without_reasoning_effort_support() -> None:
+    policy = _messages_policy(
+        model_id="claude-haiku-4.5",
+        reasoning_efforts=[],
+        adaptive_thinking=True,
+        min_thinking_budget=None,
+        max_thinking_budget=None,
+    )
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-haiku-4.5",
+        policy=policy,
+        thinking_effort="high",
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    assert payload == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "max_tokens": 4096,
+        "temperature": 0.25,
+        "top_p": 0.9,
+    }
+    assert "output_config" not in payload
+
+
+def test_build_payload_haiku_ignores_budget_controls_from_bundled_metadata_shape() -> None:
+    policy = _messages_policy(
+        model_id="claude-haiku-4.5",
+        reasoning_efforts=[],
+        adaptive_thinking=True,
+        min_thinking_budget=1024,
+        max_thinking_budget=32000,
+    )
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-haiku-4.5",
+        policy=policy,
+        thinking_budget=2048,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        thinking_effort="high",
+        output_config={"effort": "high"},
+        temperature=0.25,
+    )
+
+    assert payload == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "max_tokens": 4096,
+        "temperature": 0.25,
+    }
+    assert "output_config" not in payload
+
+
+def test_build_payload_haiku_runtime_metadata_misses_visible_thinking_request_shape() -> None:
+    policy = _messages_policy(
+        model_id="claude-haiku-4.5",
+        reasoning_efforts=[],
+        adaptive_thinking=False,
+    )
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-haiku-4.5",
+        policy=policy,
+        thinking_effort="high",
+        temperature=0.25,
+    )
+
+    assert payload == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
+        "max_tokens": 4096,
+        "temperature": 0.25,
+    }
+
+
 def test_normalize_response_extracts_text_thinking_meta_tool_calls_and_usage() -> None:
     normalized = normalize_copilot_messages_response(
         {
@@ -290,6 +417,31 @@ def test_normalize_response_extracts_text_thinking_meta_tool_calls_and_usage() -
             ]
         },
         "tool_calls": [{"id": "toolu_1", "name": "read", "arguments": {"path": "README.md"}}],
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+
+
+def test_normalize_response_extracts_visible_thinking_text_block() -> None:
+    normalized = normalize_copilot_messages_response(
+        {
+            "content": [
+                {"type": "thinking", "text": "Need to inspect first.", "signature": "sig-1"},
+                {"type": "text", "text": "Done."},
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+    )
+
+    assert normalized == {
+        "role": "assistant",
+        "content": "Done.",
+        "reasoning": "Need to inspect first.",
+        "reasoning_meta": {
+            "content_blocks": [
+                {"type": "thinking", "text": "Need to inspect first.", "signature": "sig-1"}
+            ]
+        },
+        "tool_calls": None,
         "usage": {"input_tokens": 10, "output_tokens": 20},
     }
 
@@ -367,6 +519,105 @@ def test_stream_normalizes_text_thinking_signature_tool_usage_and_finish() -> No
         },
         {"type": "finish", "reason": "tool_calls"},
         {"type": "usage", "input_tokens": 7, "output_tokens": 11},
+    ]
+
+
+def test_stream_normalizes_visible_thinking_text_delta_variant() -> None:
+    state = CopilotMessagesStreamState()
+
+    events: list[dict[str, Any]] = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Need docs lookup."},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig-stream"},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+    deltas = []
+    for event in events:
+        deltas.extend(normalize_copilot_messages_stream_event(event, state))
+
+    assert deltas == [
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "content_blocks": [
+                    {"type": "thinking", "text": "Need docs lookup.", "signature": "sig-stream"}
+                ]
+            },
+        },
+    ]
+
+
+def test_stream_normalizes_tool_use_stop_reason_to_tool_calls_finish() -> None:
+    state = CopilotMessagesStreamState()
+
+    events: list[dict[str, Any]] = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "search"},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+        },
+    ]
+
+    deltas = []
+    for event in events:
+        deltas.extend(normalize_copilot_messages_stream_event(event, state))
+
+    assert deltas == [
+        {
+            "type": "tool_call_delta",
+            "id": "toolu_1",
+            "name_delta": "search",
+            "arguments_delta": "",
+        },
+        {"type": "finish", "reason": "tool_calls"},
+    ]
+
+
+def test_stream_falls_back_to_tool_calls_finish_when_tool_use_block_is_present() -> None:
+    state = CopilotMessagesStreamState()
+
+    events: list[dict[str, Any]] = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "search"},
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "copilot_tool_stop"},
+        },
+    ]
+
+    deltas = []
+    for event in events:
+        deltas.extend(normalize_copilot_messages_stream_event(event, state))
+
+    assert deltas == [
+        {
+            "type": "tool_call_delta",
+            "id": "toolu_1",
+            "name_delta": "search",
+            "arguments_delta": "",
+        },
+        {"type": "finish", "reason": "tool_calls"},
     ]
 
 

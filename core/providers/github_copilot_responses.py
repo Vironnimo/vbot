@@ -33,7 +33,8 @@ class ResponsesStreamState:
 
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
     emitted_tool_names: set[str] = field(default_factory=set)
-    emitted_tool_arguments: set[str] = field(default_factory=set)
+    emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
+    emitted_reasoning_text: str = ""
 
 
 def build_responses_payload(
@@ -114,13 +115,13 @@ def normalize_responses_stream_event(
     if event_type == "response.output_text.delta":
         return _text_delta(event_data, "content_delta")
     if event_type in REASONING_SUMMARY_DELTA_EVENTS:
-        return _text_delta(event_data, "reasoning_delta")
+        return _reasoning_delta(event_data, state)
     if event_type == "response.function_call_arguments.delta":
         return _function_arguments_delta(event_data, state)
     if event_type in {"response.output_item.added", "response.output_item.done"}:
         return _output_item_event_deltas(event_data, state)
     if event_type in {"response.completed", "response.done"}:
-        return _completed_event_deltas(event_data)
+        return _completed_event_deltas(event_data, state)
     return []
 
 
@@ -168,8 +169,8 @@ def _tool_call_to_function_call(tool_call: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "type": "function_call",
         "call_id": _string_or(tool_call.get("id"), ""),
-        "name": _string_or(tool_call.get("name"), ""),
-        "arguments": json.dumps(tool_call.get("arguments", {}), separators=(",", ":")),
+        "name": _function_call_name(tool_call),
+        "arguments": _serialize_tool_arguments(_function_call_arguments(tool_call)),
     }
 
 
@@ -212,21 +213,19 @@ def _apply_responses_tools(
 
 
 def _to_responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
-    if tool.get("type") == "function" and "name" in tool:
-        return dict(tool)
     function = tool.get("function")
     if isinstance(function, Mapping):
         return {
             "type": "function",
-            "name": _string_or(function.get("name"), ""),
-            "description": _string_or(function.get("description"), ""),
-            "parameters": function.get("parameters", {}),
+            "name": _function_call_name(tool),
+            "description": _function_description(tool),
+            "parameters": _function_parameters(tool),
         }
     return {
         "type": "function",
-        "name": _string_or(tool.get("name"), ""),
-        "description": _string_or(tool.get("description"), ""),
-        "parameters": tool.get("parameters", {}),
+        "name": _function_call_name(tool),
+        "description": _function_description(tool),
+        "parameters": _function_parameters(tool),
     }
 
 
@@ -308,7 +307,7 @@ def _supports_responses_temperature(policy: GitHubCopilotModelPolicy) -> bool:
     and omits the field for that endpoint family.
     """
 
-    return policy.endpoint_path != "/responses"
+    return policy.supports_request_parameter("temperature")
 
 
 def _append_include(payload: dict[str, Any], include_item: str) -> None:
@@ -335,6 +334,12 @@ def _extract_reasoning_parts(output_items: list[Mapping[str, Any]]) -> list[str]
         if item.get("type") != "reasoning":
             continue
         parts.extend(_content_text_parts(item.get("summary"), {"summary_text", "text"}))
+        parts.extend(
+            _content_text_parts(
+                item.get("content"),
+                {"summary_text", "reasoning_text", "output_text", "text"},
+            )
+        )
         text = item.get("text")
         if isinstance(text, str):
             parts.append(text)
@@ -364,8 +369,8 @@ def _extract_function_calls(output_items: list[Mapping[str, Any]]) -> list[dict[
         tool_calls.append(
             {
                 "id": _function_call_id(item),
-                "name": _string_or(item.get("name"), ""),
-                "arguments": _parse_tool_arguments(item.get("arguments")),
+                "name": _function_call_name(item),
+                "arguments": _parse_tool_arguments(_function_call_arguments(item)),
             }
         )
     return tool_calls or None
@@ -450,6 +455,16 @@ def _text_delta(event_data: Mapping[str, Any], delta_type: str) -> list[dict[str
     return [{"type": delta_type, "text": delta}]
 
 
+def _reasoning_delta(
+    event_data: Mapping[str, Any],
+    state: ResponsesStreamState,
+) -> list[dict[str, Any]]:
+    deltas = _text_delta(event_data, "reasoning_delta")
+    if deltas:
+        state.emitted_reasoning_text += deltas[0]["text"]
+    return deltas
+
+
 def _function_arguments_delta(
     event_data: Mapping[str, Any],
     state: ResponsesStreamState,
@@ -458,13 +473,15 @@ def _function_arguments_delta(
     delta = event_data.get("delta")
     if not isinstance(delta, str) or not delta:
         return []
-    state.emitted_tool_arguments.add(tool_call_id)
+    arguments_delta = _record_tool_argument_delta(tool_call_id, delta, state)
+    if arguments_delta is None:
+        return []
     return [
         {
             "type": "tool_call_delta",
             "id": tool_call_id,
             "name_delta": "",
-            "arguments_delta": delta,
+            "arguments_delta": arguments_delta,
         }
     ]
 
@@ -483,59 +500,133 @@ def _output_item_event_deltas(
     tool_call_id = _function_call_id(item)
     _remember_stream_tool_call_id(event_data, tool_call_id, state)
     deltas: list[dict[str, Any]] = []
-    name = item.get("name")
-    if isinstance(name, str) and name and tool_call_id not in state.emitted_tool_names:
-        deltas.append(
-            {
-                "type": "tool_call_delta",
-                "id": tool_call_id,
-                "name_delta": name,
-                "arguments_delta": "",
-            }
-        )
-        state.emitted_tool_names.add(tool_call_id)
+    name = _function_call_name(item)
     arguments = item.get("arguments")
-    if (
-        isinstance(arguments, str)
-        and arguments
-        and tool_call_id not in state.emitted_tool_arguments
-    ):
+    name_delta = ""
+    arguments_delta: str | None = None
+    if isinstance(name, str) and name and tool_call_id not in state.emitted_tool_names:
+        name_delta = name
+        state.emitted_tool_names.add(tool_call_id)
+    if isinstance(arguments, str) and arguments:
+        arguments_delta = _record_tool_argument_delta(tool_call_id, arguments, state)
+    nested_arguments = _function_call_arguments(item)
+    if arguments_delta is None and isinstance(nested_arguments, str) and nested_arguments:
+        arguments_delta = _record_tool_argument_delta(tool_call_id, nested_arguments, state)
+    if name_delta or arguments_delta:
         deltas.append(
             {
                 "type": "tool_call_delta",
                 "id": tool_call_id,
-                "name_delta": "",
-                "arguments_delta": arguments,
+                "name_delta": name_delta,
+                "arguments_delta": arguments_delta or "",
             }
         )
-        state.emitted_tool_arguments.add(tool_call_id)
     return deltas
 
 
-def _completed_event_deltas(event_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _record_tool_argument_delta(
+    tool_call_id: str,
+    delta: str,
+    state: ResponsesStreamState,
+) -> str | None:
+    emitted_arguments = state.emitted_tool_arguments.get(tool_call_id, "")
+    if not emitted_arguments:
+        state.emitted_tool_arguments[tool_call_id] = delta
+        return delta
+    if delta in emitted_arguments:
+        return None
+    if delta.startswith(emitted_arguments):
+        suffix = delta[len(emitted_arguments) :]
+        state.emitted_tool_arguments[tool_call_id] = delta
+        return suffix or None
+
+    overlap = _suffix_prefix_overlap(emitted_arguments, delta)
+    if overlap > 0:
+        suffix = delta[overlap:]
+        state.emitted_tool_arguments[tool_call_id] = emitted_arguments + suffix
+        return suffix or None
+
+    state.emitted_tool_arguments[tool_call_id] = emitted_arguments + delta
+    return delta
+
+
+def _completed_event_deltas(
+    event_data: Mapping[str, Any],
+    state: ResponsesStreamState,
+) -> list[dict[str, Any]]:
     response = event_data.get("response")
     if not isinstance(response, Mapping):
         response = event_data
     deltas: list[dict[str, Any]] = []
     output_items = _mapping_list(response.get("output"))
+    reasoning = _joined_or_none(_extract_reasoning_parts(output_items))
+    reasoning_backfill = _reasoning_backfill_delta(reasoning, state)
+    if reasoning_backfill is not None:
+        deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
     reasoning_meta = _extract_reasoning_meta(response, output_items)
     if reasoning_meta is not None:
         deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
     usage = _extract_responses_usage(response.get("usage"))
     if usage is not None:
         deltas.append({"type": "usage", **usage})
-    deltas.append({"type": "finish", "reason": _responses_finish_reason(response)})
+    deltas.append({"type": "finish", "reason": _responses_finish_reason(response, state)})
     return deltas
 
 
-def _responses_finish_reason(response: Mapping[str, Any]) -> str:
-    status = response.get("status")
-    if status == "completed":
-        return "stop"
+def _reasoning_backfill_delta(
+    reasoning: str | None,
+    state: ResponsesStreamState,
+) -> str | None:
+    if reasoning is None:
+        return None
+    emitted_reasoning = state.emitted_reasoning_text
+    if not emitted_reasoning:
+        state.emitted_reasoning_text = reasoning
+        return reasoning
+    if reasoning == emitted_reasoning or emitted_reasoning.endswith(reasoning):
+        return None
+    if reasoning.startswith(emitted_reasoning):
+        backfill = reasoning[len(emitted_reasoning) :]
+        state.emitted_reasoning_text = reasoning
+        return backfill or None
+
+    overlap = _suffix_prefix_overlap(emitted_reasoning, reasoning)
+    if overlap > 0:
+        backfill = reasoning[overlap:]
+        state.emitted_reasoning_text += backfill
+        return backfill or None
+    return None
+
+
+def _suffix_prefix_overlap(left: str, right: str) -> int:
+    max_overlap = min(len(left), len(right))
+    for overlap in range(max_overlap, 0, -1):
+        if left.endswith(right[:overlap]):
+            return overlap
+    return 0
+
+
+def _responses_finish_reason(
+    response: Mapping[str, Any],
+    state: ResponsesStreamState | None = None,
+) -> str:
     output_items = _mapping_list(response.get("output"))
     if any(item.get("type") == "function_call" for item in output_items):
         return "tool_calls"
+    if state is not None and _stream_has_tool_calls(state):
+        return "tool_calls"
+    status = response.get("status")
+    if status == "completed":
+        return "stop"
     return "stop"
+
+
+def _stream_has_tool_calls(state: ResponsesStreamState) -> bool:
+    return bool(
+        state.tool_call_ids_by_output_index
+        or state.emitted_tool_names
+        or state.emitted_tool_arguments
+    )
 
 
 def _responses_error_message(event_data: Mapping[str, Any]) -> str:
@@ -551,8 +642,11 @@ def _responses_error_message(event_data: Mapping[str, Any]) -> str:
 
 
 def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamState) -> str:
-    item_id = event_data.get("item_id") or event_data.get("call_id")
-    if isinstance(item_id, str) and item_id:
+    call_id = _non_empty_string_or_none(event_data.get("call_id"))
+    if call_id is not None:
+        return call_id
+    item_id = _non_empty_string_or_none(event_data.get("item_id"))
+    if item_id is not None:
         return item_id
     output_index = event_data.get("output_index")
     if isinstance(output_index, int):
@@ -576,8 +670,70 @@ def _remember_stream_tool_call_id(
 
 
 def _function_call_id(item: Mapping[str, Any]) -> str:
-    call_id = item.get("call_id") or item.get("id")
-    return call_id if isinstance(call_id, str) and call_id else "tool_call_0"
+    call_id = _non_empty_string_or_none(item.get("call_id"))
+    if call_id is not None:
+        return call_id
+    item_id = _non_empty_string_or_none(item.get("id"))
+    return item_id if item_id is not None else "tool_call_0"
+
+
+def _function_mapping(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    function = item.get("function")
+    return function if isinstance(function, Mapping) else None
+
+
+def _function_call_name(item: Mapping[str, Any]) -> str:
+    name = _non_empty_string_or_none(item.get("name"))
+    if name is not None:
+        return name
+    function = _function_mapping(item)
+    if function is None:
+        return ""
+    nested_name = _non_empty_string_or_none(function.get("name"))
+    return nested_name if nested_name is not None else ""
+
+
+def _function_description(item: Mapping[str, Any]) -> str:
+    description = item.get("description")
+    if isinstance(description, str):
+        return description
+    function = _function_mapping(item)
+    if function is None:
+        return ""
+    return _string_or(function.get("description"), "")
+
+
+def _function_parameters(item: Mapping[str, Any]) -> Any:
+    parameters = item.get("parameters")
+    if isinstance(parameters, Mapping):
+        return parameters
+    function = _function_mapping(item)
+    if function is None:
+        return {}
+    nested_parameters = function.get("parameters")
+    return nested_parameters if isinstance(nested_parameters, Mapping) else {}
+
+
+def _function_call_arguments(item: Mapping[str, Any]) -> Any:
+    arguments = item.get("arguments")
+    if _has_function_arguments(arguments):
+        return arguments
+    function = _function_mapping(item)
+    if function is None:
+        return None
+    return function.get("arguments")
+
+
+def _has_function_arguments(arguments: Any) -> bool:
+    if isinstance(arguments, Mapping):
+        return True
+    return isinstance(arguments, str) and bool(arguments)
+
+
+def _serialize_tool_arguments(arguments: Any) -> str:
+    if isinstance(arguments, str):
+        return arguments
+    return json.dumps(arguments if arguments is not None else {}, separators=(",", ":"))
 
 
 def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
@@ -604,3 +760,10 @@ def _joined_or_none(parts: list[str]) -> str | None:
 
 def _string_or(value: Any, fallback: str) -> str:
     return value if isinstance(value, str) else fallback
+
+
+def _non_empty_string_or_none(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None

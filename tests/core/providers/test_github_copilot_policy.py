@@ -1,11 +1,16 @@
 """Tests for GitHub Copilot runtime policy."""
 
+import json
+from pathlib import Path
+
 from core.providers.github_copilot_policy import (
     CHAT_COMPLETIONS_ENDPOINT,
     MESSAGES_ENDPOINT,
     RESPONSES_ENDPOINT,
     copilot_model_policy,
 )
+
+BUNDLED_MODELS_PATH = Path("resources/models/github-copilot.json")
 
 
 def copilot_metadata(**overrides):
@@ -24,6 +29,18 @@ def copilot_metadata(**overrides):
     }
     metadata["github_copilot"].update(overrides)
     return metadata
+
+
+def bundled_copilot_metadata(model_id: str) -> dict:
+    payload = json.loads(BUNDLED_MODELS_PATH.read_text(encoding="utf-8"))
+    bundled_models = payload.get("models")
+    if not isinstance(bundled_models, dict):
+        return {}
+    model_entry = bundled_models.get(model_id)
+    if not isinstance(model_entry, dict):
+        return {}
+    metadata = model_entry.get("metadata")
+    return dict(metadata) if isinstance(metadata, dict) else {}
 
 
 def test_openai_like_model_prefers_responses_from_metadata() -> None:
@@ -196,6 +213,168 @@ def test_messages_policy_keeps_messages_safe_output_token_field() -> None:
         "temperature": 0.2,
         "top_k": 10,
         "stop_sequences": ["END"],
+    }
+
+
+def test_messages_policy_omits_temperature_for_sonnet_when_thinking_active() -> None:
+    policy = copilot_model_policy(
+        "claude-sonnet-4.6",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-sonnet-4.6",
+            version="claude-sonnet-4.6",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            adaptive_thinking=True,
+            min_thinking_budget=1024,
+            max_thinking_budget=32000,
+        ),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "temperature": 0.2,
+            "top_k": 10,
+            "stop_sequences": ["END"],
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert filtered == {
+        "thinking_effort": "high",
+        "top_k": 10,
+        "stop_sequences": ["END"],
+    }
+
+
+def test_messages_policy_keeps_temperature_for_haiku_when_thinking_active() -> None:
+    policy = copilot_model_policy(
+        "claude-haiku-4.5",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-haiku-4.5",
+            version="claude-haiku-4.5",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            adaptive_thinking=True,
+            min_thinking_budget=1024,
+            max_thinking_budget=32000,
+        ),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "temperature": 0.2,
+            "top_k": 10,
+            "stop_sequences": ["END"],
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert filtered == {
+        "temperature": 0.2,
+        "top_k": 10,
+        "stop_sequences": ["END"],
+    }
+
+
+def test_messages_policy_haiku_drops_budget_and_reasoning_effort_from_bundled_metadata() -> None:
+    policy = copilot_model_policy("claude-haiku-4.5", bundled_copilot_metadata("claude-haiku-4.5"))
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "thinking_budget": 2048,
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "output_config": {"effort": "high"},
+            "temperature": 0.2,
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert policy.supports_adaptive_thinking is True
+    assert policy.supports_thinking_budget is False
+    assert policy.allowed_reasoning_efforts == frozenset()
+    assert filtered == {
+        "temperature": 0.2,
+    }
+
+
+def test_messages_policy_keeps_adaptive_thinking_for_haiku_without_reasoning_efforts() -> None:
+    policy = copilot_model_policy(
+        "claude-haiku-4.5",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-haiku-4.5",
+            version="claude-haiku-4.5",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            reasoning_efforts=[],
+            adaptive_thinking=True,
+            min_thinking_budget=None,
+            max_thinking_budget=None,
+        ),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "temperature": 0.2,
+            "top_k": 10,
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert policy.supports_adaptive_thinking is True
+    assert policy.allowed_reasoning_efforts == frozenset()
+    assert filtered == {
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "temperature": 0.2,
+        "top_k": 10,
+    }
+
+
+def test_bundled_haiku_metadata_supports_visible_thinking_request_controls() -> None:
+    policy = copilot_model_policy("claude-haiku-4.5", bundled_copilot_metadata("claude-haiku-4.5"))
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "temperature": 0.2,
+            "top_k": 10,
+            "stop_sequences": ["END"],
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert policy.supports_adaptive_thinking is True
+    assert policy.supports_thinking_budget is False
+    assert policy.allowed_reasoning_efforts == frozenset()
+    assert filtered == {
+        "temperature": 0.2,
+        "top_k": 10,
+        "stop_sequences": ["END"],
+    }
+
+
+def test_bundled_gemini_3_1_metadata_routes_chat_and_keeps_reasoning_effort() -> None:
+    policy = copilot_model_policy(
+        "gemini-3.1-pro-preview",
+        bundled_copilot_metadata("gemini-3.1-pro-preview"),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    assert policy.endpoint_path == CHAT_COMPLETIONS_ENDPOINT
+    assert policy.allows_reasoning_effort("high") is False
+    assert filtered == {
+        "temperature": 0.2,
     }
 
 
