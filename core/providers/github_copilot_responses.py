@@ -303,16 +303,12 @@ def _supports_responses_temperature(policy: GitHubCopilotModelPolicy) -> bool:
 
     GPT-5 reasoning models on the Responses API reject temperature changes, so
     Copilot should omit that field unless the routed model is known to support
-    it. The current runtime policy does not expose positive temperature support,
-    therefore OpenAI-like Responses models with reasoning controls stay on the
-    conservative omission path.
+    it. The current runtime policy does not expose positive temperature support
+    for any Responses-routed Copilot model, so this helper stays conservative
+    and omits the field for that endpoint family.
     """
 
-    return not (
-        policy.endpoint_path == "/responses"
-        and policy.facts.is_openai_like
-        and policy.allows_any_reasoning_controls
-    )
+    return policy.endpoint_path != "/responses"
 
 
 def _append_include(payload: dict[str, Any], include_item: str) -> None:
