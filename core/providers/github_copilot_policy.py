@@ -41,7 +41,15 @@ _RESPONSES_REQUEST_PARAMETERS = frozenset(
     {"max_tokens", "max_output_tokens", "temperature", "top_p"}
 )
 _MESSAGES_REQUEST_PARAMETERS = frozenset(
-    {"max_tokens", "temperature", "top_p", "top_k", "stop_sequences"}
+    {
+        "max_tokens",
+        "max_output_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop_sequences",
+    }
 )
 
 
@@ -308,14 +316,9 @@ def _supported_request_parameters(
         return _MESSAGES_REQUEST_PARAMETERS
     if endpoint_path == RESPONSES_ENDPOINT:
         parameters = set(_RESPONSES_REQUEST_PARAMETERS)
-        if _responses_temperature_is_unsupported(facts):
-            parameters.discard("temperature")
+        parameters.discard("temperature")
         return frozenset(parameters)
     return _CHAT_COMPLETIONS_REQUEST_PARAMETERS
-
-
-def _responses_temperature_is_unsupported(facts: CopilotModelFacts) -> bool:
-    return facts.is_openai_like and bool(facts.allowed_reasoning_efforts)
 
 
 def _copilot_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]:

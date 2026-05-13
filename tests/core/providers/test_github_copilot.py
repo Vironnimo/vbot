@@ -90,6 +90,16 @@ SYNTHETIC_COPILOT_METADATA_BY_MODEL_ID = {
             "tool_calls": True,
         }
     },
+    "gpt-5.4-partial": {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4",
+            "version": "gpt-5.4",
+            "supported_endpoints": ["/responses"],
+            "streaming": True,
+            "tool_calls": True,
+        }
+    },
 }
 
 
@@ -489,6 +499,52 @@ async def test_responses_models_send_exact_on_wire_payload_without_temperature(
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "max_output_tokens": 4096,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_partial_openai_like_metadata_still_omits_temperature_on_responses(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.4-partial",
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "gpt-5.4-partial",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+        "max_output_tokens": 4096,
+        "top_p": 0.9,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_messages_alias_override_wins_over_provider_default_on_wire(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="claude-haiku-4.5",
+        max_output_tokens=2048,
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 2048,
+        "temperature": 0.25,
     }
 
 

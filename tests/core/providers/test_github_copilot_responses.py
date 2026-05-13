@@ -116,6 +116,23 @@ def test_build_payload_omits_temperature_for_gpt5_responses_models(model_id: str
     assert payload["parallel_tool_calls"] is True
 
 
+def test_build_payload_omits_temperature_for_partial_openai_like_metadata() -> None:
+    partial_policy = responses_policy(reasoning_efforts=[])
+
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="gpt-5.4",
+        policy=partial_policy,
+        temperature=0.2,
+        top_p=0.9,
+        max_tokens=512,
+    )
+
+    assert "temperature" not in payload
+    assert payload["top_p"] == 0.9
+    assert payload["max_output_tokens"] == 512
+
+
 def test_build_payload_prefers_explicit_max_output_tokens_over_max_tokens() -> None:
     payload = build_responses_payload(
         [{"role": "user", "content": "Hello"}],

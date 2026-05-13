@@ -42,11 +42,6 @@ SAFE_TOP_LEVEL_PARAMETERS = {
     "top_k",
     "stop_sequences",
 }
-MAX_TOKENS_PARAMETER_NAMES = (
-    "max_tokens",
-    "max_output_tokens",
-    "max_completion_tokens",
-)
 SAFE_THINKING_TYPES = {"adaptive", "disabled", "enabled"}
 SAFE_TOOL_CHOICE_TYPES = {"auto", "any", "tool"}
 
@@ -472,8 +467,17 @@ def _apply_safe_top_level_parameters(
 
 
 def _resolve_messages_max_tokens(kwargs: dict[str, Any]) -> int:
-    for parameter_name in MAX_TOKENS_PARAMETER_NAMES:
-        max_tokens = _safe_max_tokens_value(kwargs.pop(parameter_name, None))
+    explicit_max_output_tokens = _safe_max_tokens_value(kwargs.pop("max_output_tokens", None))
+    explicit_max_completion_tokens = _safe_max_tokens_value(
+        kwargs.pop("max_completion_tokens", None)
+    )
+    explicit_max_tokens = _safe_max_tokens_value(kwargs.pop("max_tokens", None))
+
+    for max_tokens in (
+        explicit_max_output_tokens,
+        explicit_max_completion_tokens,
+        explicit_max_tokens,
+    ):
         if max_tokens is not None:
             return max_tokens
     return DEFAULT_MAX_OUTPUT_TOKENS

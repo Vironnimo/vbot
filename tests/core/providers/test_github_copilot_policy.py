@@ -54,7 +54,8 @@ def test_claude_like_model_prefers_messages_from_metadata() -> None:
     assert policy.supports_adaptive_thinking is True
     assert policy.supports_thinking_budget is True
     assert policy.supports_request_parameter("max_tokens") is True
-    assert policy.supports_request_parameter("max_output_tokens") is False
+    assert policy.supports_request_parameter("max_output_tokens") is True
+    assert policy.supports_request_parameter("max_completion_tokens") is True
 
 
 def test_gemini_model_stays_chat_first_when_chat_is_advertised() -> None:
@@ -191,7 +192,37 @@ def test_messages_policy_keeps_messages_safe_output_token_field() -> None:
     assert policy.endpoint_path == MESSAGES_ENDPOINT
     assert filtered == {
         "max_tokens": 4096,
+        "max_output_tokens": 2048,
         "temperature": 0.2,
         "top_k": 10,
         "stop_sequences": ["END"],
+    }
+
+
+def test_responses_policy_omits_temperature_for_partial_openai_like_metadata() -> None:
+    policy = copilot_model_policy(
+        "gpt-5.4",
+        {
+            "github_copilot": {
+                "vendor": "OpenAI",
+                "family": "gpt-5.4",
+                "supported_endpoints": [RESPONSES_ENDPOINT],
+            }
+        },
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "temperature": 0.4,
+            "top_p": 0.9,
+            "max_tokens": 4096,
+            "max_output_tokens": 2048,
+        }
+    )
+
+    assert policy.endpoint_path == RESPONSES_ENDPOINT
+    assert filtered == {
+        "top_p": 0.9,
+        "max_tokens": 4096,
+        "max_output_tokens": 2048,
     }

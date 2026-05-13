@@ -168,6 +168,41 @@ def test_build_payload_keeps_only_endpoint_safe_fields() -> None:
     assert "text" not in payload
 
 
+def test_build_payload_prefers_messages_output_token_aliases_over_provider_default() -> None:
+    policy = _messages_policy()
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="claude-sonnet-4.6",
+        policy=policy,
+        max_tokens=4096,
+        max_output_tokens=2048,
+    )
+
+    assert payload == {
+        "model": "claude-sonnet-4.6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 2048,
+    }
+
+
+def test_build_payload_accepts_max_completion_tokens_alias() -> None:
+    policy = _messages_policy()
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="claude-sonnet-4.6",
+        policy=policy,
+        max_completion_tokens="1024",
+    )
+
+    assert payload == {
+        "model": "claude-sonnet-4.6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 1024,
+    }
+
+
 def test_build_payload_gates_thinking_by_exact_policy() -> None:
     policy = _messages_policy()
 
