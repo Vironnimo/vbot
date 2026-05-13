@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-12 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential.
+Last updated: 2026-05-13 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -293,6 +293,11 @@ reasoning efforts, thinking budgets, and adaptive thinking. Unknown Copilot
 models default to `/chat/completions`, no explicit reasoning/thinking controls,
 no tools, and no structured-output controls.
 
+For `/responses`, `temperature` is currently treated as unsupported unless a
+future Copilot policy explicitly adds positive support. Partial or incomplete
+Copilot metadata must stay on that conservative omission path rather than
+forwarding `temperature` optimistically.
+
 Observed Copilot `/models` shape:
 
 ```json
@@ -381,6 +386,11 @@ Key differences from OpenAI:
 - `thinking.budget_tokens`: int, token budget for thinking (when `type: "enabled"`)
 - `output_config.effort`: `"low"` | `"medium"` | `"high"` | `"xhigh"` | `"max"`
 - `thinking.display`: `"summarized"` | `"omitted"` — controls thinking visibility
+
+Copilot's `/v1/messages` helper must always send top-level `max_tokens`.
+Caller-provided `max_output_tokens` and `max_completion_tokens` aliases may be
+accepted for convenience, but they are normalized to on-wire `max_tokens` and
+are never forwarded as raw top-level keys.
 
 **Response format:** content blocks array, each with a `type` field:
 - `type: "text"` — regular text content
