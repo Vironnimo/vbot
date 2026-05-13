@@ -1,849 +1,1003 @@
 {
-    "fetched_at": "2026-05-12T21:37:48.754946+00:00",
-    "models": {
-        "accounts/msft/routers/f185i3v4": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 256000,
-            "max_output_tokens": 1024,
-            "metadata": {
-                "github_copilot": {
-                    "family": "search-agent",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions"],
-                    "tool_calls": true,
-                    "version": "accounts/msft/routers/f185i3v4"
-                }
-            },
-            "name": "Search Agent A"
+  "fetched_at": "2026-05-13T18:40:43.945589+00:00",
+  "models": {
+    "accounts/msft/routers/f185i3v4": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
         },
-        "accounts/msft/routers/fmfeto88": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 256000,
-            "max_output_tokens": 1024,
-            "metadata": {
-                "github_copilot": {
-                    "family": "search-agent",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions"],
-                    "tool_calls": true,
-                    "vendor": "Fireworks",
-                    "version": "accounts/msft/routers/fmfeto88"
-                }
-            },
-            "name": "Search Agent B"
-        },
-        "accounts/msft/routers/gdjv4v2v": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 256000,
-            "max_output_tokens": 1024,
-            "metadata": {
-                "github_copilot": {
-                    "family": "search-agent",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions"],
-                    "tool_calls": true,
-                    "vendor": "Fireworks",
-                    "version": "accounts/msft/routers/gdjv4v2v"
-                }
-            },
-            "name": "Search Agent C"
-        },
-        "claude-haiku-4.5": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 200000,
-            "max_output_tokens": 32000,
-            "metadata": {
-                "github_copilot": {
-                    "adaptive_thinking": true,
-                    "family": "claude-haiku-4.5",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions", "/v1/messages"],
-                    "tool_calls": true,
-                    "vendor": "Anthropic",
-                    "version": "claude-haiku-4.5"
-                }
-            },
-            "name": "Claude Haiku 4.5"
-        },
-        "claude-opus-4.5": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 200000,
-            "max_output_tokens": 32000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "claude-opus-4.5",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 1024,
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions", "/v1/messages"],
-                    "tool_calls": true,
-                    "vendor": "Anthropic",
-                    "version": "claude-opus-4.5"
-                }
-            },
-            "name": "Claude Opus 4.5"
-        },
-        "claude-opus-4.7": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 200000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "adaptive_thinking": true,
-                    "family": "claude-opus-4.7",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 1024,
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["medium"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/v1/messages", "/chat/completions"],
-                    "tool_calls": true,
-                    "vendor": "Anthropic",
-                    "version": "claude-opus-4.7"
-                }
-            },
-            "name": "Claude Opus 4.7"
-        },
-        "claude-sonnet-4.5": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 200000,
-            "max_output_tokens": 32000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "claude-sonnet-4.5",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 1024,
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions", "/v1/messages"],
-                    "tool_calls": true,
-                    "vendor": "Anthropic",
-                    "version": "claude-sonnet-4.5"
-                }
-            },
-            "name": "Claude Sonnet 4.5"
-        },
-        "claude-sonnet-4.6": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 200000,
-            "max_output_tokens": 32000,
-            "metadata": {
-                "github_copilot": {
-                    "adaptive_thinking": true,
-                    "family": "claude-sonnet-4.6",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 1024,
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/chat/completions", "/v1/messages"],
-                    "tool_calls": true,
-                    "vendor": "Anthropic",
-                    "version": "claude-sonnet-4.6"
-                }
-            },
-            "name": "Claude Sonnet 4.6"
-        },
-        "gemini-2.5-pro": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gemini-2.5-pro",
-                    "max_thinking_budget": 32768,
-                    "min_thinking_budget": 128,
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Google",
-                    "version": "gemini-2.5-pro"
-                }
-            },
-            "name": "Gemini 2.5 Pro"
-        },
-        "gemini-3-flash-preview": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gemini-3-flash",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 256,
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high"],
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Google",
-                    "version": "gemini-3-flash-preview"
-                }
-            },
-            "name": "Gemini 3 Flash (Preview)"
-        },
-        "gemini-3.1-pro-preview": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gemini-3.1-pro-preview",
-                    "max_thinking_budget": 32000,
-                    "min_thinking_budget": 256,
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "supported_endpoints": ["/chat/completions"],
-                    "tool_calls": true,
-                    "vendor": "Google",
-                    "version": "gemini-3.1-pro-preview"
-                }
-            },
-            "name": "Gemini 3.1 Pro"
-        },
-        "gpt-3.5-turbo": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 16384,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-3.5-turbo",
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-3.5-turbo-0613"
-                }
-            },
-            "name": "GPT 3.5 Turbo"
-        },
-        "gpt-3.5-turbo-0613": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 16384,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-3.5-turbo",
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-3.5-turbo-0613"
-                }
-            },
-            "name": "GPT 3.5 Turbo"
-        },
-        "gpt-4": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 32768,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4",
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4-0613"
-                }
-            },
-            "name": "GPT 4"
-        },
-        "gpt-4-0125-preview": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4-turbo",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4-0125-preview"
-                }
-            },
-            "name": "GPT 4 Turbo"
-        },
-        "gpt-4-0613": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 32768,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4",
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4-0613"
-                }
-            },
-            "name": "GPT 4"
-        },
-        "gpt-4-o-preview": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-2024-05-13"
-                }
-            },
-            "name": "GPT-4o"
-        },
-        "gpt-4.1": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 16384,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4.1",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4.1-2025-04-14"
-                }
-            },
-            "name": "GPT-4.1"
-        },
-        "gpt-4.1-2025-04-14": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 16384,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4.1",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4.1-2025-04-14"
-                }
-            },
-            "name": "GPT-4.1"
-        },
-        "gpt-4o": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-2024-11-20"
-                }
-            },
-            "name": "GPT-4o"
-        },
-        "gpt-4o-2024-05-13": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-2024-05-13"
-                }
-            },
-            "name": "GPT-4o"
-        },
-        "gpt-4o-2024-08-06": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 16384,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-2024-08-06"
-                }
-            },
-            "name": "GPT-4o"
-        },
-        "gpt-4o-2024-11-20": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 128000,
-            "max_output_tokens": 16384,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-2024-11-20"
-                }
-            },
-            "name": "GPT-4o"
-        },
-        "gpt-4o-mini": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o-mini",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-mini-2024-07-18"
-                }
-            },
-            "name": "GPT-4o mini"
-        },
-        "gpt-4o-mini-2024-07-18": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-4o-mini",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-4o-mini-2024-07-18"
-                }
-            },
-            "name": "GPT-4o mini"
-        },
-        "gpt-5-mini": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 264000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5-mini",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/chat/completions", "/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "gpt-5-mini"
-                }
-            },
-            "name": "GPT-5 mini"
-        },
-        "gpt-5.2": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 264000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.2",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/chat/completions", "/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.2"
-                }
-            },
-            "name": "GPT-5.2"
-        },
-        "gpt-5.2-codex": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 400000,
-            "max_output_tokens": 128000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.2-codex",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.2-codex"
-                }
-            },
-            "name": "GPT-5.2-Codex"
-        },
-        "gpt-5.3-codex": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 400000,
-            "max_output_tokens": 128000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.3-codex",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.3-codex"
-                }
-            },
-            "name": "GPT-5.3-Codex"
-        },
-        "gpt-5.4": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 400000,
-            "max_output_tokens": 128000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.4",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/responses", "/chat/completions", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.4"
-                }
-            },
-            "name": "GPT-5.4"
-        },
-        "gpt-5.4-mini": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 400000,
-            "max_output_tokens": 128000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.4-mini",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.4-mini"
-                }
-            },
-            "name": "GPT-5.4 mini"
-        },
-        "gpt-5.5": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": true},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 400000,
-            "max_output_tokens": 128000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "gpt-5.5",
-                    "parallel_tool_calls": true,
-                    "reasoning_efforts": ["none", "low", "medium", "high", "xhigh"],
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/responses", "ws:/responses"],
-                    "tool_calls": true,
-                    "vendor": "OpenAI",
-                    "version": "gpt-5.5"
-                }
-            },
-            "name": "GPT-5.5"
-        },
-        "grok-code-fast-1": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": false
-            },
-            "context_window": 128000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "grok-code",
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "tool_calls": true,
-                    "vendor": "xAI",
-                    "version": "grok-code-fast-1"
-                }
-            },
-            "name": "Grok Code Fast 1"
-        },
-        "oswe-vscode-prime": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 264000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "oswe-vscode",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/chat/completions", "/responses"],
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "raptor-mini"
-                }
-            },
-            "name": "Raptor mini (Preview)"
-        },
-        "oswe-vscode-secondary": {
-            "capabilities": {
-                "json_mode": true,
-                "reasoning": {"supported": false},
-                "tools": true,
-                "vision": true
-            },
-            "context_window": 264000,
-            "max_output_tokens": 64000,
-            "metadata": {
-                "github_copilot": {
-                    "family": "oswe-vscode",
-                    "parallel_tool_calls": true,
-                    "streaming": true,
-                    "structured_outputs": true,
-                    "supported_endpoints": ["/chat/completions", "/responses"],
-                    "tool_calls": true,
-                    "vendor": "Azure OpenAI",
-                    "version": "raptor-mini"
-                }
-            },
-            "name": "Raptor mini (Preview)"
-        },
-        "text-embedding-3-small": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": false,
-                "vision": false
-            },
-            "context_window": 0,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "text-embedding-3-small",
-                    "vendor": "Azure OpenAI",
-                    "version": "text-embedding-3-small"
-                }
-            },
-            "name": "Embedding V3 small"
-        },
-        "text-embedding-3-small-inference": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": false,
-                "vision": false
-            },
-            "context_window": 0,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "text-embedding-3-small",
-                    "vendor": "Azure OpenAI",
-                    "version": "text-embedding-3-small"
-                }
-            },
-            "name": "Embedding V3 small (Inference)"
-        },
-        "text-embedding-ada-002": {
-            "capabilities": {
-                "json_mode": false,
-                "reasoning": {"supported": false},
-                "tools": false,
-                "vision": false
-            },
-            "context_window": 0,
-            "max_output_tokens": 4096,
-            "metadata": {
-                "github_copilot": {
-                    "family": "text-embedding-ada-002",
-                    "vendor": "Azure OpenAI",
-                    "version": "text-embedding-3-small"
-                }
-            },
-            "name": "Embedding V2 Ada"
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 1024,
+      "metadata": {
+        "github_copilot": {
+          "family": "search-agent",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Experimental",
+          "version": "accounts/msft/routers/f185i3v4"
         }
+      },
+      "name": "Search Agent A"
     },
-    "provider_id": "github-copilot",
-    "source": "discovery"
+    "accounts/msft/routers/fmfeto88": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 1024,
+      "metadata": {
+        "github_copilot": {
+          "family": "search-agent",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Fireworks",
+          "version": "accounts/msft/routers/fmfeto88"
+        }
+      },
+      "name": "Search Agent B"
+    },
+    "accounts/msft/routers/gdjv4v2v": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 1024,
+      "metadata": {
+        "github_copilot": {
+          "family": "search-agent",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Fireworks",
+          "version": "accounts/msft/routers/gdjv4v2v"
+        }
+      },
+      "name": "Search Agent C"
+    },
+    "claude-haiku-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "metadata": {
+        "github_copilot": {
+          "family": "claude-haiku-4.5",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/v1/messages"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-haiku-4.5"
+        }
+      },
+      "name": "Claude Haiku 4.5"
+    },
+    "claude-opus-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "metadata": {
+        "github_copilot": {
+          "family": "claude-opus-4.5",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/v1/messages"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-opus-4.5"
+        }
+      },
+      "name": "Claude Opus 4.5"
+    },
+    "claude-opus-4.7": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "adaptive_thinking": true,
+          "family": "claude-opus-4.7",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "medium"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/v1/messages",
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-opus-4.7"
+        }
+      },
+      "name": "Claude Opus 4.7"
+    },
+    "claude-sonnet-4.5": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "metadata": {
+        "github_copilot": {
+          "family": "claude-sonnet-4.5",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/v1/messages"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-sonnet-4.5"
+        }
+      },
+      "name": "Claude Sonnet 4.5"
+    },
+    "claude-sonnet-4.6": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "metadata": {
+        "github_copilot": {
+          "adaptive_thinking": true,
+          "family": "claude-sonnet-4.6",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/v1/messages"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-sonnet-4.6"
+        }
+      },
+      "name": "Claude Sonnet 4.6"
+    },
+    "gemini-2.5-pro": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gemini-2.5-pro",
+          "max_thinking_budget": 32768,
+          "min_thinking_budget": 128,
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Google",
+          "version": "gemini-2.5-pro"
+        }
+      },
+      "name": "Gemini 2.5 Pro"
+    },
+    "gemini-3-flash-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gemini-3-flash",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 256,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Google",
+          "version": "gemini-3-flash-preview"
+        }
+      },
+      "name": "Gemini 3 Flash (Preview)"
+    },
+    "gemini-3.1-pro-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gemini-3.1-pro-preview",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 256,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Google",
+          "version": "gemini-3.1-pro-preview"
+        }
+      },
+      "name": "Gemini 3.1 Pro"
+    },
+    "gpt-3.5-turbo": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 16384,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-3.5-turbo",
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-3.5-turbo-0613"
+        }
+      },
+      "name": "GPT 3.5 Turbo"
+    },
+    "gpt-3.5-turbo-0613": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 16384,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-3.5-turbo",
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-3.5-turbo-0613"
+        }
+      },
+      "name": "GPT 3.5 Turbo"
+    },
+    "gpt-4": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4",
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4-0613"
+        }
+      },
+      "name": "GPT 4"
+    },
+    "gpt-4-0125-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4-turbo",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4-0125-preview"
+        }
+      },
+      "name": "GPT 4 Turbo"
+    },
+    "gpt-4-0613": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 32768,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4",
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4-0613"
+        }
+      },
+      "name": "GPT 4"
+    },
+    "gpt-4-o-preview": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-2024-05-13"
+        }
+      },
+      "name": "GPT-4o"
+    },
+    "gpt-4.1": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4.1",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "structured_outputs": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4.1-2025-04-14"
+        }
+      },
+      "name": "GPT-4.1"
+    },
+    "gpt-4.1-2025-04-14": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4.1",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "structured_outputs": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4.1-2025-04-14"
+        }
+      },
+      "name": "GPT-4.1"
+    },
+    "gpt-4o": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-2024-11-20"
+        }
+      },
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-05-13": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-2024-05-13"
+        }
+      },
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-08-06": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-2024-08-06"
+        }
+      },
+      "name": "GPT-4o"
+    },
+    "gpt-4o-2024-11-20": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-2024-11-20"
+        }
+      },
+      "name": "GPT-4o"
+    },
+    "gpt-4o-mini": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o-mini",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-mini-2024-07-18"
+        }
+      },
+      "name": "GPT-4o mini"
+    },
+    "gpt-4o-mini-2024-07-18": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-4o-mini",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-4o-mini-2024-07-18"
+        }
+      },
+      "name": "GPT-4o mini"
+    },
+    "gpt-5-mini": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 264000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5-mini",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "gpt-5-mini"
+        }
+      },
+      "name": "GPT-5 mini"
+    },
+    "gpt-5.2": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 264000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.2",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.2"
+        }
+      },
+      "name": "GPT-5.2"
+    },
+    "gpt-5.2-codex": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.2-codex",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.2-codex"
+        }
+      },
+      "name": "GPT-5.2-Codex"
+    },
+    "gpt-5.3-codex": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.3-codex",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.3-codex"
+        }
+      },
+      "name": "GPT-5.3-Codex"
+    },
+    "gpt-5.4": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.4",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses",
+            "/chat/completions",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.4"
+        }
+      },
+      "name": "GPT-5.4"
+    },
+    "gpt-5.4-mini": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.4-mini",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.4-mini"
+        }
+      },
+      "name": "GPT-5.4 mini"
+    },
+    "gpt-5.5": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 400000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gpt-5.5",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses",
+            "ws:/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "OpenAI",
+          "version": "gpt-5.5"
+        }
+      },
+      "name": "GPT-5.5"
+    },
+    "grok-code-fast-1": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "grok-code",
+          "streaming": true,
+          "structured_outputs": true,
+          "tool_calls": true,
+          "vendor": "xAI",
+          "version": "grok-code-fast-1"
+        }
+      },
+      "name": "Grok Code Fast 1"
+    },
+    "oswe-vscode-prime": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 264000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "oswe-vscode",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/chat/completions",
+            "/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "raptor-mini"
+        }
+      },
+      "name": "Raptor mini (Preview)"
+    },
+    "text-embedding-3-small": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "text-embedding-3-small",
+          "vendor": "Azure OpenAI",
+          "version": "text-embedding-3-small"
+        }
+      },
+      "name": "Embedding V3 small"
+    },
+    "text-embedding-3-small-inference": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "text-embedding-3-small",
+          "vendor": "Azure OpenAI",
+          "version": "text-embedding-3-small"
+        }
+      },
+      "name": "Embedding V3 small (Inference)"
+    },
+    "text-embedding-ada-002": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "github_copilot": {
+          "family": "text-embedding-ada-002",
+          "vendor": "Azure OpenAI",
+          "version": "text-embedding-3-small"
+        }
+      },
+      "name": "Embedding V2 Ada"
+    }
+  },
+  "provider_id": "github-copilot",
+  "source": "discovery"
 }
