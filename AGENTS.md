@@ -23,8 +23,10 @@ Your agent file lists any additional files to read on top of these.
 | Planning & file-scope assignment | **Planner** |
 | Application code, tests, and UI | **Builder** |
 | Code review | **Reviewer** |
+| Web research (tech, libraries, APIs) | **Researcher** |
+| Codebase exploration & structured summaries | **Explorer** |
 
-**No agent operates outside their role.** Only the Orchestrator touches git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. All other agents write application files — nothing more.
+**No agent operates outside their role.** Only the Orchestrator touches git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. Every other agent writes only within the scope defined by their role.
 
 ## Code Quality
 
