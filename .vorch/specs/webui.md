@@ -170,6 +170,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 
 ## Constraints & Gotchas
 
+- The Toasted `Components` showcase is a design/reference artifact only. It
+  must not ship as a live WebUI tab or appear in normal navigation.
 - Reload recovery for in-flight Runs and accessor-local last-selected-Agent
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
