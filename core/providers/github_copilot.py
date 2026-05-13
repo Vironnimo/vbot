@@ -122,12 +122,18 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
         policy = self._policy_for_model(model_id)
         if policy.endpoint_path == CHAT_COMPLETIONS_ENDPOINT:
+            emitted_visible_reasoning = ""
             async for delta in super().stream(
                 messages,
                 model_id=model_id,
                 **self._chat_request_kwargs(policy, kwargs),
             ):
-                yield delta
+                normalized_deltas, emitted_visible_reasoning = _normalize_copilot_chat_stream_delta(
+                    delta,
+                    emitted_visible_reasoning,
+                )
+                for normalized_delta in normalized_deltas:
+                    yield normalized_delta
             return
         if policy.endpoint_path == RESPONSES_ENDPOINT:
             payload = build_responses_payload(
@@ -165,7 +171,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             return normalize_responses_response(response)
         if isinstance(response.get("content"), list):
             return normalize_copilot_messages_response(response)
-        return super().normalize_response(response)
+        return _normalize_copilot_chat_response(super().normalize_response(response))
 
     def _policy_for_model(self, model_id: str) -> GitHubCopilotModelPolicy:
         metadata = None
@@ -385,3 +391,89 @@ def _provider_default_max_tokens(defaults: Mapping[str, Any] | None) -> int:
     if isinstance(max_tokens, str) and max_tokens.isdecimal():
         return int(max_tokens)
     return DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def _normalize_copilot_chat_response(response: dict[str, Any]) -> dict[str, Any]:
+    reasoning = response.get("reasoning")
+    if isinstance(reasoning, str) and reasoning:
+        return response
+    visible_reasoning = _copilot_visible_reasoning_from_meta(response.get("reasoning_meta"))
+    if visible_reasoning is None:
+        return response
+    normalized_response = dict(response)
+    normalized_response["reasoning"] = visible_reasoning
+    return normalized_response
+
+
+def _normalize_copilot_chat_stream_delta(
+    delta: Mapping[str, Any],
+    emitted_visible_reasoning: str,
+) -> tuple[list[dict[str, Any]], str]:
+    delta_type = delta.get("type")
+    if delta_type == "reasoning_delta":
+        text = delta.get("text")
+        if isinstance(text, str) and text:
+            emitted_visible_reasoning += text
+        return [dict(delta)], emitted_visible_reasoning
+    if delta_type != "reasoning_meta":
+        return [dict(delta)], emitted_visible_reasoning
+
+    visible_reasoning = _copilot_visible_reasoning_from_meta(delta.get("reasoning_meta"))
+    if visible_reasoning is None:
+        return [dict(delta)], emitted_visible_reasoning
+
+    reasoning_backfill, updated_visible_reasoning = _copilot_reasoning_backfill_delta(
+        visible_reasoning,
+        emitted_visible_reasoning,
+    )
+    normalized_deltas: list[dict[str, Any]] = []
+    if reasoning_backfill is not None:
+        normalized_deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
+    normalized_deltas.append(dict(delta))
+    return normalized_deltas, updated_visible_reasoning
+
+
+def _copilot_visible_reasoning_from_meta(reasoning_meta: Any) -> str | None:
+    if not isinstance(reasoning_meta, Mapping):
+        return None
+    reasoning_details = reasoning_meta.get("reasoning_details")
+    if not isinstance(reasoning_details, list):
+        return None
+
+    parts: list[str] = []
+    for item in reasoning_details:
+        if not isinstance(item, Mapping):
+            continue
+        detail_type = item.get("type")
+        text = item.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+        if isinstance(detail_type, str) and detail_type.startswith("reasoning"):
+            parts.append(text)
+    return "".join(parts) or None
+
+
+def _copilot_reasoning_backfill_delta(
+    reasoning: str,
+    emitted_visible_reasoning: str,
+) -> tuple[str | None, str]:
+    if not emitted_visible_reasoning:
+        return reasoning, reasoning
+    if reasoning == emitted_visible_reasoning or emitted_visible_reasoning.endswith(reasoning):
+        return None, emitted_visible_reasoning
+    if reasoning.startswith(emitted_visible_reasoning):
+        return reasoning[len(emitted_visible_reasoning) :] or None, reasoning
+
+    overlap = _copilot_suffix_prefix_overlap(emitted_visible_reasoning, reasoning)
+    if overlap > 0:
+        backfill = reasoning[overlap:]
+        return backfill or None, f"{emitted_visible_reasoning}{backfill}"
+    return None, emitted_visible_reasoning
+
+
+def _copilot_suffix_prefix_overlap(left: str, right: str) -> int:
+    max_overlap = min(len(left), len(right))
+    for overlap in range(max_overlap, 0, -1):
+        if left.endswith(right[:overlap]):
+            return overlap
+    return 0

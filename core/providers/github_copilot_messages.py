@@ -86,7 +86,7 @@ def build_copilot_messages_payload(
         payload["system"] = "\n\n".join(system_parts)
 
     _apply_safe_messages_tools(payload, request_kwargs, policy)
-    _apply_safe_messages_thinking(payload, request_kwargs, policy)
+    _apply_safe_messages_thinking(payload, dict(kwargs), policy)
     _apply_safe_top_level_parameters(payload, request_kwargs)
     return payload
 
@@ -278,9 +278,12 @@ def _safe_reasoning_block(block: Any) -> dict[str, Any]:
     if block_type == THINKING_BLOCK_TYPE:
         safe_block: dict[str, Any] = {"type": THINKING_BLOCK_TYPE}
         thinking = block.get("thinking")
+        text = block.get("text")
         signature = block.get("signature")
         if isinstance(thinking, str):
             safe_block["thinking"] = thinking
+        elif isinstance(text, str):
+            safe_block["text"] = text
         if isinstance(signature, str):
             safe_block["signature"] = signature
         return safe_block
@@ -360,9 +363,6 @@ def _apply_safe_messages_thinking(
     kwargs.pop("reasoning", None)
     kwargs.pop("include_reasoning", None)
 
-    if not policy.allows_any_reasoning_controls:
-        return
-
     safe_thinking = _safe_explicit_thinking(thinking, policy)
     if safe_thinking is None:
         safe_thinking = _thinking_from_budget(thinking_budget, policy)
@@ -417,10 +417,14 @@ def _thinking_from_effort(
     if not isinstance(thinking_effort, str) or not thinking_effort:
         return None
     if thinking_effort == "none":
-        return {"type": "disabled"}
-    if not policy.supports_adaptive_thinking or not policy.allows_reasoning_effort(thinking_effort):
+        return {"type": "disabled"} if policy.supports_adaptive_thinking else None
+    if thinking_effort == "minimal":
         return None
-    return {"type": "adaptive", "display": "summarized"}
+    if policy.supports_adaptive_thinking and policy.allows_reasoning_effort(thinking_effort):
+        return {"type": "adaptive", "display": "summarized"}
+    if policy.supports_adaptive_thinking and not policy.allowed_reasoning_efforts:
+        return {"type": "adaptive", "display": "summarized"}
+    return None
 
 
 def _safe_output_config(
@@ -505,9 +509,11 @@ def _extract_messages_text(content_blocks: Any) -> str | None:
 
 def _extract_messages_reasoning(content_blocks: Any) -> str | None:
     reasoning_parts = [
-        block["thinking"]
+        reasoning_text
         for block in _content_blocks(content_blocks)
-        if block.get("type") == THINKING_BLOCK_TYPE and isinstance(block.get("thinking"), str)
+        if block.get("type") == THINKING_BLOCK_TYPE
+        for reasoning_text in [_reasoning_text_from_block(block)]
+        if reasoning_text is not None
     ]
     return "".join(reasoning_parts) if reasoning_parts else None
 
@@ -628,8 +634,7 @@ def _normalize_content_block_delta(
     block_state = state.content_blocks_by_index.get(index, {})
     delta_type = delta.get("type")
     if delta_type == "text_delta":
-        text = delta.get("text")
-        return [{"type": "content_delta", "text": text}] if isinstance(text, str) and text else []
+        return _normalize_text_delta(delta, block_state)
     if delta_type == "thinking_delta":
         return _normalize_thinking_delta(delta, block_state)
     if delta_type == "signature_delta":
@@ -654,6 +659,7 @@ def _normalize_content_block_stop(
         return []
 
     state.reasoning_meta_blocks.append(safe_block)
+    state.content_blocks_by_index.pop(index, None)
     return [
         {
             "type": "reasoning_meta",
@@ -707,8 +713,23 @@ def _normalize_thinking_delta(
         return []
     block = block_state.get("block")
     if isinstance(block, dict):
-        block["thinking"] = f"{block.get('thinking', '')}{thinking}"
+        _append_reasoning_text(block, thinking, preferred_key="thinking")
     return [{"type": "reasoning_delta", "text": thinking}]
+
+
+def _normalize_text_delta(
+    delta: dict[str, Any],
+    block_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    text = delta.get("text")
+    if not isinstance(text, str) or not text:
+        return []
+    if block_state.get("type") == THINKING_BLOCK_TYPE:
+        block = block_state.get("block")
+        if isinstance(block, dict):
+            _append_reasoning_text(block, text, preferred_key="text")
+        return [{"type": "reasoning_delta", "text": text}]
+    return [{"type": "content_delta", "text": text}]
 
 
 def _apply_signature_delta(delta: dict[str, Any], block_state: dict[str, Any]) -> None:
@@ -716,6 +737,25 @@ def _apply_signature_delta(delta: dict[str, Any], block_state: dict[str, Any]) -
     block = block_state.get("block")
     if isinstance(signature, str) and signature and isinstance(block, dict):
         block["signature"] = signature
+
+
+def _reasoning_text_from_block(block: dict[str, Any]) -> str | None:
+    thinking = block.get("thinking")
+    if isinstance(thinking, str):
+        return thinking
+    text = block.get("text")
+    if isinstance(text, str):
+        return text
+    return None
+
+
+def _append_reasoning_text(
+    block: dict[str, Any], text: str, *, preferred_key: str | None = None
+) -> None:
+    key = preferred_key
+    if key not in {"thinking", "text"}:
+        key = "thinking" if "thinking" in block or "text" not in block else "text"
+    block[key] = f"{block.get(key, '')}{text}"
 
 
 def _normalize_tool_input_delta(
