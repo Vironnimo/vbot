@@ -15,12 +15,12 @@ from core.providers.github_copilot_responses import (
 )
 
 
-def responses_policy(**overrides):
+def responses_policy(model_id: str = "gpt-5.4", **overrides):
     metadata = {
         "github_copilot": {
             "vendor": "OpenAI",
-            "family": "gpt-5.4",
-            "version": "gpt-5.4",
+            "family": model_id,
+            "version": model_id,
             "supported_endpoints": [RESPONSES_ENDPOINT],
             "reasoning_efforts": ["low", "medium", "high", "xhigh"],
             "tool_calls": True,
@@ -30,7 +30,7 @@ def responses_policy(**overrides):
         }
     }
     metadata["github_copilot"].update(overrides)
-    return copilot_model_policy("gpt-5.4", metadata)
+    return copilot_model_policy(model_id, metadata)
 
 
 def test_build_payload_extracts_system_instructions_and_user_input() -> None:
@@ -88,17 +88,20 @@ def test_build_payload_includes_allowed_reasoning_encrypted_content_request() ->
     assert payload["include"] == ["reasoning.encrypted_content"]
 
 
-def test_build_payload_omits_caller_include_cache_controls_and_unknown_extras() -> None:
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5-mini"])
+def test_build_payload_omits_temperature_for_gpt5_responses_models(model_id: str) -> None:
     payload = build_responses_payload(
         [{"role": "user", "content": "Hello"}],
-        model_id="gpt-5.4",
-        policy=responses_policy(),
+        model_id=model_id,
+        policy=responses_policy(model_id),
         include=["unsupported.trace", "reasoning.encrypted_content"],
         cache_control={"type": "ephemeral"},
         prompt_cache_key="cache-key",
         prompt_cache_retention="24h",
         unknown_extra="do-not-forward",
         temperature=0.2,
+        top_p=0.9,
+        max_tokens=512,
         parallel_tool_calls=True,
     )
 
@@ -107,8 +110,22 @@ def test_build_payload_omits_caller_include_cache_controls_and_unknown_extras() 
     assert "prompt_cache_key" not in payload
     assert "prompt_cache_retention" not in payload
     assert "unknown_extra" not in payload
-    assert payload["temperature"] == 0.2
+    assert "temperature" not in payload
+    assert payload["top_p"] == 0.9
+    assert payload["max_output_tokens"] == 512
     assert payload["parallel_tool_calls"] is True
+
+
+def test_build_payload_prefers_explicit_max_output_tokens_over_max_tokens() -> None:
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Hello"}],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        max_tokens=512,
+        max_output_tokens=1024,
+    )
+
+    assert payload["max_output_tokens"] == 1024
 
 
 def test_build_payload_omits_tools_when_policy_disallows_tools() -> None:

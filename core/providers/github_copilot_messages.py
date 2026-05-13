@@ -14,6 +14,7 @@ from typing import Any
 
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
+from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 
 SSE_DATA_PREFIX = "data: "
 SSE_EVENT_PREFIX = "event: "
@@ -36,12 +37,16 @@ MESSAGE_STOP_REASONS = {
 }
 
 SAFE_TOP_LEVEL_PARAMETERS = {
-    "max_tokens",
     "temperature",
     "top_p",
     "top_k",
     "stop_sequences",
 }
+MAX_TOKENS_PARAMETER_NAMES = (
+    "max_tokens",
+    "max_output_tokens",
+    "max_completion_tokens",
+)
 SAFE_THINKING_TYPES = {"adaptive", "disabled", "enabled"}
 SAFE_TOOL_CHOICE_TYPES = {"auto", "any", "tool"}
 
@@ -460,9 +465,29 @@ def _apply_safe_top_level_parameters(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
 ) -> None:
+    payload["max_tokens"] = _resolve_messages_max_tokens(kwargs)
     for parameter_name in SAFE_TOP_LEVEL_PARAMETERS:
         if parameter_name in kwargs:
             payload[parameter_name] = kwargs[parameter_name]
+
+
+def _resolve_messages_max_tokens(kwargs: dict[str, Any]) -> int:
+    for parameter_name in MAX_TOKENS_PARAMETER_NAMES:
+        max_tokens = _safe_max_tokens_value(kwargs.pop(parameter_name, None))
+        if max_tokens is not None:
+            return max_tokens
+    return DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def _safe_max_tokens_value(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isdecimal():
+        parsed_value = int(value)
+        return parsed_value if parsed_value > 0 else None
+    return None
 
 
 def _extract_messages_text(content_blocks: Any) -> str | None:

@@ -289,12 +289,30 @@ def _apply_remaining_kwargs(
     max_output_tokens = request_kwargs.pop("max_output_tokens", None)
     if max_output_tokens is not None:
         payload["max_output_tokens"] = max_output_tokens
-    for key in ("temperature", "top_p"):
-        if key in request_kwargs:
-            payload[key] = request_kwargs[key]
+    if "temperature" in request_kwargs and _supports_responses_temperature(policy):
+        payload["temperature"] = request_kwargs["temperature"]
+    if "top_p" in request_kwargs:
+        payload["top_p"] = request_kwargs["top_p"]
     parallel_tool_calls = request_kwargs.pop("parallel_tool_calls", None)
     if policy.supports_parallel_tool_calls and isinstance(parallel_tool_calls, bool):
         payload["parallel_tool_calls"] = parallel_tool_calls
+
+
+def _supports_responses_temperature(policy: GitHubCopilotModelPolicy) -> bool:
+    """Return whether this Copilot Responses route should forward ``temperature``.
+
+    GPT-5 reasoning models on the Responses API reject temperature changes, so
+    Copilot should omit that field unless the routed model is known to support
+    it. The current runtime policy does not expose positive temperature support,
+    therefore OpenAI-like Responses models with reasoning controls stay on the
+    conservative omission path.
+    """
+
+    return not (
+        policy.endpoint_path == "/responses"
+        and policy.facts.is_openai_like
+        and policy.allows_any_reasoning_controls
+    )
 
 
 def _append_include(payload: dict[str, Any], include_item: str) -> None:
