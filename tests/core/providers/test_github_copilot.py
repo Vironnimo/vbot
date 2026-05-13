@@ -53,6 +53,54 @@ SUCCESS_RESPONSE = {
     ],
 }
 SAMPLE_MESSAGES = [{"role": "user", "content": "Hello"}]
+SYNTHETIC_COPILOT_METADATA_BY_MODEL_ID = {
+    "claude-haiku-4.5": {
+        "github_copilot": {
+            "vendor": "Anthropic",
+            "family": "claude-haiku-4.5",
+            "version": "claude-haiku-4.5",
+            "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, "/v1/messages"],
+            "reasoning_efforts": ["low", "medium", "high"],
+            "adaptive_thinking": True,
+            "parallel_tool_calls": True,
+            "streaming": True,
+            "structured_outputs": True,
+            "tool_calls": True,
+        }
+    },
+    "gemini-3.1-pro-preview": {
+        "github_copilot": {
+            "vendor": "Google",
+            "family": "gemini-3.1-pro-preview",
+            "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT],
+            "tool_calls": True,
+            "streaming": True,
+        }
+    },
+    "gpt-5.4": {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4",
+            "version": "gpt-5.4",
+            "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, "/responses", "ws:/responses"],
+            "reasoning_efforts": ["low", "medium", "high"],
+            "parallel_tool_calls": True,
+            "streaming": True,
+            "structured_outputs": True,
+            "tool_calls": True,
+        }
+    },
+    "gpt-5.4-partial": {
+        "github_copilot": {
+            "vendor": "OpenAI",
+            "family": "gpt-5.4",
+            "version": "gpt-5.4",
+            "supported_endpoints": ["/responses"],
+            "streaming": True,
+            "tool_calls": True,
+        }
+    },
+}
 
 
 def _raw_copilot_models() -> dict[str, dict]:
@@ -66,16 +114,9 @@ def _copilot_metadata(model_id: str) -> dict:
 
 
 def _copilot_metadata_lookup(model_id: str) -> dict | None:
-    if model_id == "gemini-3.1-pro-preview":
-        return {
-            "github_copilot": {
-                "vendor": "Google",
-                "family": "gemini-3.1-pro-preview",
-                "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT],
-                "tool_calls": True,
-                "streaming": True,
-            }
-        }
+    synthetic_metadata = SYNTHETIC_COPILOT_METADATA_BY_MODEL_ID.get(model_id)
+    if synthetic_metadata is not None:
+        return synthetic_metadata
     raw_models = _raw_copilot_models()
     if model_id not in raw_models:
         return None
@@ -402,6 +443,131 @@ async def test_send_routes_claude_to_messages_from_metadata(
         "reasoning_meta": None,
         "tool_calls": None,
         "usage": {"input_tokens": 5, "output_tokens": 6},
+    }
+
+
+@pytest.mark.parametrize("model_id", ["claude-sonnet-4.6", "claude-haiku-4.5"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_messages_models_send_exact_on_wire_payload(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id=model_id,
+        thinking_effort="high",
+        response_format={"type": "json_object"},
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": model_id,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "high"},
+        "max_tokens": 4096,
+        "temperature": 0.25,
+    }
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5-mini"])
+@respx.mock
+@pytest.mark.asyncio
+async def test_responses_models_send_exact_on_wire_payload_without_temperature(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+    model_id: str,
+) -> None:
+    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id=model_id,
+        thinking_effort="high",
+        response_format={"type": "json_object"},
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": model_id,
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+        "reasoning": {"effort": "high"},
+        "include": ["reasoning.encrypted_content"],
+        "text": {"format": {"type": "json_object"}},
+        "max_output_tokens": 4096,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_partial_openai_like_metadata_still_omits_temperature_on_responses(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json={"output": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.4-partial",
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "gpt-5.4-partial",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+        "max_output_tokens": 4096,
+        "top_p": 0.9,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_messages_alias_override_wins_over_provider_default_on_wire(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="claude-haiku-4.5",
+        max_output_tokens=2048,
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 2048,
+        "temperature": 0.25,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_messages_max_completion_tokens_alias_maps_to_max_tokens_on_wire(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json={"content": []}))
+
+    await metadata_copilot_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="claude-haiku-4.5",
+        max_completion_tokens=1024,
+        temperature=0.25,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "model": "claude-haiku-4.5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 1024,
+        "temperature": 0.25,
     }
 
 
