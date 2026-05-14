@@ -67,10 +67,6 @@ Clients call the vBot server contract; provider wire details stay behind
   normal history response; persisted `role: "error"` messages are included.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model.
-- `automation.trigger` starts a programmatic Run through
-  `runtime.trigger_service`. It accepts `{ agent_id, message, session_id? }` and
-  returns `{ run_id, agent_id, session_id, status }`; when `session_id` is
-  omitted, the automation layer creates a new Session.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
