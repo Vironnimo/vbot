@@ -163,8 +163,6 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _stream_chat(state, params)
         case "chat.cancel":
             return await _cancel_chat(state, params)
-        case "automation.trigger":
-            return await _trigger_run(state, params)
         case "settings.get":
             return _get_settings(state, params)
         case "settings.update":
@@ -551,27 +549,6 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run)
-
-
-async def _trigger_run(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
-    message = _required_string(params, "message")
-    session_id = _optional_string(params, "session_id")
-    try:
-        run = await state.runtime.trigger_service.trigger_run(
-            agent_id,
-            message,
-            session_id=session_id,
-        )
-        _bridge_run_to_event_bus(state, run)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {
-        "run_id": run.id,
-        "agent_id": run.agent_id,
-        "session_id": run.session_id,
-        "status": run.status.value,
-    }
 
 
 def _get_settings(state: Any, params: JsonObject) -> JsonObject:
