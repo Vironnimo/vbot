@@ -686,10 +686,14 @@ class ChatLoop:
                     if fallback is not None:
                         fallback_model_str, fb_provider_id, fb_connection_id = fallback
                         _, fallback_model_id = _split_agent_model(fallback_model_str)
-                        fallback_adapter = self._runtime.get_adapter(
-                            fb_provider_id,
-                            fb_connection_id,
-                        )
+                        try:
+                            fallback_adapter = self._runtime.get_adapter(
+                                fb_provider_id,
+                                fb_connection_id,
+                            )
+                        except (ConfigError, VBotError) as construction_exc:
+                            _persist_run_error(run, session, construction_exc)
+                            raise
                         run.add_cancel_callback(lambda: _close_adapter(fallback_adapter))
                         run.emit(
                             MODEL_FALLBACK_ACTIVATED_EVENT,
