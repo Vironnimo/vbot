@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, tzinfo
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from core.automation.cron import CronJob, CronService
 
 CronAction = Literal["create", "list", "update", "delete", "enable", "disable"]
+CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = "Create, list, update, delete, enable, and disable scheduled cron jobs."
@@ -202,7 +203,7 @@ def _handle_create(cron_service: CronService, arguments: JsonObject) -> JsonObje
     job = cron_service.create_job(
         agent_id=agent_id,
         prompt=prompt,
-        schedule_type=schedule_type,
+        schedule_type=cast(CronScheduleType, schedule_type),
         cron_expression=cron_expression,
         run_at=run_at,
         timezone=timezone,
@@ -289,7 +290,7 @@ def _next_fire_at(job: CronJob) -> str | None:
     try:
         timezone = _resolve_timezone(job.timezone)
         now_local = datetime.now(timezone)
-        next_fire_local = croniter(job.cron_expression, now_local).get_next(datetime)
+        next_fire_local = cast(datetime, croniter(job.cron_expression, now_local).get_next(datetime))
         if next_fire_local.tzinfo is None:
             next_fire_local = next_fire_local.replace(tzinfo=timezone)
         return next_fire_local.astimezone(UTC).isoformat()
