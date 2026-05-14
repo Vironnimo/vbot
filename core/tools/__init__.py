@@ -7,7 +7,6 @@ from core.tools.bash import (
     bash_handler,
     register_bash_tool,
 )
-from core.tools.cron import register_cron_tool
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -83,6 +82,10 @@ from core.tools.write import (
 
 
 def __getattr__(name: str) -> object:
+    if name == "register_cron_tool":
+        from core.tools.cron import register_cron_tool
+
+        return register_cron_tool
     if name in {"SubAgentBatchTracker", "register_subagent_tools"}:
         from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
 
