@@ -78,11 +78,24 @@ async def refresh_models(
     try:
         adapter_class = _adapter_class_for_discovery(provider_config.adapter)
 
-        raw_models = await _fetch_raw_models(
+        raw_payload, raw_models = await _fetch_raw_models(
             url,
             provider_config,
             credential_value,
             credential_connection,
+        )
+
+        models_dir = resources_dir / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_output_path = models_dir / f"{provider_config.id}.raw.json"
+        raw_output_data = {
+            "provider_id": provider_config.id,
+            "fetched_at": fetched_at,
+            "raw_response": raw_payload,
+        }
+        raw_output_path.write_text(
+            json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
         normalized_models: dict[str, Model] = {}
@@ -96,8 +109,6 @@ async def refresh_models(
         overrides_path = _overrides_path(resources_dir, provider_config.id)
         merged_models = apply_overrides(normalized_models, overrides_path)
 
-        models_dir = resources_dir / "models"
-        models_dir.mkdir(parents=True, exist_ok=True)
         output_path = models_dir / f"{provider_config.id}.json"
         output_data = {
             "provider_id": provider_config.id,
@@ -108,7 +119,7 @@ async def refresh_models(
         output_path.write_text(
             json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
+    except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError) as exc:
         raise ModelDiscoveryError(
             f"Model discovery failed for provider '{provider_config.id}': {exc}"
         ) from exc
@@ -155,7 +166,7 @@ async def _fetch_raw_models(
     provider_config: ProviderConfig,
     credential_value: str,
     credential_connection: ConnectionConfig | None = None,
-) -> list[Mapping[str, Any]]:
+) -> tuple[Any, list[Mapping[str, Any]]]:
     headers = _build_headers(provider_config, credential_value, credential_connection)
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(url, headers=headers)
@@ -169,7 +180,7 @@ async def _fetch_raw_models(
     for raw_model in raw_models:
         if not isinstance(raw_model, dict):
             raise ValueError("Every raw model entry must be an object")
-    return raw_models
+    return payload, raw_models
 
 
 def _build_headers(
