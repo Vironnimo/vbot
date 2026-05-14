@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 
 from core.agents import AgentError
 from core.chat import (
@@ -774,7 +774,10 @@ def _cron_next_fire_at(job: Any) -> str | None:
     try:
         timezone = _resolve_cron_timezone(job.timezone)
         now_local = datetime.now(timezone)
-        next_fire_local = croniter(job.cron_expression, now_local).get_next(datetime)
+        next_fire_local = cast(
+            datetime,
+            croniter(job.cron_expression, now_local).get_next(datetime),
+        )
         if next_fire_local.tzinfo is None:
             next_fire_local = next_fire_local.replace(tzinfo=timezone)
         return next_fire_local.astimezone(UTC).isoformat()

@@ -32,7 +32,6 @@ from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools import (
     register_bash_tool,
-    register_cron_tool,
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
@@ -41,6 +40,7 @@ from core.tools import (
     register_skill_tool,
     register_write_tool,
 )
+from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
 from core.tools.tools import ToolRegistry

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -320,9 +320,11 @@ class CronService:
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
 
         self._job_tasks[job.id] = task
-        task.add_done_callback(
-            lambda completed_task, job_id=job.id: self._on_job_task_done(job_id, completed_task)
-        )
+
+        def on_done(completed_task: asyncio.Task[None], job_id: str = job.id) -> None:
+            self._on_job_task_done(job_id, completed_task)
+
+        task.add_done_callback(on_done)
 
     def _cancel_job_task(self, job_id: str) -> None:
         """Cancel and forget one tracked asyncio task if present."""
