@@ -7,6 +7,7 @@ from core.tools.bash import (
     bash_handler,
     register_bash_tool,
 )
+from core.tools.cron import register_cron_tool
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -148,6 +149,7 @@ __all__ = [
     "register_edit_tool",
     "register_glob_tool",
     "register_bash_tool",
+    "register_cron_tool",
     "register_grep_tool",
     "register_process_tool",
     "register_read_tool",
