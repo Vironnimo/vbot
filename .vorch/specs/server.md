@@ -80,8 +80,10 @@ Clients call the vBot server contract; provider wire details stay behind
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
   `agent.deleted` (full agent payload via `_agent_response`). Run output
-  includes persisted error-message events bridged as `run_output`. App-level
-  background failures use `app_error` with an error payload for WebSocket clients.
+  includes persisted error-message events bridged as `run_output`, plus
+  `model_fallback_activated` with payload `{ from_model, to_model }` when a Run
+  switches to an Agent fallback model. App-level background failures use
+  `app_error` with an error payload for WebSocket clients.
   Provider OAuth completion uses `provider_auth_completed` with provider and
   public compositional connection identifiers plus a success flag; it must not
   include token values.

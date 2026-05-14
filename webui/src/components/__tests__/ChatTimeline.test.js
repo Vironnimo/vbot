@@ -1679,6 +1679,39 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('renders model fallback notices inside assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-model-fallback',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'model_fallback_activated',
+      run_id: 'run-model-fallback',
+      sequence: 1,
+      payload: {
+        from_model: 'openai/gpt-5',
+        to_model: 'openrouter/anthropic/claude-sonnet-4',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const fallbackNotice = document.querySelector('.model-fallback-notice');
+    expect(fallbackNotice).toBeTruthy();
+    expect(fallbackNotice.textContent).toContain(
+      'Switched to openrouter/anthropic/claude-sonnet-4',
+    );
+  });
+
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
     const sessionState = ensureSessionState(
       createChatState(),

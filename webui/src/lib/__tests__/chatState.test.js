@@ -872,6 +872,45 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('treats model fallback activation as an assistant-run event and appends a fallback item', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'model_fallback_activated',
+      run_id: 'run-one',
+      sequence: 2,
+      timestamp: '2026-05-15T10:00:00Z',
+      payload: {
+        from_model: 'openai/gpt-5',
+        to_model: 'openrouter/anthropic/claude-sonnet-4',
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+    const [assistantRun] = timelineItems;
+
+    expect(timelineItems).toHaveLength(1);
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        id: 'assistant-run-run-one',
+        type: 'assistant_run',
+        runId: 'run-one',
+      }),
+    );
+    expect(assistantRun.items).toEqual([
+      expect.objectContaining({
+        type: 'model_fallback',
+        content: 'openrouter/anthropic/claude-sonnet-4',
+        from_model: 'openai/gpt-5',
+        to_model: 'openrouter/anthropic/claude-sonnet-4',
+      }),
+    ]);
+  });
+
   it('preserves first-seen child ordering when later reasoning updates arrive', () => {
     const sessionState = ensureSessionState(
       createChatState(),
