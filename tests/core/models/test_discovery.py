@@ -245,7 +245,9 @@ class TestRefreshModels:
         result = await refresh_models(openrouter_config, API_KEY, resources_dir)
 
         output_path = resources_dir / "models" / "openrouter.json"
+        raw_output_path = resources_dir / "models" / "openrouter.raw.json"
         output_data = json.loads(output_path.read_text(encoding="utf-8"))
+        raw_output_data = json.loads(raw_output_path.read_text(encoding="utf-8"))
         registry = ModelRegistry.load(resources_dir)
         model_b = registry.get("openrouter", "model-b")
 
@@ -253,6 +255,9 @@ class TestRefreshModels:
         assert result["model_count"] == 2
         assert result["fetched_at"] == output_data["fetched_at"]
         assert output_data["source"] == "discovery"
+        assert raw_output_path.exists()
+        assert raw_output_data["provider_id"] == "openrouter"
+        assert raw_output_data["fetched_at"] == output_data["fetched_at"]
         assert model_b.name == "Model B"
         assert model_b.max_output_tokens == 8192
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
@@ -291,9 +296,11 @@ class TestRefreshModels:
         result = await refresh_models(openrouter_config, API_KEY, resources_dir)
 
         output_path = models_dir / "openrouter.json"
+        raw_output_path = models_dir / "openrouter.raw.json"
         registry = ModelRegistry.load(resources_dir)
         assert result["model_count"] == 2
         assert output_path.exists()
+        assert raw_output_path.exists()
         assert overrides_path.exists()
         assert not (resources_dir / "model-overrides" / "openrouter.json").exists()
         assert registry.get("openrouter", "model-a").name == "Corrected Model A"
@@ -332,14 +339,17 @@ class TestRefreshModels:
                 json={"data": [raw_openrouter_model(model_id="model-a", name="Model A")]},
             )
         )
+        resources_dir = tmp_path / "resources"
 
         await refresh_models(
             provider_config,
             API_KEY,
-            tmp_path / "resources",
+            resources_dir,
             credential_connection=selected_connection,
         )
 
+        assert (resources_dir / "models" / "openrouter.json").exists()
+        assert (resources_dir / "models" / "openrouter.raw.json").exists()
         assert route.calls.last.request.headers["x-api-key"] == f"Token {API_KEY}"
         assert "Authorization" not in route.calls.last.request.headers
 
@@ -365,8 +375,12 @@ class TestRefreshModels:
         output_data = json.loads(
             (tmp_path / "resources" / "models" / "github-copilot.json").read_text(encoding="utf-8")
         )
+        raw_output_path = tmp_path / "resources" / "models" / "github-copilot.raw.json"
+        raw_output_data = json.loads(raw_output_path.read_text(encoding="utf-8"))
         gpt_5_mini_data = output_data["models"]["gpt-5-mini"]
         assert result["model_count"] == 5
+        assert raw_output_path.exists()
+        assert raw_output_data["raw_response"] == raw_fixture
         assert gpt_4o.capabilities.vision is True
         assert gpt_4o.context_window == 128000
         assert gpt_4o.max_output_tokens == 4096
@@ -388,6 +402,80 @@ class TestRefreshModels:
         ] == ("/chat/completions", "/responses", "ws:/responses")
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["Copilot-Integration-Id"] == "vbot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_writes_raw_file_with_full_provider_response(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        resources_dir = tmp_path / "resources"
+        raw_response = {
+            "data": [
+                {
+                    **raw_openrouter_model(model_id="model-a", name="Model A"),
+                    "future_field": "value",
+                }
+            ],
+            "extra_key": "preserved",
+        }
+        respx.get(OPENROUTER_MODELS_URL).mock(return_value=httpx.Response(200, json=raw_response))
+
+        await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        raw_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.raw.json").read_text(encoding="utf-8")
+        )
+        sanitized_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+
+        assert raw_output_data["raw_response"]["extra_key"] == "preserved"
+        assert raw_output_data["raw_response"]["data"][0]["future_field"] == "value"
+        assert "extra_key" not in sanitized_output_data
+        assert "future_field" not in sanitized_output_data["models"]["model-a"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_raw_file_contains_unfiltered_data(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        class _DropModelBFilter:
+            def accepts(self, raw_model):
+                return raw_model.get("id") != "model-b"
+
+        resources_dir = tmp_path / "resources"
+        raw_response = {
+            "data": [
+                raw_openrouter_model(model_id="model-a", name="Model A"),
+                raw_openrouter_model(model_id="model-b", name="Model B"),
+            ]
+        }
+        respx.get(OPENROUTER_MODELS_URL).mock(return_value=httpx.Response(200, json=raw_response))
+
+        await refresh_models(
+            openrouter_config,
+            API_KEY,
+            resources_dir,
+            raw_filter=_DropModelBFilter(),
+        )
+
+        raw_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.raw.json").read_text(encoding="utf-8")
+        )
+        sanitized_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.json").read_text(encoding="utf-8")
+        )
+
+        assert len(raw_output_data["raw_response"]["data"]) == 2
+        assert {model["id"] for model in raw_output_data["raw_response"]["data"]} == {
+            "model-a",
+            "model-b",
+        }
+        assert set(sanitized_output_data["models"].keys()) == {"model-a"}
 
     @pytest.mark.asyncio
     async def test_refresh_models_rejects_unknown_discovery_adapter(self, tmp_path: Path):

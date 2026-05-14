@@ -88,7 +88,7 @@ class ModelRegistry:
         models: dict[tuple[str, str], Model] = {}
 
         for json_file in sorted(models_dir.glob("*.json")):
-            if json_file.name.endswith(".overrides.json"):
+            if json_file.name.endswith(".overrides.json") or json_file.name.endswith(".raw.json"):
                 continue
 
             data = json.loads(json_file.read_text(encoding="utf-8"))

@@ -78,7 +78,19 @@ The `<model-id-at-provider>` part is what gets looked up in the registry and pas
 
 ## Storage Format
 
-One JSON file per provider at `resources/models/<provider>.json`:
+Model discovery may write up to three file types beside each other under
+`resources/models/`:
+
+| File | Written by | Read by | Purpose |
+|---|---|---|---|
+| `<provider>.json` | `refresh_models()` | `ModelRegistry.load()` | App catalog (sanitized) |
+| `<provider>.raw.json` | `refresh_models()` | nobody | Inspection / debugging |
+| `<provider>.overrides.json` | human | `apply_overrides()` | Durable corrections |
+
+### Sanitized file
+
+The app-facing catalog remains one JSON file per provider at
+`resources/models/<provider>.json`:
 
 ```json
 {
@@ -121,6 +133,33 @@ One JSON file per provider at `resources/models/<provider>.json`:
 - Individual model entries may include optional `metadata`. `ModelRegistry.load()`
   preserves this on `Model.metadata` for runtime consumers and freezes nested
   mappings/lists so loaded model data remains immutable.
+
+`refresh_models()` writes the sanitized file after provider-specific
+normalization and optional overrides. The app, runtime, and UI use only this
+sanitized file.
+
+### Raw file
+
+For providers with discovery, the same `refresh_models()` call also writes
+`resources/models/<provider>.raw.json`:
+
+```json
+{
+  "provider_id": "openrouter",
+  "fetched_at": "2026-01-01T00:00:00+00:00",
+  "raw_response": {
+    "data": []
+  }
+}
+```
+
+- `raw_response` stores the full parsed provider HTTP response body
+- Raw output is written before any `raw_filter` is applied, so it preserves the
+  unfiltered provider response
+- The app does not read raw files at runtime; they exist only for inspection,
+  debugging, and future normalization work
+- `ModelRegistry.load()` skips `*.raw.json` files the same way it skips
+  `*.overrides.json`
 
 Optional override files live beside generated model files as
 `resources/models/<provider>.overrides.json`:

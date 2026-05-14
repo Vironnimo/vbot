@@ -167,6 +167,14 @@ browser strategy, which features need API credentials, shutdown — live in
 Use this section only for important strategic decisions, unusual global
 constraints, or things an agent would otherwise likely assume incorrectly.
 
+- **Raw model catalog files are kept alongside sanitized files.** After a
+  model-db refresh, `resources/models/<provider>.raw.json` stores the full
+  provider HTTP response body for inspection and debugging. The app does not
+  load or use raw catalog files at runtime. Only
+  `resources/models/<provider>.json` (the sanitized vBot-schema catalog) is
+  loaded by `ModelRegistry`. The raw file exists so we can see what providers
+  actually returned and what additional fields might be useful to normalize
+  later.
 - **Two-channel transport architecture:** SSE is the per-Run streaming channel
   (token-by-token output for one Run). WebSocket is the persistent app-wide
   signalling channel (connection status, agent CRUD, run lifecycle summaries).
