@@ -23,6 +23,8 @@ __pycache__/
 stuff/
 TODO.md
 desktop/settings.json
+.data-dir-base/
+.vorch/WORKTREE.md
 
 # Node / webui
 node_modules/
