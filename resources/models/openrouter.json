@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-13T18:40:44.767465+00:00",
+  "fetched_at": "2026-05-14T13:42:04.823080+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -534,19 +534,6 @@
       "max_output_tokens": 16000,
       "name": "Baidu: ERNIE 4.5 VL 424B A47B "
     },
-    "baidu/qianfan-ocr-fast:free": {
-      "capabilities": {
-        "json_mode": false,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": false,
-        "vision": true
-      },
-      "context_window": 65536,
-      "max_output_tokens": 28672,
-      "name": "Baidu: Qianfan-OCR-Fast (free)"
-    },
     "bytedance-seed/seed-1.6": {
       "capabilities": {
         "json_mode": true,
@@ -845,6 +832,19 @@
       "context_window": 1048576,
       "max_output_tokens": 131072,
       "name": "DeepSeek: DeepSeek V4 Flash"
+    },
+    "deepseek/deepseek-v4-flash:free": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 256000,
+      "name": "DeepSeek: DeepSeek V4 Flash (free)"
     },
     "deepseek/deepseek-v4-pro": {
       "capabilities": {
@@ -4521,8 +4521,8 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 204800,
-      "max_output_tokens": 204800,
+      "context_window": 202752,
+      "max_output_tokens": 131072,
       "name": "Z.ai: GLM 4.6"
     },
     "z-ai/glm-4.6v": {
