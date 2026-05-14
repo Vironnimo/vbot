@@ -104,6 +104,7 @@ export const englishCatalog = Object.freeze({
   'chat.event.toolPreparing': 'Preparing tool',
   'chat.event.toolResult': 'Tool result',
   'chat.event.assistantOutput': 'Assistant output',
+  'chat.modelFallbackActivated': 'Switched to {model}',
   'chat.event.completed': 'Run completed',
   'chat.event.failed': 'Run failed',
   'chat.event.cancelled': 'Run cancelled',

@@ -1045,6 +1045,12 @@
                         aria-hidden="true"
                       ></span>{/if}
                   </p>
+                {:else if child.type === 'model_fallback'}
+                  <div class="model-fallback-notice">
+                    {t('chat.modelFallbackActivated', 'Switched to {model}', {
+                      model: child.to_model,
+                    })}
+                  </div>
                 {/if}
               {/each}
             </div>
@@ -1343,6 +1349,16 @@
 
   .streaming-tool-event .te-time {
     color: var(--amber);
+  }
+
+  .model-fallback-notice {
+    border-left: 2px solid rgba(232, 135, 10, 0.25);
+    margin: 2px 0;
+    padding: 4px 0 4px 12px;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-style: italic;
   }
 
   .subagent-tool-event .tool-event-line {
