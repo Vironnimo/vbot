@@ -188,15 +188,27 @@ async def _watch_background_process(
     command: str,
     trigger_service: Any,
 ) -> None:
-    while True:
-        result = await process_manager.poll(process_session_id, agent_id, timeout_ms=5000)
-        if result["status"] != "running":
-            break
+    try:
+        session = process_manager.get_session(process_session_id, agent_id)
+        wait_task = session.wait_task
+        if wait_task is not None:
+            await wait_task
+        else:
+            while process_manager.get_session(process_session_id, agent_id).status == "running":
+                await asyncio.sleep(FOREGROUND_POLL_INTERVAL_SECONDS)
+    except SessionNotFoundError as error:
+        _LOGGER.warning(
+            "Bash completion watcher skipped trigger for agent=%s process_session=%s: %s",
+            agent_id,
+            process_session_id,
+            error,
+        )
+        return
 
     try:
         log_result = await process_manager.log(process_session_id, agent_id)
         session = process_manager.get_session(process_session_id, agent_id)
-    except (SessionNotFoundError, Exception) as error:
+    except SessionNotFoundError as error:
         _LOGGER.warning(
             "Bash completion watcher skipped trigger for agent=%s process_session=%s: %s",
             agent_id,
