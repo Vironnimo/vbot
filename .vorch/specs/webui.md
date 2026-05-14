@@ -14,6 +14,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - The left navigation contains at least these entries:
   - `Chat`
   - `Agents`
+- `Cron`
   - `System Prompt`
   - `Settings`
   - `Logs`
@@ -23,6 +24,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/api.js`
   - `rpc(method, params?, options?)` posts to `/api/rpc` and returns `result` or
      throws `ApiClientError` with a stable `code`.
+  - `listCronJobs`, `createCronJob`, `updateCronJob`, `deleteCronJob`,
+    `enableCronJob`, and `disableCronJob` wrap the `cron.*` RPC methods.
   - `listLogs(options?)` calls `log.list` and returns `{ files, default_file }`
     for the daily logs catalog.
   - `readLogFile(file, options?)` calls `log.read` and returns
@@ -62,6 +65,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Pure helpers for Logs tab state: initial state, catalog application,
     selected-file changes, append/reset stream merging, level option derivation,
     and local text filtering across timestamp/level/logger/message/continuation.
+- `webui/src/lib/cronView.js`
+  - Pure helpers for the Cron tab state: initial state, job normalization,
+    completed-job filtering, and create/update payload builders.
+  - Once-job edit payloads preserve the original stored `run_at` instant when
+    the user does not change the scheduled value, so opening and saving a job
+    does not shift its fire time.
 - `webui/src/components/ToastStack.svelte`
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
@@ -118,9 +127,17 @@ does not talk to providers directly. The product presents an Agent-first chat su
     and newest/oldest order controls.
   - Uses the `cursor` from each `log.read` response when opening the live log
     socket so append events are not lost during the read→subscribe handoff.
+- `webui/src/components/CronView.svelte`
+  - Loads `cron.list` and `agent.list` on mount, filters completed jobs out of
+    the rendered table, exposes create/edit/delete and enable/disable actions,
+  and refreshes the job list after every mutation.
+  - Edit flows preserve server-provided `session_id` values unless the user
+    explicitly changes them.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
+  - Routes the top-level `Cron` navigation item to `CronView` between Agents and
+    System Prompt.
   - Routes the top-level `Logs` navigation item to `LogsView`.
   - Handles server-pushed `app_error` WebSocket events as error toasts.
   - Forwards `provider_auth_completed` WebSocket events to `SettingsView` when
@@ -135,6 +152,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   copy is introduced.
 - Browser resources (`EventSource`, `WebSocket`) must expose explicit cleanup and
   be closed on component destroy.
+- The Cron tab is backend-driven through `cron.*` RPC methods and shows only
+  active and paused jobs; completed jobs stay hidden from the normal table.
 - The Logs tab is read-only and file-backed. It reads one selected daily log file
   at a time and must not depend on chat/session state or the shared app event bus.
 - The Logs tab should pass the most recent `log.read` cursor into
