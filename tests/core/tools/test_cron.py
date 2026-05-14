@@ -284,7 +284,7 @@ def test_unknown_id_failures_return_job_not_found(
     tmp_path: Path,
     action: str,
     method_name: str,
-    arguments: dict[str, str],
+    arguments: dict[str, object],
 ) -> None:
     cron_service = Mock()
     getattr(cron_service, method_name).side_effect = CronJobNotFoundError(

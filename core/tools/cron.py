@@ -290,7 +290,9 @@ def _next_fire_at(job: CronJob) -> str | None:
     try:
         timezone = _resolve_timezone(job.timezone)
         now_local = datetime.now(timezone)
-        next_fire_local = cast(datetime, croniter(job.cron_expression, now_local).get_next(datetime))
+        next_fire_local = cast(
+            datetime, croniter(job.cron_expression, now_local).get_next(datetime)
+        )
         if next_fire_local.tzinfo is None:
             next_fire_local = next_fire_local.replace(tzinfo=timezone)
         return next_fire_local.astimezone(UTC).isoformat()
