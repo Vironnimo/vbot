@@ -65,6 +65,11 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   required `session_id` plus optional `agent_id` and `run_id`. It fetches a
   live Run result when available or falls back to the last non-empty assistant
   message in the target JSONL Session.
+- Built-in `cron` tool: flat name `cron`; schema includes required `action` and
+  action-specific job fields for `create`, `list`, `update`, `delete`,
+  `enable`, and `disable`. It delegates to `CronService`, validates cron
+  expressions with `croniter`, and returns `next_fire_at` for active cron jobs
+  in `list` responses.
 
 ## Interfaces
 
@@ -90,6 +95,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   with the command, exit code, and full output once the process finishes.
 - `register_process_tool(registry, process_manager) -> None` — registers the
   built-in `process` tool backed by the shared `ProcessManager`.
+- `register_cron_tool(registry, cron_service) -> None` — registers the built-in
+  `cron` scheduling tool backed by `CronService`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
   a subprocess session for the given Run scope and Agent.
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)` — manages
