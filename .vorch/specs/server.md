@@ -53,8 +53,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
 - `cron.create` accepts scheduled job fields and returns `{ id }`.
-- `cron.list` returns `{ jobs }` where each job includes persisted cron fields plus
-  server-computed `next_fire_at` for active cron jobs.
+- `cron.list` returns `{ jobs }` where each job includes persisted cron fields,
+  `session_id` for lossless edit round-tripping, plus server-computed
+  `next_fire_at` for active cron jobs.
 - `cron.update`, `cron.delete`, `cron.enable`, and `cron.disable` return `{ ok: true }`.
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
 - `agent.delete` rejects deletion when it would leave zero Agents.

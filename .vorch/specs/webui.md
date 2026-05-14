@@ -68,6 +68,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/cronView.js`
   - Pure helpers for the Cron tab state: initial state, job normalization,
     completed-job filtering, and create/update payload builders.
+  - Once-job edit payloads preserve the original stored `run_at` instant when
+    the user does not change the scheduled value, so opening and saving a job
+    does not shift its fire time.
 - `webui/src/components/ToastStack.svelte`
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
@@ -127,7 +130,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/CronView.svelte`
   - Loads `cron.list` and `agent.list` on mount, filters completed jobs out of
     the rendered table, exposes create/edit/delete and enable/disable actions,
-    and refreshes the job list after every mutation.
+  and refreshes the job list after every mutation.
+  - Edit flows preserve server-provided `session_id` values unless the user
+    explicitly changes them.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.

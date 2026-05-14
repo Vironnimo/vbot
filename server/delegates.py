@@ -759,6 +759,7 @@ def _cron_job_response(job: Any) -> JsonObject:
         "cron_expression": job.cron_expression,
         "run_at": job.run_at,
         "timezone": job.timezone,
+        "session_id": job.session_id,
         "status": job.status,
         "last_fired_at": job.last_fired_at,
         "next_fire_at": _cron_next_fire_at(job),

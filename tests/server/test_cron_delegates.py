@@ -95,6 +95,7 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
                     "cron_expression": "*/5 * * * *",
                     "run_at": None,
                     "timezone": "UTC",
+                    "session_id": "session-1",
                     "status": "active",
                     "last_fired_at": "2026-05-14T09:55:00+00:00",
                     "next_fire_at": "2026-05-14T10:05:00+00:00",
