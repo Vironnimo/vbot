@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
-from core.automation import TriggerService
+from core.automation import CronService, TriggerService
 from core.chat import ChatLoop, ChatRunManager
 from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
@@ -32,6 +32,7 @@ from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools import (
     register_bash_tool,
+    register_cron_tool,
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
@@ -119,6 +120,7 @@ class Runtime:
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
+        self._cron_service: CronService | None = None
         self._subagent_batch_tracker: SubAgentBatchTracker | None = None
         self._system_prompts: SystemPromptManager | None = None
 
@@ -185,6 +187,9 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         self._chat_loop = ChatLoop(self, streaming=False)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        self._cron_service = CronService(self._trigger_service, self._storage.data_dir)
+        self._start_cron_service()
+        register_cron_tool(self._tools, self._cron_service)
         register_bash_tool(self._tools, self._process_manager, self._trigger_service)
         self._subagent_batch_tracker = SubAgentBatchTracker(self._trigger_service)
         register_subagent_tools(
@@ -227,6 +232,9 @@ class Runtime:
         self._process_manager = None
         self._skills = None
         self._chat_sessions = None
+        if self._cron_service is not None:
+            self._cron_service.stop()
+        self._cron_service = None
         self._trigger_service = None
         self._subagent_batch_tracker = None
         self._chat_loop = None
@@ -282,6 +290,15 @@ class Runtime:
         except RuntimeError:
             return
         self._process_manager.start()
+
+    def _start_cron_service(self) -> None:
+        if self._cron_service is None:
+            raise RuntimeError("Cron service not available")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._cron_service.start()
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
@@ -421,6 +438,14 @@ class Runtime:
         if self._trigger_service is None:
             raise RuntimeError("Trigger service not available")
         return self._trigger_service
+
+    @property
+    def cron_service(self) -> CronService:
+        """Access to persisted cron scheduling and job execution."""
+        self._ensure_started()
+        if self._cron_service is None:
+            raise RuntimeError("Cron service not available")
+        return self._cron_service
 
     @property
     def system_prompts(self) -> SystemPromptManager:

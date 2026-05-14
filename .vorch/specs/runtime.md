@@ -30,12 +30,14 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   fragments, wires services, starts the `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools, creates the
   shared `ChatRunManager`, creates the non-streaming automation `ChatLoop`, wires
-  `TriggerService`, creates the in-memory `SubAgentBatchTracker`, registers
+  `TriggerService`, wires and starts `CronService` when an event loop is active,
+  registers the `cron` tool, creates the in-memory `SubAgentBatchTracker`, registers
   sub-agent tools, and ensures a usable default Agent exists. Writes `Runtime
   started` at info level. Second call is no-op (debug log) and preserves service
   instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
-  `ProcessManager` sweeper, resets started state, and clears service references.
+  `ProcessManager` sweeper, stops `CronService`, resets started state, and clears
+  service references.
   Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
@@ -56,6 +58,8 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   compatibility.
 - `trigger_service` — `TriggerService` for programmatic Run starts and
   in-memory busy-Session queueing.
+- `cron_service` — `CronService` for persisted cron and one-shot scheduled
+  triggers rooted at `<data_dir>/cron/jobs.json`.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
 - `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
 - `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
