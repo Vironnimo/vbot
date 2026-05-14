@@ -119,6 +119,226 @@ async def test_background_flag_returns_running_session(
 
 
 @pytest.mark.asyncio
+async def test_background_trigger_fires_when_trigger_service_provided(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            agent_id: str,
+            message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            calls.append(
+                {
+                    "agent_id": agent_id,
+                    "message": message,
+                    "session_id": session_id,
+                    "internal": internal,
+                }
+            )
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; sys.exit(0)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == AGENT_ID
+    assert calls[0]["session_id"] == context.session_id
+    assert calls[0]["internal"] is True
+
+
+@pytest.mark.asyncio
+async def test_background_trigger_not_spawned_when_trigger_service_is_none(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watcher_started = asyncio.Event()
+
+    async def unexpected_watch(*_args: Any, **_kwargs: Any) -> None:
+        watcher_started.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    monkeypatch.setattr(bash_module, "_watch_background_process", unexpected_watch)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "background": True},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert isinstance(result["data"]["session_id"], str)
+    await asyncio.sleep(0)
+    assert watcher_started.is_set() is False
+
+    await kill_background(manager, result)
+
+
+@pytest.mark.asyncio
+async def test_yield_after_expiry_triggers_background_completion_when_trigger_service_present(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            agent_id: str,
+            message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            calls.append(
+                {
+                    "agent_id": agent_id,
+                    "message": message,
+                    "session_id": session_id,
+                    "internal": internal,
+                }
+            )
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {
+            "command": "import time; print('yield-marker'); time.sleep(0.2)",
+            "yield_after": 0.01,
+        },
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == AGENT_ID
+    assert calls[0]["session_id"] == context.session_id
+    assert calls[0]["internal"] is True
+    assert "yield-marker" in calls[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_background_trigger_message_contains_command_exit_code_and_output(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            messages.append(message)
+            assert session_id
+            assert internal is True
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+    command = "import sys; print('result-marker'); sys.exit(3)"
+
+    result = await bash_handler(
+        context,
+        {"command": command, "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(messages) == 1
+    assert f"Command: {command}" in messages[0]
+    assert "Exit code: 3" in messages[0]
+    assert "result-marker" in messages[0]
+
+
+@pytest.mark.asyncio
+async def test_background_watcher_does_not_consume_process_poll_output(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_called = asyncio.Event()
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            _message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; print('poll-marker'); time.sleep(0.05)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    data = result["data"]
+    assert isinstance(data, dict)
+    session_id = data["session_id"]
+    assert isinstance(session_id, str)
+
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    poll_result = await manager.poll(session_id, AGENT_ID, timeout_ms=0)
+    output = poll_result.get("output")
+    assert isinstance(output, str)
+    assert "poll-marker" in output
+
+
+@pytest.mark.asyncio
 async def test_yield_after_expiry_backgrounds_running_process(
     manager: ProcessManager,
     tmp_path: Path,

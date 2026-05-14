@@ -165,7 +165,6 @@ class Runtime:
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
-        register_bash_tool(self._tools, self._process_manager)
         register_process_tool(self._tools, self._process_manager)
         settings = self._storage.load_settings()
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
@@ -186,6 +185,7 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         self._chat_loop = ChatLoop(self, streaming=False)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        register_bash_tool(self._tools, self._process_manager, self._trigger_service)
         self._subagent_batch_tracker = SubAgentBatchTracker(self._trigger_service)
         register_subagent_tools(
             self._tools,

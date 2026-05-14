@@ -83,8 +83,11 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 - `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
-- `register_bash_tool(registry, process_manager) -> None` — registers the
-  built-in `bash` tool backed by the shared `ProcessManager`.
+- `register_bash_tool(registry, process_manager, trigger_service=None) -> None` — registers the
+  built-in `bash` tool backed by the shared `ProcessManager`. When `trigger_service` is
+  provided and a process transitions to background (explicit `background=True` or after
+  `yield_after` expiry), a fire-and-forget watcher task fires `trigger_service.trigger_run`
+  with the command, exit code, and full output once the process finishes.
 - `register_process_tool(registry, process_manager) -> None` — registers the
   built-in `process` tool backed by the shared `ProcessManager`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
