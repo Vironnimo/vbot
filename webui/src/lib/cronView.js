@@ -32,6 +32,8 @@ export function createCronFormValues(job = null) {
       run_at: '',
       timezone: '',
       session_id: '',
+      original_run_at: '',
+      original_timezone: '',
     };
   }
 
@@ -46,6 +48,8 @@ export function createCronFormValues(job = null) {
     run_at: toDateTimeLocalInput(normalized.run_at),
     timezone: normalized.timezone ?? '',
     session_id: normalized.session_id ?? '',
+    original_run_at: normalized.run_at ?? '',
+    original_timezone: normalized.timezone ?? '',
   };
 }
 
@@ -119,10 +123,27 @@ export function buildUpdateCronPayload(formValues) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else {
-    payload.run_at = requiredText(formValues?.run_at);
+    payload.run_at = resolveOnceRunAtValue(formValues);
   }
 
   return payload;
+}
+
+function resolveOnceRunAtValue(formValues) {
+  const runAt = requiredText(formValues?.run_at);
+  const originalRunAt = optionalText(formValues?.original_run_at);
+  const timezone = optionalText(formValues?.timezone);
+  const originalTimezone = optionalText(formValues?.original_timezone);
+
+  if (
+    originalRunAt !== null
+    && runAt === toDateTimeLocalInput(originalRunAt)
+    && timezone === originalTimezone
+  ) {
+    return originalRunAt;
+  }
+
+  return runAt;
 }
 
 function normalizeCronJob(job) {

@@ -162,6 +162,48 @@ describe('CronView', () => {
     });
   });
 
+  it('keeps once run_at and session_id when saving an unchanged edit', async () => {
+    const storedRunAt = '2026-05-14T10:00:00+00:00';
+
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-once',
+          schedule_type: 'once',
+          cron_expression: null,
+          run_at: storedRunAt,
+          timezone: 'UTC',
+          session_id: 'session-preserve',
+        }),
+      ],
+    });
+
+    mountedComponent = mount(CronView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => document.querySelector('[data-testid="cron-edit-job-once"]'));
+
+    buttonByTestId('cron-edit-job-once').click();
+    flushSync();
+
+    await waitForCondition(() => document.getElementById('cron-job-run-at'));
+    const runAtInput = inputById('cron-job-run-at');
+    expect(runAtInput.value.length).toBeGreaterThan(0);
+
+    buttonByText('Save').click();
+
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith({
+      id: 'job-once',
+      agent_id: 'agent-alpha',
+      prompt: 'Default cron prompt',
+      schedule_type: 'once',
+      run_at: storedRunAt,
+      timezone: 'UTC',
+      session_id: 'session-preserve',
+    });
+  });
+
   it('calls cron.delete helper after confirmation', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [cronJob({ id: 'job-delete', status: 'active' })],
