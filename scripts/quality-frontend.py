@@ -149,10 +149,19 @@ def main() -> int:
 
     for label, cmd, kind in steps:
         start = time.monotonic()
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="webui")
+        # Use errors="replace" and text=True to avoid UnicodeDecodeError on Windows.
+        # Capture stdout and stderr properly.
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd="webui", errors="replace"
+        )
         elapsed = time.monotonic() - start
         total_elapsed += elapsed
-        output = (result.stdout + result.stderr).strip()
+        output = ""
+        if result.stdout:
+            output += result.stdout
+        if result.stderr:
+            output += result.stderr
+        output = output.strip()
 
         if kind == "fix":
             # prettier --write / eslint --fix
