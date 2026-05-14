@@ -15,8 +15,9 @@ Persisted agent configuration and workspace lifecycle management.
 
 - `id` is immutable and used as the filesystem directory name.
 - `model` is user-facing `<provider>/<model-id>` and may be empty until chat time.
+- `fallback_model` is an optional secondary `<provider>/<model-id>` used when a retryable provider error escapes the primary adapter's built-in retries during a Run. Once activated, it stays active only for the rest of that Run; the next turn starts from `model` again.
 - `connection` is user-facing `<provider>:<connection-id>` and stores how to reach `model`. It defaults to `""` for manually edited configs but normal create/update flows should persist model and connection together.
-- `fallback_connection` stores how to reach `fallback_model` and defaults to `""`.
+- `fallback_connection` optionally stores how to reach `fallback_model` and defaults to `""`; when empty, runtime falls back to the first usable connection for the fallback provider.
 - `workspace` defaults to `<data_dir>/workspace-<id>/` and is stored as an absolute path.
   Public WebUI/RPC create/update does not accept workspace mutation in Phase 4;
   this avoids archiving arbitrary user paths if an Agent is later deleted.
@@ -58,5 +59,5 @@ Persisted agent configuration and workspace lifecycle management.
 - Agent mutable fields are validated server/core-side. `thinking_effort` is one
   of `""`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`;
   `allowed_tools` and `allowed_skills` must be lists of strings.
-- `fallback_model` is persisted but automatic fallback behavior is still out of scope/open.
+- Automatic fallback is run-local only. It does not mutate persisted `model`, `connection`, `fallback_model`, or `fallback_connection`.
 - Skill prompt XML escapes metadata values before insertion.

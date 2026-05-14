@@ -14,6 +14,7 @@ import pytest
 from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
+    MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -27,7 +28,7 @@ from core.chat import (
     RunCancelledError,
     RunStatus,
 )
-from core.providers.errors import ProviderRateLimitError
+from core.providers.errors import ProviderAuthError, ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
@@ -37,7 +38,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
-from core.utils.errors import ProviderError
+from core.utils.errors import ConfigError, ProviderError
 from core.utils.tokens import estimate_tokens
 
 JsonObject = dict[str, Any]
@@ -47,6 +48,7 @@ JsonObject = dict[str, Any]
 class StubAgent:
     id: str
     model: str
+    fallback_model: str = ""
     connection: str | None = None
     fallback_connection: str = ""
     temperature: float = 0.1
@@ -255,6 +257,8 @@ class StubRuntime:
         data_dir: Path,
         agent: StubAgent,
         adapter: StubAdapter,
+        adapters_by_connection: dict[str, StubAdapter] | None = None,
+        raise_on_connection: dict[str, Exception] | None = None,
         provider_ids: set[str] | None = None,
         tools: ToolRegistry | None = None,
     ) -> None:
@@ -269,12 +273,18 @@ class StubRuntime:
         )
         self.skills = StubSkills([])
         self.adapter = adapter
+        self.adapters_by_connection = dict(adapters_by_connection or {})
+        self.raise_on_connection = dict(raise_on_connection or {})
         self.adapter_provider_id: str | None = None
         self.adapter_connection_id: str | None = None
 
     def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
         self.adapter_provider_id = provider_id
         self.adapter_connection_id = connection_id
+        if connection_id in self.raise_on_connection:
+            raise self.raise_on_connection[connection_id]
+        if connection_id in self.adapters_by_connection:
+            return self.adapters_by_connection[connection_id]
         return self.adapter
 
 
@@ -691,6 +701,254 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
     ]
     assert run.events[2].payload["message"]["role"] == "error"
     assert run.events[2].payload["message"]["error_kind"] == "rate_limit"
+
+
+@pytest.mark.asyncio
+async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    fallback_events = [
+        event for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+    ]
+    assert assistant.content == "Recovered"
+    assert [message.role for message in messages] == ["user", "note", "assistant"]
+    assert messages[1].content == (
+        "Primary model unavailable. Switched to anthropic/claude-sonnet-4 for this run."
+    )
+    assert len(fallback_events) == 1
+    assert fallback_events[0].payload == {
+        "from_model": "openai/gpt-5.2",
+        "to_model": "anthropic/claude-sonnet-4",
+    }
+    assert primary_adapter.requests[0]["model_id"] == "gpt-5.2"
+    assert fallback_adapter.requests[0]["model_id"] == "claude-sonnet-4"
+
+
+@pytest.mark.asyncio
+async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={"openai:api-key": primary_adapter},
+        raise_on_connection={"anthropic:api-key": ConfigError("bad credential")},
+        provider_ids={"openai", "anthropic"},
+    )
+
+    with pytest.raises(ConfigError, match="bad credential"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    event_types = [event.type for event in run.events]
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert ERROR_MESSAGE_PERSISTED_EVENT in event_types
+    assert MODEL_FALLBACK_ACTIVATED_EVENT not in event_types
+
+
+@pytest.mark.asyncio
+async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter(
+        [
+            ProviderRateLimitError("primary rate limited"),
+            {"content": "Primary turn 2", "tool_calls": None},
+        ]
+    )
+    fallback_adapter = StubAdapter([{"content": "Fallback turn 1", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    first_assistant = await ChatLoop(runtime).send("coder", "turn 1", session_id="s1")
+    second_assistant = await ChatLoop(runtime).send("coder", "turn 2", session_id="s1")
+
+    fallback_event_count = sum(
+        1
+        for run in runtime.chat_runs._runs.values()
+        for event in run.events
+        if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
+    )
+    assert first_assistant.content == "Fallback turn 1"
+    assert second_assistant.content == "Primary turn 2"
+    assert len(primary_adapter.requests) == 2
+    assert len(fallback_adapter.requests) == 1
+    assert fallback_event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([{"content": "Should not be used", "tool_calls": None}])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    with pytest.raises(ProviderAuthError, match="invalid credential"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
+    assert fallback_adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
+
+
+@pytest.mark.asyncio
+async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["echo"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "echo", "arguments": {"value": "x"}}],
+            },
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "echo",
+        "Echo value.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"value": arguments["value"]}),
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+        tools=tools,
+    )
+
+    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert assistant.content == "Done"
+    assert len(primary_adapter.requests) == 1
+    assert len(fallback_adapter.requests) == 2
+    assert primary_adapter.requests[0]["model_id"] == "gpt-5.2"
+    assert all(request["model_id"] == "claude-sonnet-4" for request in fallback_adapter.requests)
+
+
+@pytest.mark.asyncio
+async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4",
+        fallback_connection="anthropic:api-key",
+        allowed_tools=["*"],
+    )
+    primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
+    fallback_adapter = StubAdapter([ProviderRateLimitError("fallback rate limited")])  # type: ignore[list-item]
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+    )
+
+    with pytest.raises(ProviderRateLimitError, match="fallback rate limited"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    error_events = [event for event in run.events if event.type == ERROR_MESSAGE_PERSISTED_EVENT]
+    assert run.status == RunStatus.FAILED
+    assert len(error_events) == 1
+    assert any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
+    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert messages[-1].error_kind == "rate_limit"
 
 
 @pytest.mark.asyncio

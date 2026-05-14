@@ -16,6 +16,7 @@ from typing import Any, Literal, cast
 from core.chat.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
+    MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_EVENT,
     TOOL_CALL_RESULT_EVENT,
     TOOL_CALL_STARTED_EVENT,
@@ -679,19 +680,49 @@ class ChatLoop:
                     tools,
                     run,
                 )
-            except (ProviderError, ChatError, ConfigError, VBotError) as exc:
-                kind = _exception_to_error_kind(exc)
-                content = str(exc)
-                error_message = ChatMessage.error(error_kind=kind, content=content)
-                session.append(error_message)
-                _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
-                _LOGGER.error(
-                    "Persisted run error for agent=%s session=%s kind=%s: %s",
-                    run.agent_id,
-                    run.session_id,
-                    kind,
-                    exc,
-                )
+            except ProviderError as primary_exc:
+                if _is_model_fallback_trigger(primary_exc):
+                    fallback = _resolve_fallback(self._runtime, agent)
+                    if fallback is not None:
+                        fallback_model_str, fb_provider_id, fb_connection_id = fallback
+                        _, fallback_model_id = _split_agent_model(fallback_model_str)
+                        try:
+                            fallback_adapter = self._runtime.get_adapter(
+                                fb_provider_id,
+                                fb_connection_id,
+                            )
+                        except (ConfigError, VBotError) as construction_exc:
+                            _persist_run_error(run, session, construction_exc)
+                            raise
+                        run.add_cancel_callback(lambda: _close_adapter(fallback_adapter))
+                        run.emit(
+                            MODEL_FALLBACK_ACTIVATED_EVENT,
+                            {"from_model": agent.model, "to_model": fallback_model_str},
+                        )
+                        session.add_note(
+                            "Primary model unavailable. Switched to "
+                            f"{fallback_model_str} for this run."
+                        )
+                        try:
+                            return await self._send_until_final(
+                                agent,
+                                fallback_adapter,
+                                fallback_model_id,
+                                session,
+                                messages,
+                                tools,
+                                run,
+                            )
+                        except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
+                            _persist_run_error(run, session, fallback_exc)
+                            raise fallback_exc
+                        finally:
+                            await _close_adapter(fallback_adapter)
+
+                _persist_run_error(run, session, primary_exc)
+                raise
+            except (ChatError, ConfigError, VBotError) as exc:
+                _persist_run_error(run, session, exc)
                 raise
         finally:
             await _close_adapter(adapter)
@@ -1100,6 +1131,10 @@ def error_kind_llm_visible(kind: str) -> bool:
     return ERROR_KIND_LLM_VISIBLE.get(kind, False)
 
 
+def _is_model_fallback_trigger(exc: Exception) -> bool:
+    return isinstance(exc, ProviderError) and exc.retryable
+
+
 def _exception_to_error_kind(exc: Exception) -> str:
     if isinstance(exc, ProviderRateLimitError):
         return ERROR_KIND_RATE_LIMIT
@@ -1116,6 +1151,20 @@ def _exception_to_error_kind(exc: Exception) -> str:
     if isinstance(exc, (ChatError, ConfigError, VBotError)):
         return ERROR_KIND_CONFIG
     return ERROR_KIND_PROVIDER_ERROR
+
+
+def _persist_run_error(run: Run, session: ChatSession, exc: Exception) -> None:
+    kind = _exception_to_error_kind(exc)
+    error_message = ChatMessage.error(error_kind=kind, content=str(exc))
+    session.append(error_message)
+    _emit_message_event(run, ERROR_MESSAGE_PERSISTED_EVENT, error_message)
+    _LOGGER.error(
+        "Persisted run error for agent=%s session=%s kind=%s: %s",
+        run.agent_id,
+        run.session_id,
+        kind,
+        exc,
+    )
 
 
 def _new_message_id() -> str:
@@ -1161,6 +1210,31 @@ def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
         return provider_id, connection_id
 
     return model_provider_id, _first_usable_connection_id(runtime, model_provider_id)
+
+
+def _resolve_fallback(runtime: Any, agent: Any) -> tuple[str, str, str] | None:
+    fallback_model = getattr(agent, "fallback_model", "")
+    if not fallback_model:
+        return None
+
+    try:
+        fallback_provider_id, _fallback_model_id = _split_agent_model(fallback_model)
+    except ChatError:
+        return None
+
+    fallback_connection = getattr(agent, "fallback_connection", "")
+    if fallback_connection:
+        provider_id, separator, local_id = fallback_connection.partition(":")
+        if not separator or not provider_id or not local_id:
+            return None
+        return fallback_model, provider_id, fallback_connection
+
+    try:
+        fallback_connection_id = _first_usable_connection_id(runtime, fallback_provider_id)
+    except ChatError:
+        return None
+
+    return fallback_model, fallback_provider_id, fallback_connection_id
 
 
 def _first_usable_connection_id(runtime: Any, provider_id: str) -> str:
