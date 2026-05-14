@@ -30,6 +30,8 @@ public API, soft limit 600 lines per file. Providers has a subfolder structure:
 adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
 GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities, and
 error classes in addition to the registry.
+Automation now includes both `TriggerService` for queued programmatic run starts
+and `CronService` for persisted time-based scheduling rooted at `<data_dir>/cron/`.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
 + `/ws/logs` (selected log-file live tail) + SSE (streaming). No auth
@@ -107,7 +109,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx` and `pyyaml` (direct `SKILL.md` YAML frontmatter parsing). The `server` group includes `watchfiles` for the dedicated log-view watcher transport. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), and `croniter` (cron expression parsing / next-fire calculation). The `server` group includes `watchfiles` for the dedicated log-view watcher transport. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -122,8 +124,8 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
-keys), `settings.json`, `logs/`, OAuth tokens under `oauth/`, and all runtime
-data.
+keys), `settings.json`, `logs/`, OAuth tokens under `oauth/`, scheduled cron
+jobs under `cron/jobs.json`, and all runtime data.
 
 ## Testing
 
