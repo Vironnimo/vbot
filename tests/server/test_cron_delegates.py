@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
@@ -56,11 +56,11 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
 ) -> None:
     class FrozenDateTime(datetime):
         @classmethod
-        def now(cls, tz: Any = None) -> datetime:
-            base = datetime(2026, 5, 14, 10, 0, 0, tzinfo=UTC)
+        def now(cls, tz: Any = None) -> FrozenDateTime:
+            base = cls(2026, 5, 14, 10, 0, 0, tzinfo=UTC)
             if tz is None:
                 return base
-            return base.astimezone(tz)
+            return cast(FrozenDateTime, base.astimezone(tz))
 
     monkeypatch.setattr("server.delegates.datetime", FrozenDateTime)
 
