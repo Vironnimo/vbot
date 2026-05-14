@@ -56,6 +56,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     queued messages. Visible timeline aggregation groups Run events into one
     `assistant_run` item per Run so thinking, tool lifecycle rows, and assistant
     output render together.
+  - Live `model_fallback_activated` Run events are aggregated into the current
+    `assistant_run` as a `model_fallback` child item so the switch appears inline
+    with the rest of the Run rather than as a standalone chat message.
   - `role: "error"` history messages and live `error_message_persisted` Run events
     render as standalone message timeline items, never inside an assistant Run.
 - `webui/src/lib/toastState.js`
@@ -118,6 +121,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
+  - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
 - `webui/src/components/LogsView.svelte`
   - Loads the daily logs catalog on mount, selects the newest file by default,
     reads one file at a time through `log.read`, applies local level/search/sort
