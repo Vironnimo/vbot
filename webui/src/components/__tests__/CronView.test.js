@@ -88,13 +88,19 @@ describe('CronView', () => {
     mountedComponent = mount(CronView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => document.body.textContent.includes('Nightly summary'));
+    await waitForCondition(() =>
+      document.body.textContent.includes('Nightly summary'),
+    );
 
     expect(document.body.textContent).toContain('Nightly summary');
     expect(document.body.textContent).toContain('Pause me');
     expect(document.body.textContent).not.toContain('Completed and hidden');
-    expect(document.querySelector('[data-testid="cron-toggle-job-active"]')).toBeTruthy();
-    expect(document.querySelector('[data-testid="cron-toggle-job-paused"]')).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-active"]'),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-paused"]'),
+    ).toBeTruthy();
     expect(
       document.querySelector('[data-testid="cron-toggle-job-completed"]'),
     ).toBeFalsy();
@@ -143,7 +149,9 @@ describe('CronView', () => {
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
 
     inputById('cron-job-prompt').value = 'Prepare morning digest';
-    inputById('cron-job-prompt').dispatchEvent(new Event('input', { bubbles: true }));
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
 
     inputById('cron-job-expression').value = '0 6 * * *';
     inputById('cron-job-expression').dispatchEvent(
@@ -181,7 +189,9 @@ describe('CronView', () => {
     mountedComponent = mount(CronView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => document.querySelector('[data-testid="cron-edit-job-once"]'));
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-edit-job-once"]'),
+    );
 
     buttonByTestId('cron-edit-job-once').click();
     flushSync();
