@@ -221,6 +221,12 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     shutil.rmtree(data_dir, ignore_errors=True)
 
+    branch_delete_flag = "-D" if args.force else "-d"
+    branch_return_code, branch_stderr = _run_command(["git", "branch", branch_delete_flag, name])
+    if branch_return_code != 0:
+        reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
+        print_error(reason)
+
     print_ok(name=name, path=worktree_path, **{"data-dir": data_dir}, status="removed")
     return 0
 
