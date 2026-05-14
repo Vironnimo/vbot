@@ -9,6 +9,7 @@ Every session begins by reading these files — immediately, before anything els
 
 1. `.vorch/PROJECT.md`
 2. `.vorch/GLOSSARY.md`
+3. If `.vorch/WORKTREE.md` exists, read it immediately after `GLOSSARY.md`.
 
 Your agent file lists any additional files to read on top of these.
 
