@@ -5,10 +5,7 @@ export const CRON_STATUS_ACTIVE = 'active';
 export const CRON_STATUS_PAUSED = 'paused';
 export const CRON_STATUS_COMPLETED = 'completed';
 
-const VISIBLE_JOB_STATUSES = new Set([
-  CRON_STATUS_ACTIVE,
-  CRON_STATUS_PAUSED,
-]);
+const VISIBLE_JOB_STATUSES = new Set([CRON_STATUS_ACTIVE, CRON_STATUS_PAUSED]);
 
 export function createCronViewState() {
   return {
@@ -136,9 +133,9 @@ function resolveOnceRunAtValue(formValues) {
   const originalTimezone = optionalText(formValues?.original_timezone);
 
   if (
-    originalRunAt !== null
-    && runAt === toDateTimeLocalInput(originalRunAt)
-    && timezone === originalTimezone
+    originalRunAt !== null &&
+    runAt === toDateTimeLocalInput(originalRunAt) &&
+    timezone === originalTimezone
   ) {
     return originalRunAt;
   }

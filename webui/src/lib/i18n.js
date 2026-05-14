@@ -243,8 +243,7 @@ export const englishCatalog = Object.freeze({
   'cron.noAgents': 'Create an agent before adding cron jobs.',
   'cron.loading': 'Loading cron jobs…',
   'cron.emptyTitle': 'No scheduled jobs',
-  'cron.emptySubtitle':
-    'Create a job to run an agent prompt on a schedule.',
+  'cron.emptySubtitle': 'Create a job to run an agent prompt on a schedule.',
   'cron.table.caption': 'Cron jobs',
   'cron.table.agent': 'Agent',
   'cron.table.prompt': 'Prompt',

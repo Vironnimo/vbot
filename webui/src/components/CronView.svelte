@@ -184,7 +184,8 @@
 
   function validateFormValues() {
     const hasCoreValues =
-      formValues.agent_id.trim().length > 0 && formValues.prompt.trim().length > 0;
+      formValues.agent_id.trim().length > 0 &&
+      formValues.prompt.trim().length > 0;
     const hasScheduleValue =
       formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON
         ? formValues.cron_expression.trim().length > 0
@@ -216,10 +217,16 @@
     try {
       if (formMode === FORM_MODE_CREATE) {
         await createCronJob(buildCreateCronPayload(formValues));
-        viewState.statusMessage = t('cron.messages.created', 'Cron job created.');
+        viewState.statusMessage = t(
+          'cron.messages.created',
+          'Cron job created.',
+        );
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
-        viewState.statusMessage = t('cron.messages.updated', 'Cron job updated.');
+        viewState.statusMessage = t(
+          'cron.messages.updated',
+          'Cron job updated.',
+        );
       }
 
       isModalOpen = false;
@@ -249,7 +256,10 @@
         );
       } else {
         await enableCronJob(job.id);
-        viewState.statusMessage = t('cron.messages.enabled', 'Cron job enabled.');
+        viewState.statusMessage = t(
+          'cron.messages.enabled',
+          'Cron job enabled.',
+        );
       }
 
       await loadJobs({ silent: true });
@@ -295,9 +305,7 @@
 
   function agentLabel(agentId) {
     return (
-      agentNameById.get(agentId) ||
-      agentId ||
-      t('common.unknown', 'Unknown')
+      agentNameById.get(agentId) || agentId || t('common.unknown', 'Unknown')
     );
   }
 
@@ -354,7 +362,9 @@
       <p class="cron-view__eyebrow">
         {t('cron.eyebrow', 'Scheduled automation')}
       </p>
-      <h2 id="cron-title" class="cron-view__title">{t('cron.title', 'Cron')}</h2>
+      <h2 id="cron-title" class="cron-view__title">
+        {t('cron.title', 'Cron')}
+      </h2>
       <p class="cron-view__subtitle">
         {t(
           'cron.subtitle',
@@ -508,7 +518,11 @@
   {/if}
 
   {#if isModalOpen}
-    <div class="modal-overlay open" role="presentation" onclick={handleOverlayClick}>
+    <div
+      class="modal-overlay open"
+      role="presentation"
+      onclick={handleOverlayClick}
+    >
       <div
         class="modal cron-view__modal"
         role="dialog"
@@ -606,12 +620,16 @@
                   )}
                   disabled={submittingForm}
                   oninput={(event) =>
-                    updateFormField('cron_expression', event.currentTarget.value)}
+                    updateFormField(
+                      'cron_expression',
+                      event.currentTarget.value,
+                    )}
                 />
               </label>
             {:else}
               <label class="modal-field">
-                <span class="modal-label">{t('cron.form.runAt', 'Run at')}</span>
+                <span class="modal-label">{t('cron.form.runAt', 'Run at')}</span
+                >
                 <input
                   id="cron-job-run-at"
                   class="s-input"
@@ -625,13 +643,18 @@
             {/if}
 
             <label class="modal-field">
-              <span class="modal-label">{t('cron.form.timezone', 'Timezone')}</span>
+              <span class="modal-label"
+                >{t('cron.form.timezone', 'Timezone')}</span
+              >
               <input
                 id="cron-job-timezone"
                 class="s-input"
                 type="text"
                 value={formValues.timezone}
-                placeholder={t('cron.form.timezonePlaceholder', 'System default')}
+                placeholder={t(
+                  'cron.form.timezonePlaceholder',
+                  'System default',
+                )}
                 disabled={submittingForm}
                 oninput={(event) =>
                   updateFormField('timezone', event.currentTarget.value)}
@@ -639,7 +662,9 @@
             </label>
 
             <label class="modal-field">
-              <span class="modal-label">{t('cron.form.sessionId', 'Session ID')}</span>
+              <span class="modal-label"
+                >{t('cron.form.sessionId', 'Session ID')}</span
+              >
               <input
                 id="cron-job-session"
                 class="s-input"
@@ -653,7 +678,10 @@
             </label>
 
             {#if formErrorMessage}
-              <p class="cron-view__notice cron-view__notice--error" role="alert">
+              <p
+                class="cron-view__notice cron-view__notice--error"
+                role="alert"
+              >
                 {formErrorMessage}
               </p>
             {/if}
@@ -668,7 +696,11 @@
             >
               {t('common.cancel', 'Cancel')}
             </button>
-            <button type="submit" class="modal-btn-confirm" disabled={submittingForm}>
+            <button
+              type="submit"
+              class="modal-btn-confirm"
+              disabled={submittingForm}
+            >
               {submittingForm
                 ? t('common.saving', 'Saving…')
                 : t('common.save', 'Save')}
