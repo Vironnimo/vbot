@@ -292,7 +292,9 @@ class CronService:
     def _save_jobs(self) -> None:
         """Persist cron jobs to <data_root>/cron/jobs.json using atomic replace."""
         self._ensure_storage_exists()
-        payload = [job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)]
+        payload = [
+            job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
+        ]
         temp_path = self._jobs_path.with_name(f"{self._jobs_path.name}.{uuid4().hex}.tmp")
 
         try:
@@ -398,7 +400,9 @@ class CronService:
             if not self._jobs_path.exists():
                 self._jobs_path.write_text("[]\n", encoding="utf-8")
         except OSError as error:
-            raise CronStorageError(f"Cannot initialize cron storage at {self._cron_dir}: {error}") from error
+            raise CronStorageError(
+                f"Cannot initialize cron storage at {self._cron_dir}: {error}"
+            ) from error
 
     def _restart_job_task(self, job: CronJob) -> None:
         self._cancel_job_task(job.id)

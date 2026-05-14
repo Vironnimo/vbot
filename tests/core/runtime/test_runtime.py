@@ -23,6 +23,7 @@ from core.utils.config import Config
 
 CANONICAL_BUILTIN_TOOLS = [
     "bash",
+    "cron",
     "edit",
     "glob",
     "grep",

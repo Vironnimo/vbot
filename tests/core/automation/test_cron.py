@@ -164,7 +164,9 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
 
     monkeypatch.setattr(cron_module, "croniter", ImmediateCronIter)
 
-    async def trigger_and_pause(_agent_id: str, _prompt: str, _session_id: str | None = None) -> None:
+    async def trigger_and_pause(
+        _agent_id: str, _prompt: str, _session_id: str | None = None
+    ) -> None:
         service._jobs[job.id].status = "paused"
 
     trigger_service.trigger_run.side_effect = trigger_and_pause

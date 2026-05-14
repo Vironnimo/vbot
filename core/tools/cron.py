@@ -18,9 +18,7 @@ if TYPE_CHECKING:
 CronAction = Literal["create", "list", "update", "delete", "enable", "disable"]
 
 CRON_TOOL_NAME = "cron"
-CRON_TOOL_DESCRIPTION = (
-    "Create, list, update, delete, enable, and disable scheduled cron jobs."
-)
+CRON_TOOL_DESCRIPTION = "Create, list, update, delete, enable, and disable scheduled cron jobs."
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
@@ -184,7 +182,9 @@ def _handle_create(cron_service: CronService, arguments: JsonObject) -> JsonObje
         allowed=CRON_SCHEDULE_TYPES,
     )
 
-    cron_expression = _optional_string(arguments.get("cron_expression"), field_name="cron_expression")
+    cron_expression = _optional_string(
+        arguments.get("cron_expression"), field_name="cron_expression"
+    )
     run_at = _optional_string(arguments.get("run_at"), field_name="run_at")
     timezone = _optional_string(arguments.get("timezone"), field_name="timezone")
     session_id = _optional_string(arguments.get("session_id"), field_name="session_id")
@@ -235,14 +235,18 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         )
     if "cron_expression" in arguments:
         updates["cron_expression"] = _validated_cron_expression(
-            _required_non_empty_string(arguments.get("cron_expression"), field_name="cron_expression")
+            _required_non_empty_string(
+                arguments.get("cron_expression"), field_name="cron_expression"
+            )
         )
     if "run_at" in arguments:
         updates["run_at"] = _required_non_empty_string(arguments.get("run_at"), field_name="run_at")
     if "timezone" in arguments:
         updates["timezone"] = _optional_string(arguments.get("timezone"), field_name="timezone")
     if "session_id" in arguments:
-        updates["session_id"] = _optional_string(arguments.get("session_id"), field_name="session_id")
+        updates["session_id"] = _optional_string(
+            arguments.get("session_id"), field_name="session_id"
+        )
     if "status" in arguments:
         updates["status"] = _required_enum(
             arguments.get("status"),
