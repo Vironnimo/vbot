@@ -642,6 +642,23 @@ function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (event.type === 'model_fallback_activated') {
+    const toModel = event.payload?.to_model ?? '';
+    const fromModel = event.payload?.from_model ?? '';
+    assistantRun.items.push({
+      id: `model-fallback-${assistantRun.id}-${event.sequence ?? assistantRun.items.length}`,
+      type: 'model_fallback',
+      content: toModel,
+      from_model: fromModel,
+      to_model: toModel,
+      sequence: event.sequence ?? assistantRun.items.length,
+      timestamp: event.timestamp,
+      events: [event],
+    });
+    syncAssistantRunCollections(assistantRun);
+    return;
+  }
+
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
     assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
     assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
@@ -1048,6 +1065,7 @@ function historyMessageItem(message) {
 function isAssistantRunEvent(event) {
   return [
     'run_started',
+    'model_fallback_activated',
     RUN_EVENT_REASONING_DELTA,
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,
