@@ -89,7 +89,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `yield_after` expiry), a fire-and-forget watcher task fires `trigger_service.trigger_run`
   with the command, exit code, and full output once the process finishes.
 - `register_process_tool(registry, process_manager) -> None` — registers the
--  built-in `process` tool backed by the shared `ProcessManager`.
+  built-in `process` tool backed by the shared `ProcessManager`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
   a subprocess session for the given Run scope and Agent.
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)` — manages
