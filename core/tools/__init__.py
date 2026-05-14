@@ -82,6 +82,10 @@ from core.tools.write import (
 
 
 def __getattr__(name: str) -> object:
+    if name == "register_cron_tool":
+        from core.tools.cron import register_cron_tool
+
+        return register_cron_tool
     if name in {"SubAgentBatchTracker", "register_subagent_tools"}:
         from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
 
@@ -148,6 +152,7 @@ __all__ = [
     "register_edit_tool",
     "register_glob_tool",
     "register_bash_tool",
+    "register_cron_tool",
     "register_grep_tool",
     "register_process_tool",
     "register_read_tool",

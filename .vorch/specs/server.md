@@ -18,8 +18,9 @@ Clients call the vBot server contract; provider wire details stay behind
   "error": { "code": ..., "message": ... } }`.
 - WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `skill.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
-  `chat.history`, `chat.send`, `chat.stream`, `chat.cancel`, `log.list`, and
-  `log.read`.
+  `chat.history`, `chat.send`, `chat.stream`, `chat.cancel`, `cron.create`,
+  `cron.list`, `cron.update`, `cron.delete`, `cron.enable`, `cron.disable`,
+  `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
   `connection.list`: `provider.connect`, `provider.disconnect`, and
@@ -51,6 +52,11 @@ Clients call the vBot server contract; provider wire details stay behind
   token for the follow-up log WebSocket subscription.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
+- `cron.create` accepts scheduled job fields and returns `{ id }`.
+- `cron.list` returns `{ jobs }` where each job includes persisted cron fields,
+  `session_id` for lossless edit round-tripping, plus server-computed
+  `next_fire_at` for active cron jobs.
+- `cron.update`, `cron.delete`, `cron.enable`, and `cron.disable` return `{ ok: true }`.
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
 - `agent.delete` rejects deletion when it would leave zero Agents.
 - `agent.delete` serializes the list/check/delete sequence with a process-local

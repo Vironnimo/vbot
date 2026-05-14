@@ -17,6 +17,11 @@
         'Agent creation, editing, and deletion controls are coming next.',
     },
     {
+      id: 'cron',
+      labelKey: 'navigation.cron',
+      labelFallback: 'Cron',
+    },
+    {
       id: 'system-prompt',
       labelKey: 'navigation.systemPrompt',
       labelFallback: 'System Prompt',
@@ -45,6 +50,7 @@
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
+  import CronView from './components/CronView.svelte';
   import LogsView from './components/LogsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
@@ -172,6 +178,8 @@
       onAgentsChanged={refreshAgents}
       onAgentSelected={selectAgent}
     />
+  {:else if activeViewId === 'cron'}
+    <CronView />
   {:else if activeViewId === 'system-prompt'}
     <SystemPromptView />
   {:else if activeViewId === 'settings'}

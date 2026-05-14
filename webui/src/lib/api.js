@@ -148,6 +148,60 @@ export function readLogFile(file, options = {}) {
   return rpc('log.read', { file }, options);
 }
 
+export function listCronJobs(options = {}) {
+  return rpc('cron.list', {}, options);
+}
+
+export function createCronJob(params = {}, options = {}) {
+  return rpc('cron.create', params, options);
+}
+
+export function updateCronJob(params = {}, options = {}) {
+  return rpc('cron.update', params, options);
+}
+
+export function deleteCronJob(id, options = {}) {
+  if (!isNonEmptyString(id)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Cron job id must be a non-empty string',
+      {
+        method: 'cron.delete',
+      },
+    );
+  }
+
+  return rpc('cron.delete', { id }, options);
+}
+
+export function enableCronJob(id, options = {}) {
+  if (!isNonEmptyString(id)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Cron job id must be a non-empty string',
+      {
+        method: 'cron.enable',
+      },
+    );
+  }
+
+  return rpc('cron.enable', { id }, options);
+}
+
+export function disableCronJob(id, options = {}) {
+  if (!isNonEmptyString(id)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Cron job id must be a non-empty string',
+      {
+        method: 'cron.disable',
+      },
+    );
+  }
+
+  return rpc('cron.disable', { id }, options);
+}
+
 export async function connectProvider(providerId, connectionId, options = {}) {
   return (options.rpc ?? rpc)(
     'provider.connect',
