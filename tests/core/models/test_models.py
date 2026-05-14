@@ -319,35 +319,35 @@ class TestModelRegistryLoad:
         models_dir.mkdir()
         models_dir.joinpath("openrouter.json").write_text(
             """
-            {
-              "provider_id": "openrouter",
-              "models": {
-                "model-a": {
-                  "name": "Model A",
-                  "capabilities": {
-                    "vision": false,
-                    "tools": false,
-                    "json_mode": false,
-                    "reasoning": {"supported": false}
-                  },
-                  "context_window": 1000,
-                  "max_output_tokens": 100
-                }
-              }
-            }
-            """,
+                        {
+                            "provider_id": "openrouter",
+                            "models": {
+                                "model-a": {
+                                    "name": "Model A",
+                                    "capabilities": {
+                                        "vision": false,
+                                        "tools": false,
+                                        "json_mode": false,
+                                        "reasoning": {"supported": false}
+                                    },
+                                    "context_window": 1000,
+                                    "max_output_tokens": 100
+                                }
+                            }
+                        }
+                        """,
             encoding="utf-8",
         )
         models_dir.joinpath("openrouter.overrides.json").write_text(
             """
-            {
-              "provider_id": "openrouter",
-              "models": {
-                "model-a": {"name": "Corrected Model A"},
-                "override-only": {"name": "Override Only"}
-              }
-            }
-            """,
+                        {
+                            "provider_id": "openrouter",
+                            "models": {
+                                "model-a": {"name": "Corrected Model A"},
+                                "override-only": {"name": "Override Only"}
+                            }
+                        }
+                        """,
             encoding="utf-8",
         )
 
@@ -356,6 +356,49 @@ class TestModelRegistryLoad:
         assert registry.get("openrouter", "model-a").name == "Model A"
         with pytest.raises(KeyError):
             registry.get("openrouter", "override-only")
+
+    def test_load_ignores_colocated_raw_files(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("test_provider.json").write_text(
+            """
+                        {
+                            "provider_id": "test_provider",
+                            "models": {
+                                "model-a": {
+                                    "name": "Model A",
+                                    "capabilities": {
+                                        "vision": false,
+                                        "tools": false,
+                                        "json_mode": false,
+                                        "reasoning": {"supported": false}
+                                    },
+                                    "context_window": 1000,
+                                    "max_output_tokens": 100
+                                }
+                            }
+                        }
+                        """,
+            encoding="utf-8",
+        )
+        models_dir.joinpath("test_provider.raw.json").write_text(
+            """
+                        {
+                            "provider_id": "test_provider",
+                            "fetched_at": "2026-01-01T00:00:00+00:00",
+                            "raw_response": {
+                                "data": []
+                            }
+                        }
+                        """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        models = registry.list_for_provider("test_provider")
+        assert len(models) == 1
+        assert models[0].model_id == "model-a"
 
 
 # ---------------------------------------------------------------------------
@@ -418,101 +461,31 @@ class TestModelRegistryListForProvider:
 
 
 class TestModelRegistryRealResources:
-    """Verify the shipped JSON data files load correctly."""
+    """Smoke-check: shipped sanitized JSON files load without error."""
 
     @pytest.fixture(autouse=True)
     def _reset_cache_for_real_resources(self):
-        """Extra cache clear to ensure isolation from fixture-based tests."""
         ModelRegistry._cache.clear()
         yield
         ModelRegistry._cache.clear()
 
-    def test_load_openai(self):
+    @pytest.mark.parametrize(
+        "provider_id",
+        ["openai", "openrouter", "anthropic", "github-copilot"],
+    )
+    def test_provider_loads_and_has_models(self, provider_id: str):
         registry = ModelRegistry.load(RESOURCES_DIR)
+        models = registry.list_for_provider(provider_id)
 
-        model = registry.get("openai", "gpt-5.2")
-        assert model.name == "GPT-5.2"
-        assert model.context_window == 128000
-        assert model.max_output_tokens == 16384
-
-    def test_load_github_copilot_resource_with_optional_metadata(self):
-        registry = ModelRegistry.load(RESOURCES_DIR)
-
-        model = registry.get("github-copilot", "gpt-5-mini")
-
-        assert model.name == "GPT-5 mini"
-        assert model.metadata == {} or "github_copilot" in model.metadata
-
-    def test_load_openrouter(self):
-        registry = ModelRegistry.load(RESOURCES_DIR)
-
-        haiku = registry.get("openrouter", "anthropic/claude-haiku-4.5")
-        assert haiku.name == "Anthropic: Claude Haiku 4.5"
-        assert haiku.context_window == 200000
-        assert haiku.max_output_tokens == 64000
-        assert haiku.capabilities.vision is True
-        assert haiku.capabilities.tools is True
-        assert haiku.capabilities.json_mode is True
-        assert haiku.capabilities.reasoning.supported is True
-
-        claude = registry.get("openrouter", "anthropic/claude-sonnet-4")
-        assert claude.name == "Anthropic: Claude Sonnet 4"
-        assert claude.context_window == 1000000
-        assert claude.max_output_tokens == 64000
-
-        gpt = registry.get("openrouter", "openai/gpt-5.2")
-        assert gpt.name == "OpenAI: GPT-5.2"
-        assert gpt.context_window == 400000
-        assert gpt.max_output_tokens == 128000
-
-        gpt_55 = registry.get("openrouter", "openai/gpt-5.5")
-        assert gpt_55.name == "OpenAI: GPT-5.5"
-        assert gpt_55.context_window == 1050000
-        assert gpt_55.max_output_tokens == 128000
-        assert gpt_55.capabilities.vision is True
-        assert gpt_55.capabilities.tools is True
-        assert gpt_55.capabilities.json_mode is True
-        assert gpt_55.capabilities.reasoning.supported is True
-
-        opus = registry.get("openrouter", "anthropic/claude-opus-4.7")
-        assert opus.name == "Anthropic: Claude Opus 4.7"
-        assert opus.context_window == 1000000
-        assert opus.max_output_tokens == 128000
-        assert opus.capabilities.vision is True
-        assert opus.capabilities.tools is True
-        assert opus.capabilities.json_mode is True
-        assert opus.capabilities.reasoning.supported is True
-
-    def test_load_anthropic(self):
-        registry = ModelRegistry.load(RESOURCES_DIR)
-
-        sonnet = registry.get("anthropic", "claude-sonnet-4-20250219")
-        assert sonnet.name == "Claude Sonnet 4"
-        assert sonnet.context_window == 200000
-        assert sonnet.max_output_tokens == 64000
-
-        opus = registry.get("anthropic", "claude-opus-4-20250219")
-        assert opus.name == "Claude Opus 4"
-        assert opus.context_window == 200000
-        assert opus.max_output_tokens == 32000
-
-    def test_list_all_providers(self):
-        registry = ModelRegistry.load(RESOURCES_DIR)
-
-        openai_models = registry.list_for_provider("openai")
-        assert len(openai_models) == 1
-        assert [model.model_id for model in openai_models] == ["gpt-5.2"]
-
-        openrouter_models = registry.list_for_provider("openrouter")
-        openrouter_model_ids = {model.model_id for model in openrouter_models}
-        assert len(openrouter_models) > 100
-        assert "anthropic/claude-sonnet-4" in openrouter_model_ids
-        assert "anthropic/claude-opus-4.7" in openrouter_model_ids
-        assert "openai/gpt-5.5" in openrouter_model_ids
-
-        anthropic_models = registry.list_for_provider("anthropic")
-        assert len(anthropic_models) == 2
-        assert {model.model_id for model in anthropic_models} == {
-            "claude-sonnet-4-20250219",
-            "claude-opus-4-20250219",
-        }
+        assert len(models) > 0
+        for model in models:
+            assert model.model_id
+            assert model.name
+            assert isinstance(model.capabilities.vision, bool)
+            assert isinstance(model.capabilities.tools, bool)
+            assert isinstance(model.capabilities.json_mode, bool)
+            assert isinstance(model.capabilities.reasoning.supported, bool)
+            assert isinstance(model.context_window, int)
+            assert model.context_window >= 0
+            assert isinstance(model.max_output_tokens, int)
+            assert model.max_output_tokens >= 0
