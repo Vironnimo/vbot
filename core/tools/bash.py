@@ -10,9 +10,11 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
-from core.tools.process_manager import ProcessManager
+from core.tools.process_manager import ProcessManager, SessionNotFoundError
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.utils.logging import get_logger
 
 BASH_TOOL_NAME = "bash"
 BASH_TOOL_DESCRIPTION = (
@@ -62,6 +64,8 @@ SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 
+_LOGGER = get_logger("tools.bash")
+
 _cached_shell_env: dict[str, str] | None = None
 
 
@@ -69,6 +73,7 @@ async def bash_handler(
     context: ToolContext,
     arguments: JsonObject,
     process_manager: ProcessManager,
+    trigger_service: Any | None = None,
 ) -> JsonObject:
     """Run a shell command and return a stable tool result envelope."""
     parsed = _parse_arguments(arguments)
@@ -99,7 +104,15 @@ async def bash_handler(
     )
 
     if parsed["background"]:
-        return await _background_result(process_manager, context, session_id)
+        result = await _background_result(process_manager, context, session_id)
+        _maybe_spawn_completion_watcher(
+            process_manager,
+            context,
+            session_id,
+            command,
+            trigger_service,
+        )
+        return result
 
     result = await _run_foreground_phase(
         process_manager,
@@ -110,6 +123,13 @@ async def bash_handler(
     )
 
     if result["data"] is not None and result["data"].get("status") == "running":
+        _maybe_spawn_completion_watcher(
+            process_manager,
+            context,
+            session_id,
+            command,
+            trigger_service,
+        )
         return result
 
     if timeout_state["timed_out"]:
@@ -123,17 +143,114 @@ async def bash_handler(
     return result
 
 
-def register_bash_tool(registry: ToolRegistry, process_manager: ProcessManager) -> None:
+def register_bash_tool(
+    registry: ToolRegistry,
+    process_manager: ProcessManager,
+    trigger_service: Any | None = None,
+) -> None:
     """Register the bash tool with a vBot tool registry."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await bash_handler(context, arguments, process_manager)
+        return await bash_handler(
+            context,
+            arguments,
+            process_manager,
+            trigger_service=trigger_service,
+        )
 
     registry.register(
         BASH_TOOL_NAME,
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         handler,
+    )
+
+
+def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is None:
+        return
+    _LOGGER.error(
+        "%s: %s",
+        message,
+        error,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
+async def _watch_background_process(
+    process_manager: ProcessManager,
+    process_session_id: str,
+    agent_id: str,
+    chat_session_id: str,
+    command: str,
+    trigger_service: Any,
+) -> None:
+    while True:
+        result = await process_manager.poll(process_session_id, agent_id, timeout_ms=5000)
+        if result["status"] != "running":
+            break
+
+    try:
+        log_result = await process_manager.log(process_session_id, agent_id)
+        session = process_manager.get_session(process_session_id, agent_id)
+    except (SessionNotFoundError, Exception) as error:
+        _LOGGER.warning(
+            "Bash completion watcher skipped trigger for agent=%s process_session=%s: %s",
+            agent_id,
+            process_session_id,
+            error,
+        )
+        return
+
+    output = log_result.get("output", "")
+    if not isinstance(output, str):
+        output = ""
+
+    message = (
+        "Background process completed.\n"
+        f"Command: {command}\n"
+        f"Exit code: {session.exit_code}\n"
+        "Output:\n"
+        f"{output}"
+    )
+
+    await trigger_service.trigger_run(
+        agent_id,
+        message,
+        session_id=chat_session_id,
+        internal=True,
+    )
+
+
+def _maybe_spawn_completion_watcher(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    process_session_id: str,
+    command: str,
+    trigger_service: Any | None,
+) -> None:
+    if trigger_service is None:
+        return
+
+    task = asyncio.create_task(
+        _watch_background_process(
+            process_manager,
+            process_session_id,
+            context.agent_id,
+            context.session_id,
+            command,
+            trigger_service,
+        )
+    )
+    task.add_done_callback(
+        lambda completed: _log_background_task_result(
+            completed,
+            f"Bash completion trigger failed for "
+            f"agent={context.agent_id} session={context.session_id}",
+        )
     )
 
 
