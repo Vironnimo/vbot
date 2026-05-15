@@ -1036,7 +1036,10 @@ def _cron_next_fire_at(job: Any) -> str | None:
 
 def _resolve_cron_timezone(timezone_name: str | None) -> tzinfo:
     if timezone_name:
-        return ZoneInfo(timezone_name)
+        normalized_timezone = timezone_name.strip()
+        if normalized_timezone.upper() == "UTC":
+            return UTC
+        return ZoneInfo(normalized_timezone)
 
     local_timezone = datetime.now().astimezone().tzinfo
     if local_timezone is not None:
