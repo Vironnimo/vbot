@@ -6,12 +6,14 @@ does not own server business logic.
 
 ## Overview
 
-`cli/` is the local process-management entrypoint used by both human users and
-agents. It owns `server start`, `server stop`, `server restart`, and
-`server status`. The CLI is non-interactive and automation-safe: it never opens
-the browser and instead prints the resolved server URL and status information.
-It manages local vBot server reachability around the existing `server/main.py`
-foreground entrypoint.
+`cli/` is the local process-management and management-command entrypoint used by
+both human users and agents. It owns `server start`, `server stop`, `server
+restart`, `server status`, and channel-management commands. The CLI is
+non-interactive and automation-safe: it never opens the browser and instead
+prints the resolved server URL and status information. It manages local vBot
+server reachability around the existing `server/main.py` foreground entrypoint
+and calls the running server's RPC contract for non-process domains such as
+channels.
 
 ## Interfaces
 
@@ -27,10 +29,24 @@ foreground entrypoint.
   - re-resolves host/port/data-dir from current args, env, and settings before restart
 - `python cli/main.py server status [--host] [--port] [--data-dir]`
   - reports at least: running/not running, resolved URL, WebUI available/unavailable, and resolved `data_dir`
+- `python cli/main.py channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
+  - calls `channel.create` over server RPC and creates a persisted channel config
+- `python cli/main.py channel list`
+  - calls `channel.list` over server RPC and prints deterministic output
+- `python cli/main.py channel remove --id`
+  - calls `channel.delete` over server RPC
+- `python cli/main.py channel enable --id`
+  - calls `channel.enable` over server RPC
+- `python cli/main.py channel disable --id`
+  - calls `channel.disable` over server RPC
+- `python cli/main.py channel status --id`
+  - calls `channel.status` over server RPC
 
 ## Conventions
 
 - `server start` is data-dir-scoped for instance selection.
+- Channel commands require a reachable vBot server because they are RPC-backed,
+  not local file mutations.
 - Port resolution follows `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`.
 - Ambient `PORT` and `SERVER_PORT` process environment variables are ignored for
   port resolution; only `VBOT_SERVER_PORT` can override `settings.json` from the
@@ -60,3 +76,5 @@ foreground entrypoint.
   live reachability and `/health` detection are the authority.
 - CLI-managed background server startup must not bypass the managed
   application logger.
+- Channel command output is deterministic and automation-safe. RPC failures and
+  malformed envelopes surface as non-zero exits with clear messages.

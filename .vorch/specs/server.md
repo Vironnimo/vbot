@@ -18,9 +18,11 @@ Clients call the vBot server contract; provider wire details stay behind
   "error": { "code": ..., "message": ... } }`.
 - WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `skill.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
-  `chat.history`, `chat.send`, `chat.stream`, `chat.cancel`, `cron.create`,
-  `cron.list`, `cron.update`, `cron.delete`, `cron.enable`, `cron.disable`,
-  `log.list`, and `log.read`.
+  `session.list`, `session.link_channel`, `chat.history`, `chat.send`,
+  `chat.stream`, `chat.cancel`, `channel.list`, `channel.create`,
+  `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
+  `channel.status`, `cron.create`, `cron.list`, `cron.update`,
+  `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
   `connection.list`: `provider.connect`, `provider.disconnect`, and
@@ -67,10 +69,25 @@ Clients call the vBot server contract; provider wire details stay behind
   fields. `connection` and `fallback_connection` are optional string fields alongside `model` and `fallback_model`. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
+- `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each
+  item includes session timing plus merged sidecar metadata fields such as
+  `source_channel_id`, `platform`, `platform_conv_id`, and `last_reply_target`
+  when present.
+- `session.link_channel` accepts `{ agent_id, session_id, channel_id,
+  platform_conv_id }`, writes channel metadata to the session sidecar, and
+  appends a System Reminder note so the next provider request sees the channel
+  context.
 - `chat.history` returns visible persisted messages for `{ agent_id,
   session_id? }`. If `session_id` is omitted, it loads the Agent's
   `current_session_id`. Kernel-internal note messages are excluded from this
   normal history response; persisted `role: "error"` messages are included.
+- `channel.list` returns `{ channels }`, where each item includes the persisted
+  channel config fields `{ id, platform, agent_id, dm_scope, allowed_chat_ids,
+  token_env_var, enabled }`.
+- `channel.create` accepts channel config fields and returns `{ id }`.
+- `channel.update`, `channel.delete`, `channel.enable`, and `channel.disable`
+  return `{ ok: true }`.
+- `channel.status` accepts `{ id }` and returns `{ id, enabled, running }`.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
@@ -126,6 +143,8 @@ Clients call the vBot server contract; provider wire details stay behind
 ## Conventions
 
 - Server code maps expected domain errors to provider-agnostic RPC errors.
+- Channel RPC delegates map channel-domain failures to stable RPC codes:
+  `channel_not_found`, `channel_already_exists`, and `channel_config_error`.
 - Opaque provider metadata such as `reasoning_meta` must not appear in public
   server payloads, including nested SSE/WebSocket event payloads.
 - Session creation is explicit at the server/product boundary.
