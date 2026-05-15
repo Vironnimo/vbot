@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
 from core.automation import CronService, TriggerService
+from core.channels import ChannelService
 from core.chat import ChatLoop, ChatRunManager
 from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
@@ -120,6 +121,7 @@ class Runtime:
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
+        self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
         self._subagent_batch_tracker: SubAgentBatchTracker | None = None
         self._system_prompts: SystemPromptManager | None = None
@@ -187,6 +189,11 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         self._chat_loop = ChatLoop(self, streaming=False)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        self._channel_service = ChannelService(self._trigger_service, self._chat_sessions, self)
+        self._channel_service._notify_tool_registration_changed_hook = self.reload_channel_tool
+        self._start_channel_service()
+        if self._channel_service.has_active_channels():
+            self.reload_channel_tool()
         self._cron_service = CronService(self._trigger_service, self._storage.data_dir)
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
@@ -232,6 +239,9 @@ class Runtime:
         self._process_manager = None
         self._skills = None
         self._chat_sessions = None
+        if self._channel_service is not None:
+            self._channel_service.stop()
+        self._channel_service = None
         if self._cron_service is not None:
             self._cron_service.stop()
         self._cron_service = None
@@ -299,6 +309,36 @@ class Runtime:
         except RuntimeError:
             return
         self._cron_service.start()
+
+    def _start_channel_service(self) -> None:
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._channel_service.start()
+
+    def reload_channel_tool(self) -> None:
+        """Re-register channel_send based on current active channel adapters."""
+        self._ensure_started()
+        if self._tools is None:
+            raise RuntimeError("Tool service not available")
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        if self._chat_sessions is None:
+            raise RuntimeError("Chat session service not available")
+
+        self._tools.unregister("channel_send")
+        if not self._channel_service.has_active_channels():
+            return
+
+        try:
+            from core.tools.channel import register_channel_send_tool
+        except ModuleNotFoundError as error:
+            raise RuntimeError("Channel tool registration is unavailable") from error
+
+        register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
@@ -438,6 +478,14 @@ class Runtime:
         if self._trigger_service is None:
             raise RuntimeError("Trigger service not available")
         return self._trigger_service
+
+    @property
+    def channel_service(self) -> ChannelService:
+        """Access to channel config management and adapter lifecycle."""
+        self._ensure_started()
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        return self._channel_service
 
     @property
     def cron_service(self) -> CronService:

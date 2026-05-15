@@ -30,14 +30,16 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   fragments, wires services, starts the `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools, creates the
   shared `ChatRunManager`, creates the non-streaming automation `ChatLoop`, wires
-  `TriggerService`, wires and starts `CronService` when an event loop is active,
-  registers the `cron` tool, creates the in-memory `SubAgentBatchTracker`, registers
+  `TriggerService`, wires and starts `ChannelService` when an event loop is active,
+  registers the `channel_send` tool when at least one channel is active, wires
+  and starts `CronService` when an event loop is active, registers the `cron`
+  tool, creates the in-memory `SubAgentBatchTracker`, registers
   sub-agent tools, and ensures a usable default Agent exists. Writes `Runtime
   started` at info level. Second call is no-op (debug log) and preserves service
   instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
-  `ProcessManager` sweeper, stops `CronService`, resets started state, and clears
-  service references.
+  `ProcessManager` sweeper, stops `ChannelService`, stops `CronService`, resets
+  started state, and clears service references.
   Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
@@ -58,10 +60,15 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   compatibility.
 - `trigger_service` — `TriggerService` for programmatic Run starts and
   in-memory busy-Session queueing.
+- `channel_service` — `ChannelService` for persisted channel configs, adapter
+  lifecycle, and outbound platform delivery rooted at `<data_dir>/channels/`.
 - `cron_service` — `CronService` for persisted cron and one-shot scheduled
   triggers rooted at `<data_dir>/cron/jobs.json`.
 - `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
 - `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
+- `reload_channel_tool()` — unregisters `channel_send` and re-registers it when
+  `channel_service.has_active_channels()` is true so runtime channel
+  enable/disable changes keep tool visibility in sync.
 - `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
 
 All service properties raise `RuntimeError` before `start()` and after `stop()`.
@@ -84,3 +91,6 @@ configured otherwise.
   persists it as `current_session_id`.
 - Existing data directories with at least one Agent are preserved; Runtime does
   not add another `main` Agent just because `main` is absent.
+- `ChannelService.start()` follows the same event-loop guard pattern as
+  `CronService.start()`: when runtime startup happens without an active asyncio
+  loop, the service is wired but listeners are not started.
