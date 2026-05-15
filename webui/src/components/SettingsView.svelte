@@ -1827,14 +1827,14 @@
                           disabled={rowBusy}
                           aria-label={channel.enabled
                             ? t(
-                                'settings.channels.disable',
+                                'settings.channels.disableAria',
                                 'Disable channel {id}',
                                 {
                                   id: channel.id,
                                 },
                               )
                             : t(
-                                'settings.channels.enable',
+                                'settings.channels.enableAria',
                                 'Enable channel {id}',
                                 {
                                   id: channel.id,
