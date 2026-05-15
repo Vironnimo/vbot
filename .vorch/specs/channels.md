@@ -11,7 +11,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - `ChannelConfig`
   - `id: str`
   - `platform: str` (`telegram` first)
-  - `agent_id: str`
+  - `agent_id: str` — must resolve to an existing Agent
   - `dm_scope: str` (`per_conversation` | `main` | `per_peer` | `per_account_channel_peer`)
   - `allowed_chat_ids: list[int]`
   - `token_env_var: str`
@@ -64,10 +64,12 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Missing or empty `allowed_chat_ids` means deny-all for DM-capable channels.
 - Session history remains the single source of truth. Channels add metadata and System Reminder notes; they do not fork chat history.
 - Runtime registers `channel_send` only when at least one channel is active and re-evaluates registration when channels are enabled or disabled.
+- `channel_send` reports success only after the adapter send call completes; delivery is not fire-and-forget.
 
 ## External Dependencies
 
 - `python-telegram-bot` — async Telegram Bot API client used for long polling and outbound sends in the first platform adapter.
+- Telegram bot tokens resolve through the runtime credential environment snapshot first, with process-environment fallback. Standard data-dir `.env` setups must work without mutating `os.environ`.
 
 ## Constraints & Gotchas
 

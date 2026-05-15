@@ -243,8 +243,10 @@ class ChannelService:
         self._storage = ChannelStorage(_resolve_runtime_data_root(runtime))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
+        self._adapter_stop_tasks: dict[str, asyncio.Task[None]] = {}
         self._adapter_restart_attempts: dict[str, int] = {}
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
         self._failed_channels: set[str] = set()
         self._started = False
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
@@ -257,13 +259,29 @@ class ChannelService:
         self._started = True
         for config in self._storage.load_all():
             if config.enabled:
-                self.start_channel(config.id)
+                try:
+                    self.start_channel(config.id)
+                except ChannelError as error:
+                    _LOGGER.error(
+                        "Cannot start channel adapter during service startup (channel=%s): %s",
+                        config.id,
+                        error,
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
 
     def stop(self) -> None:
         """Stop all active channel adapter tasks. Idempotent."""
-        if not self._started and not self._adapter_tasks and not self._adapter_restart_tasks:
+        if (
+            not self._started
+            and not self._adapter_tasks
+            and not self._adapter_restart_tasks
+            and not self._adapter_stop_tasks
+        ):
             return
 
+        self._pending_start_requests.clear()
+        for channel_id in list(self._adapter_stop_tasks):
+            self._cancel_stop_task(channel_id)
         for channel_id in list(self._adapter_restart_tasks):
             self._cancel_restart_task(channel_id)
         for channel_id in list(self._adapter_tasks):
@@ -272,13 +290,39 @@ class ChannelService:
         self._failed_channels.clear()
         self._started = False
 
-    def start_channel(self, channel_id: str, *, reset_backoff: bool = True) -> None:
+    def start_channel(
+        self,
+        channel_id: str,
+        *,
+        reset_backoff: bool = True,
+        config_override: ChannelConfig | None = None,
+    ) -> None:
         """Start one enabled channel adapter task when not already running."""
         normalized_id = _normalize_channel_id(channel_id)
+
+        if config_override is not None:
+            if config_override.id != normalized_id:
+                raise ChannelConfigError(
+                    f"config_override.id mismatch: {config_override.id} != {normalized_id}"
+                )
+            config = replace(config_override)
+            config.validate()
+        else:
+            config = self._storage.get(normalized_id)
+
+        self._validate_agent_exists(config.agent_id)
         self._cancel_restart_task(normalized_id)
         if reset_backoff:
             self._adapter_restart_attempts.pop(normalized_id, None)
             self._failed_channels.discard(normalized_id)
+
+        if self._is_stop_in_progress(normalized_id):
+            self._schedule_pending_start(
+                normalized_id,
+                reset_backoff=reset_backoff,
+                config_override=config,
+            )
+            return
 
         existing_task = self._adapter_tasks.get(normalized_id)
         if existing_task is not None and not existing_task.done():
@@ -287,7 +331,6 @@ class ChannelService:
             self._adapter_tasks.pop(normalized_id, None)
             self._adapters.pop(normalized_id, None)
 
-        config = self._storage.get(normalized_id)
         if not config.enabled:
             return
 
@@ -299,6 +342,7 @@ class ChannelService:
             )
             return
 
+        had_active_channels = self.has_active_channels()
         adapter = self._create_adapter(config)
         task = loop.create_task(
             self._run_adapter(normalized_id, adapter), name=f"channel:{normalized_id}"
@@ -310,10 +354,14 @@ class ChannelService:
             self._on_adapter_task_done(channel, completed_task)
 
         task.add_done_callback(on_done)
+        self._notify_tool_registration_if_changed(had_active_channels)
 
     def stop_channel(self, channel_id: str) -> None:
         """Stop one running channel adapter task when active."""
         normalized_id = _normalize_channel_id(channel_id)
+        had_active_channels = self.has_active_channels()
+
+        self._pending_start_requests.pop(normalized_id, None)
         self._cancel_restart_task(normalized_id)
         self._adapter_restart_attempts.pop(normalized_id, None)
         self._failed_channels.discard(normalized_id)
@@ -323,8 +371,25 @@ class ChannelService:
 
         if task is not None and not task.done():
             task.cancel()
+            loop = _get_running_loop_or_none()
+            if loop is not None:
+                stop_task = loop.create_task(
+                    self._await_adapter_shutdown(normalized_id, task),
+                    name=f"channel:{normalized_id}:stop",
+                )
+                self._adapter_stop_tasks[normalized_id] = stop_task
 
-    def send(self, channel_id: str, message: str, platform_target: str) -> None:
+                def on_stop_done(
+                    completed_task: asyncio.Task[None],
+                    channel: str = normalized_id,
+                ) -> None:
+                    self._on_stop_task_done(channel, completed_task)
+
+                stop_task.add_done_callback(on_stop_done)
+
+        self._notify_tool_registration_if_changed(had_active_channels)
+
+    async def send(self, channel_id: str, message: str, platform_target: str) -> None:
         """Delegate an outbound send to a running channel adapter."""
         normalized_id = _normalize_channel_id(channel_id)
         if not isinstance(message, str) or not message:
@@ -333,19 +398,7 @@ class ChannelService:
             raise ChannelConfigError("platform_target must be a non-empty string")
 
         adapter = self._active_adapter(normalized_id)
-        loop = _get_running_loop_or_none()
-        if loop is None:
-            raise ChannelError("Channel send requires a running event loop")
-
-        send_task = loop.create_task(
-            adapter.send(message, platform_target),
-            name=f"channel:{normalized_id}:send",
-        )
-
-        def on_send_done(completed_task: asyncio.Task[None], channel: str = normalized_id) -> None:
-            self._on_send_task_done(channel, completed_task)
-
-        send_task.add_done_callback(on_send_done)
+        await adapter.send(message, platform_target)
 
     def list_channels(self) -> list[ChannelConfig]:
         """Return all persisted channels, enabled and disabled."""
@@ -355,6 +408,8 @@ class ChannelService:
         """Validate and persist one channel config, then start it when enabled."""
         if not isinstance(config, ChannelConfig):
             raise ChannelConfigError("config must be a ChannelConfig instance")
+        config.validate()
+        self._validate_agent_exists(config.agent_id)
 
         try:
             self._storage.get(config.id)
@@ -363,9 +418,14 @@ class ChannelService:
         else:
             raise ChannelConfigError(f"Channel already exists: {config.id}")
 
+        self._preflight_adapter_start(config)
         self._storage.save(config)
         if config.enabled:
-            self.start_channel(config.id)
+            try:
+                self.start_channel(config.id, config_override=config)
+            except Exception:
+                self._rollback_created_channel(config.id)
+                raise
 
     def update_channel(self, channel_id: str, **fields: Any) -> None:
         """Update mutable fields, persist, and restart when currently running."""
@@ -381,28 +441,39 @@ class ChannelService:
 
         updated = replace(config, **fields)
         updated.validate()
-        self._storage.save(updated)
+        self._validate_agent_exists(updated.agent_id)
+        self._preflight_adapter_start(updated)
 
-        was_running = self._is_running(normalized_id)
+        was_running = self._is_running(normalized_id) or self._is_stop_in_progress(normalized_id)
+
         if was_running:
             self.stop_channel(normalized_id)
-        if updated.enabled:
-            self.start_channel(normalized_id)
+
+        self._storage.save(updated)
+        try:
+            if updated.enabled:
+                self.start_channel(normalized_id, config_override=updated)
+            else:
+                self._pending_start_requests.pop(normalized_id, None)
+        except Exception:
+            self._rollback_updated_channel(normalized_id, config, was_running)
+            raise
 
     def delete_channel(self, channel_id: str) -> None:
         """Delete one channel config and stop any active adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         self.stop_channel(normalized_id)
+        self._pending_start_requests.pop(normalized_id, None)
         self._storage.delete(normalized_id)
 
     def enable_channel(self, channel_id: str) -> None:
         """Enable one channel and start its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        self._validate_agent_exists(config.agent_id)
         if not config.enabled:
             self._storage.save(replace(config, enabled=True))
         self.start_channel(normalized_id)
-        self._notify_tool_registration_changed()
 
     def disable_channel(self, channel_id: str) -> None:
         """Disable one channel and stop its adapter task."""
@@ -411,7 +482,6 @@ class ChannelService:
         if config.enabled:
             self._storage.save(replace(config, enabled=False))
         self.stop_channel(normalized_id)
-        self._notify_tool_registration_changed()
 
     def has_active_channels(self) -> bool:
         """Return whether at least one channel adapter task is currently running."""
@@ -423,8 +493,163 @@ class ChannelService:
         except Exception:
             _LOGGER.exception("Channel tool-registration hook failed")
 
+    def _notify_tool_registration_if_changed(self, had_active_channels: bool) -> None:
+        if had_active_channels == self.has_active_channels():
+            return
+        self._notify_tool_registration_changed()
+
     def _create_adapter(self, config: ChannelConfig) -> ChannelAdapter:
+        if config.platform == "telegram":
+            from core.channels.telegram import TelegramChannelAdapter
+
+            return TelegramChannelAdapter(
+                config,
+                self._trigger_service,
+                self._chat_sessions,
+                self._runtime,
+            )
+
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
+
+    def _preflight_adapter_start(self, config: ChannelConfig) -> None:
+        if not config.enabled:
+            return
+        if _get_running_loop_or_none() is None:
+            return
+        self._create_adapter(config)
+
+    def _validate_agent_exists(self, agent_id: str) -> None:
+        runtime_obj = cast(Any, self._runtime)
+        agents = getattr(runtime_obj, "_agents", None)
+        if agents is None:
+            try:
+                agents = runtime_obj.agents
+            except Exception:
+                agents = None
+
+        if agents is None:
+            raise ChannelConfigError("Runtime agent store is unavailable")
+        try:
+            agents.get(agent_id)
+        except Exception as error:
+            raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
+
+    def _rollback_created_channel(self, channel_id: str) -> None:
+        try:
+            self._storage.delete(channel_id)
+        except Exception as error:
+            _LOGGER.error(
+                "Rollback failed while deleting newly created channel config (channel=%s): %s",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _rollback_updated_channel(
+        self,
+        channel_id: str,
+        previous_config: ChannelConfig,
+        was_running: bool,
+    ) -> None:
+        self._pending_start_requests.pop(channel_id, None)
+        try:
+            self._storage.save(previous_config)
+        except Exception as error:
+            _LOGGER.error(
+                "Rollback failed while restoring previous channel config (channel=%s): %s",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+        if not was_running or not previous_config.enabled:
+            return
+
+        try:
+            self.start_channel(channel_id, config_override=previous_config)
+        except Exception as error:
+            _LOGGER.error(
+                "Rollback failed while restarting previous channel adapter (channel=%s): %s",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _schedule_pending_start(
+        self,
+        channel_id: str,
+        *,
+        reset_backoff: bool,
+        config_override: ChannelConfig | None,
+    ) -> None:
+        if not self._started:
+            return
+        self._pending_start_requests[channel_id] = (reset_backoff, config_override)
+
+    def _is_stop_in_progress(self, channel_id: str) -> bool:
+        task = self._adapter_stop_tasks.get(channel_id)
+        return task is not None and not task.done()
+
+    async def _await_adapter_shutdown(self, channel_id: str, task: asyncio.Task[None]) -> None:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+        if self._adapter_stop_tasks.get(channel_id) is asyncio.current_task():
+            self._adapter_stop_tasks.pop(channel_id, None)
+
+        pending = self._pending_start_requests.pop(channel_id, None)
+        if pending is None or not self._started:
+            return
+
+        reset_backoff, config_override = pending
+        if config_override is None and not self._can_restart_channel(channel_id):
+            return
+
+        try:
+            self.start_channel(
+                channel_id,
+                reset_backoff=reset_backoff,
+                config_override=config_override,
+            )
+        except Exception as error:
+            _LOGGER.error(
+                "Cannot start queued channel adapter after stop completed (channel=%s): %s",
+                channel_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    def _on_stop_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
+        if self._adapter_stop_tasks.get(channel_id) is task:
+            self._adapter_stop_tasks.pop(channel_id, None)
+
+        if task.cancelled():
+            return
+
+        error = task.exception()
+        if error is None:
+            return
+
+        _LOGGER.error(
+            "Channel adapter stop task failed for channel=%s: %s",
+            channel_id,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+    def _cancel_stop_task(self, channel_id: str) -> None:
+        task = self._adapter_stop_tasks.pop(channel_id, None)
+        if task is None or task.done():
+            return
+
+        if task is asyncio.current_task():
+            return
+
+        task.cancel()
 
     def _active_adapter(self, channel_id: str) -> ChannelAdapter:
         task = self._adapter_tasks.get(channel_id)
@@ -461,6 +686,7 @@ class ChannelService:
         error = task.exception()
         if error is None:
             self._adapter_restart_attempts.pop(channel_id, None)
+            self._notify_tool_registration_changed()
             return
 
         _LOGGER.warning(
@@ -470,9 +696,13 @@ class ChannelService:
             exc_info=(type(error), error, error.__traceback__),
         )
         self._schedule_restart(channel_id)
+        self._notify_tool_registration_changed()
 
     def _schedule_restart(self, channel_id: str) -> None:
         if not self._started:
+            return
+
+        if self._is_stop_in_progress(channel_id):
             return
 
         existing_task = self._adapter_restart_tasks.get(channel_id)
@@ -539,6 +769,9 @@ class ChannelService:
         if self._is_running(channel_id):
             return False
 
+        if self._is_stop_in_progress(channel_id):
+            return False
+
         try:
             config = self._storage.get(channel_id)
         except ChannelNotFoundError:
@@ -575,19 +808,6 @@ class ChannelService:
 
         _LOGGER.error(
             "Channel adapter restart task failed for channel=%s: %s",
-            channel_id,
-            error,
-            exc_info=(type(error), error, error.__traceback__),
-        )
-
-    def _on_send_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if task.cancelled():
-            return
-        error = task.exception()
-        if error is None:
-            return
-        _LOGGER.error(
-            "Channel send failed for channel=%s: %s",
             channel_id,
             error,
             exc_info=(type(error), error, error.__traceback__),

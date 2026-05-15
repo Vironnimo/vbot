@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("channels.telegram")
 
 TELEGRAM_MESSAGE_LIMIT = 4096
-_FAILED_REPLY_PREFIX = "Sorry, your request failed"
+_FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
 _SYSTEM_REMINDER_TEMPLATE = (
@@ -66,7 +66,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._chat_sessions = chat_sessions
         self._runtime = runtime
 
-        token = os.environ.get(config.token_env_var)
+        token = _resolve_channel_token(config.token_env_var, runtime)
         if not isinstance(token, str) or not token.strip():
             raise ChannelConfigError(
                 f"Missing Telegram token in environment variable: {config.token_env_var}"
@@ -293,8 +293,8 @@ class TelegramChannelAdapter(ChannelAdapter):
                 queued.message.text,
                 queued.route.session_id,
             )
-        except Exception as error:
-            await self.send(_format_failed_reply(str(error)), queued.reply_plan.platform_target)
+        except Exception:
+            await self.send(_format_failed_reply(), queued.reply_plan.platform_target)
             return
 
         await self._relay_run_events(run, queued.reply_plan.platform_target)
@@ -314,8 +314,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                 return
 
             if event.type == RUN_FAILED_EVENT:
-                error_text = _extract_error_text(event)
-                await self.send(_format_failed_reply(error_text), platform_target)
+                await self.send(_format_failed_reply(), platform_target)
                 return
 
             if event.type == RUN_CANCELLED_EVENT:
@@ -387,22 +386,21 @@ def _extract_assistant_output(event: RunEvent) -> str | None:
     return content or None
 
 
-def _extract_error_text(event: RunEvent) -> str:
-    payload = event.payload
-    if not isinstance(payload, dict):
-        return ""
-
-    error = payload.get("error")
-    if not isinstance(error, str):
-        return ""
-
-    return error.strip()
+def _format_failed_reply() -> str:
+    return _FAILED_REPLY
 
 
-def _format_failed_reply(detail: str) -> str:
-    if detail:
-        return f"{_FAILED_REPLY_PREFIX}: {detail}."
-    return f"{_FAILED_REPLY_PREFIX}."
+def _resolve_channel_token(token_env_var: str, runtime: object) -> str:
+    resolver = getattr(runtime, "resolve_environment_credential", None)
+    if callable(resolver):
+        try:
+            resolved = resolver(token_env_var)
+        except Exception:
+            resolved = ""
+        if isinstance(resolved, str):
+            return resolved
+
+    return os.environ.get(token_env_var, "")
 
 
 def _parse_platform_target(platform_target: str) -> int:

@@ -61,8 +61,14 @@ def make_adapter(
     dm_scope: str = "per_conversation",
     allowed_chat_ids: list[int] | None = None,
     trigger_run: AsyncMock | None = None,
+    runtime: object | None = None,
+    set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
+    if set_process_token:
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
+    else:
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
+
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
     trigger_service = SimpleNamespace(trigger_run=trigger_mock)
@@ -71,7 +77,7 @@ def make_adapter(
         make_config(dm_scope=dm_scope, allowed_chat_ids=allowed_chat_ids),
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
-        runtime=SimpleNamespace(),
+        runtime=runtime if runtime is not None else SimpleNamespace(),
     )
 
     bot = SimpleNamespace(send_message=AsyncMock())
@@ -132,6 +138,23 @@ def test_constructor_requires_token_env_var(
             chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
             runtime=SimpleNamespace(),
         )
+
+
+def test_constructor_resolves_token_from_runtime_environment_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
+    runtime = SimpleNamespace(resolve_environment_credential=lambda _key: "runtime-token")
+
+    adapter = TelegramChannelAdapter(
+        make_config(allowed_chat_ids=[12345]),
+        trigger_service=cast(Any, SimpleNamespace(trigger_run=AsyncMock())),
+        chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
+        runtime=runtime,
+    )
+
+    assert adapter._token == "runtime-token"
 
 
 @pytest.mark.asyncio
@@ -261,6 +284,31 @@ async def test_failed_run_sends_error_reply(
 
     bot.send_message.assert_awaited_once()
     error_text = bot.send_message.await_args.kwargs["text"]
-    assert "failed" in error_text.lower()
-    assert "boom" in error_text
+    assert "try again" in error_text.lower()
+    assert "boom" not in error_text
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_trigger_run_exception_does_not_leak_internal_error_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trigger_mock = AsyncMock(side_effect=RuntimeError("internal stack trace"))
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="hello"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    bot.send_message.assert_awaited_once()
+    sent_text = bot.send_message.await_args.kwargs["text"]
+    assert "internal stack trace" not in sent_text
     await adapter.stop()

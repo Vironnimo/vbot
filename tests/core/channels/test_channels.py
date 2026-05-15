@@ -19,17 +19,39 @@ from core.channels import (
     ChannelService,
     ChannelStorage,
 )
+from core.channels.telegram import TelegramChannelAdapter
 
 
-def make_runtime(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(storage=SimpleNamespace(data_dir=tmp_path))
+class AgentStoreStub:
+    def __init__(self, *, known_agent_ids: set[str] | None = None) -> None:
+        self._known_agent_ids = set(known_agent_ids or {"assistant"})
+
+    def get(self, agent_id: str) -> SimpleNamespace:
+        if agent_id not in self._known_agent_ids:
+            raise KeyError(agent_id)
+        return SimpleNamespace(id=agent_id)
 
 
-def make_service(tmp_path: Path) -> ChannelService:
+def make_runtime(
+    tmp_path: Path,
+    *,
+    known_agent_ids: set[str] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        storage=SimpleNamespace(data_dir=tmp_path),
+        agents=AgentStoreStub(known_agent_ids=known_agent_ids),
+    )
+
+
+def make_service(
+    tmp_path: Path,
+    *,
+    known_agent_ids: set[str] | None = None,
+) -> ChannelService:
     return ChannelService(
         cast(Any, SimpleNamespace()),
         cast(Any, SimpleNamespace()),
-        make_runtime(tmp_path),
+        make_runtime(tmp_path, known_agent_ids=known_agent_ids),
     )
 
 
@@ -84,6 +106,37 @@ class FailingAdapter(ChannelAdapter):
         await asyncio.Future()
 
     async def stop(self) -> None:
+        self.stopped.set()
+
+    async def send(self, message: str, platform_target: str) -> None:
+        return
+
+
+class DelayedStopAdapter(ChannelAdapter):
+    platform = "telegram"
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        stop_gate: asyncio.Event,
+        events: list[str],
+    ) -> None:
+        self.label = label
+        self._stop_gate = stop_gate
+        self._events = events
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self._events.append(f"start:{self.label}")
+        self.started.set()
+        await asyncio.Future()
+
+    async def stop(self) -> None:
+        self._events.append(f"stop:{self.label}:begin")
+        await self._stop_gate.wait()
+        self._events.append(f"stop:{self.label}:end")
         self.stopped.set()
 
     async def send(self, message: str, platform_target: str) -> None:
@@ -151,6 +204,35 @@ def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:
 
     with pytest.raises(ChannelConfigError, match="already exists"):
         service.create_channel(config)
+
+
+def test_channel_service_adapter_factory_builds_telegram_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "token")
+    service = make_service(tmp_path)
+
+    adapter = service._create_adapter(make_config())
+
+    assert isinstance(adapter, TelegramChannelAdapter)
+
+
+def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:
+    service = make_service(tmp_path, known_agent_ids={"main"})
+
+    with pytest.raises(ChannelConfigError, match="Unknown agent_id"):
+        service.create_channel(make_config())
+
+
+def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=False)
+    storage.save(config)
+    service = make_service(tmp_path, known_agent_ids={"assistant"})
+
+    with pytest.raises(ChannelConfigError, match="Unknown agent_id"):
+        service.update_channel(config.id, agent_id="missing-agent")
 
 
 @pytest.mark.asyncio
@@ -238,8 +320,7 @@ async def test_channel_service_send_routes_to_running_adapter(
     await asyncio.wait_for(adapter.started.wait(), timeout=1)
 
     # Act
-    service.send(config.id, "Hello", "12345")
-    await asyncio.sleep(0)
+    await service.send(config.id, "Hello", "12345")
 
     # Assert
     assert adapter.sent_messages == [("Hello", "12345")]
@@ -250,11 +331,41 @@ async def test_channel_service_send_routes_to_running_adapter(
     await asyncio.sleep(0)
 
 
-def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_channel_service_notifies_hook_when_adapter_crashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    hook_calls = 0
+
+    def hook() -> None:
+        nonlocal hook_calls
+        hook_calls += 1
+
+    service._notify_tool_registration_changed_hook = hook
+    monkeypatch.setattr(
+        service, "_create_adapter", lambda _config: FailingAdapter(fail_on_start=True)
+    )
+    monkeypatch.setattr(service, "_schedule_restart", lambda _channel_id: None)
+
+    service.start()
+    await wait_until(lambda: config.id not in service._adapter_tasks)
+
+    assert service.has_active_channels() is False
+    assert hook_calls >= 2
+
+
+@pytest.mark.asyncio
+async def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     with pytest.raises(ChannelNotFoundError, match="Channel not active"):
-        service.send("tg-assistant", "hello", "12345")
+        await service.send("tg-assistant", "hello", "12345")
 
 
 def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
@@ -265,6 +376,99 @@ def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
 
     with pytest.raises(ChannelConfigError, match="Unsupported channel fields"):
         service.update_channel(config.id, unknown_field="value")
+
+
+def test_channel_service_create_rolls_back_when_start_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    service = make_service(tmp_path)
+    config = make_config(enabled=True)
+
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+
+    def fail_start_channel(
+        _channel_id: str,
+        *,
+        reset_backoff: bool = True,
+        config_override: ChannelConfig | None = None,
+    ) -> None:
+        raise ChannelConfigError("start failed")
+
+    monkeypatch.setattr(service, "start_channel", fail_start_channel)
+
+    with pytest.raises(ChannelConfigError, match="start failed"):
+        service.create_channel(config)
+
+    with pytest.raises(ChannelNotFoundError):
+        storage.get(config.id)
+
+
+def test_channel_service_update_rolls_back_when_restart_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    original = make_config(enabled=False)
+    storage.save(original)
+    service = make_service(tmp_path)
+
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+
+    def fail_start_channel(
+        _channel_id: str,
+        *,
+        reset_backoff: bool = True,
+        config_override: ChannelConfig | None = None,
+    ) -> None:
+        raise ChannelConfigError("restart failed")
+
+    monkeypatch.setattr(service, "start_channel", fail_start_channel)
+
+    with pytest.raises(ChannelConfigError, match="restart failed"):
+        service.update_channel(original.id, enabled=True)
+
+    assert storage.get(original.id).to_dict() == original.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_channel_service_update_waits_for_adapter_stop_before_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    stop_gate = asyncio.Event()
+    lifecycle_events: list[str] = []
+    created: list[DelayedStopAdapter] = []
+
+    monkeypatch.setattr(service, "_preflight_adapter_start", lambda _config: None)
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        label = "old" if not created else "new"
+        adapter = DelayedStopAdapter(label=label, stop_gate=stop_gate, events=lifecycle_events)
+        created.append(adapter)
+        return adapter
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+
+    service.start()
+    await asyncio.wait_for(created[0].started.wait(), timeout=1)
+
+    service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
+    await wait_until(lambda: "stop:old:begin" in lifecycle_events)
+
+    assert "start:new" not in lifecycle_events
+
+    stop_gate.set()
+    await wait_until(lambda: "start:new" in lifecycle_events)
+    assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
+
+    service.stop()
 
 
 @pytest.mark.asyncio

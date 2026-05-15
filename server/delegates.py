@@ -688,6 +688,7 @@ def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     )
 
     try:
+        _validate_channel_agent_exists(state, config.agent_id)
         state.runtime.channel_service.create_channel(config)
         state.runtime.reload_channel_tool()
     except Exception as exc:
@@ -728,6 +729,8 @@ def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["enabled"] = _required_bool(params, "enabled")
 
     try:
+        if "agent_id" in updates:
+            _validate_channel_agent_exists(state, updates["agent_id"])
         state.runtime.channel_service.update_channel(channel_id, **updates)
         state.runtime.reload_channel_tool()
     except Exception as exc:
@@ -806,6 +809,13 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
         "enabled": config.enabled,
         "running": running,
     }
+
+
+def _validate_channel_agent_exists(state: Any, agent_id: str) -> None:
+    try:
+        state.runtime.agents.get(agent_id)
+    except Exception as error:
+        raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
 
 
 def _cron_create(state: Any, params: JsonObject) -> JsonObject:
