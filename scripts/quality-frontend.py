@@ -11,11 +11,40 @@ translated to their parent directory for vitest.  All npm commands
 run with ``cwd="webui"``.
 """
 
+import hashlib
 import re
 import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+WEBUI_ROOT = PROJECT_ROOT / "webui"
+FRONTEND_FILE_SUFFIXES = {
+    ".cjs",
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".jsx",
+    ".md",
+    ".mjs",
+    ".scss",
+    ".svelte",
+    ".ts",
+    ".tsx",
+    ".yaml",
+    ".yml",
+}
+SNAPSHOT_IGNORED_DIRS = {
+    ".git",
+    ".svelte-kit",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+}
 
 # ---------- path helpers ----------
 
@@ -86,6 +115,77 @@ def parse_vitest_counts(output: str) -> tuple[int, int]:
     return 0, 0
 
 
+def hash_file(path: Path) -> str:
+    """Return a stable content hash for *path*."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def iter_snapshot_files(directory: Path) -> list[Path]:
+    """Return snapshot-eligible frontend files under *directory*."""
+    files: list[Path] = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return files
+
+    for entry in entries:
+        if entry.is_dir():
+            if entry.name in SNAPSHOT_IGNORED_DIRS:
+                continue
+            files.extend(iter_snapshot_files(entry))
+            continue
+        if entry.suffix in FRONTEND_FILE_SUFFIXES:
+            files.append(entry)
+    return files
+
+
+def display_path(path: Path) -> str:
+    """Return a stable project-relative path for console output."""
+    if path.is_relative_to(PROJECT_ROOT):
+        return path.relative_to(PROJECT_ROOT).as_posix()
+    return path.as_posix()
+
+
+def snapshot_target_files(paths: list[str]) -> dict[str, str]:
+    """Return content hashes for fixable frontend files under the given targets."""
+    snapshot: dict[str, str] = {}
+
+    for raw_path in paths:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = WEBUI_ROOT / raw_path
+        candidate = candidate.resolve()
+
+        if not candidate.exists():
+            continue
+        if candidate.is_file():
+            if candidate.suffix in FRONTEND_FILE_SUFFIXES:
+                snapshot[display_path(candidate)] = hash_file(candidate)
+            continue
+
+        for file_path in iter_snapshot_files(candidate):
+            snapshot[display_path(file_path)] = hash_file(file_path)
+
+    return snapshot
+
+
+def changed_snapshot_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Return sorted file paths whose content changed between two snapshots."""
+    return sorted(
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+    )
+
+
+def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str]) -> str:
+    """Return the status text for an auto-fix step."""
+    if changed_files:
+        file_word = "file" if len(changed_files) == 1 else "files"
+        return f"FIXED ({elapsed:.1f}s, {len(changed_files)} {file_word})"
+    if returncode == 0:
+        return f"PASS ({elapsed:.1f}s, no fixes needed)"
+    return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
+
+
 # ---------- main ----------
 
 
@@ -124,20 +224,31 @@ def main() -> int:
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "test" = test runner with count display
-    steps: list[tuple[str, list[str], str]] = [
-        ("prettier", [npx_exe, "prettier", "--write"] + prettier_paths, "fix"),
-        ("eslint fix", [npx_exe, "eslint", "--fix"] + eslint_fix_paths, "fix"),
-        ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate"),
+    steps: list[tuple[str, list[str], str, list[str] | None]] = [
+        (
+            "prettier",
+            [npx_exe, "prettier", "--write"] + prettier_paths,
+            "fix",
+            prettier_paths,
+        ),
+        (
+            "eslint fix",
+            [npx_exe, "eslint", "--fix"] + eslint_fix_paths,
+            "fix",
+            eslint_fix_paths,
+        ),
+        ("eslint", [npx_exe, "eslint"] + eslint_check_paths, "gate", None),
         (
             "vitest",
             [npx_exe, "vitest", "run", "--reporter=verbose"] + vitest_paths,
             "test",
+            None,
         ),
     ]
 
     # Build is always full-project — only run when no paths were given.
     if is_full_scan:
-        steps.append(("build", [npm_exe, "run", "build"], "gate"))
+        steps.append(("build", [npm_exe, "run", "build"], "gate", None))
 
     title = "Quality Gates (Frontend)"
     print(title)
@@ -147,7 +258,11 @@ def main() -> int:
     validation_passed = True
     failures: list[tuple[str, str]] = []  # (label, full_output)
 
-    for label, cmd, kind in steps:
+    for label, cmd, kind, snapshot_paths in steps:
+        before_snapshot: dict[str, str] = {}
+        if kind == "fix" and snapshot_paths is not None:
+            before_snapshot = snapshot_target_files(snapshot_paths)
+
         start = time.monotonic()
         # Use errors="replace" and text=True to avoid UnicodeDecodeError on Windows.
         # Capture stdout and stderr properly.
@@ -160,13 +275,17 @@ def main() -> int:
         if result.stderr:
             output += result.stderr
         output = output.strip()
+        changed_files: list[str] = []
 
         if kind == "fix":
+            if snapshot_paths is not None:
+                after_snapshot = snapshot_target_files(snapshot_paths)
+                changed_files = changed_snapshot_paths(before_snapshot, after_snapshot)
             # prettier --write / eslint --fix
             # Exit code 1 from eslint --fix means "unfixable issues remain"
             # — that is expected; the follow-up eslint gate step catches them.
             if result.returncode <= 1:
-                status = f"FIXED ({elapsed:.1f}s)"
+                status = describe_fix_result(result.returncode, elapsed, changed_files)
             else:
                 status = f"FAIL ({elapsed:.1f}s)"
                 failures.append((label, output))
@@ -191,6 +310,9 @@ def main() -> int:
                 failures.append((label, output))
 
         print(f"{label:<14}.... {status}")
+        if changed_files:
+            for changed_path in changed_files:
+                print(f"{'':<18}{changed_path}")
 
     print()
 

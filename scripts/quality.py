@@ -10,10 +10,27 @@ their corresponding test paths (``tests/core/utils/test_config.py``) for
 pytest; ruff and mypy receive them directly.
 """
 
+import hashlib
 import re
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_FILE_SUFFIXES = {".py"}
+SNAPSHOT_IGNORED_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
 
 
 def deduplicate_paths(paths: list[str]) -> list[str]:
@@ -74,6 +91,77 @@ def parse_pytest_counts(output: str) -> tuple[int, int, int]:
     )
 
 
+def hash_file(path: Path) -> str:
+    """Return a stable content hash for *path*."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def iter_snapshot_files(directory: Path) -> list[Path]:
+    """Return Python files under *directory*, skipping ignored folders."""
+    files: list[Path] = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return files
+
+    for entry in entries:
+        if entry.is_dir():
+            if entry.name in SNAPSHOT_IGNORED_DIRS:
+                continue
+            files.extend(iter_snapshot_files(entry))
+            continue
+        if entry.suffix in PYTHON_FILE_SUFFIXES:
+            files.append(entry)
+    return files
+
+
+def display_path(path: Path) -> str:
+    """Return a stable project-relative path for console output."""
+    if path.is_relative_to(PROJECT_ROOT):
+        return path.relative_to(PROJECT_ROOT).as_posix()
+    return path.as_posix()
+
+
+def snapshot_target_files(paths: list[str]) -> dict[str, str]:
+    """Return content hashes for fixable files under the given targets."""
+    snapshot: dict[str, str] = {}
+
+    for raw_path in paths:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / raw_path
+        candidate = candidate.resolve()
+
+        if not candidate.exists():
+            continue
+        if candidate.is_file():
+            if candidate.suffix in PYTHON_FILE_SUFFIXES:
+                snapshot[display_path(candidate)] = hash_file(candidate)
+            continue
+
+        for file_path in iter_snapshot_files(candidate):
+            snapshot[display_path(file_path)] = hash_file(file_path)
+
+    return snapshot
+
+
+def changed_snapshot_paths(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Return sorted file paths whose content changed between two snapshots."""
+    return sorted(
+        path for path in before.keys() | after.keys() if before.get(path) != after.get(path)
+    )
+
+
+def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str]) -> str:
+    """Return the status text for an auto-fix step."""
+    if changed_files:
+        file_word = "file" if len(changed_files) == 1 else "files"
+        return f"FIXED ({elapsed:.1f}s, {len(changed_files)} {file_word})"
+    if returncode == 0:
+        return f"PASS ({elapsed:.1f}s, no fixes needed)"
+    return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
+
+
 def main() -> int:
     raw_paths: list[str] = sys.argv[1:]
 
@@ -98,15 +186,26 @@ def main() -> int:
     # Each step: (label, command, kind)
     # kind: "fix" = auto-fix (shows FIXED), "gate" = validation (PASS/FAIL),
     #       "pytest" = test runner with count display
-    steps: list[tuple[str, list[str], str]] = [
-        ("ruff format", [sys.executable, "-m", "ruff", "format"] + ruff_fmt_paths, "fix"),
-        ("ruff fix", [sys.executable, "-m", "ruff", "check", "--fix"] + ruff_fix_paths, "fix"),
-        ("ruff check", [sys.executable, "-m", "ruff", "check"] + ruff_check_paths, "gate"),
-        ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate"),
+    steps: list[tuple[str, list[str], str, list[str] | None]] = [
+        (
+            "ruff format",
+            [sys.executable, "-m", "ruff", "format"] + ruff_fmt_paths,
+            "fix",
+            ruff_fmt_paths,
+        ),
+        (
+            "ruff fix",
+            [sys.executable, "-m", "ruff", "check", "--fix"] + ruff_fix_paths,
+            "fix",
+            ruff_fix_paths,
+        ),
+        ("ruff check", [sys.executable, "-m", "ruff", "check"] + ruff_check_paths, "gate", None),
+        ("mypy", [sys.executable, "-m", "mypy", "--pretty"] + mypy_paths, "gate", None),
         (
             "pytest",
             [sys.executable, "-m", "pytest", "-v", "--tb=short", "--timeout=30"] + test_paths,
             "pytest",
+            None,
         ),
     ]
 
@@ -117,19 +216,27 @@ def main() -> int:
     validation_passed = True
     failures: list[tuple[str, str]] = []  # (label, full_output)
 
-    for label, cmd, kind in steps:
+    for label, cmd, kind, snapshot_paths in steps:
+        before_snapshot: dict[str, str] = {}
+        if kind == "fix" and snapshot_paths is not None:
+            before_snapshot = snapshot_target_files(snapshot_paths)
+
         start = time.monotonic()
         result = subprocess.run(cmd, capture_output=True, text=True)
         elapsed = time.monotonic() - start
         total_elapsed += elapsed
         output = (result.stdout + result.stderr).strip()
+        changed_files: list[str] = []
 
         if kind == "fix":
+            if snapshot_paths is not None:
+                after_snapshot = snapshot_target_files(snapshot_paths)
+                changed_files = changed_snapshot_paths(before_snapshot, after_snapshot)
             # ruff format / ruff check --fix
             # Exit code 1 means "unfixable issues remain" — that's fine,
             # the follow-up `ruff check` step will catch them with full detail.
             if result.returncode <= 1:
-                status = f"FIXED ({elapsed:.1f}s)"
+                status = describe_fix_result(result.returncode, elapsed, changed_files)
             else:
                 status = f"FAIL ({elapsed:.1f}s)"
                 failures.append((label, output))
@@ -156,6 +263,9 @@ def main() -> int:
                 failures.append((label, output))
 
         print(f"{label:<14}.... {status}")
+        if changed_files:
+            for changed_path in changed_files:
+                print(f"{'':<18}{changed_path}")
 
     print()
 
