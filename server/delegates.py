@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.agents import AgentError
+from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError
 from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -71,6 +72,8 @@ SUBAGENT_SETTING_FIELDS = (
 )
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
 CRON_JOB_STATUSES = frozenset(("active", "paused", "completed"))
+CHANNEL_PLATFORMS = frozenset(("telegram",))
+CHANNEL_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
@@ -80,6 +83,9 @@ RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
 RPC_ERROR_LAST_AGENT = "last_agent"
 RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
+RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
+RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
+RPC_ERROR_CHANNEL_CONFIG = "channel_config_error"
 
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
@@ -162,6 +168,10 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _delete_agent(state, params)
         case "session.create":
             return _create_session(state, params)
+        case "session.list":
+            return _list_sessions(state, params)
+        case "session.link_channel":
+            return _link_session_to_channel(state, params)
         case "chat.history":
             return _chat_history(state, params)
         case "chat.send":
@@ -170,6 +180,20 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _stream_chat(state, params)
         case "chat.cancel":
             return await _cancel_chat(state, params)
+        case "channel.list":
+            return _list_channels(state, params)
+        case "channel.create":
+            return _create_channel(state, params)
+        case "channel.update":
+            return _update_channel(state, params)
+        case "channel.delete":
+            return _delete_channel(state, params)
+        case "channel.enable":
+            return _enable_channel(state, params)
+        case "channel.disable":
+            return _disable_channel(state, params)
+        case "channel.status":
+            return _channel_status(state, params)
         case "cron.create":
             return _cron_create(state, params)
         case "cron.list":
@@ -518,6 +542,61 @@ def _create_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": session.id}
 
 
+def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"agent_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported session.list fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "agent_id")
+    try:
+        sessions = state.runtime.chat_sessions.list_with_metadata(agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"sessions": sessions}
+
+
+def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
+    supported_fields = {"agent_id", "session_id", "channel_id", "platform_conv_id"}
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported session.link_channel fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    channel_id = _required_string(params, "channel_id")
+    platform_conv_id = _required_string(params, "platform_conv_id")
+
+    try:
+        channel_service = state.runtime.channel_service
+        channel_config = _channel_config_by_id(channel_service, channel_id)
+        session = state.runtime.chat_sessions.get(agent_id, session_id)
+        metadata = dict(state.runtime.chat_sessions.get_metadata(agent_id, session_id))
+        metadata.update(
+            {
+                "source_channel_id": channel_id,
+                "platform": channel_config.platform,
+                "platform_conv_id": platform_conv_id,
+                "last_reply_target": {
+                    "channel_id": channel_id,
+                    "platform_target": platform_conv_id,
+                },
+            }
+        )
+        state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata)
+        session.add_note(
+            _channel_system_reminder(channel_config.platform, channel_id, platform_conv_id)
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
+
+
 def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _optional_string(params, "session_id")
@@ -568,6 +647,165 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run)
+
+
+def _list_channels(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "channel.list does not accept params")
+
+    try:
+        channels = [config.to_dict() for config in state.runtime.channel_service.list_channels()]
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"channels": channels}
+
+
+def _create_channel(state: Any, params: JsonObject) -> JsonObject:
+    supported_fields = {
+        "id",
+        "platform",
+        "agent_id",
+        "dm_scope",
+        "allowed_chat_ids",
+        "token_env_var",
+        "enabled",
+    }
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.create fields: {', '.join(unsupported_fields)}",
+        )
+
+    config = ChannelConfig(
+        id=_required_string(params, "id"),
+        platform=_required_channel_platform(params, "platform"),
+        agent_id=_required_string(params, "agent_id"),
+        dm_scope=_optional_channel_dm_scope(params, "dm_scope", default="per_conversation"),
+        allowed_chat_ids=_optional_integer_list(params, "allowed_chat_ids", default=[]),
+        token_env_var=_required_string(params, "token_env_var"),
+        enabled=_optional_bool(params, "enabled", default=True),
+    )
+
+    try:
+        state.runtime.channel_service.create_channel(config)
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"id": config.id}
+
+
+def _update_channel(state: Any, params: JsonObject) -> JsonObject:
+    supported_fields = {
+        "id",
+        "platform",
+        "agent_id",
+        "dm_scope",
+        "allowed_chat_ids",
+        "token_env_var",
+        "enabled",
+    }
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.update fields: {', '.join(unsupported_fields)}",
+        )
+
+    channel_id = _required_string(params, "id")
+    updates: JsonObject = {}
+    if "platform" in params:
+        updates["platform"] = _required_channel_platform(params, "platform")
+    if "agent_id" in params:
+        updates["agent_id"] = _required_string(params, "agent_id")
+    if "dm_scope" in params:
+        updates["dm_scope"] = _optional_channel_dm_scope(params, "dm_scope", default="")
+    if "allowed_chat_ids" in params:
+        updates["allowed_chat_ids"] = _required_integer_list(params, "allowed_chat_ids")
+    if "token_env_var" in params:
+        updates["token_env_var"] = _required_string(params, "token_env_var")
+    if "enabled" in params:
+        updates["enabled"] = _required_bool(params, "enabled")
+
+    try:
+        state.runtime.channel_service.update_channel(channel_id, **updates)
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
+
+
+def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.delete fields: {', '.join(unsupported_fields)}",
+        )
+
+    channel_id = _required_string(params, "id")
+    try:
+        state.runtime.channel_service.delete_channel(channel_id)
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
+
+
+def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.enable fields: {', '.join(unsupported_fields)}",
+        )
+
+    channel_id = _required_string(params, "id")
+    try:
+        state.runtime.channel_service.enable_channel(channel_id)
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
+
+
+def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.disable fields: {', '.join(unsupported_fields)}",
+        )
+
+    channel_id = _required_string(params, "id")
+    try:
+        state.runtime.channel_service.disable_channel(channel_id)
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
+
+
+def _channel_status(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported channel.status fields: {', '.join(unsupported_fields)}",
+        )
+
+    channel_id = _required_string(params, "id")
+    try:
+        channel_service = state.runtime.channel_service
+        config = _channel_config_by_id(channel_service, channel_id)
+        running = _channel_is_running(channel_service, channel_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {
+        "id": config.id,
+        "enabled": config.enabled,
+        "running": running,
+    }
 
 
 def _cron_create(state: Any, params: JsonObject) -> JsonObject:
@@ -1032,6 +1270,88 @@ def _required_string(params: JsonObject, key: str) -> str:
     return value
 
 
+def _required_bool(params: JsonObject, key: str) -> bool:
+    value = params.get(key)
+    if not isinstance(value, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
+    return value
+
+
+def _required_integer_list(params: JsonObject, key: str) -> list[int]:
+    value = params.get(key)
+    if not isinstance(value, list):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a list of integers")
+
+    parsed: list[int] = []
+    for item in value:
+        if not isinstance(item, int) or isinstance(item, bool):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"params.{key} must be a list of integers",
+            )
+        parsed.append(item)
+    return parsed
+
+
+def _optional_integer_list(params: JsonObject, key: str, *, default: list[int]) -> list[int]:
+    if key not in params:
+        return list(default)
+    return _required_integer_list(params, key)
+
+
+def _required_channel_platform(params: JsonObject, key: str) -> str:
+    platform = _required_string(params, key)
+    if platform not in CHANNEL_PLATFORMS:
+        options = ", ".join(sorted(CHANNEL_PLATFORMS))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be one of: {options}",
+        )
+    return platform
+
+
+def _optional_channel_dm_scope(params: JsonObject, key: str, *, default: str) -> str:
+    if key not in params:
+        return default
+
+    dm_scope = _required_string(params, key)
+    if dm_scope not in CHANNEL_DM_SCOPES:
+        options = ", ".join(sorted(CHANNEL_DM_SCOPES))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be one of: {options}",
+        )
+    return dm_scope
+
+
+def _channel_config_by_id(channel_service: Any, channel_id: str) -> ChannelConfig:
+    for config in channel_service.list_channels():
+        if config.id == channel_id:
+            return cast(ChannelConfig, config)
+    raise ChannelNotFoundError(f"Channel not found: {channel_id}")
+
+
+def _channel_is_running(channel_service: Any, channel_id: str) -> bool:
+    running_checker = getattr(channel_service, "_is_running", None)
+    if callable(running_checker):
+        return bool(running_checker(channel_id))
+
+    adapter_tasks = getattr(channel_service, "_adapter_tasks", None)
+    if isinstance(adapter_tasks, dict):
+        task = adapter_tasks.get(channel_id)
+        return bool(task is not None and not task.done())
+    return False
+
+
+def _channel_system_reminder(platform: str, channel_id: str, platform_conv_id: str) -> str:
+    platform_name = platform.capitalize()
+    return (
+        f"This session is receiving messages via {platform_name} "
+        f"(channel: {channel_id}, chat: {platform_conv_id}).\n"
+        f"Respond in a style appropriate for {platform_name} messaging."
+    )
+
+
 def _settings_response(state: Any) -> JsonObject:
     runtime = state.runtime
     appearance = runtime.storage.load_appearance_settings()
@@ -1341,6 +1661,13 @@ def _validate_string_list(key: str, value: Any) -> list[str]:
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
+    if isinstance(error, ChannelNotFoundError):
+        return RpcError(RPC_ERROR_CHANNEL_NOT_FOUND, str(error))
+    if isinstance(error, ChannelConfigError):
+        message = str(error)
+        if message.startswith("Channel already exists"):
+            return RpcError(RPC_ERROR_CHANNEL_ALREADY_EXISTS, message)
+        return RpcError(RPC_ERROR_CHANNEL_CONFIG, message)
     if isinstance(error, ActiveRunError):
         return RpcError(RPC_ERROR_ACTIVE_RUN, str(error))
     if isinstance(error, RunNotFoundError):
