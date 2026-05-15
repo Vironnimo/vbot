@@ -107,6 +107,9 @@ through i18n — no hardcoded text.
 pip install -e ".[dev]"
 ```
 
+Use the current Python interpreter directly. Do not assume a virtual
+environment for installs, quality gates, or runtime commands.
+
 **Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), `croniter` (cron expression parsing / next-fire calculation), and `tzdata` (cross-platform IANA timezone data for cron scheduling). The `server` group includes `watchfiles` for the dedicated log-view watcher transport and `python-telegram-bot` for channel adapters. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, Telegram channel adapter dependencies, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket, channel flows, and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**

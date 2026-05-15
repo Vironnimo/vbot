@@ -8,7 +8,7 @@ integration tests (that is the Builder's job with pytest/Vitest).
 
 Before starting any live test session:
 
-1. Python virtual environment is active and vBot is installed
+1. The current Python interpreter already has vBot installed
 2. No other process on the target port (default 8420)
 
 If the environment is not ready, report **Blocked** — do not attempt to install
