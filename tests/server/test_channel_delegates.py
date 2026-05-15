@@ -31,11 +31,17 @@ def _state(
     *,
     channel_service: object | None = None,
     chat_sessions: object | None = None,
+    agents: object | None = None,
 ) -> SimpleNamespace:
+    agent_store = agents if agents is not None else Mock()
+    if isinstance(agent_store, Mock):
+        agent_store.get.return_value = SimpleNamespace(id="assistant")
+
     runtime = SimpleNamespace(
         channel_service=channel_service if channel_service is not None else Mock(),
         reload_channel_tool=Mock(),
         chat_sessions=chat_sessions if chat_sessions is not None else Mock(),
+        agents=agent_store,
     )
     return SimpleNamespace(runtime=runtime)
 
@@ -75,6 +81,7 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
     created_config = channel_service.create_channel.call_args.args[0]
     assert isinstance(created_config, ChannelConfig)
     assert created_config.to_dict() == _channel_config().to_dict()
+    state.runtime.agents.get.assert_called_once_with("assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
 
 
@@ -103,7 +110,32 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
         allowed_chat_ids=[12345, -100],
         enabled=False,
     )
+    state.runtime.agents.get.assert_not_called()
     state.runtime.reload_channel_tool.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_channel_update_validates_agent_when_agent_id_is_present() -> None:
+    channel_service = Mock()
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.update",
+            "params": {
+                "id": "tg-assistant",
+                "agent_id": "assistant",
+            },
+        },
+    )
+
+    assert response == {"ok": True, "result": {"ok": True}}
+    state.runtime.agents.get.assert_called_once_with("assistant")
+    channel_service.update_channel.assert_called_once_with(
+        "tg-assistant",
+        agent_id="assistant",
+    )
 
 
 @pytest.mark.asyncio
@@ -295,6 +327,58 @@ async def test_channel_update_maps_config_error_to_channel_config_error() -> Non
         "error": {
             "code": "channel_config_error",
             "message": "invalid channel config",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_channel_create_rejects_unknown_agent() -> None:
+    state = _state(channel_service=Mock())
+    state.runtime.agents.get.side_effect = KeyError("missing")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "tg-assistant",
+                "platform": "telegram",
+                "agent_id": "missing",
+                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {
+            "code": "channel_config_error",
+            "message": "Unknown agent_id: missing",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_channel_update_rejects_unknown_agent() -> None:
+    state = _state(channel_service=Mock())
+    state.runtime.agents.get.side_effect = KeyError("missing")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.update",
+            "params": {
+                "id": "tg-assistant",
+                "agent_id": "missing",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {
+            "code": "channel_config_error",
+            "message": "Unknown agent_id: missing",
         },
     }
 

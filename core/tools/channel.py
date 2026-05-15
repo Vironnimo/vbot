@@ -50,8 +50,8 @@ def register_channel_send_tool(
 ) -> None:
     """Register the channel_send tool with a vBot tool registry."""
 
-    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return _handle_channel_send_tool(channel_service, chat_sessions, context, arguments)
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await _handle_channel_send_tool(channel_service, chat_sessions, context, arguments)
 
     registry.register(
         CHANNEL_SEND_TOOL_NAME,
@@ -61,7 +61,7 @@ def register_channel_send_tool(
     )
 
 
-def _handle_channel_send_tool(
+async def _handle_channel_send_tool(
     channel_service: ChannelService,
     chat_sessions: ChatSessionManager,
     context: ToolContext,
@@ -82,7 +82,7 @@ def _handle_channel_send_tool(
             chat_sessions,
             context,
         )
-        channel_service.send(channel_id, message, platform_target)
+        await channel_service.send(channel_id, message, platform_target)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:

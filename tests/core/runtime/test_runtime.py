@@ -248,6 +248,90 @@ def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
     assert (data_dir / "prompts" / "system.md").is_file()
 
 
+def test_runtime_resolve_environment_credential_prefers_process_env(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath(".env").write_text(
+        "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "process-token")
+
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert (
+        runtime.resolve_environment_credential("TELEGRAM_BOT_TOKEN_TG_ASSISTANT") == "process-token"
+    )
+
+    runtime.stop()
+
+
+def test_runtime_resolve_environment_credential_uses_data_dir_fallback(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath(".env").write_text(
+        "TELEGRAM_BOT_TOKEN_TG_ASSISTANT=fallback-token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
+
+    runtime = Runtime(config)
+    runtime.start()
+
+    assert (
+        runtime.resolve_environment_credential("TELEGRAM_BOT_TOKEN_TG_ASSISTANT")
+        == "fallback-token"
+    )
+
+    runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", raising=False)
+    runtime = Runtime(config)
+
+    seed_agent_store = AgentStore(
+        config.data_dir,
+        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+    )
+    seed_agent_store.create("assistant", "Assistant")
+
+    channel_dir = config.data_dir / "channels" / "tg-assistant"
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    channel_dir.joinpath("channel.json").write_text(
+        "\n".join(
+            (
+                "{",
+                '  "id": "tg-assistant",',
+                '  "platform": "telegram",',
+                '  "agent_id": "assistant",',
+                '  "dm_scope": "per_conversation",',
+                '  "allowed_chat_ids": [12345],',
+                '  "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",',
+                '  "enabled": true',
+                "}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runtime.start()
+
+    assert runtime.channel_service.has_active_channels() is False
+
+    runtime.stop()
+
+
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
     """Runtime.start() leaves a new data dir with a usable default agent."""
     logging.getLogger("vbot").handlers = []
