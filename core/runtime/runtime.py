@@ -197,8 +197,7 @@ class Runtime:
             self._reload_channel_tool_if_started
         )
         self._start_channel_service()
-        if self._channel_service.has_active_channels():
-            self.reload_channel_tool()
+        self._sync_channel_tool_registration()
         self._cron_service = CronService(self._trigger_service, self._storage.data_dir)
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
@@ -336,9 +335,7 @@ class Runtime:
             return
         self.reload_channel_tool()
 
-    def reload_channel_tool(self) -> None:
-        """Re-register channel_send based on current active channel adapters."""
-        self._ensure_started()
+    def _sync_channel_tool_registration(self) -> None:
         if self._tools is None:
             raise RuntimeError("Tool service not available")
         if self._channel_service is None:
@@ -356,6 +353,11 @@ class Runtime:
             raise RuntimeError("Channel tool registration is unavailable") from error
 
         register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
+
+    def reload_channel_tool(self) -> None:
+        """Re-register channel_send based on current active channel adapters."""
+        self._ensure_started()
+        self._sync_channel_tool_registration()
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
