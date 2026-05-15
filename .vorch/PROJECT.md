@@ -104,8 +104,6 @@ through i18n — no hardcoded text.
 
 **Setup:**
 ```bash
-python -m venv .venv
-.\.venv\Scripts\activate   # Windows
 pip install -e ".[dev]"
 ```
 

@@ -151,9 +151,7 @@ def main() -> int:
         start = time.monotonic()
         # Use errors="replace" and text=True to avoid UnicodeDecodeError on Windows.
         # Capture stdout and stderr properly.
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd="webui", errors="replace"
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd="webui", errors="replace")
         elapsed = time.monotonic() - start
         total_elapsed += elapsed
         output = ""

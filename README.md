@@ -42,16 +42,9 @@ Details dazu stehen in `ROADMAP.md`.
 
 ## Schnellstart
 
-### 1. Entwicklungsumgebung aufsetzen
+### 1. Dependencies installieren
 
 ```bash
-python -m venv .venv
-```
-
-Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
