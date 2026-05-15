@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.agents.agents import AgentStore, SystemPromptManager
+from core.channels import ChannelService
 from core.chat.chat import ChatLoop, ChatSessionManager
 from core.chat.runs import ChatRunManager, RunCancelledError
 from core.providers.credentials import ProviderCredentialResolver
@@ -332,6 +333,54 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
     runtime.stop()
 
 
+@pytest.mark.asyncio
+async def test_runtime_start_registers_channel_send_when_enabled_channel_starts(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = Runtime(config)
+
+    seed_agent_store = AgentStore(
+        config.data_dir,
+        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+    )
+    seed_agent_store.create("assistant", "Assistant")
+
+    channel_dir = config.data_dir / "channels" / "tg-assistant"
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    channel_dir.joinpath("channel.json").write_text(
+        "\n".join(
+            (
+                "{",
+                '  "id": "tg-assistant",',
+                '  "platform": "telegram",',
+                '  "agent_id": "assistant",',
+                '  "dm_scope": "per_conversation",',
+                '  "allowed_chat_ids": [12345],',
+                '  "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",',
+                '  "enabled": true',
+                "}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    adapter = _BlockingChannelAdapter()
+    monkeypatch.setattr(ChannelService, "_create_adapter", lambda _service, _config: adapter)
+
+    runtime.start()
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
+    assert "channel_send" in tool_names
+    assert runtime.channel_service.has_active_channels() is True
+
+    runtime.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
     """Runtime.start() leaves a new data dir with a usable default agent."""
     logging.getLogger("vbot").handlers = []
@@ -501,6 +550,22 @@ def _write_test_skill(skill_root: Path, name: str, description: str) -> None:
         f"---\nname: {name}\ndescription: {description}\n---\n\nUse this skill.\n",
         encoding="utf-8",
     )
+
+
+class _BlockingChannelAdapter:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+        await asyncio.Future()
+
+    async def stop(self) -> None:
+        self.stopped.set()
+
+    async def send(self, _message: str, _platform_target: str) -> None:
+        return
 
 
 class _BlockingAdapter:
