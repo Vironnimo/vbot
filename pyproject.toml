@@ -9,10 +9,10 @@ requires-python = ">=3.11"
 dependencies = ["httpx", "pyyaml", "croniter", "tzdata"]
 
 [project.optional-dependencies]
-server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles"]
+server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot"]
 cli     = ["rich", "psutil"]
 desktop = ["pywebview"]
-dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "psutil"]
+dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "psutil"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]

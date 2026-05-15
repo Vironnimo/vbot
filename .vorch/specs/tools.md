@@ -70,6 +70,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `enable`, and `disable`. It delegates to `CronService`, validates cron
   expressions with `croniter`, and returns `next_fire_at` for active cron jobs
   in `list` responses.
+- Built-in `channel_send` tool: flat name `channel_send`; schema includes
+  required `channel_id`, required `message`, and optional `platform_target`.
+  It delegates to `ChannelService.send()` and resolves `platform_target` from
+  session metadata `last_reply_target` when omitted.
 
 ## Interfaces
 
@@ -97,6 +101,9 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   built-in `process` tool backed by the shared `ProcessManager`.
 - `register_cron_tool(registry, cron_service) -> None` — registers the built-in
   `cron` scheduling tool backed by `CronService`.
+- `register_channel_send_tool(registry, channel_service, chat_sessions) -> None`
+  — registers the built-in `channel_send` outbound messaging tool backed by
+  `ChannelService` plus `ChatSessionManager` metadata lookup.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str` — starts
   a subprocess session for the given Run scope and Agent.
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)` — manages
@@ -149,6 +156,13 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   edits or appends; use `edit` for surgical changes.
 - `write` success data includes a human-readable `message`, the resolved `path`,
   and written byte count.
+- `channel_send` is registered via a closure helper, not a new `ToolContext`
+  hook. When `platform_target` is omitted, it reads `last_reply_target` from
+  `ChatSessionManager` metadata for the current `(agent_id, session_id)` and
+  fails clearly if no target is available.
+- `channel_send` is present only while the runtime has at least one active
+  channel. Runtime enable/disable flows re-register the tool to keep catalogs in
+  sync.
 - `glob` is for path discovery. It accepts glob-style relative patterns such as
   `**/*.py`, includes files and directories, sorts matches relative to the
   search root, caps output at 100 matches, and returns no-match messages as

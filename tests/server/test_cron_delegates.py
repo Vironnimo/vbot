@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock
+from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 
@@ -63,6 +64,11 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
             return cast(FrozenDateTime, base.astimezone(tz))
 
     monkeypatch.setattr("server.delegates.datetime", FrozenDateTime)
+
+    def missing_zoneinfo(_timezone_name: str) -> Any:
+        raise ZoneInfoNotFoundError("timezone data unavailable")
+
+    monkeypatch.setattr("server.delegates.ZoneInfo", missing_zoneinfo)
 
     job = SimpleNamespace(
         id="job-1",
