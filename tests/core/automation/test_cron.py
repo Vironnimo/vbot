@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.automation.cron as cron_module
-from core.automation.cron import CronJobNotFoundError, CronService
+from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronService
 
 
 def make_service(tmp_path: Path) -> tuple[CronService, SimpleNamespace]:
@@ -65,6 +65,54 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     assert jobs == []
     assert jobs_path.exists()
     assert json.loads(jobs_path.read_text(encoding="utf-8")) == []
+
+
+def test_utc_timezone_is_accepted_when_zoneinfo_database_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, _trigger_service = make_service(tmp_path)
+
+    def missing_zoneinfo(_timezone_name: str) -> Any:
+        raise cron_module.ZoneInfoNotFoundError("timezone data unavailable")
+
+    monkeypatch.setattr(cron_module, "ZoneInfo", missing_zoneinfo)
+
+    # Act
+    created = service.create_job(
+        agent_id="agent-one",
+        prompt="Cron job",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        timezone="UTC",
+    )
+
+    # Assert
+    assert created.timezone == "UTC"
+
+
+def test_non_utc_timezone_still_fails_when_zoneinfo_database_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, _trigger_service = make_service(tmp_path)
+
+    def missing_zoneinfo(_timezone_name: str) -> Any:
+        raise cron_module.ZoneInfoNotFoundError("timezone data unavailable")
+
+    monkeypatch.setattr(cron_module, "ZoneInfo", missing_zoneinfo)
+
+    # Act / Assert
+    with pytest.raises(CronJobValidationError, match="Unknown timezone: Europe/Paris"):
+        service.create_job(
+            agent_id="agent-one",
+            prompt="Cron job",
+            schedule_type="cron",
+            cron_expression="* * * * *",
+            timezone="Europe/Paris",
+        )
 
 
 @pytest.mark.asyncio

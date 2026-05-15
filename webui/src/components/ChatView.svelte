@@ -24,6 +24,7 @@
     startRun,
   } from '../lib/chatState.js';
   import ChatComposer from './ChatComposer.svelte';
+  import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
 
@@ -44,13 +45,17 @@
   let historyError = $state('');
   let actionError = $state('');
   let availableSkills = $state([]);
-  let overrideSessionId = $state('');
+  let showSessionDrawer = $state(false);
+  let viewingSessionId = $state('');
+  let viewingSessionReadOnly = $state(false);
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
 
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(getActiveSessionState());
-  let readOnlySessionActive = $derived(Boolean(overrideSessionId));
+  let readOnlySessionActive = $derived(
+    Boolean(viewingSessionId) && viewingSessionReadOnly,
+  );
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(
     !activeAgent || loadingHistory || readOnlySessionActive,
@@ -108,8 +113,8 @@
 
   function getActiveSessionState() {
     const agent = selectedAgent(chatState);
-    if (agent && overrideSessionId) {
-      return chatState.sessions[`${agent.id}::${overrideSessionId}`] ?? null;
+    if (agent && viewingSessionId) {
+      return chatState.sessions[`${agent.id}::${viewingSessionId}`] ?? null;
     }
     return currentSessionState(chatState);
   }
@@ -248,12 +253,29 @@
       onAgentSelected?.(agentId);
     }
 
-    overrideSessionId = sessionId;
+    viewingSessionId = sessionId;
+    viewingSessionReadOnly = true;
     await loadHistoryForSession(agentId, sessionId);
   };
 
+  const handleSessionSelected = async (sessionId) => {
+    const agent = selectedAgent(chatState);
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    if (!agent || !normalizedSessionId) {
+      return;
+    }
+
+    viewingSessionReadOnly = false;
+    viewingSessionId =
+      normalizedSessionId === agent.current_session_id
+        ? ''
+        : normalizedSessionId;
+    await loadHistoryForSession(agent.id, normalizedSessionId);
+  };
+
   const clearSessionOverride = () => {
-    overrideSessionId = '';
+    viewingSessionId = '';
+    viewingSessionReadOnly = false;
   };
 
   const handleReturnToCurrentSession = async () => {
@@ -302,7 +324,7 @@
     }
 
     const agent = selectedAgent(chatState);
-    const sessionState = currentSessionState(chatState);
+    const sessionState = activeSessionState;
     if (!agent || !sessionState) {
       return;
     }
@@ -444,6 +466,19 @@
       {/if}
       <button
         type="button"
+        class:chat-sessions-toggle--active={showSessionDrawer}
+        class="btn-outline chat-sessions-toggle"
+        onclick={() => {
+          showSessionDrawer = !showSessionDrawer;
+        }}
+        disabled={!activeAgent}
+      >
+        {showSessionDrawer
+          ? t('sessions.hide', 'Hide sessions')
+          : t('sessions.title', 'Sessions')}
+      </button>
+      <button
+        type="button"
         class="btn-outline chat-refresh"
         onclick={loadAgents}
         disabled={chatState.loadingAgents}
@@ -504,75 +539,90 @@
       </p>
     </div>
   {:else}
-    <div class="chat-view__surface">
-      {#if readOnlySessionActive || loadingHistory || historyError || actionError || activeSessionState?.error}
-        <div class="chat-view__notice-stack" aria-live="polite">
-          {#if readOnlySessionActive}
-            <div class="chat-view__readonly-notice">
-              <div class="chat-view__readonly-copy">
-                <p class="chat-view__readonly-title">
-                  {t(
-                    'chat.subagentSessionReadOnly',
-                    'Viewing a sub-agent session',
-                  )}
-                </p>
-                <p class="chat-view__readonly-hint">
-                  {t(
-                    'chat.subagentSessionReadOnlyHint',
-                    'This historical session is read-only. Return to the current agent session to continue chatting.',
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                class="btn-outline chat-view__readonly-return"
-                disabled={loadingHistory}
-                onclick={handleReturnToCurrentSession}
-              >
-                {t('chat.returnToCurrentSession', 'Return to current session')}
-              </button>
-            </div>
-          {/if}
-          {#if loadingHistory}
-            <p class="chat-view__notice">
-              {t('loading.history', 'Loading chat history…')}
-            </p>
-          {/if}
-          {#if historyError}
-            <p class="chat-view__error">
-              {t('chat.historyLoadError', 'Chat history could not be loaded.')}
-              {historyError}
-            </p>
-          {/if}
-          {#if actionError}
-            <p class="chat-view__error">{actionError}</p>
-          {/if}
-          {#if activeSessionState?.error}
-            <p class="chat-view__error">
-              {t('chat.runError', 'Run failed.')}
-              {activeSessionState.error}
-            </p>
-          {/if}
-        </div>
+    <div class="chat-view__content-shell">
+      {#if showSessionDrawer}
+        <SessionListDrawer
+          agentId={activeAgent.id}
+          currentSessionId={viewingSessionId || activeAgent.current_session_id}
+          onSessionSelected={handleSessionSelected}
+        />
       {/if}
-      <div class="chat-view__timeline-shell">
-        <ChatTimeline
-          sessionState={activeSessionState}
-          agentName={activeAgent.name}
-          onNavigateToSubAgent={navigateToSubAgent}
-        />
-      </div>
-      <div class="chat-view__footer-stack">
-        <QueuedMessages
-          queuedMessages={activeSessionState?.queue ?? []}
-          onRemoveQueuedMessage={handleRemoveQueuedMessage}
-        />
-        <ChatComposer
-          disabled={composerDisabled}
-          isRunning={isRunActive(activeSessionState)}
-          {availableSkills}
-          onSendMessage={handleSendMessage}
-        />
+      <div class="chat-view__surface">
+        {#if readOnlySessionActive || loadingHistory || historyError || actionError || activeSessionState?.error}
+          <div class="chat-view__notice-stack" aria-live="polite">
+            {#if readOnlySessionActive}
+              <div class="chat-view__readonly-notice">
+                <div class="chat-view__readonly-copy">
+                  <p class="chat-view__readonly-title">
+                    {t(
+                      'chat.subagentSessionReadOnly',
+                      'Viewing a sub-agent session',
+                    )}
+                  </p>
+                  <p class="chat-view__readonly-hint">
+                    {t(
+                      'chat.subagentSessionReadOnlyHint',
+                      'This historical session is read-only. Return to the current agent session to continue chatting.',
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn-outline chat-view__readonly-return"
+                  disabled={loadingHistory}
+                  onclick={handleReturnToCurrentSession}
+                >
+                  {t(
+                    'chat.returnToCurrentSession',
+                    'Return to current session',
+                  )}
+                </button>
+              </div>
+            {/if}
+            {#if loadingHistory}
+              <p class="chat-view__notice">
+                {t('loading.history', 'Loading chat history…')}
+              </p>
+            {/if}
+            {#if historyError}
+              <p class="chat-view__error">
+                {t(
+                  'chat.historyLoadError',
+                  'Chat history could not be loaded.',
+                )}
+                {historyError}
+              </p>
+            {/if}
+            {#if actionError}
+              <p class="chat-view__error">{actionError}</p>
+            {/if}
+            {#if activeSessionState?.error}
+              <p class="chat-view__error">
+                {t('chat.runError', 'Run failed.')}
+                {activeSessionState.error}
+              </p>
+            {/if}
+          </div>
+        {/if}
+        <div class="chat-view__timeline-shell">
+          <ChatTimeline
+            sessionState={activeSessionState}
+            agentName={activeAgent.name}
+            onNavigateToSubAgent={navigateToSubAgent}
+          />
+        </div>
+        <div class="chat-view__footer-stack">
+          <QueuedMessages
+            queuedMessages={activeSessionState?.queue ?? []}
+            onRemoveQueuedMessage={handleRemoveQueuedMessage}
+          />
+          <ChatComposer
+            disabled={composerDisabled}
+            isRunning={isRunActive(activeSessionState)}
+            {availableSkills}
+            onSendMessage={handleSendMessage}
+          />
+        </div>
       </div>
     </div>
   {/if}
@@ -682,6 +732,19 @@
     flex-direction: column;
     overflow: hidden;
     background: var(--bg);
+  }
+
+  .chat-view__content-shell {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .chat-sessions-toggle--active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(232, 135, 10, 0.08);
   }
 
   .chat-view__timeline-shell {
@@ -799,6 +862,10 @@
 
     .chat-view__notice-stack {
       padding: 10px 14px;
+    }
+
+    .chat-view__content-shell {
+      flex-direction: column;
     }
 
     .chat-view__readonly-notice {

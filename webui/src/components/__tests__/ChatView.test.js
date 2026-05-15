@@ -7,6 +7,8 @@ import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
 const subscribeRunEventsMock = vi.fn(() => ({ close: vi.fn(), source: null }));
+const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
+const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -15,6 +17,8 @@ vi.mock('svelte', async () => {
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
   subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
+  listSessions: (...args) => listSessionsMock(...args),
+  linkSessionToChannel: (...args) => linkSessionToChannelMock(...args),
 }));
 
 const { default: ChatView } = await import('../ChatView.svelte');
@@ -27,6 +31,10 @@ describe('ChatView', () => {
     init('en');
     rpcMock.mockReset();
     subscribeRunEventsMock.mockClear();
+    listSessionsMock.mockReset();
+    listSessionsMock.mockResolvedValue({ sessions: [] });
+    linkSessionToChannelMock.mockReset();
+    linkSessionToChannelMock.mockResolvedValue({ ok: true });
     mountedComponent = null;
   });
 
@@ -160,40 +168,185 @@ describe('ChatView', () => {
     });
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
+
+  it('loads selected session history from the sessions drawer', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-1': [
+            {
+              id: 'assistant-one',
+              role: 'assistant',
+              content: 'Current session reply',
+            },
+          ],
+          'ch-tg-assistant-12345': [
+            {
+              id: 'assistant-two',
+              role: 'assistant',
+              content: 'Telegram session reply',
+            },
+          ],
+        },
+      }),
+    );
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'ch-tg-assistant-12345',
+          created_at: '2026-05-10T11:00:00+00:00',
+          last_active_at: '2026-05-11T09:30:00+00:00',
+          source_channel_id: 'tg-assistant',
+          platform: 'telegram',
+          platform_conv_id: '12345',
+        },
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T01:00:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Current session reply'),
+      100,
+    );
+
+    const sessionsButton = findButtonByText('Sessions');
+    expect(sessionsButton).toBeTruthy();
+    sessionsButton.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('telegram/12345'),
+      100,
+    );
+
+    const telegramSessionButton = findButtonByText('telegram/12345');
+    expect(telegramSessionButton).toBeTruthy();
+    telegramSessionButton.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Telegram session reply'),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'ch-tg-assistant-12345',
+    });
+  });
+
+  it('links an unlinked session to a channel from the sessions drawer', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-legacy',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T01:00:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const sessionsButton = findButtonByText('Sessions');
+    expect(sessionsButton).toBeTruthy();
+    sessionsButton.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('session-legacy'),
+      100,
+    );
+
+    const linkButton = findButtonByText('Link to channel');
+    expect(linkButton).toBeTruthy();
+    linkButton.click();
+
+    await waitForCondition(
+      () => Boolean(document.querySelector('input[name="channel-id"]')),
+      100,
+    );
+
+    const channelIdInput = document.querySelector('input[name="channel-id"]');
+    const platformConvIdInput = document.querySelector(
+      'input[name="platform-conv-id"]',
+    );
+
+    expect(channelIdInput).toBeTruthy();
+    expect(platformConvIdInput).toBeTruthy();
+
+    setInputValue(channelIdInput, 'tg-assistant');
+    setInputValue(platformConvIdInput, '12345');
+
+    const confirmLinkButton = findButtonByText('Link session');
+    expect(confirmLinkButton).toBeTruthy();
+    confirmLinkButton.click();
+
+    await waitForCondition(
+      () => linkSessionToChannelMock.mock.calls.length > 0,
+      100,
+    );
+
+    expect(linkSessionToChannelMock).toHaveBeenCalledWith(
+      'alpha',
+      'session-legacy',
+      'tg-assistant',
+      '12345',
+    );
+    expect(document.body.textContent).toContain('Session linked to channel.');
+  });
 });
 
-function createChatRpcMock({ usage, contextWindow = 262144 } = {}) {
+function createChatRpcMock({
+  usage,
+  contextWindow = 262144,
+  sessionMessages,
+} = {}) {
+  const resolvedSessionMessages = {
+    'session-1': [
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'Hello',
+        usage,
+      },
+    ],
+    'sub-session-1': [
+      {
+        id: 'sub-assistant-one',
+        role: 'assistant',
+        content: 'Sub-agent response',
+      },
+    ],
+    ...(sessionMessages ?? {}),
+  };
+
   return async (method, params) => {
     if (method === 'agent.list') {
       return { agents: [createAgent({ context_window: contextWindow })] };
     }
 
     if (method === 'chat.history') {
-      if (params.session_id === 'sub-session-1') {
+      const messages = resolvedSessionMessages[params.session_id];
+      if (messages) {
         return {
-          session_id: 'sub-session-1',
-          messages: [
-            {
-              id: 'sub-assistant-one',
-              role: 'assistant',
-              content: 'Sub-agent response',
-            },
-          ],
+          session_id: params.session_id,
+          messages,
         };
       }
 
-      expect(params).toEqual({ agent_id: 'alpha', session_id: 'session-1' });
-      return {
-        session_id: 'session-1',
-        messages: [
-          {
-            id: 'assistant-one',
-            role: 'assistant',
-            content: 'Hello',
-            usage,
-          },
-        ],
-      };
+      throw new Error(`Unexpected session id: ${params.session_id}`);
     }
 
     if (method === 'skill.list') {
@@ -233,6 +386,17 @@ function createAgent(overrides = {}) {
     updated_at: '2026-05-09T00:00:00+00:00',
     ...overrides,
   };
+}
+
+function findButtonByText(text) {
+  return Array.from(document.querySelectorAll('button')).find((button) =>
+    button.textContent.includes(text),
+  );
+}
+
+function setInputValue(input, value) {
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 async function waitForCondition(check, attempts = 20) {

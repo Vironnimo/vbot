@@ -109,7 +109,7 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), `croniter` (cron expression parsing / next-fire calculation), and `tzdata` (cross-platform IANA timezone data for cron scheduling). The `server` group includes `watchfiles` for the dedicated log-view watcher transport. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket and CLI tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), `croniter` (cron expression parsing / next-fire calculation), and `tzdata` (cross-platform IANA timezone data for cron scheduling). The `server` group includes `watchfiles` for the dedicated log-view watcher transport and `python-telegram-bot` for channel adapters. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, Telegram channel adapter dependencies, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket, channel flows, and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -192,6 +192,7 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   exact invariants that must survive refresh belong in
   `core/providers/github_copilot_policy.py` via exact-model overrides.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
+- **Channel architecture decisions are fixed by `stuff/channels.md`.** Decisions D1-D8 are the binding contract for the first channel implementation: automatic final-reply routing via `run.subscribe()`, session metadata sidecars owned by `ChatSessionManager`, `channel_send` as proactive outbound only, adapter-local batching/sequencing, per-channel runtime start/stop, and deny-all default `allowed_chat_ids`.
 
 ## Specs
 
@@ -210,6 +211,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
 | `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
 | `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
+| `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, Telegram-first routing, metadata, outbound send |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |

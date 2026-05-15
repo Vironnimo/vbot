@@ -5,12 +5,14 @@ all core services and manages the application lifecycle.
 """
 
 import asyncio
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
 from core.automation import CronService, TriggerService
+from core.channels import ChannelService
 from core.chat import ChatLoop, ChatRunManager
 from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
@@ -102,6 +104,7 @@ class Runtime:
         """
         self._config: ConfigProtocol = config
         self._data_dir = self._resolve_data_dir()
+        self._fallback_environment: dict[str, str] = {}
         log_level = config.get("LOG_LEVEL", "INFO")
         self._log_manager = LogManager(level=log_level, data_dir=self._data_dir)
         self.logger: LoggerProtocol | None = None
@@ -120,6 +123,7 @@ class Runtime:
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
+        self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
         self._subagent_batch_tracker: SubAgentBatchTracker | None = None
         self._system_prompts: SystemPromptManager | None = None
@@ -145,6 +149,7 @@ class Runtime:
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
         self._storage.ensure_directories()
         data_dir_credentials = self._storage.load_environment()
+        self._fallback_environment = dict(data_dir_credentials)
         self._storage.copy_prompt_fragments()
 
         self._providers = ProviderRegistry.load(resources_path)
@@ -187,6 +192,12 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         self._chat_loop = ChatLoop(self, streaming=False)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        self._channel_service = ChannelService(self._trigger_service, self._chat_sessions, self)
+        self._channel_service._notify_tool_registration_changed_hook = (
+            self._reload_channel_tool_if_started
+        )
+        self._start_channel_service()
+        self._sync_channel_tool_registration()
         self._cron_service = CronService(self._trigger_service, self._storage.data_dir)
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
@@ -223,6 +234,7 @@ class Runtime:
         self._providers = None
         self._provider_credentials = None
         self._token_store = None
+        self._fallback_environment = {}
         self._models = None
         self._storage = None
         self._agents = None
@@ -232,6 +244,9 @@ class Runtime:
         self._process_manager = None
         self._skills = None
         self._chat_sessions = None
+        if self._channel_service is not None:
+            self._channel_service.stop()
+        self._channel_service = None
         if self._cron_service is not None:
             self._cron_service.stop()
         self._cron_service = None
@@ -299,6 +314,50 @@ class Runtime:
         except RuntimeError:
             return
         self._cron_service.start()
+
+    def _start_channel_service(self) -> None:
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._channel_service.start()
+
+    def resolve_environment_credential(self, key: str) -> str:
+        """Resolve one environment credential using runtime precedence rules."""
+        if key in os.environ:
+            return os.environ[key]
+        return self._fallback_environment.get(key, "")
+
+    def _reload_channel_tool_if_started(self) -> None:
+        if not self._started:
+            return
+        self.reload_channel_tool()
+
+    def _sync_channel_tool_registration(self) -> None:
+        if self._tools is None:
+            raise RuntimeError("Tool service not available")
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        if self._chat_sessions is None:
+            raise RuntimeError("Chat session service not available")
+
+        self._tools.unregister("channel_send")
+        if not self._channel_service.has_active_channels():
+            return
+
+        try:
+            from core.tools.channel import register_channel_send_tool
+        except ModuleNotFoundError as error:
+            raise RuntimeError("Channel tool registration is unavailable") from error
+
+        register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
+
+    def reload_channel_tool(self) -> None:
+        """Re-register channel_send based on current active channel adapters."""
+        self._ensure_started()
+        self._sync_channel_tool_registration()
 
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
@@ -438,6 +497,14 @@ class Runtime:
         if self._trigger_service is None:
             raise RuntimeError("Trigger service not available")
         return self._trigger_service
+
+    @property
+    def channel_service(self) -> ChannelService:
+        """Access to channel config management and adapter lifecycle."""
+        self._ensure_started()
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        return self._channel_service
 
     @property
     def cron_service(self) -> CronService:

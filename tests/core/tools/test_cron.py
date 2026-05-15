@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
+import core.tools.cron as cron_tool_module
 from core.automation.cron import CronJob, CronJobNotFoundError
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
@@ -130,6 +131,30 @@ def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
     assert jobs[1]["next_fire_at"] is None
     assert jobs[2]["next_fire_at"] is None
     cron_service.list_jobs.assert_called_once_with()
+
+
+def test_list_action_preserves_utc_next_fire_at_without_zoneinfo_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_zoneinfo(_timezone_name: str) -> Any:
+        raise cron_tool_module.ZoneInfoNotFoundError("timezone data unavailable")
+
+    monkeypatch.setattr(cron_tool_module, "ZoneInfo", missing_zoneinfo)
+
+    cron_service = Mock()
+    cron_service.list_jobs.return_value = [
+        _make_job(job_id="job-cron", schedule_type="cron", status="active", timezone="UTC")
+    ]
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(_dispatch(registry, tmp_path, {"action": "list"}))
+
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    jobs = cast(list[dict[str, Any]], data["jobs"])
+    assert jobs[0]["next_fire_at"] is not None
 
 
 def test_update_action_returns_success(tmp_path: Path) -> None:
