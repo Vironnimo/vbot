@@ -15,16 +15,9 @@ Phase 4. In `webui/` gibt es im Moment nur ein minimales Frontend-Scaffold.
 
 ## 2. Setup
 
-### Python-Umgebung
+### Dependencies installieren
 
 ```bash
-python -m venv .venv
-```
-
-Windows PowerShell:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 ```
 
