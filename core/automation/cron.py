@@ -499,8 +499,11 @@ class CronService:
 
     def _resolve_timezone(self, timezone_name: str | None) -> tzinfo:
         if timezone_name:
+            normalized_timezone = timezone_name.strip()
+            if normalized_timezone.upper() == "UTC":
+                return UTC
             try:
-                return ZoneInfo(timezone_name)
+                return ZoneInfo(normalized_timezone)
             except ZoneInfoNotFoundError as error:
                 raise CronJobValidationError(f"Unknown timezone: {timezone_name}") from error
 
