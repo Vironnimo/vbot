@@ -1,4 +1,20 @@
+import {
+  CHANNEL_DM_SCOPE_PER_CONVERSATION,
+  CHANNEL_DM_SCOPES,
+  CHANNEL_PLATFORM_TELEGRAM,
+  CHANNEL_PLATFORMS,
+  applyChannelList,
+  buildCreatePayload,
+  buildUpdatePayload,
+  createChannelSettingsState,
+} from './channelSettings.js';
+
 export const SETTINGS_LAYOUT_CLASS = 'settings-layout view active';
+
+export const CHANNEL_FORM_MODE_CREATE = 'create';
+export const CHANNEL_FORM_MODE_EDIT = 'edit';
+
+export { CHANNEL_DM_SCOPES, CHANNEL_PLATFORM_TELEGRAM, CHANNEL_PLATFORMS };
 
 export const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   max_subagent_depth: 4,
@@ -84,6 +100,114 @@ export function createSkillDirectoriesUpdatePayload(directories) {
       directories: normalizeSkillDirectories(directories),
     },
   };
+}
+
+export function createChannelPanelState() {
+  return createChannelSettingsState();
+}
+
+export function applyChannelPanelList(state, result) {
+  return applyChannelList(state, result?.channels);
+}
+
+export function createChannelFormValues(channel = null) {
+  return {
+    id: textOrEmpty(channel?.id),
+    platform: textOrFallback(channel?.platform, CHANNEL_PLATFORM_TELEGRAM),
+    agent_id: textOrEmpty(channel?.agent_id),
+    dm_scope: textOrFallback(
+      channel?.dm_scope,
+      CHANNEL_DM_SCOPE_PER_CONVERSATION,
+    ),
+    token_env_var: textOrEmpty(channel?.token_env_var),
+    allowed_chat_ids: formatAllowedChatIds(channel?.allowed_chat_ids),
+  };
+}
+
+export function buildChannelCreatePayload(formValues) {
+  return buildCreatePayload(formValues);
+}
+
+export function buildChannelUpdatePayload(formValues) {
+  return buildUpdatePayload(formValues);
+}
+
+export function getAgentItems(result) {
+  const agents = Array.isArray(result?.agents) ? result.agents : [];
+
+  return agents
+    .map((agent) => {
+      const id = textOrEmpty(agent?.id);
+
+      if (!id) {
+        return null;
+      }
+
+      return {
+        id,
+        name: textOrFallback(agent?.name, id),
+      };
+    })
+    .filter((agent) => agent !== null)
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function mergeChannelStatuses(channels, statusResults) {
+  const channelItems = Array.isArray(channels) ? channels : [];
+  const statusItems = Array.isArray(statusResults) ? statusResults : [];
+  const statusById = new Map(
+    statusItems
+      .filter(
+        (status) => typeof status?.id === 'string' && status.id.length > 0,
+      )
+      .map((status) => [status.id, status]),
+  );
+
+  return channelItems.map((channel) => {
+    const status = statusById.get(channel.id);
+    if (!status) {
+      return channel;
+    }
+
+    const running =
+      typeof status.running === 'boolean' ? status.running : channel.running;
+
+    const enabled =
+      typeof status.enabled === 'boolean' ? status.enabled : channel.enabled;
+
+    return {
+      ...channel,
+      running,
+      enabled,
+    };
+  });
+}
+
+export function channelEnabledChipClass(enabled) {
+  return enabled ? 'chip-green' : 'chip-amber';
+}
+
+export function channelRunningChipClass(running) {
+  if (running === true) {
+    return 'chip-green';
+  }
+
+  if (running === false) {
+    return 'chip-amber';
+  }
+
+  return 'chip-orange';
+}
+
+export function formatAllowedChatIds(value) {
+  if (!Array.isArray(value)) {
+    return '';
+  }
+
+  return value
+    .filter((item) => Number.isSafeInteger(item))
+    .map((item) => String(item))
+    .join(', ');
 }
 
 export function normalizeSubAgentSettings(rawSettings) {
@@ -309,4 +433,18 @@ export function normalizeSettingsForDisplay(settings, translate) {
     availableLanguageOptions: buildLanguageOptions(settings?.appearance),
     persistedLanguageId: getPersistedLanguageId(settings),
   };
+}
+
+function textOrEmpty(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  return String(value).trim();
+}
+
+function textOrFallback(value, fallback) {
+  const normalized = textOrEmpty(value);
+
+  return normalized.length > 0 ? normalized : fallback;
 }

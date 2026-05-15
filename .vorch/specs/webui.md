@@ -24,6 +24,15 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/api.js`
   - `rpc(method, params?, options?)` posts to `/api/rpc` and returns `result` or
      throws `ApiClientError` with a stable `code`.
+  - `listSessions(agentId, options?)` calls `session.list` and returns
+    `{ sessions }` for one Agent.
+  - `linkSessionToChannel(agentId, sessionId, channelId, platformConvId, options?)`
+    calls `session.link_channel`.
+  - `listChannels(options?)`, `createChannel(payload, options?)`,
+    `updateChannel(channelId, payload, options?)`, `deleteChannel(channelId,
+    options?)`, `enableChannel(channelId, options?)`,
+    `disableChannel(channelId, options?)`, and `getChannelStatus(channelId,
+    options?)` wrap the `channel.*` RPC methods.
   - `listCronJobs`, `createCronJob`, `updateCronJob`, `deleteCronJob`,
     `enableCronJob`, and `disableCronJob` wrap the `cron.*` RPC methods.
   - `listLogs(options?)` calls `log.list` and returns `{ files, default_file }`
@@ -68,6 +77,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Pure helpers for Logs tab state: initial state, catalog application,
     selected-file changes, append/reset stream merging, level option derivation,
     and local text filtering across timestamp/level/logger/message/continuation.
+- `webui/src/lib/sessionListView.js`
+  - Pure helpers for session drawer state: `createSessionListState()`,
+    `applySessionList(...)`, `selectSession(...)`, and display-name derivation
+    for normal and channel-backed sessions.
+- `webui/src/lib/channelSettings.js`
+  - Pure helpers for Channels settings state and payload building: initial
+    state, channel-list normalization, and create/update payload builders.
 - `webui/src/lib/cronView.js`
   - Pure helpers for the Cron tab state: initial state, job normalization,
     completed-job filtering, and create/update payload builders.
@@ -79,6 +95,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
     toast CSS classes.
 - `webui/src/components/ChatView.svelte`
   - Loads `skill.list` on mount and passes the loadable `skills` array (not `invalid_skills`) to the composer for skill-trigger suggestions.
+  - Owns the session drawer toggle plus local `viewingSessionId` override state.
+    Selecting a session from the drawer loads its history without mutating the
+    Agent's persisted `current_session_id`.
+- `webui/src/components/SessionListDrawer.svelte`
+  - Renders the per-Agent session list with platform badges, last-active
+    metadata, selection callbacks, and inline retroactive channel-linking flows
+    backed by `session.link_channel`.
 - `webui/src/components/ChatComposer.svelte`
   - Supports `/skill-name` at the start of input and `$skill-name` inline autocomplete. Selection inserts only the trigger token and preserves the rest of the message text exactly; backend chat activation handles loading.
 - `webui/src/components/SkillAutocomplete.svelte`
@@ -102,6 +125,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Normalizes Settings provider metadata that now uses credential-centric
     fields (`credential_key`, `credentials_configured`) rather than env/API-key
     wording.
+  - Delegates Channels panel state and payload logic to `channelSettings.js` so
+    channel form parsing and validation stay centralized.
   - Provides OAuth provider helpers for Settings: OAuth connection detection,
     public connection-id payload construction, and local connection status
     derivation (`connected`, `disconnected`, or `pending`).
@@ -114,6 +139,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/SettingsView.svelte`
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
+  - Includes a Channels panel. It lists configured channels, hydrates per-row
+    running state via `channel.status`, and supports create, edit, delete,
+    enable, and disable actions through the `channel.*` RPC methods.
   - The Providers panel renders OAuth connections with Connect/Disconnect
     controls. `provider.connect` opens an inline Device Flow dialog with the user
     code, copy control, and verification link; `provider_auth_completed` closes
@@ -163,12 +191,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - The Logs tab should pass the most recent `log.read` cursor into
   `subscribeLogEvents(...)` whenever it opens or reopens the dedicated log
   socket.
-- The UI normally selects Agents, not Sessions. The shown chat is the selected
-  Agent's `current_session_id`; old Sessions are not listed. Sub-agent session
-  links are the targeted exception: they load an explicit Session ID as a
-  transient read-only override. The read-only banner provides an explicit
-  “Return to current session” action, and normal new-session/agent-selection
-  actions also clear the override.
+- The UI normally selects Agents, not Sessions. The shown chat defaults to the
+  selected Agent's `current_session_id`, but explicit session overrides may be
+  opened through the Session drawer or sub-agent session links. These overrides
+  are accessor-local UI state only; they do not mutate the kernel's persisted
+  `current_session_id`. The read-only banner provides an explicit “Return to
+  current session” action, and normal new-session/agent-selection actions also
+  clear the override.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
 - Streaming output is accessor-local/in-memory. `streamingItems` preserves the

@@ -202,6 +202,177 @@ export function disableCronJob(id, options = {}) {
   return rpc('cron.disable', { id }, options);
 }
 
+export function listSessions(agentId, options = {}) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'session.list',
+      },
+    );
+  }
+
+  return rpc('session.list', { agent_id: agentId }, options);
+}
+
+export function linkSessionToChannel(
+  agentId,
+  sessionId,
+  channelId,
+  platformConvId,
+  options = {},
+) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'session.link_channel',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'session.link_channel',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'session.link_channel',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(platformConvId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Platform conversation id must be a non-empty string',
+      {
+        method: 'session.link_channel',
+      },
+    );
+  }
+
+  return rpc(
+    'session.link_channel',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      channel_id: channelId,
+      platform_conv_id: platformConvId,
+    },
+    options,
+  );
+}
+
+export function listChannels(options = {}) {
+  return rpc('channel.list', {}, options);
+}
+
+export function createChannel(payload = {}, options = {}) {
+  if (!isPlainObject(payload)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel payload must be an object',
+      {
+        method: 'channel.create',
+      },
+    );
+  }
+
+  return rpc('channel.create', payload, options);
+}
+
+export function updateChannel(channelId, payload = {}, options = {}) {
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'channel.update',
+      },
+    );
+  }
+
+  if (!isPlainObject(payload)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel payload must be an object',
+      {
+        method: 'channel.update',
+      },
+    );
+  }
+
+  return rpc('channel.update', { ...payload, id: channelId }, options);
+}
+
+export function deleteChannel(channelId, options = {}) {
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'channel.delete',
+      },
+    );
+  }
+
+  return rpc('channel.delete', { id: channelId }, options);
+}
+
+export function enableChannel(channelId, options = {}) {
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'channel.enable',
+      },
+    );
+  }
+
+  return rpc('channel.enable', { id: channelId }, options);
+}
+
+export function disableChannel(channelId, options = {}) {
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'channel.disable',
+      },
+    );
+  }
+
+  return rpc('channel.disable', { id: channelId }, options);
+}
+
+export function getChannelStatus(channelId, options = {}) {
+  if (!isNonEmptyString(channelId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Channel id must be a non-empty string',
+      {
+        method: 'channel.status',
+      },
+    );
+  }
+
+  return rpc('channel.status', { id: channelId }, options);
+}
+
 export async function connectProvider(providerId, connectionId, options = {}) {
   return (options.rpc ?? rpc)(
     'provider.connect',
