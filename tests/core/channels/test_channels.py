@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,6 +67,36 @@ class BlockingAdapter(ChannelAdapter):
 
     async def send(self, message: str, platform_target: str) -> None:
         self.sent_messages.append((message, platform_target))
+
+
+class FailingAdapter(ChannelAdapter):
+    platform = "telegram"
+
+    def __init__(self, *, fail_on_start: bool) -> None:
+        self._fail_on_start = fail_on_start
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+        if self._fail_on_start:
+            raise RuntimeError("adapter failed")
+        await asyncio.Future()
+
+    async def stop(self) -> None:
+        self.stopped.set()
+
+    async def send(self, message: str, platform_target: str) -> None:
+        return
+
+
+async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            raise TimeoutError("Timed out waiting for condition")
+        await asyncio.sleep(0)
 
 
 def test_channel_config_enabled_defaults_true() -> None:
@@ -234,3 +265,90 @@ def test_channel_service_update_rejects_unknown_fields(tmp_path: Path) -> None:
 
     with pytest.raises(ChannelConfigError, match="Unsupported channel fields"):
         service.update_channel(config.id, unknown_field="value")
+
+
+@pytest.mark.asyncio
+async def test_channel_service_restarts_failed_adapter_with_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    created: list[FailingAdapter] = []
+    starts = 0
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        nonlocal starts
+        starts += 1
+        adapter = FailingAdapter(fail_on_start=starts == 1)
+        created.append(adapter)
+        return adapter
+
+    delays: list[float] = []
+    original_restart_delay = service._restart_delay_seconds
+
+    def immediate_restart_delay(attempt: int) -> float:
+        delays.append(original_restart_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
+
+    service.start()
+    await wait_until(lambda: len(created) >= 2)
+    await asyncio.wait_for(created[1].started.wait(), timeout=1)
+
+    assert delays == [1.0]
+    assert service.has_active_channels() is True
+    assert config.id not in service._failed_channels
+
+    service.stop()
+    await asyncio.wait_for(created[-1].stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_channel_service_marks_channel_failed_after_max_restart_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    created: list[FailingAdapter] = []
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        adapter = FailingAdapter(fail_on_start=True)
+        created.append(adapter)
+        return adapter
+
+    delays: list[float] = []
+    original_restart_delay = service._restart_delay_seconds
+
+    def immediate_restart_delay(attempt: int) -> float:
+        delays.append(original_restart_delay(attempt))
+        return 0.0
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+    monkeypatch.setattr(service, "_restart_delay_seconds", immediate_restart_delay)
+
+    service.start()
+    await wait_until(
+        lambda: (
+            config.id in service._failed_channels
+            and config.id not in service._adapter_tasks
+            and config.id not in service._adapter_restart_tasks
+        )
+    )
+
+    assert delays == [1.0, 2.0, 4.0]
+    assert len(created) == 4
+    assert service.has_active_channels() is False
+    assert service._adapter_restart_attempts[config.id] == 3
+
+    service.stop()

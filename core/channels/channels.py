@@ -28,6 +28,9 @@ _DEFAULT_DM_SCOPE = "per_conversation"
 _ALLOWED_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
 _ALLOWED_PLATFORMS = frozenset(("telegram",))
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
+_ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
+_ADAPTER_RESTART_MAX_RETRIES = 3
 _MUTABLE_FIELDS = frozenset(
     (
         "platform",
@@ -240,6 +243,9 @@ class ChannelService:
         self._storage = ChannelStorage(_resolve_runtime_data_root(runtime))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
+        self._adapter_restart_attempts: dict[str, int] = {}
+        self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
+        self._failed_channels: set[str] = set()
         self._started = False
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
 
@@ -255,16 +261,25 @@ class ChannelService:
 
     def stop(self) -> None:
         """Stop all active channel adapter tasks. Idempotent."""
-        if not self._started and not self._adapter_tasks:
+        if not self._started and not self._adapter_tasks and not self._adapter_restart_tasks:
             return
 
+        for channel_id in list(self._adapter_restart_tasks):
+            self._cancel_restart_task(channel_id)
         for channel_id in list(self._adapter_tasks):
             self.stop_channel(channel_id)
+        self._adapter_restart_attempts.clear()
+        self._failed_channels.clear()
         self._started = False
 
-    def start_channel(self, channel_id: str) -> None:
+    def start_channel(self, channel_id: str, *, reset_backoff: bool = True) -> None:
         """Start one enabled channel adapter task when not already running."""
         normalized_id = _normalize_channel_id(channel_id)
+        self._cancel_restart_task(normalized_id)
+        if reset_backoff:
+            self._adapter_restart_attempts.pop(normalized_id, None)
+            self._failed_channels.discard(normalized_id)
+
         existing_task = self._adapter_tasks.get(normalized_id)
         if existing_task is not None and not existing_task.done():
             return
@@ -299,6 +314,10 @@ class ChannelService:
     def stop_channel(self, channel_id: str) -> None:
         """Stop one running channel adapter task when active."""
         normalized_id = _normalize_channel_id(channel_id)
+        self._cancel_restart_task(normalized_id)
+        self._adapter_restart_attempts.pop(normalized_id, None)
+        self._failed_channels.discard(normalized_id)
+
         task = self._adapter_tasks.pop(normalized_id, None)
         self._adapters.pop(normalized_id, None)
 
@@ -441,10 +460,121 @@ class ChannelService:
             return
         error = task.exception()
         if error is None:
+            self._adapter_restart_attempts.pop(channel_id, None)
+            return
+
+        _LOGGER.warning(
+            "Channel adapter task failed for channel=%s; scheduling restart: %s",
+            channel_id,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        self._schedule_restart(channel_id)
+
+    def _schedule_restart(self, channel_id: str) -> None:
+        if not self._started:
+            return
+
+        existing_task = self._adapter_restart_tasks.get(channel_id)
+        if existing_task is not None and not existing_task.done():
+            return
+
+        loop = _get_running_loop_or_none()
+        if loop is None:
+            _LOGGER.error(
+                "Cannot restart channel adapter without a running event loop (channel=%s)",
+                channel_id,
+            )
+            return
+
+        restart_task = loop.create_task(
+            self._restart_with_backoff(channel_id),
+            name=f"channel:{channel_id}:restart",
+        )
+        self._adapter_restart_tasks[channel_id] = restart_task
+
+        def on_done(completed_task: asyncio.Task[None], channel: str = channel_id) -> None:
+            self._on_restart_task_done(channel, completed_task)
+
+        restart_task.add_done_callback(on_done)
+
+    async def _restart_with_backoff(self, channel_id: str) -> None:
+        attempt = self._adapter_restart_attempts.get(channel_id, 0)
+        if attempt >= _ADAPTER_RESTART_MAX_RETRIES:
+            self._failed_channels.add(channel_id)
+            _LOGGER.error(
+                "Channel adapter exceeded max restart attempts and is marked failed "
+                "(channel=%s, retries=%s)",
+                channel_id,
+                _ADAPTER_RESTART_MAX_RETRIES,
+            )
+            return
+
+        next_attempt = attempt + 1
+        self._adapter_restart_attempts[channel_id] = next_attempt
+
+        delay_seconds = self._restart_delay_seconds(next_attempt)
+        _LOGGER.warning(
+            "Restarting channel adapter after %.1fs (channel=%s, attempt=%s/%s)",
+            delay_seconds,
+            channel_id,
+            next_attempt,
+            _ADAPTER_RESTART_MAX_RETRIES,
+        )
+        await asyncio.sleep(delay_seconds)
+
+        if not self._can_restart_channel(channel_id):
+            return
+
+        self.start_channel(channel_id, reset_backoff=False)
+
+    def _restart_delay_seconds(self, attempt: int) -> float:
+        delay = _ADAPTER_RESTART_INITIAL_DELAY_SECONDS * float(2 ** (attempt - 1))
+        return float(min(_ADAPTER_RESTART_MAX_DELAY_SECONDS, delay))
+
+    def _can_restart_channel(self, channel_id: str) -> bool:
+        if not self._started:
+            return False
+
+        if self._is_running(channel_id):
+            return False
+
+        try:
+            config = self._storage.get(channel_id)
+        except ChannelNotFoundError:
+            return False
+        except ChannelError:
+            _LOGGER.exception(
+                "Cannot load channel config while checking restart eligibility (channel=%s)",
+                channel_id,
+            )
+            return False
+
+        return config.enabled
+
+    def _cancel_restart_task(self, channel_id: str) -> None:
+        task = self._adapter_restart_tasks.pop(channel_id, None)
+        if task is None or task.done():
+            return
+
+        if task is asyncio.current_task():
+            return
+
+        task.cancel()
+
+    def _on_restart_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
+        if self._adapter_restart_tasks.get(channel_id) is task:
+            self._adapter_restart_tasks.pop(channel_id, None)
+
+        if task.cancelled():
+            return
+
+        error = task.exception()
+        if error is None:
             return
 
         _LOGGER.error(
-            "Channel adapter task failed for channel=%s: %s",
+            "Channel adapter restart task failed for channel=%s: %s",
             channel_id,
             error,
             exc_info=(type(error), error, error.__traceback__),
