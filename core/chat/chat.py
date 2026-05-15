@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import inspect
 import json
+import os
 import re
 import uuid
 from collections import deque
@@ -330,6 +332,11 @@ class ChatSession:
         """Return the session identifier derived from the JSONL filename."""
         return self.path.stem
 
+    @property
+    def sidecar_path(self) -> Path:
+        """Return the JSON metadata sidecar path for this session."""
+        return self.path.with_name(f"{self.path.stem}.meta.json")
+
     def append(self, message: ChatMessage) -> None:
         """Append one canonical message as a single JSONL line."""
         payload = json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
@@ -445,6 +452,14 @@ class ChatSessionManager:
         """Create a new session for an agent."""
         return ChatSession.create(self.sessions_dir(agent_id), session_id=session_id)
 
+    def get_or_create(self, agent_id: str, session_id: str) -> ChatSession:
+        """Return an existing session handle or create a new one."""
+        _validate_session_id(session_id)
+        session_path = self.sessions_dir(agent_id) / f"{session_id}{SESSION_FILE_EXTENSION}"
+        if session_path.exists():
+            return ChatSession(session_path)
+        return self.create(agent_id, session_id=session_id)
+
     def get(self, agent_id: str, session_id: str) -> ChatSession:
         """Return a session handle for an existing agent session."""
         _validate_session_id(session_id)
@@ -452,6 +467,34 @@ class ChatSessionManager:
         if not session_path.exists():
             raise ChatSessionError(f"session does not exist: {session_id}")
         return ChatSession(session_path)
+
+    def get_metadata(self, agent_id: str, session_id: str) -> JsonObject:
+        """Load session metadata from sidecar JSON or return an empty object."""
+        session = self.get(agent_id, session_id)
+        return self._load_sidecar(session)
+
+    def set_metadata(self, agent_id: str, session_id: str, data: dict[str, Any]) -> None:
+        """Persist session metadata to sidecar JSON using atomic replace."""
+        if not isinstance(data, dict):
+            raise ChatSessionError("session metadata must be an object")
+
+        session = self.get(agent_id, session_id)
+        sidecar_path = session.sidecar_path
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = sidecar_path.with_name(f".{sidecar_path.name}.{uuid.uuid4().hex}.tmp")
+
+        try:
+            serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise ChatSessionError("session metadata must be JSON-serializable") from exc
+
+        try:
+            temp_path.write_text(serialized, encoding="utf-8")
+            os.replace(temp_path, sidecar_path)
+        except OSError as exc:
+            raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     def list(self, agent_id: str) -> list[ChatSession]:
         """List session handles for an agent sorted by filename."""
@@ -464,9 +507,54 @@ class ChatSessionManager:
             if _is_valid_session_id(path.stem)
         ]
 
+    def list_with_metadata(self, agent_id: str) -> builtins.list[dict[str, Any]]:
+        """List sessions with activity timestamps plus merged sidecar metadata."""
+        sessions_with_metadata: builtins.list[dict[str, Any]] = []
+        for session in self.list(agent_id):
+            created_at, last_active_at = self._activity_timestamps(session)
+            metadata = self._load_sidecar(session)
+
+            session_data: dict[str, Any] = dict(metadata)
+            session_data["id"] = session.id
+            session_data["created_at"] = created_at
+            session_data["last_active_at"] = last_active_at
+            sessions_with_metadata.append(session_data)
+        return sessions_with_metadata
+
     def delete(self, agent_id: str, session_id: str) -> None:
         """Delete one agent session file."""
         self.get(agent_id, session_id).delete()
+
+    def _load_sidecar(self, session: ChatSession) -> JsonObject:
+        sidecar_path = session.sidecar_path
+        if not sidecar_path.exists():
+            return {}
+
+        try:
+            data = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ChatSessionError(f"failed to read metadata for session: {session.id}") from exc
+        except json.JSONDecodeError as exc:
+            raise ChatSessionError(f"invalid metadata JSON for session: {session.id}") from exc
+
+        if not isinstance(data, dict):
+            raise ChatSessionError(f"metadata for session must be an object: {session.id}")
+        return dict(data)
+
+    def _activity_timestamps(self, session: ChatSession) -> tuple[str, str]:
+        fallback_timestamp = self._file_mtime(session.path)
+        messages = session.load()
+        if not messages:
+            return fallback_timestamp, fallback_timestamp
+        return messages[0].timestamp, messages[-1].timestamp
+
+    @staticmethod
+    def _file_mtime(path: Path) -> str:
+        try:
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+        except OSError as exc:
+            raise ChatSessionError(f"failed to read file metadata: {path}") from exc
+        return _format_timestamp(modified_at)
 
 
 class _EmittingToolRegistry(ToolRegistry):
