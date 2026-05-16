@@ -84,10 +84,38 @@ def test_store_rejects_blocked_mime_type(tmp_path: Path) -> None:
 def test_get_missing_attachment_raises_not_found(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
+    missing_attachment_id = "00000000-0000-4000-8000-000000000000"
 
     # Act / Assert
     with pytest.raises(AttachmentNotFoundError, match="Attachment not found"):
-        store.get("missing-id")
+        store.get(missing_attachment_id)
+
+
+def test_get_rejects_path_traversal_attachment_id(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+
+    # Act / Assert
+    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+        store.get("../../etc/passwd")
+
+
+def test_get_rejects_empty_attachment_id(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+
+    # Act / Assert
+    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+        store.get("")
+
+
+def test_get_rejects_non_uuid_attachment_id(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+
+    # Act / Assert
+    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+        store.get("not-a-uuid")
 
 
 def test_delete_removes_blob_and_sidecar_and_missing_is_noop(tmp_path: Path) -> None:
@@ -106,6 +134,32 @@ def test_delete_removes_blob_and_sidecar_and_missing_is_noop(tmp_path: Path) -> 
     # Assert
     assert not blob_path.exists()
     assert not sidecar_path.exists()
+
+
+def test_delete_rejects_path_traversal_id_without_removing_existing_files(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"keep me")
+    blob_path = Path(record.file_path)
+    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+
+    # Act / Assert
+    with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
+        store.delete("../../etc/passwd")
+
+    assert blob_path.exists()
+    assert sidecar_path.exists()
+
+
+def test_delete_missing_valid_uuid_is_noop(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+
+    # Act
+    store.delete("00000000-0000-4000-8000-000000000001")
+
+    # Assert
+    assert not (tmp_path / "attachments").exists()
 
 
 def test_stored_at_uses_utc_iso_format_with_explicit_offset(tmp_path: Path) -> None:
