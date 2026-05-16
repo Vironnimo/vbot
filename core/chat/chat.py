@@ -868,8 +868,17 @@ class ChatLoop:
         session.drain_pending_notes()
         request_messages = [system_message.to_dict(), *session.skill_context_messages(), *history]
 
-        current_user_message = _last_user_message_with_content_blocks(session_messages)
-        if self._attachment_resolver is None or current_user_message is None:
+        if self._attachment_resolver is None:
+            return request_messages
+        if not _session_has_any_content_blocks(session_messages):
+            return request_messages
+
+        # Use the most recently appended user turn as the current-turn marker.
+        # If that turn is plain text, all content blocks resolve as historical.
+        current_user_message = _last_user_message_with_content_blocks(
+            session_messages
+        ) or _last_user_message(session_messages)
+        if current_user_message is None:
             return request_messages
 
         return self._attachment_resolver.resolve_messages(
@@ -1324,6 +1333,19 @@ def _last_user_message_with_content_blocks(messages: list[ChatMessage]) -> ChatM
             return message
         return None
     return None
+
+
+def _last_user_message(messages: list[ChatMessage]) -> ChatMessage | None:
+    """Return the most recently appended user message regardless of content type."""
+    for message in reversed(messages):
+        if message.role == "user":
+            return message
+    return None
+
+
+def _session_has_any_content_blocks(messages: list[ChatMessage]) -> bool:
+    """Return True if any user message in the session carries list content."""
+    return any(message.role == "user" and isinstance(message.content, list) for message in messages)
 
 
 def _split_agent_model(model: str) -> tuple[str, str]:
