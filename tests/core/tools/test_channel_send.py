@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+from core.channels.adapter import FileData
 from core.channels.channels import ChannelNotFoundError
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
@@ -73,7 +74,12 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
 
     data = assert_success_envelope(result)
     assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
-    channel_service.send.assert_awaited_once_with("tg-assistant", "Task finished", "12345")
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Task finished",
+        "12345",
+        files=None,
+    )
     chat_sessions.get_metadata.assert_not_called()
     channel_service.list_channels.assert_not_called()
 
@@ -106,7 +112,12 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
     data = assert_success_envelope(result)
     assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
     chat_sessions.get_metadata.assert_called_once_with("agent-1", "session-1")
-    channel_service.send.assert_awaited_once_with("tg-assistant", "Task finished", "12345")
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Task finished",
+        "12345",
+        files=None,
+    )
     channel_service.list_channels.assert_not_called()
 
 
@@ -136,7 +147,136 @@ def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_p
     assert data == {"channel_id": "tg-private", "platform_target": "8506476339"}
     chat_sessions.get_metadata.assert_called_once_with("agent-1", "session-1")
     channel_service.list_channels.assert_called_once_with()
-    channel_service.send.assert_awaited_once_with("tg-private", "Task finished", "8506476339")
+    channel_service.send.assert_awaited_once_with(
+        "tg-private",
+        "Task finished",
+        "8506476339",
+        files=None,
+    )
+
+
+def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = []
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "at least one of message or file_paths must be provided",
+    )
+    channel_service.send.assert_not_called()
+
+
+def test_channel_send_file_paths_only_forwards_files(tmp_path: Path) -> None:
+    attachment_path = tmp_path / "note.txt"
+    attachment_path.write_text("hello", encoding="utf-8")
+
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = []
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "file_paths": [str(attachment_path)],
+            },
+        )
+    )
+
+    data = assert_success_envelope(result)
+    assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
+    send_call = channel_service.send.await_args
+    assert send_call.args == ("tg-assistant", None, "12345")
+    files = send_call.kwargs.get("files")
+    assert isinstance(files, list)
+    assert len(files) == 1
+    assert isinstance(files[0], FileData)
+    assert files[0].filename == "note.txt"
+    assert files[0].media_type == "text/plain"
+    assert files[0].data == b"hello"
+
+
+def test_channel_send_message_and_file_paths_forwarded(tmp_path: Path) -> None:
+    attachment_path = tmp_path / "image.png"
+    attachment_path.write_bytes(b"\x89PNG\r\n\x1a\nDATA")
+
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = []
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "caption",
+                "platform_target": "12345",
+                "file_paths": [str(attachment_path)],
+            },
+        )
+    )
+
+    data = assert_success_envelope(result)
+    assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
+    send_call = channel_service.send.await_args
+    assert send_call.args == ("tg-assistant", "caption", "12345")
+    files = send_call.kwargs.get("files")
+    assert isinstance(files, list)
+    assert len(files) == 1
+    assert files[0].filename == "image.png"
+    assert files[0].media_type == "image/png"
+
+
+def test_channel_send_nonexistent_file_path_returns_failure(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = []
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "file_paths": ["missing.pdf"],
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "file_paths[0] is not a file: missing.pdf",
+    )
+    channel_service.send.assert_not_called()
 
 
 def test_channel_send_fails_when_platform_target_is_missing_everywhere(tmp_path: Path) -> None:

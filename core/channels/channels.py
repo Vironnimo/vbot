@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from core.channels.adapter import ChannelAdapter
+from core.channels.adapter import ChannelAdapter, FileData
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -389,16 +389,48 @@ class ChannelService:
 
         self._notify_tool_registration_if_changed(had_active_channels)
 
-    async def send(self, channel_id: str, message: str, platform_target: str) -> None:
+    async def send(
+        self,
+        channel_id: str,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+    ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         normalized_id = _normalize_channel_id(channel_id)
-        if not isinstance(message, str) or not message:
-            raise ChannelConfigError("message must be a non-empty string")
         if not isinstance(platform_target, str) or not platform_target:
             raise ChannelConfigError("platform_target must be a non-empty string")
 
+        normalized_message: str | None
+        if message is None:
+            normalized_message = None
+        elif isinstance(message, str) and message.strip():
+            normalized_message = message.strip()
+        else:
+            raise ChannelConfigError("message must be a non-empty string when provided")
+
+        normalized_files: list[FileData] | None
+        if files is None:
+            normalized_files = None
+        elif not isinstance(files, list):
+            raise ChannelConfigError("files must be a list of FileData when provided")
+        else:
+            normalized_files = []
+            for file_data in files:
+                if not isinstance(file_data, FileData):
+                    raise ChannelConfigError("files must contain FileData values only")
+                normalized_files.append(file_data)
+
+        if normalized_message is None and not normalized_files:
+            raise ChannelConfigError("at least one of message or files must be provided")
+
         adapter = self._active_adapter(normalized_id)
-        await adapter.send(message, platform_target)
+        if normalized_files is None:
+            await adapter.send(normalized_message, platform_target)
+            return
+
+        await adapter.send(normalized_message, platform_target, files=normalized_files)
 
     def list_channels(self) -> list[ChannelConfig]:
         """Return all persisted channels, enabled and disabled."""
