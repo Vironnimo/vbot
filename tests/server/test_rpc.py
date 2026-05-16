@@ -348,6 +348,7 @@ class StubStorage:
             "system.md": "# System\nDefault system prompt.",
             "runtime.md": "# Runtime\nDefault runtime info.",
             "tools.md": "# Tools\nDefault tools list.",
+            "channels.md": "# Channels\nDefault channels list.",
             "skills.md": "# Skills\nDefault skills list.",
         }
 
@@ -2513,14 +2514,20 @@ class TestServerEventFromRunEvent:
 
 
 @pytest.mark.asyncio
-async def test_prompt_list_returns_all_four_fragments_in_order(tmp_path: Path) -> None:
+async def test_prompt_list_returns_all_five_fragments_in_order(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(state, {"method": "prompt.list"})
 
     assert response["ok"] is True
     fragments = response["result"]["fragments"]
-    assert [f["name"] for f in fragments] == ["system.md", "runtime.md", "tools.md", "skills.md"]
+    assert [f["name"] for f in fragments] == [
+        "system.md",
+        "runtime.md",
+        "tools.md",
+        "channels.md",
+        "skills.md",
+    ]
 
 
 @pytest.mark.asyncio

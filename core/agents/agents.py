@@ -16,6 +16,7 @@ from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.channels.channels import ChannelConfig
 from core.chat.chat import ChatSession, ChatSessionError, ChatSessionManager
 
 DEFAULT_FALLBACK_MODEL = ""
@@ -88,6 +89,19 @@ class SkillPromptRegistry(Protocol):
 
     def filter_allowed(self, allowed_skills: list[str]) -> list[SkillPromptMetadata]:
         """Return prompt-visible skills filtered by an agent allowlist."""
+
+
+class ChannelPromptRegistry(Protocol):
+    """Channel registry methods needed for prompt-visible channel filtering."""
+
+    def has_active_channels(self) -> bool:
+        """Return whether any channel adapter is currently running."""
+
+    def list_channels(self) -> list[ChannelConfig]:
+        """Return all configured channels."""
+
+    def _is_running(self, channel_id: str) -> bool:
+        """Return whether one configured channel adapter is currently running."""
 
 
 @dataclass(frozen=True)
@@ -360,6 +374,7 @@ class SystemPromptManager:
         storage: PromptFragmentReader,
         tool_registry: ToolPromptRegistry,
         skill_registry: SkillPromptRegistry,
+        channel_registry: ChannelPromptRegistry | None = None,
         *,
         app_version: str,
         app_dir: str | Path,
@@ -371,6 +386,7 @@ class SystemPromptManager:
         self._storage = storage
         self._tool_registry = tool_registry
         self._skill_registry = skill_registry
+        self._channel_registry = channel_registry
         self._app_version = app_version
         self._app_dir = Path(app_dir)
         self._data_root = Path(data_root)
@@ -389,6 +405,7 @@ class SystemPromptManager:
             "{app_version}": self._app_version,
             "{runtime}": self._build_runtime_block(agent),
             "{tools}": self._build_tools_block(agent),
+            "{channels}": self._build_channels_block(agent),
             "{skills}": self._build_skills_block(agent),
         }
         for placeholder, value in replacements.items():
@@ -428,6 +445,11 @@ class SystemPromptManager:
         )
         return tools.replace("{tool_list}", tool_list)
 
+    def _build_channels_block(self, agent: Agent) -> str:
+        channels = self._storage.read_prompt_fragment("channels.md")
+        channel_list = _format_channel_list(self._agent_active_channels(agent))
+        return channels.replace("{channel_list}", channel_list)
+
     def _build_skills_block(self, agent: Agent) -> str:
         skills = self._storage.read_prompt_fragment("skills.md")
         skill_list = _format_skill_list(self._skill_registry.filter_allowed(agent.allowed_skills))
@@ -435,6 +457,22 @@ class SystemPromptManager:
 
     def _agent_has_loadable_skills(self, agent: Agent) -> bool:
         return bool(self._skill_registry.filter_allowed(agent.allowed_skills))
+
+    def _agent_active_channels(self, agent: Agent) -> list[ChannelConfig]:
+        channel_registry = self._channel_registry
+        if channel_registry is None or not channel_registry.has_active_channels():
+            return []
+
+        active_channels: list[ChannelConfig] = []
+        for channel in channel_registry.list_channels():
+            if channel.agent_id != agent.id:
+                continue
+            if not channel.enabled:
+                continue
+            if not channel_registry._is_running(channel.id):
+                continue
+            active_channels.append(channel)
+        return active_channels
 
     def _replace_workspace_includes(self, prompt: str, workspace_path: Path) -> str:
         def replace_include(match: re.Match[str]) -> str:
@@ -513,6 +551,21 @@ def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
     return "\n".join(
         f"- {definition['name']}: {definition['description']}" for definition in tool_definitions
     )
+
+
+def _format_channel_list(channels: list[ChannelConfig]) -> str:
+    if not channels:
+        return "- None"
+
+    lines: list[str] = []
+    for channel in channels:
+        target_hint = (
+            "default target available"
+            if len(channel.allowed_chat_ids) == 1
+            else "explicit target required"
+        )
+        lines.append(f"- {channel.id}: {channel.platform} ({target_hint})")
+    return "\n".join(lines)
 
 
 def _format_skill_list(skills: list[SkillPromptMetadata]) -> str:

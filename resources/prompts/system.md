@@ -5,6 +5,8 @@ Use the instructions below and the tools available to you to assist the user.
 
 {tools}
 
+{channels}
+
 {skills}
 
 {include:SOUL.md}

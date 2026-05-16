@@ -92,6 +92,7 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
         {"placeholder": "{app_version}", "description": "Application version string"},
         {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
         {"placeholder": "{tools}", "description": "Rendered tools fragment"},
+        {"placeholder": "{channels}", "description": "Rendered channels fragment"},
         {"placeholder": "{skills}", "description": "Rendered skills fragment"},
         {
             "placeholder": "{include:filename}",
@@ -110,6 +111,9 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     ],
     "tools.md": [
         {"placeholder": "{tool_list}", "description": "List of available tools"},
+    ],
+    "channels.md": [
+        {"placeholder": "{channel_list}", "description": "List of active agent-bound channels"},
     ],
     "skills.md": [
         {"placeholder": "{skill_list}", "description": "List of available skills"},
@@ -1099,7 +1103,7 @@ def _read_log(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _list_prompts(state: Any) -> JsonObject:
-    fragment_order = ["system.md", "runtime.md", "tools.md", "skills.md"]
+    fragment_order = ["system.md", "runtime.md", "tools.md", "channels.md", "skills.md"]
     fragments: list[JsonObject] = []
     for name in fragment_order:
         try:
