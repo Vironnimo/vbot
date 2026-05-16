@@ -168,16 +168,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         caption: str | None,
     ) -> None:
-        if len(files) == 1:
-            await self._send_single_file(bot, chat_id, files[0], caption=caption)
+        if not files:
             return
 
-        first_batch = True
-        for start in range(0, len(files), 10):
-            batch = files[start : start + 10]
-            batch_caption = caption if first_batch else None
-            await self._send_file_batch(bot, chat_id, batch, caption=batch_caption)
-            first_batch = False
+        await self._send_file_batch(bot, chat_id, files, caption=caption)
 
     async def _send_single_file(
         self,
@@ -210,13 +204,52 @@ class TelegramChannelAdapter(ChannelAdapter):
         *,
         caption: str | None,
     ) -> None:
+        image_files: list[FileData] = []
+        doc_files: list[FileData] = []
+        for file_data in files:
+            if _is_image_media_type(file_data.media_type):
+                image_files.append(file_data)
+            else:
+                doc_files.append(file_data)
+
+        caption_pending = caption
+        for partition, is_image in ((image_files, True), (doc_files, False)):
+            if not partition:
+                continue
+
+            for start in range(0, len(partition), 10):
+                batch = partition[start : start + 10]
+                await self._send_homogeneous_batch(
+                    bot,
+                    chat_id,
+                    batch,
+                    caption=caption_pending,
+                    is_image=is_image,
+                )
+                caption_pending = None
+
+    async def _send_homogeneous_batch(
+        self,
+        bot: Any,
+        chat_id: int,
+        files: list[FileData],
+        *,
+        caption: str | None,
+        is_image: bool,
+    ) -> None:
+        if not files:
+            return
+        if len(files) == 1:
+            await self._send_single_file(bot, chat_id, files[0], caption=caption)
+            return
+
         telegram = _load_telegram()
         media_items: list[Any] = []
 
         for index, file_data in enumerate(files):
             item_caption = caption if index == 0 else None
             input_file = telegram.InputFile(file_data.data, filename=file_data.filename)
-            if _is_image_media_type(file_data.media_type):
+            if is_image:
                 media_items.append(telegram.InputMediaPhoto(media=input_file, caption=item_caption))
             else:
                 media_items.append(
