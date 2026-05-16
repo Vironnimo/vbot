@@ -4,6 +4,8 @@ import {
 } from './settingsView.js';
 
 const RPC_ENDPOINT = '/api/rpc';
+const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
+const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
 const WEBSOCKET_ENDPOINT = '/ws';
 const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
 
@@ -128,6 +130,117 @@ export async function rpc(method, params = {}, options = {}) {
     throw normalizeRpcError(payload.error, { method, status: response.status });
   }
   return payload.result;
+}
+
+export async function uploadAttachment(file, options = {}) {
+  if (!file || typeof file !== 'object') {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Attachment file must be provided',
+      {
+        method: 'upload_attachment',
+      },
+    );
+  }
+
+  const fetchFunction = options.fetch ?? globalThis.fetch;
+  if (typeof fetchFunction !== 'function') {
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'fetch is not available', {
+      method: 'upload_attachment',
+    });
+  }
+
+  const formData = new FormData();
+  const filename = isNonEmptyString(file.name) ? file.name : 'upload.bin';
+  formData.append('file', file, filename);
+
+  let response;
+  try {
+    response = await fetchFunction(
+      buildHttpUrl(
+        options.uploadPath ?? ATTACHMENT_UPLOAD_ENDPOINT,
+        options.baseUrl,
+      ),
+      {
+        method: 'POST',
+        body: formData,
+        signal: options.signal,
+      },
+    );
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_NETWORK,
+      'Attachment upload failed before a response arrived',
+      {
+        method: 'upload_attachment',
+        cause: error,
+      },
+    );
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'Attachment upload response body must be valid JSON',
+      {
+        method: 'upload_attachment',
+        status: response.status,
+        cause: error,
+      },
+    );
+  }
+
+  if (!response.ok) {
+    throw new ApiClientError(
+      RPC_ERROR_HTTP,
+      isNonEmptyString(payload?.detail)
+        ? payload.detail
+        : `Attachment upload failed with HTTP ${response.status}`,
+      {
+        method: 'upload_attachment',
+        status: response.status,
+        details: isPlainObject(payload) ? payload : null,
+      },
+    );
+  }
+
+  if (
+    !isPlainObject(payload) ||
+    !isNonEmptyString(payload.attachment_id) ||
+    !isNonEmptyString(payload.filename) ||
+    !isNonEmptyString(payload.media_type) ||
+    typeof payload.size_bytes !== 'number'
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'Attachment upload response has an invalid shape',
+      {
+        method: 'upload_attachment',
+        status: response.status,
+        details: payload,
+      },
+    );
+  }
+
+  return {
+    attachment_id: payload.attachment_id,
+    filename: payload.filename,
+    media_type: payload.media_type,
+    size_bytes: payload.size_bytes,
+  };
+}
+
+export function getAttachmentUrl(attachmentId) {
+  if (!isNonEmptyString(attachmentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Attachment id must be a non-empty string',
+    );
+  }
+  return `${ATTACHMENT_BASE_ENDPOINT}/${attachmentId}`;
 }
 
 export function listLogs(options = {}) {
