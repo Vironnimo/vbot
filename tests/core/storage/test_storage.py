@@ -17,7 +17,7 @@ from core.storage import (
 def create_prompt_resources(resources_dir: Path) -> None:
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
-    for name in ("system.md", "runtime.md", "tools.md", "skills.md"):
+    for name in ("system.md", "runtime.md", "tools.md", "channels.md", "skills.md"):
         prompts_dir.joinpath(name).write_text(f"{name} bundled", encoding="utf-8")
 
 
@@ -308,7 +308,12 @@ def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> N
     written_paths = storage.copy_prompt_fragments()
 
     assert (data_dir / "prompts" / "system.md").read_text(encoding="utf-8") == "custom"
-    assert sorted(path.name for path in written_paths) == ["runtime.md", "skills.md", "tools.md"]
+    assert sorted(path.name for path in written_paths) == [
+        "channels.md",
+        "runtime.md",
+        "skills.md",
+        "tools.md",
+    ]
 
 
 def test_copy_prompt_fragments_can_overwrite_existing_user_copy(tmp_path: Path) -> None:

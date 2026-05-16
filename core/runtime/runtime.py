@@ -214,6 +214,7 @@ class Runtime:
             self._storage,
             self._tools,
             cast(SkillPromptRegistry, self._skills),
+            channel_registry=cast(ChannelService, self._channel_service),
             app_version=str(self._config.get("APP_VERSION", _DEFAULT_APP_VERSION)),
             app_dir=_PROJECT_ROOT,
             data_root=self._storage.data_dir,
