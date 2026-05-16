@@ -10,10 +10,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.channels.adapter import ConversationFacts
+import core.channels.telegram as telegram_module
+from core.attachments import AttachmentStore
+from core.channels.adapter import ConversationFacts, FileData
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
 from core.chat.chat import ChatSessionManager
+from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.runs import ASSISTANT_OUTPUT_EVENT, Run
 
 
@@ -41,6 +44,56 @@ def make_update(*, chat_id: int, user_id: int, text: str) -> SimpleNamespace:
     )
 
 
+def make_photo_update(
+    *,
+    chat_id: int,
+    user_id: int,
+    file_id: str,
+    file_unique_id: str,
+    caption: str | None = None,
+    media_group_id: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=user_id),
+        effective_message=SimpleNamespace(
+            text=None,
+            caption=caption,
+            photo=[SimpleNamespace(file_id=file_id, file_unique_id=file_unique_id)],
+            document=None,
+            media_group_id=media_group_id,
+            message_thread_id=None,
+        ),
+    )
+
+
+def make_document_update(
+    *,
+    chat_id: int,
+    user_id: int,
+    file_id: str,
+    file_unique_id: str,
+    file_name: str,
+    caption: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_chat=SimpleNamespace(id=chat_id),
+        effective_user=SimpleNamespace(id=user_id),
+        effective_message=SimpleNamespace(
+            text=None,
+            caption=caption,
+            photo=None,
+            document=SimpleNamespace(
+                file_id=file_id,
+                file_unique_id=file_unique_id,
+                file_name=file_name,
+            ),
+            media_group_id=None,
+            message_thread_id=None,
+        ),
+    )
+
+
 def make_completed_run(*, session_id: str, output_text: str) -> Run:
     run = Run(run_id="run-completed", agent_id="assistant", session_id=session_id)
     run.emit(ASSISTANT_OUTPUT_EVENT, {"message": {"content": output_text}})
@@ -62,6 +115,7 @@ def make_adapter(
     allowed_chat_ids: list[int] | None = None,
     trigger_run: AsyncMock | None = None,
     runtime: object | None = None,
+    attachment_store: AttachmentStore | None = None,
     set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
     if set_process_token:
@@ -78,9 +132,16 @@ def make_adapter(
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
         runtime=runtime if runtime is not None else SimpleNamespace(),
+        attachment_store=attachment_store,
     )
 
-    bot = SimpleNamespace(send_message=AsyncMock())
+    bot = SimpleNamespace(
+        send_message=AsyncMock(),
+        send_photo=AsyncMock(),
+        send_document=AsyncMock(),
+        send_media_group=AsyncMock(),
+        get_file=AsyncMock(),
+    )
     adapter._application = SimpleNamespace(
         bot=bot,
         updater=None,
@@ -96,6 +157,30 @@ async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> Non
         await asyncio.sleep(0)
         return
     await asyncio.wait_for(queue.join(), timeout=1)
+
+
+def install_fake_telegram_media(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeInputFile:
+        def __init__(self, data: bytes, *, filename: str | None = None) -> None:
+            self.data = data
+            self.filename = filename
+
+    class FakeInputMediaPhoto:
+        def __init__(self, media: FakeInputFile, caption: str | None = None) -> None:
+            self.media = media
+            self.caption = caption
+
+    class FakeInputMediaDocument:
+        def __init__(self, media: FakeInputFile, caption: str | None = None) -> None:
+            self.media = media
+            self.caption = caption
+
+    fake_telegram = SimpleNamespace(
+        InputFile=FakeInputFile,
+        InputMediaPhoto=FakeInputMediaPhoto,
+        InputMediaDocument=FakeInputMediaDocument,
+    )
+    monkeypatch.setattr(telegram_module, "_load_telegram", lambda: fake_telegram)
 
 
 @pytest.mark.parametrize(
@@ -259,6 +344,261 @@ async def test_send_splits_message_at_telegram_limit(
 
     chunks = [call.kwargs["text"] for call in bot.send_message.await_args_list]
     assert [len(chunk) for chunk in chunks] == [TELEGRAM_MESSAGE_LIMIT, TELEGRAM_MESSAGE_LIMIT, 9]
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_single_image_file_uses_send_photo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    await adapter.send(
+        "caption",
+        "12345",
+        files=[FileData(filename="image.png", media_type="image/png", data=b"img-bytes")],
+    )
+
+    bot.send_photo.assert_awaited_once()
+    assert bot.send_photo.await_args.kwargs["chat_id"] == 12345
+    assert bot.send_photo.await_args.kwargs["caption"] == "caption"
+    bot.send_document.assert_not_awaited()
+    bot.send_media_group.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_multiple_files_uses_send_media_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    await adapter.send(
+        "batch caption",
+        "12345",
+        files=[
+            FileData(filename="a.png", media_type="image/png", data=b"a"),
+            FileData(filename="b.pdf", media_type="application/pdf", data=b"%PDF"),
+        ],
+    )
+
+    bot.send_media_group.assert_awaited_once()
+    media = bot.send_media_group.await_args.kwargs["media"]
+    assert len(media) == 2
+    assert media[0].caption == "batch caption"
+    assert media[1].caption is None
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_photo_stores_attachment_and_triggers_media_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nIMG"))
+    )
+
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="photo-1",
+            file_unique_id="uniq-1",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    trigger_args = await_args.args
+    assert trigger_args[0] == "assistant"
+    assert trigger_args[2] == session_id
+    blocks = trigger_args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], MediaBlock)
+    stored = attachment_store.get(blocks[0].attachment_id)
+    assert stored.media_type == "image/png"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_pdf_document_triggers_file_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"%PDF-1.7\n"))
+    )
+
+    await adapter._handle_inbound_media(
+        make_document_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="doc-1",
+            file_unique_id="docuniq-1",
+            file_name="report.pdf",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], FileBlock)
+    assert blocks[0].media_type == "application/pdf"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_inbound_text_document_triggers_text_block_with_content(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"hello from text file"))
+    )
+
+    await adapter._handle_inbound_media(
+        make_document_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="doc-2",
+            file_unique_id="docuniq-2",
+            file_name="notes.txt",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], TextBlock)
+    assert blocks[0].text == "hello from text file"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_album_messages_are_buffered_into_single_trigger_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.side_effect = [
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nA"))
+        ),
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nB"))
+        ),
+    ]
+
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="photo-a",
+            file_unique_id="uniq-a",
+            media_group_id="album-1",
+        ),
+        SimpleNamespace(),
+    )
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="photo-b",
+            file_unique_id="uniq-b",
+            media_group_id="album-1",
+        ),
+        SimpleNamespace(),
+    )
+
+    await asyncio.sleep(0.6)
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 2
+    assert isinstance(blocks[0], MediaBlock)
+    assert isinstance(blocks[1], MediaBlock)
     await adapter.stop()
 
 

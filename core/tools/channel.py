@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.attachments.attachments import _sniff_mime
+from core.channels.adapter import FileData
 from core.channels.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
 
@@ -13,8 +16,8 @@ if TYPE_CHECKING:
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = "Send a proactive outbound message through a configured channel."
-_REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id", "message"))
-_OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(("platform_target",))
+_REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
+_OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(("message", "platform_target", "file_paths"))
 _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
     _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
 )
@@ -28,7 +31,7 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         },
         "message": {
             "type": "string",
-            "description": "Outbound message text.",
+            "description": "Optional outbound message text.",
         },
         "platform_target": {
             "type": "string",
@@ -37,8 +40,18 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "last_reply_target.platform_target value."
             ),
         },
+        "file_paths": {
+            "type": "array",
+            "items": {
+                "type": "string",
+            },
+            "description": (
+                "Optional list of file paths to send. Relative paths resolve from the "
+                "agent workspace."
+            ),
+        },
     },
-    "required": ["channel_id", "message"],
+    "required": ["channel_id"],
     "additionalProperties": False,
 }
 
@@ -76,7 +89,14 @@ async def _handle_channel_send_tool(
         channel_id = _required_non_empty_string(
             arguments.get("channel_id"), field_name="channel_id"
         )
-        message = _required_non_empty_string(arguments.get("message"), field_name="message")
+        message = _optional_non_empty_string(arguments.get("message"), field_name="message")
+        files = _build_file_data(arguments.get("file_paths"), workspace=context.workspace)
+        if message is None and not files:
+            return tool_failure(
+                "invalid_arguments",
+                "at least one of message or file_paths must be provided",
+            )
+
         platform_target = _platform_target_from_arguments_or_context(
             arguments,
             channel_service,
@@ -84,7 +104,7 @@ async def _handle_channel_send_tool(
             context,
             channel_id,
         )
-        await channel_service.send(channel_id, message, platform_target)
+        await channel_service.send(channel_id, message, platform_target, files=files or None)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
@@ -157,3 +177,47 @@ def _required_non_empty_string(value: object, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     return value.strip()
+
+
+def _optional_non_empty_string(value: object, *, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _required_non_empty_string(value, field_name=field_name)
+
+
+def _build_file_data(value: object, *, workspace: Path) -> list[FileData]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("file_paths must be an array of strings")
+
+    files: list[FileData] = []
+    for index, raw_path in enumerate(value):
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError(f"file_paths[{index}] must be a non-empty string")
+
+        resolved_path = _resolve_path(raw_path.strip(), workspace=workspace)
+        if not resolved_path.is_file():
+            raise ValueError(f"file_paths[{index}] is not a file: {raw_path}")
+
+        try:
+            data = resolved_path.read_bytes()
+        except OSError as error:
+            raise ValueError(f"cannot read file_paths[{index}] {raw_path}: {error}") from error
+
+        files.append(
+            FileData(
+                filename=resolved_path.name,
+                media_type=_sniff_mime(data, resolved_path.name),
+                data=data,
+            )
+        )
+
+    return files
+
+
+def _resolve_path(path: str, *, workspace: Path) -> Path:
+    resolved = Path(path).expanduser()
+    if not resolved.is_absolute():
+        resolved = workspace / resolved
+    return resolved.resolve()

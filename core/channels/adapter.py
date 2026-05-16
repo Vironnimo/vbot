@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.chat.content_blocks import ContentBlock
 
 
 @dataclass(frozen=True)
@@ -37,7 +41,16 @@ class ReplyPlanFacts:
 class MessageFacts:
     """Facts about the model-visible inbound message payload."""
 
-    text: str
+    content: str | list[ContentBlock]
+
+
+@dataclass(frozen=True)
+class FileData:
+    """One outbound file payload prepared for a channel adapter send."""
+
+    filename: str
+    media_type: str
+    data: bytes
 
 
 class ChannelAdapter(ABC):
@@ -54,5 +67,11 @@ class ChannelAdapter(ABC):
         """Stop receiving inbound platform events and release resources."""
 
     @abstractmethod
-    async def send(self, message: str, platform_target: str) -> None:
+    async def send(
+        self,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+    ) -> None:
         """Send one outbound message to a platform target."""
