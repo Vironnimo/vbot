@@ -106,6 +106,10 @@
     typeof mediaType === 'string' &&
     mediaType.toLowerCase().startsWith('image/');
 
+  const hasTextMediaType = (mediaType) =>
+    typeof mediaType === 'string' &&
+    mediaType.toLowerCase().startsWith('text/');
+
   const _removeAttachment = (index) => {
     const attachment = pendingAttachments[index];
     if (!attachment) {
@@ -142,6 +146,7 @@
           typeof file.type === 'string' && file.type.trim().length > 0
             ? file.type
             : 'application/octet-stream',
+        text_content: null,
         preview_url: previewUrl,
         uploading: true,
       };
@@ -159,6 +164,7 @@
             attachment_id: result.attachment_id,
             filename: result.filename,
             media_type: result.media_type,
+            text_content: result.text_content ?? null,
             uploading: false,
           };
         });
@@ -259,11 +265,28 @@
           (attachment) => !attachment.uploading && attachment.attachment_id,
         )
         .map((attachment) => {
-          const blockType = hasImageMediaType(attachment.media_type)
-            ? 'media'
-            : 'file';
+          if (hasImageMediaType(attachment.media_type)) {
+            return {
+              type: 'media',
+              attachment_id: attachment.attachment_id,
+              filename: attachment.filename,
+              media_type: attachment.media_type,
+            };
+          }
+
+          if (
+            hasTextMediaType(attachment.media_type) &&
+            typeof attachment.text_content === 'string' &&
+            attachment.text_content.length > 0
+          ) {
+            return {
+              type: 'text',
+              text: attachment.text_content,
+            };
+          }
+
           return {
-            type: blockType,
+            type: 'file',
             attachment_id: attachment.attachment_id,
             filename: attachment.filename,
             media_type: attachment.media_type,

@@ -225,11 +225,15 @@ export async function uploadAttachment(file, options = {}) {
     );
   }
 
+  const text_content =
+    typeof payload.text_content === 'string' ? payload.text_content : null;
+
   return {
     attachment_id: payload.attachment_id,
     filename: payload.filename,
     media_type: payload.media_type,
     size_bytes: payload.size_bytes,
+    text_content,
   };
 }
 

@@ -137,6 +137,7 @@ def create_app(
             "filename": record.filename,
             "media_type": record.media_type,
             "size_bytes": record.size_bytes,
+            "text_content": record.text_content,
         }
 
     @app.get("/api/attachments/{attachment_id}")
