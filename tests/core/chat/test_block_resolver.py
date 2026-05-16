@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from core.attachments import AttachmentStore
-from core.chat import ChatError
+from core.chat import ChatError, ChatLoop, ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
+from core.chat.content_blocks import MediaBlock
+
+
+class _StubPrompts:
+    def build_system_prompt(self, _agent: object) -> str:
+        return "System prompt"
+
+
+class _StubRuntime:
+    def __init__(self) -> None:
+        self.system_prompts = _StubPrompts()
+
+
+class _StubAgent:
+    def __init__(self, model: str = "openai/gpt-5.2") -> None:
+        self.model = model
 
 
 def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> None:
@@ -242,3 +259,54 @@ def test_string_content_messages_pass_through_unmodified(tmp_path: Path) -> None
 
     # Assert
     assert resolved == messages
+
+
+def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_text(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("old-photo.png", b"\x89PNG\r\n\x1a\nold")
+    session = ChatSession.create(tmp_path / "sessions", session_id="session-one")
+    session.append(
+        ChatMessage.user(
+            [
+                MediaBlock(
+                    type="media",
+                    attachment_id=record.id,
+                    filename=record.filename,
+                    media_type=record.media_type,
+                )
+            ]
+        )
+    )
+    session.append(ChatMessage.user("latest plain text"))
+    loop = ChatLoop(_StubRuntime(), attachment_resolver=ContentBlockResolver(store))
+
+    # Act
+    request_messages = loop._build_request_messages(_StubAgent(), session)
+
+    # Assert
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert request_messages[1]["content"] == [{"type": "text", "text": "[Bild: old-photo.png]"}]
+    assert request_messages[2]["content"] == "latest plain text"
+
+
+def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    session = ChatSession.create(tmp_path / "sessions", session_id="session-one")
+    session.append(ChatMessage.user("first"))
+    session.append(ChatMessage.user("second"))
+    resolver = Mock()
+    loop = ChatLoop(_StubRuntime(), attachment_resolver=resolver)
+
+    # Act
+    request_messages = loop._build_request_messages(_StubAgent(), session)
+
+    # Assert
+    resolver.resolve_messages.assert_not_called()
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert request_messages[1]["content"] == "first"
+    assert request_messages[2]["content"] == "second"
