@@ -1,10 +1,13 @@
 <script>
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
 
+  import { uploadAttachment } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
 
   const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
+  const ATTACHMENT_ACCEPT =
+    'image/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
   let {
     disabled = false,
@@ -15,8 +18,13 @@
   let content = $state('');
   let inputElement = $state(null);
   let autocompleteElement = $state(null);
+  let fileInputElement = $state(null);
   let triggerContext = $state(null);
   let activeSkillIndex = $state(0);
+  let pendingAttachments = $state([]);
+  let isDragOver = $state(false);
+  let attachmentToastMessage = $state('');
+  let attachmentToastTimeoutId = null;
 
   let loadableSkills = $derived(availableSkills.filter((skill) => skill?.name));
   let autocompleteQuery = $derived.by(() => {
@@ -29,16 +37,255 @@
   let showSkillAutocomplete = $derived(
     Boolean(triggerContext) && matchingSkillCount() > 0,
   );
+  let hasUploadingAttachments = $derived(
+    pendingAttachments.some((attachment) => attachment.uploading),
+  );
+
+  onDestroy(() => {
+    if (attachmentToastTimeoutId !== null) {
+      clearTimeout(attachmentToastTimeoutId);
+      attachmentToastTimeoutId = null;
+    }
+    clearPendingAttachments();
+  });
+
+  const safeRevokeObjectUrl = (objectUrl) => {
+    if (
+      typeof objectUrl === 'string' &&
+      objectUrl.startsWith('blob:') &&
+      typeof URL !== 'undefined' &&
+      typeof URL.revokeObjectURL === 'function'
+    ) {
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+
+  const clearPendingAttachments = () => {
+    for (const attachment of pendingAttachments) {
+      safeRevokeObjectUrl(attachment.preview_url);
+    }
+    pendingAttachments = [];
+  };
+
+  const showAttachmentUploadErrorToast = () => {
+    attachmentToastMessage = t(
+      'chat.attachment.uploadFailed',
+      'Attachment upload failed.',
+    );
+    if (attachmentToastTimeoutId !== null) {
+      clearTimeout(attachmentToastTimeoutId);
+    }
+    attachmentToastTimeoutId = setTimeout(() => {
+      attachmentToastMessage = '';
+      attachmentToastTimeoutId = null;
+    }, 3500);
+  };
+
+  const removePendingAttachmentByPreviewUrl = (previewUrl) => {
+    const existingAttachment = pendingAttachments.find(
+      (attachment) => attachment.preview_url === previewUrl,
+    );
+    if (!existingAttachment) {
+      return;
+    }
+    safeRevokeObjectUrl(existingAttachment.preview_url);
+    pendingAttachments = pendingAttachments.filter(
+      (attachment) => attachment.preview_url !== previewUrl,
+    );
+  };
+
+  const buildPastedImageFileName = () => {
+    const now = new Date();
+    const pad = (value) => String(value).padStart(2, '0');
+    const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    return `screenshot-${date}-${time}.png`;
+  };
+
+  const hasImageMediaType = (mediaType) =>
+    typeof mediaType === 'string' &&
+    mediaType.toLowerCase().startsWith('image/');
+
+  const _removeAttachment = (index) => {
+    const attachment = pendingAttachments[index];
+    if (!attachment) {
+      return;
+    }
+    safeRevokeObjectUrl(attachment.preview_url);
+    pendingAttachments = pendingAttachments.filter(
+      (_, candidateIndex) => candidateIndex !== index,
+    );
+  };
+
+  const _handleFiles = async (files) => {
+    if (disabled) {
+      return;
+    }
+
+    const selectedFiles = Array.from(files ?? []).filter(Boolean);
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const uploadTasks = selectedFiles.map(async (file) => {
+      const previewUrl =
+        typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+          ? URL.createObjectURL(file)
+          : '';
+      const pendingAttachment = {
+        attachment_id: '',
+        filename:
+          typeof file.name === 'string' && file.name.trim().length > 0
+            ? file.name
+            : 'upload.bin',
+        media_type:
+          typeof file.type === 'string' && file.type.trim().length > 0
+            ? file.type
+            : 'application/octet-stream',
+        preview_url: previewUrl,
+        uploading: true,
+      };
+
+      pendingAttachments = [...pendingAttachments, pendingAttachment];
+
+      try {
+        const result = await uploadAttachment(file);
+        pendingAttachments = pendingAttachments.map((attachment) => {
+          if (attachment.preview_url !== previewUrl) {
+            return attachment;
+          }
+          return {
+            ...attachment,
+            attachment_id: result.attachment_id,
+            filename: result.filename,
+            media_type: result.media_type,
+            uploading: false,
+          };
+        });
+      } catch {
+        removePendingAttachmentByPreviewUrl(previewUrl);
+        showAttachmentUploadErrorToast();
+      }
+    });
+
+    await Promise.all(uploadTasks);
+  };
+
+  const handleFilePickerClick = () => {
+    if (disabled) {
+      return;
+    }
+    fileInputElement?.click();
+  };
+
+  const handleFilePickerChange = async (event) => {
+    const input = event.currentTarget;
+    const files = input?.files;
+    await _handleFiles(files);
+    if (input) {
+      input.value = '';
+    }
+  };
+
+  const handlePaste = async (event) => {
+    const clipboardItems = Array.from(event.clipboardData?.items ?? []);
+    const pastedImageFiles = clipboardItems
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter(Boolean)
+      .map((file) => {
+        if (typeof file.name === 'string' && file.name.trim().length > 0) {
+          return file;
+        }
+        return new File([file], buildPastedImageFileName(), {
+          type: file.type || 'image/png',
+          lastModified: Date.now(),
+        });
+      });
+
+    if (pastedImageFiles.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    await _handleFiles(pastedImageFiles);
+  };
+
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    if (!disabled) {
+      isDragOver = true;
+    }
+  };
+
+  const handleDragLeave = (event) => {
+    const host = event.currentTarget;
+    const relatedTarget = event.relatedTarget;
+    if (host?.contains?.(relatedTarget)) {
+      return;
+    }
+    isDragOver = false;
+  };
+
+  const handleDrop = async (event) => {
+    event.preventDefault();
+    isDragOver = false;
+
+    if (disabled) {
+      return;
+    }
+
+    const files = event.dataTransfer?.files;
+    await _handleFiles(files);
+  };
 
   const submit = () => {
     const trimmedContent = content.trim();
-    if (!trimmedContent || disabled) {
+    const hasPendingAttachments = pendingAttachments.length > 0;
+
+    if (
+      disabled ||
+      hasUploadingAttachments ||
+      (!trimmedContent && !hasPendingAttachments)
+    ) {
       return;
     }
-    onSendMessage?.(content);
+
+    if (!hasPendingAttachments) {
+      onSendMessage?.(content);
+    } else {
+      const contentBlocks = pendingAttachments
+        .filter(
+          (attachment) => !attachment.uploading && attachment.attachment_id,
+        )
+        .map((attachment) => {
+          const blockType = hasImageMediaType(attachment.media_type)
+            ? 'media'
+            : 'file';
+          return {
+            type: blockType,
+            attachment_id: attachment.attachment_id,
+            filename: attachment.filename,
+            media_type: attachment.media_type,
+          };
+        });
+
+      if (trimmedContent) {
+        contentBlocks.unshift({ type: 'text', text: trimmedContent });
+      }
+
+      if (contentBlocks.length === 0) {
+        return;
+      }
+
+      onSendMessage?.(contentBlocks);
+      clearPendingAttachments();
+    }
+
     content = '';
     triggerContext = null;
     activeSkillIndex = 0;
+    isDragOver = false;
     resizeInput();
   };
 
@@ -194,12 +441,31 @@
 
 <form
   class="input-area"
+  class:drag-over={isDragOver}
   aria-label={t('chat.composerLabel', 'Message')}
+  ondragover={handleDragOver}
+  ondragleave={handleDragLeave}
+  ondrop={handleDrop}
   onsubmit={(event) => {
     event.preventDefault();
     submit();
   }}
 >
+  <input
+    bind:this={fileInputElement}
+    class="attachment-file-input"
+    type="file"
+    accept={ATTACHMENT_ACCEPT}
+    multiple
+    {disabled}
+    onchange={handleFilePickerChange}
+  />
+  {#if attachmentToastMessage}
+    <div class="composer-toast" role="status" aria-live="polite">
+      <p class="composer-toast-title">{t('errors.appError', 'Error')}</p>
+      <p class="composer-toast-message">{attachmentToastMessage}</p>
+    </div>
+  {/if}
   {#if showSkillAutocomplete}
     <SkillAutocomplete
       bind:this={autocompleteElement}
@@ -222,6 +488,7 @@
       aria-label={t('chat.composerLabel', 'Message')}
       oninput={handleInput}
       onkeydown={handleKeydown}
+      onpaste={handlePaste}
       onclick={handleSelection}
       onkeyup={handleSelection}
       placeholder={t(
@@ -234,12 +501,10 @@
       <button
         type="button"
         class="icon-btn"
-        disabled
-        aria-label={t(
-          'chat.attachPlaceholder',
-          'Attachments are not available yet',
-        )}
-        title={t('chat.attachPlaceholder', 'Attachments are not available yet')}
+        {disabled}
+        aria-label={t('chat.attachment.addFile', 'Add file')}
+        title={t('chat.attachment.addFile', 'Add file')}
+        onclick={handleFilePickerClick}
       >
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <path
@@ -250,7 +515,9 @@
       <button
         type="submit"
         class="send-btn"
-        disabled={disabled || !content.trim()}
+        disabled={disabled ||
+          hasUploadingAttachments ||
+          (!content.trim() && pendingAttachments.length === 0)}
         aria-label={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
@@ -264,6 +531,74 @@
       </button>
     </div>
   </div>
+  {#if pendingAttachments.length > 0}
+    <div
+      class="attachment-tray"
+      aria-label={t('chat.attachment.preview', 'Preview attachment')}
+    >
+      {#each pendingAttachments as attachment, index (`${attachment.preview_url}-${index}`)}
+        <div
+          class="attachment-item"
+          class:attachment-item-image={hasImageMediaType(attachment.media_type)}
+        >
+          {#if hasImageMediaType(attachment.media_type)}
+            <button
+              type="button"
+              class="attachment-thumb-trigger"
+              aria-label={t('chat.attachment.preview', 'Preview attachment')}
+              title={t('chat.attachment.preview', 'Preview attachment')}
+            >
+              <img
+                src={attachment.preview_url}
+                alt={attachment.filename}
+                class="attachment-thumb"
+              />
+            </button>
+            <div class="attachment-hover-preview" aria-hidden="true">
+              <img
+                src={attachment.preview_url}
+                alt=""
+                class="attachment-hover-image"
+              />
+            </div>
+          {:else}
+            <span class="attachment-file-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16">
+                <path
+                  d="M4 1h5l3 3v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zm4 1v2h2"
+                />
+              </svg>
+            </span>
+          {/if}
+          <div class="attachment-meta">
+            <span class="attachment-name" title={attachment.filename}
+              >{attachment.filename}</span
+            >
+            {#if attachment.uploading}
+              <span class="attachment-status">
+                {t('chat.attachment.uploading', 'Uploading…')}
+              </span>
+            {:else if !hasImageMediaType(attachment.media_type)}
+              <span class="attachment-status">
+                {t('chat.attachment.fileLabel', 'Attached file')}
+              </span>
+            {/if}
+          </div>
+          <button
+            type="button"
+            class="attachment-remove"
+            aria-label={t('chat.attachment.remove', 'Remove attachment')}
+            title={t('chat.attachment.remove', 'Remove attachment')}
+            onclick={() => _removeAttachment(index)}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
 </form>
 
 <style>
@@ -277,9 +612,220 @@
     height: 22px;
   }
 
+  .input-area.drag-over .input-wrap {
+    border-color: rgba(232, 135, 10, 0.4);
+    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+  }
+
+  .attachment-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    border: 0;
+  }
+
+  .composer-toast {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    z-index: 20;
+    min-width: 220px;
+    max-width: min(340px, 92vw);
+    padding: 10px 12px;
+    border: 1px solid rgba(252, 129, 129, 0.35);
+    border-left: 2px solid var(--red);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  .composer-toast-title {
+    margin: 0;
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .composer-toast-message {
+    margin: 2px 0 0;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .attachment-tray {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 2px 0;
+  }
+
+  .attachment-item {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    max-width: min(320px, 100%);
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+  }
+
+  .attachment-thumb-trigger {
+    flex-shrink: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+  }
+
+  .attachment-thumb {
+    display: block;
+    width: 56px;
+    height: 56px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    object-fit: cover;
+    background: var(--bg);
+  }
+
+  .attachment-hover-preview {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    z-index: 15;
+    width: min(300px, 72vw);
+    padding: 6px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(6px);
+    transition:
+      opacity 140ms ease,
+      transform 140ms ease;
+  }
+
+  .attachment-item-image:hover .attachment-hover-preview,
+  .attachment-item-image:focus-within .attachment-hover-preview {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .attachment-hover-image {
+    display: block;
+    width: 100%;
+    border-radius: var(--r-sm);
+    object-fit: contain;
+    background: var(--bg);
+  }
+
+  .attachment-file-icon {
+    display: flex;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text-med);
+    background: var(--surface-3);
+  }
+
+  .attachment-file-icon svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.3;
+  }
+
+  .attachment-meta {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .attachment-name {
+    overflow: hidden;
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .attachment-status {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .attachment-remove {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    color: var(--text-lo);
+    background: transparent;
+    transition:
+      border-color 120ms ease,
+      color 120ms ease,
+      background 120ms ease;
+  }
+
+  .attachment-remove:hover,
+  .attachment-remove:focus-visible {
+    border-color: rgba(252, 129, 129, 0.4);
+    color: var(--red);
+    background: rgba(252, 129, 129, 0.08);
+    outline: none;
+  }
+
+  .attachment-remove svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 1.4;
+  }
+
   @media (max-width: 760px) {
     .input-area {
       padding: 12px 14px;
+    }
+
+    .attachment-item {
+      max-width: 100%;
+    }
+
+    .attachment-hover-preview {
+      width: min(260px, calc(100vw - 48px));
     }
   }
 
