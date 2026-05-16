@@ -77,10 +77,12 @@ async def _handle_channel_send_tool(
             arguments.get("channel_id"), field_name="channel_id"
         )
         message = _required_non_empty_string(arguments.get("message"), field_name="message")
-        platform_target = _platform_target_from_arguments_or_metadata(
+        platform_target = _platform_target_from_arguments_or_context(
             arguments,
+            channel_service,
             chat_sessions,
             context,
+            channel_id,
         )
         await channel_service.send(channel_id, message, platform_target)
     except ValueError as error:
@@ -95,28 +97,60 @@ async def _handle_channel_send_tool(
     return tool_success({"channel_id": channel_id, "platform_target": platform_target})
 
 
-def _platform_target_from_arguments_or_metadata(
+def _platform_target_from_arguments_or_context(
     arguments: JsonObject,
+    channel_service: ChannelService,
     chat_sessions: ChatSessionManager,
     context: ToolContext,
+    channel_id: str,
 ) -> str:
     platform_target_value = arguments.get("platform_target")
     if platform_target_value is not None:
         return _required_non_empty_string(platform_target_value, field_name="platform_target")
 
+    metadata_platform_target = _platform_target_from_session_metadata(chat_sessions, context)
+    if metadata_platform_target is not None:
+        return metadata_platform_target
+
+    config_platform_target = _platform_target_from_channel_config(channel_service, channel_id)
+    if config_platform_target is not None:
+        return config_platform_target
+
+    raise ValueError(
+        "platform_target is required when session metadata has no "
+        "last_reply_target.platform_target and the channel has no unique allowed_chat_ids target"
+    )
+
+
+def _platform_target_from_session_metadata(
+    chat_sessions: ChatSessionManager,
+    context: ToolContext,
+) -> str | None:
     metadata = chat_sessions.get_metadata(context.agent_id, context.session_id)
     last_reply_target = metadata.get("last_reply_target")
     if not isinstance(last_reply_target, dict):
-        raise ValueError(
-            "platform_target is required when session metadata has no "
-            "last_reply_target.platform_target"
-        )
+        return None
 
     metadata_platform_target = last_reply_target.get("platform_target")
+    if metadata_platform_target is None:
+        return None
+
     return _required_non_empty_string(
-        metadata_platform_target,
-        field_name="last_reply_target.platform_target",
+        metadata_platform_target, field_name="last_reply_target.platform_target"
     )
+
+
+def _platform_target_from_channel_config(
+    channel_service: ChannelService,
+    channel_id: str,
+) -> str | None:
+    for config in channel_service.list_channels():
+        if config.id != channel_id:
+            continue
+        if len(config.allowed_chat_ids) != 1:
+            return None
+        return str(config.allowed_chat_ids[0])
+    return None
 
 
 def _required_non_empty_string(value: object, *, field_name: str) -> str:

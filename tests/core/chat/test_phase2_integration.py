@@ -351,7 +351,7 @@ def _write_prompt_resources(resources: Path) -> None:
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
     (prompts_dir / "system.md").write_text(
-        "App {app_version}\n{runtime}\n{tools}\n{skills}\n"
+        "App {app_version}\n{runtime}\n{tools}\n{channels}\n{skills}\n"
         "{include:SOUL.md}\n{include:IDENTITY.md}\n{include:AGENTS.md}\n{include:USER.md}",
         encoding="utf-8",
     )
@@ -361,6 +361,7 @@ def _write_prompt_resources(resources: Path) -> None:
         encoding="utf-8",
     )
     (prompts_dir / "tools.md").write_text("Tools\n{tool_list}", encoding="utf-8")
+    (prompts_dir / "channels.md").write_text("Channels\n{channel_list}", encoding="utf-8")
     (prompts_dir / "skills.md").write_text("Skills\n{skill_list}", encoding="utf-8")
 
 

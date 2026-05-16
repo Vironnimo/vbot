@@ -14,7 +14,9 @@ from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
-PROMPT_FRAGMENT_NAMES = frozenset({"system.md", "runtime.md", "tools.md", "skills.md"})
+PROMPT_FRAGMENT_NAMES = frozenset(
+    {"system.md", "runtime.md", "tools.md", "channels.md", "skills.md"}
+)
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
 SUBAGENT_SETTING_DEFAULTS = {
