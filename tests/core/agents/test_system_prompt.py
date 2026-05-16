@@ -14,6 +14,7 @@ from core.agents.agents import (
     SystemPromptManager,
     _validate_workspace_include,
 )
+from core.channels.channels import ChannelConfig
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,20 @@ class StubSkills:
         return [skill for skill in self._skills if skill.name in allowed_skills]
 
 
+class StubChannels:
+    def __init__(self, channels: list[ChannelConfig]) -> None:
+        self._channels = channels
+
+    def has_active_channels(self) -> bool:
+        return any(channel.enabled for channel in self._channels)
+
+    def list_channels(self) -> list[ChannelConfig]:
+        return list(self._channels)
+
+    def _is_running(self, channel_id: str) -> bool:
+        return any(channel.id == channel_id and channel.enabled for channel in self._channels)
+
+
 @pytest.fixture
 def fragments() -> dict[str, str]:
     return {
@@ -96,6 +111,7 @@ def fragments() -> dict[str, str]:
             "App {app_version}\n"
             "{runtime}\n"
             "{tools}\n"
+            "{channels}\n"
             "{skills}\n"
             "{include:SOUL.md}\n"
             "{include:IDENTITY.md}\n"
@@ -116,6 +132,7 @@ def fragments() -> dict[str, str]:
             "- Date: {current_date}"
         ),
         "tools.md": "## Available Tools\n{tool_list}",
+        "channels.md": "## Channels\n{channel_list}",
         "skills.md": "## Available Skills\n{skill_list}",
     }
 
@@ -147,6 +164,34 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
         StubStorage(fragments),
         tools,
         skills,
+        channel_registry=StubChannels(
+            [
+                ChannelConfig(
+                    id="tg-private",
+                    platform="telegram",
+                    agent_id="coder",
+                    allowed_chat_ids=[8506476339],
+                    token_env_var="TELEGRAM_BOT_TOKEN",
+                    enabled=True,
+                ),
+                ChannelConfig(
+                    id="tg-group",
+                    platform="telegram",
+                    agent_id="coder",
+                    allowed_chat_ids=[111, 222],
+                    token_env_var="TELEGRAM_GROUP_TOKEN",
+                    enabled=True,
+                ),
+                ChannelConfig(
+                    id="other-agent-channel",
+                    platform="telegram",
+                    agent_id="other-agent",
+                    allowed_chat_ids=[333],
+                    token_env_var="OTHER_TOKEN",
+                    enabled=True,
+                ),
+            ]
+        ),
         app_version="0.1.0",
         app_dir=tmp_path / "app",
         data_root=tmp_path / "data",
@@ -173,6 +218,10 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "- Date: 2026-05-04" in prompt
     assert "- read_file: Read a workspace file" in prompt
     assert "shell" not in prompt
+    assert "## Channels" in prompt
+    assert "- tg-private: telegram (default target available)" in prompt
+    assert "- tg-group: telegram (explicit target required)" in prompt
+    assert "other-agent-channel" not in prompt
     assert "<name>agent-cli</name>" in prompt
     assert "<description>Delegate coding tasks</description>" in prompt
     assert "<path>" not in prompt
@@ -214,6 +263,27 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
         }
     ]
     assert tools.provider_allowlist == ["read_file"]
+
+
+def test_build_system_prompt_renders_none_when_agent_has_no_active_channels(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        channel_registry=StubChannels([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Channels\n- None" in prompt
 
 
 def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
