@@ -135,7 +135,9 @@ def _platform_target_from_session_metadata(
     if metadata_platform_target is None:
         return None
 
-    return _required_non_empty_string(metadata_platform_target, field_name="last_reply_target.platform_target")
+    return _required_non_empty_string(
+        metadata_platform_target, field_name="last_reply_target.platform_target"
+    )
 
 
 def _platform_target_from_channel_config(
