@@ -11,8 +11,13 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from core.attachments.attachments import (
+    AttachmentNotFoundError,
+    AttachmentStore,
+    AttachmentTooLargeError,
+    AttachmentTypeNotAllowedError,
+)
 from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
-from core.runtime import Runtime
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc
@@ -32,7 +37,13 @@ class ServerBindState(TypedDict):
 _FASTAPI_IMPORT_ERROR: ModuleNotFoundError | None
 
 try:
-    from fastapi import FastAPI, HTTPException, Request, WebSocket  # type: ignore[import-not-found]
+    from fastapi import (  # type: ignore[import-not-found]
+        FastAPI,
+        HTTPException,
+        Request,
+        UploadFile,
+        WebSocket,
+    )
     from fastapi.responses import FileResponse, StreamingResponse  # type: ignore[import-not-found]
     from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
     from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
@@ -44,6 +55,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
     Request = Any  # type: ignore[misc,assignment]
     StaticFiles = Any  # type: ignore[misc,assignment]
     StreamingResponse = Any  # type: ignore[misc,assignment]
+    UploadFile = Any  # type: ignore[misc,assignment]
     WebSocket = Any  # type: ignore[misc,assignment]
     WebSocketDisconnect = Exception  # type: ignore[misc,assignment]
 else:
@@ -51,6 +63,8 @@ else:
 
 if TYPE_CHECKING:
     from fastapi import FastAPI as FastAPIType  # type: ignore[import-not-found]
+
+    from core.runtime import Runtime
 else:
     FastAPIType = Any
 
@@ -62,7 +76,7 @@ DEFAULT_SERVER_PORT_SOURCE = "default"
 
 def create_app(
     *,
-    runtime: Runtime | None = None,
+    runtime: Any | None = None,
     config: Config | None = None,
     server_bind: ServerBindState | None = None,
 ) -> FastAPIType:
@@ -71,7 +85,7 @@ def create_app(
         raise RuntimeError(
             "FastAPI is required to create the server app"
         ) from _FASTAPI_IMPORT_ERROR
-    app_runtime = runtime or Runtime(config or Config())
+    app_runtime = runtime if runtime is not None else _build_default_runtime(config)
     resolved_server_bind = _resolve_server_bind(
         config=config or _runtime_config(app_runtime),
         server_bind=server_bind,
@@ -104,6 +118,35 @@ def create_app(
     async def rpc(request: Request) -> JsonObject:
         payload = await request.json()
         return await dispatch_rpc(request.app.state, payload)
+
+    @app.post("/api/upload")
+    async def upload_attachment(request: Request, file: UploadFile) -> JsonObject:
+        attachment_store = _runtime_attachment_store(request.app.state.runtime)
+        filename = file.filename or "upload.bin"
+        try:
+            record = attachment_store.store(filename, await file.read())
+        except AttachmentTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except AttachmentTypeNotAllowedError as exc:
+            raise HTTPException(status_code=415, detail=str(exc)) from exc
+        finally:
+            await file.close()
+
+        return {
+            "attachment_id": record.id,
+            "filename": record.filename,
+            "media_type": record.media_type,
+            "size_bytes": record.size_bytes,
+        }
+
+    @app.get("/api/attachments/{attachment_id}")
+    async def get_attachment(request: Request, attachment_id: str) -> FileResponse:
+        attachment_store = _runtime_attachment_store(request.app.state.runtime)
+        try:
+            record = attachment_store.get(attachment_id)
+        except AttachmentNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(record.file_path, media_type=record.media_type)
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
@@ -175,7 +218,9 @@ def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
     except AttributeError:
         run_manager = None
     except RuntimeError:
-        if isinstance(runtime, Runtime):
+        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+            "core.runtime"
+        ):
             raise
         run_manager = None
     if isinstance(run_manager, ChatRunManager):
@@ -185,6 +230,18 @@ def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
     run_manager = ChatRunManager()
     runtime.chat_runs = run_manager
     return run_manager
+
+
+def _runtime_attachment_store(runtime: Any) -> AttachmentStore:
+    try:
+        attachment_store = runtime.attachment_store
+    except (AttributeError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Attachment store is unavailable") from exc
+
+    if not isinstance(attachment_store, AttachmentStore):
+        raise HTTPException(status_code=503, detail="Attachment store is unavailable")
+
+    return attachment_store
 
 
 def _app_chat_runs(state: Any) -> ChatRunManager:
@@ -199,6 +256,12 @@ def _app_chat_runs(state: Any) -> ChatRunManager:
         return runtime_run_manager
 
     raise HTTPException(status_code=503, detail="Chat run manager is unavailable")
+
+
+def _build_default_runtime(config: Config | None) -> Any:
+    from core.runtime import Runtime
+
+    return Runtime(config or Config())
 
 
 def _resolve_server_bind(
@@ -249,14 +312,14 @@ def _default_server_bind() -> ServerBindState:
     }
 
 
-def _runtime_config(runtime: Runtime) -> Config | None:
+def _runtime_config(runtime: Any) -> Config | None:
     config = getattr(runtime, "_config", None)
     if isinstance(config, Config):
         return config
     return None
 
 
-def _runtime_data_dir(runtime: Runtime) -> Path:
+def _runtime_data_dir(runtime: Any) -> Path:
     data_dir = getattr(runtime, "_data_dir", None)
     if isinstance(data_dir, Path):
         return data_dir
