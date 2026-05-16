@@ -1848,6 +1848,21 @@ def _streaming_chat_loop(state: Any) -> Any:
     chat_loop = getattr(state, "streaming_chat_loop", None)
     if chat_loop is not None:
         return chat_loop
+    runtime = getattr(state, "runtime", None)
+    if runtime is not None:
+        try:
+            chat_loop = runtime.streaming_chat_loop
+        except AttributeError:
+            chat_loop = getattr(runtime, "_streaming_chat_loop", None)
+        except RuntimeError:
+            if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+                "core.runtime"
+            ):
+                raise
+            chat_loop = getattr(runtime, "_streaming_chat_loop", None)
+        if chat_loop is not None:
+            state.streaming_chat_loop = chat_loop
+            return chat_loop
     chat_loop = ChatLoop(state.runtime, streaming=True)
     state.streaming_chat_loop = chat_loop
     return chat_loop

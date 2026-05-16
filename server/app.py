@@ -201,7 +201,7 @@ def _initialize_app_state(
 ) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = _runtime_chat_runs(runtime)
-    app.state.chat_loop = ChatLoop(runtime)
+    app.state.chat_loop = _runtime_chat_loop(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
@@ -230,6 +230,22 @@ def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
     run_manager = ChatRunManager()
     runtime.chat_runs = run_manager
     return run_manager
+
+
+def _runtime_chat_loop(runtime: Any) -> Any:
+    try:
+        chat_loop = runtime.chat_loop
+    except AttributeError:
+        chat_loop = getattr(runtime, "_chat_loop", None)
+    except RuntimeError:
+        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+            "core.runtime"
+        ):
+            raise
+        chat_loop = getattr(runtime, "_chat_loop", None)
+    if chat_loop is not None:
+        return chat_loop
+    return ChatLoop(runtime)
 
 
 def _runtime_attachment_store(runtime: Any) -> AttachmentStore:

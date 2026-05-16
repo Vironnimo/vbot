@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
+from core.attachments import AttachmentStore
 from core.automation import CronService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatRunManager
+from core.chat.block_resolver import ContentBlockResolver
 from core.chat.chat import ChatSessionManager
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
@@ -57,6 +59,7 @@ from core.utils.logging import LogManager
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
 _DEFAULT_APP_VERSION = "0.1.0"
+_DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 
 # ---------------------------------------------------------------------------
 # Adapter factory mapping
@@ -114,6 +117,7 @@ class Runtime:
         self._token_store: TokenStore | None = None
         self._models: ModelRegistry | None = None
         self._storage: StorageManager | None = None
+        self._attachment_store: AttachmentStore | None = None
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
         self._process_manager: ProcessManager | None = None
@@ -122,6 +126,7 @@ class Runtime:
         self._chat_run_manager: ChatRunManager | None = None
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
+        self._streaming_chat_loop: ChatLoop | None = None
         self._trigger_service: TriggerService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
@@ -148,6 +153,12 @@ class Runtime:
 
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
         self._storage.ensure_directories()
+        settings = self._storage.load_settings()
+        attachment_max_size_bytes = self._attachment_max_size_bytes(settings)
+        self._attachment_store = AttachmentStore(
+            self._storage.data_dir,
+            max_size_bytes=attachment_max_size_bytes,
+        )
         data_dir_credentials = self._storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
         self._storage.copy_prompt_fragments()
@@ -173,7 +184,6 @@ class Runtime:
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
         register_process_tool(self._tools, self._process_manager)
-        settings = self._storage.load_settings()
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
             self._storage.data_dir / "skills",
@@ -190,9 +200,14 @@ class Runtime:
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._chat_run_manager = ChatRunManager()
         self.chat_runs = self._chat_run_manager
-        self._chat_loop = ChatLoop(self, streaming=False)
+        if self._attachment_store is None:
+            raise RuntimeError("Attachment store not available")
+        resolver = ContentBlockResolver(self._attachment_store)
+        self._chat_loop = ChatLoop(self, streaming=False, attachment_resolver=resolver)
+        self._streaming_chat_loop = ChatLoop(self, streaming=True, attachment_resolver=resolver)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
         self._channel_service = ChannelService(self._trigger_service, self._chat_sessions, self)
+        self._wire_channel_attachment_store()
         self._channel_service._notify_tool_registration_changed_hook = (
             self._reload_channel_tool_if_started
         )
@@ -238,6 +253,7 @@ class Runtime:
         self._fallback_environment = {}
         self._models = None
         self._storage = None
+        self._attachment_store = None
         self._agents = None
         self._tools = None
         if self._process_manager is not None:
@@ -254,6 +270,7 @@ class Runtime:
         self._trigger_service = None
         self._subagent_batch_tracker = None
         self._chat_loop = None
+        self._streaming_chat_loop = None
         self._chat_run_manager = None
         self.chat_runs = None
         self._system_prompts = None
@@ -277,6 +294,17 @@ class Runtime:
             raise RuntimeError("Agent service not available")
         if not self._agents.list():
             self._agents.create("main", "Main")
+
+    def _attachment_max_size_bytes(self, settings: dict[str, object]) -> int:
+        raw_limit = settings.get("attachment_max_size_bytes", _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES)
+        if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) and raw_limit > 0:
+            return raw_limit
+        if self.logger is not None:
+            self.logger.warning(
+                "settings.attachment_max_size_bytes must be a positive integer; using default %s",
+                _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+            )
+        return _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES
 
     def _extra_skill_directories(self, settings: dict[str, object]) -> list[Path]:
         raw_directories = settings.get("skill_directories", [])
@@ -324,6 +352,26 @@ class Runtime:
         except RuntimeError:
             return
         self._channel_service.start()
+
+    def _wire_channel_attachment_store(self) -> None:
+        if self._channel_service is None:
+            raise RuntimeError("Channel service not available")
+        attachment_store = self._attachment_store
+        if attachment_store is None:
+            raise RuntimeError("Attachment store not available")
+
+        original_create_adapter = cast(Any, self._channel_service)._create_adapter
+
+        def create_adapter_with_attachment(config: Any) -> Any:
+            adapter = original_create_adapter(config)
+            if (
+                getattr(adapter, "platform", None) == "telegram"
+                and getattr(adapter, "_attachment_store", None) is None
+            ):
+                adapter._attachment_store = attachment_store
+            return adapter
+
+        cast(Any, self._channel_service)._create_adapter = create_adapter_with_attachment
 
     def resolve_environment_credential(self, key: str) -> str:
         """Resolve one environment credential using runtime precedence rules."""
@@ -444,6 +492,14 @@ class Runtime:
         return self._storage
 
     @property
+    def attachment_store(self) -> AttachmentStore:
+        """Access to persisted blob attachment storage."""
+        self._ensure_started()
+        if self._attachment_store is None:
+            raise RuntimeError("Attachment store not available")
+        return self._attachment_store
+
+    @property
     def agents(self) -> AgentStore:
         """Access to persisted agent CRUD and workspace lifecycle."""
         self._ensure_started()
@@ -498,6 +554,14 @@ class Runtime:
         if self._trigger_service is None:
             raise RuntimeError("Trigger service not available")
         return self._trigger_service
+
+    @property
+    def streaming_chat_loop(self) -> ChatLoop:
+        """Access to the resolver-wired streaming chat loop."""
+        self._ensure_started()
+        if self._streaming_chat_loop is None:
+            raise RuntimeError("Streaming chat loop is not available")
+        return self._streaming_chat_loop
 
     @property
     def channel_service(self) -> ChannelService:
