@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.content_blocks import (
     ContentBlock,
@@ -57,6 +57,9 @@ from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_tokens
+
+if TYPE_CHECKING:
+    from core.chat.block_resolver import ContentBlockResolver
 
 MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
 JsonObject = dict[str, Any]
@@ -686,18 +689,20 @@ class ChatLoop:
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         streaming: bool = False,
+        attachment_resolver: ContentBlockResolver | None = None,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
         self._runtime = runtime
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
+        self._attachment_resolver = attachment_resolver
         self._nesting_depth = 0
 
     async def send(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str | None = None,
     ) -> ChatMessage:
@@ -708,7 +713,7 @@ class ChatLoop:
     async def start_run(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str,
         internal: bool = False,
@@ -725,7 +730,7 @@ class ChatLoop:
     async def _start_run(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str | None,
         create_missing: bool,
@@ -745,7 +750,7 @@ class ChatLoop:
     async def _execute_run(
         self,
         run: Run,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         internal: bool = False,
     ) -> ChatMessage:
@@ -766,12 +771,15 @@ class ChatLoop:
         try:
             run.raise_if_cancelled()
             if internal:
+                if not isinstance(content, str):
+                    raise ChatError("internal runs require string content")
                 session.add_note(content)
             else:
                 user_message = ChatMessage.user(content)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
-                self._activate_triggered_skills(agent, session, content)
+                if isinstance(content, str):
+                    self._activate_triggered_skills(agent, session, content)
             run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
@@ -855,9 +863,20 @@ class ChatLoop:
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
-        history = _embed_notes_into_request(session.load())
+        session_messages = session.load()
+        history = _embed_notes_into_request(session_messages)
         session.drain_pending_notes()
-        return [system_message.to_dict(), *session.skill_context_messages(), *history]
+        request_messages = [system_message.to_dict(), *session.skill_context_messages(), *history]
+
+        current_user_message = _last_user_message_with_content_blocks(session_messages)
+        if self._attachment_resolver is None or current_user_message is None:
+            return request_messages
+
+        return self._attachment_resolver.resolve_messages(
+            request_messages,
+            current_user_message_id=current_user_message.id,
+            vision_supported=_model_has_vision(self._runtime, agent),
+        )
 
     async def _send_until_final(
         self,
@@ -1297,6 +1316,16 @@ async def _close_adapter(adapter: Any) -> None:
         await result
 
 
+def _last_user_message_with_content_blocks(messages: list[ChatMessage]) -> ChatMessage | None:
+    for message in reversed(messages):
+        if message.role != "user":
+            continue
+        if isinstance(message.content, list):
+            return message
+        return None
+    return None
+
+
 def _split_agent_model(model: str) -> tuple[str, str]:
     if not model:
         raise ChatError("agent has no model set")
@@ -1304,6 +1333,17 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     if not separator or not provider_id or not model_id:
         raise ChatError("agent model must use <provider>/<model-id>")
     return provider_id, model_id
+
+
+def _model_has_vision(runtime: Any, agent: Any) -> bool:
+    try:
+        provider_id, model_id = _split_agent_model(agent.model)
+        model = runtime.models.get(provider_id, model_id)
+    except Exception:
+        return False
+
+    capabilities = getattr(model, "capabilities", None)
+    return bool(getattr(capabilities, "vision", False))
 
 
 def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
