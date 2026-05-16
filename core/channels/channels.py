@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+from core.attachments import AttachmentStore
 from core.channels.adapter import ChannelAdapter, FileData
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -236,10 +237,12 @@ class ChannelService:
         trigger_service: TriggerService,
         chat_sessions: ChatSessionManager,
         runtime: object,
+        attachment_store: AttachmentStore | None = None,
     ) -> None:
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
         self._runtime = runtime
+        self._attachment_store = attachment_store
         self._storage = ChannelStorage(_resolve_runtime_data_root(runtime))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
@@ -539,6 +542,7 @@ class ChannelService:
                 self._trigger_service,
                 self._chat_sessions,
                 self._runtime,
+                attachment_store=self._attachment_store,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
