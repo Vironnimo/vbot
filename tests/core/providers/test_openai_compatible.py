@@ -226,6 +226,105 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_maps_user_list_content_image_to_data_url_part(self, openai_adapter):
+        """Resolved media blocks are translated to OpenAI image_url data URLs."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2UtYnl0ZXM=",
+                        "media_type": "image/png",
+                    }
+                ],
+            }
+        ]
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aW1hZ2UtYnl0ZXM="},
+                    }
+                ],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_user_list_content_text_part(self, openai_adapter):
+        """Resolved text blocks are translated to OpenAI text parts."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello"}],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_user_list_content_mixed_parts_in_order(self, openai_adapter):
+        """Mixed resolved user parts keep order and translate media parts."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Before"},
+                    {
+                        "type": "media",
+                        "base64": "YmFzZTY0LWltYWdl",
+                        "media_type": "image/jpeg",
+                    },
+                    {"type": "text", "text": "After"},
+                ],
+            }
+        ]
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Before"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/jpeg;base64,YmFzZTY0LWltYWdl"},
+                    },
+                    {"type": "text", "text": "After"},
+                ],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_keeps_user_string_content_unchanged(self, openai_adapter):
+        """User string content keeps existing behavior."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        messages = [{"role": "user", "content": "Plain string"}]
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [{"role": "user", "content": "Plain string"}]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_applies_defaults_from_config(self, openai_adapter):
         """Defaults from ProviderConfig are included when not overridden."""
         # Arrange
