@@ -469,7 +469,8 @@ def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
     content: str | None
     usage: JsonObject | None
     if isinstance(message, ChatMessage):
-        content = message.content
+        message_content = message.content
+        content = message_content if isinstance(message_content, str) else None
         usage = message.usage
     elif message is None:
         content = None

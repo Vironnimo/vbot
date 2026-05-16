@@ -455,7 +455,9 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
     assert messages[1].reasoning_meta == {"encrypted_content": "opaque"}
-    assert json.loads(messages[2].content or "{}") == {
+    tool_message_content = messages[2].content
+    assert isinstance(tool_message_content, str)
+    assert json.loads(tool_message_content) == {
         "ok": True,
         "error": None,
         "data": {"result": "found vBot"},
