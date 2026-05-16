@@ -17,6 +17,7 @@ from core.chat.chat import (
     ERROR_KIND_TOOL_ITERATIONS,
     error_kind_llm_visible,
 )
+from core.chat.content_blocks import FileBlock, TextBlock
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -67,6 +68,37 @@ class TestChatMessageFactories:
             "role": "user",
             "content": "What's the weather in Berlin?",
         }
+
+    def test_user_message_round_trips_content_block_list(self):
+        blocks = [
+            TextBlock(type="text", text="Please review the document."),
+            FileBlock(
+                type="file",
+                attachment_id="att_123",
+                filename="report.pdf",
+                media_type="application/pdf",
+            ),
+        ]
+
+        message = ChatMessage.user(blocks, timestamp=FIXED_TIMESTAMP)
+
+        assert message.to_dict() == {
+            "id": message.id,
+            "timestamp": "2026-05-03T14:30:00+00:00",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please review the document."},
+                {
+                    "type": "file",
+                    "attachment_id": "att_123",
+                    "filename": "report.pdf",
+                    "media_type": "application/pdf",
+                },
+            ],
+        }
+
+        parsed = ChatMessage.from_dict(message.to_dict())
+        assert parsed.content == blocks
 
     def test_note_message_contains_only_content(self):
         message = ChatMessage.note("Background task completed.", timestamp=FIXED_TIMESTAMP)
@@ -181,6 +213,35 @@ class TestChatMessageFactories:
 
 
 class TestChatMessageParsing:
+    def test_from_dict_deserializes_user_content_block_list(self):
+        data = {
+            "id": "msg_blocks_1",
+            "timestamp": "2026-05-03T14:30:01+00:00",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Please read this."},
+                {
+                    "type": "file",
+                    "attachment_id": "att_123",
+                    "filename": "report.pdf",
+                    "media_type": "application/pdf",
+                },
+            ],
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.content == [
+            TextBlock(type="text", text="Please read this."),
+            FileBlock(
+                type="file",
+                attachment_id="att_123",
+                filename="report.pdf",
+                media_type="application/pdf",
+            ),
+        ]
+        assert message.to_dict() == data
+
     def test_from_dict_round_trips_assistant_message(self):
         data = {
             "id": "g7h8i9",
@@ -286,6 +347,39 @@ class TestChatMessageParsing:
                     "content": "Hello",
                 }
             )
+
+    def test_user_message_rejects_empty_content_block_list(self):
+        with pytest.raises(ChatMessageValidationError, match="must not be empty"):
+            ChatMessage.from_dict(
+                {
+                    "id": "msg_empty_blocks",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "user",
+                    "content": [],
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("role", "extra_fields"),
+        [
+            ("system", {"model": "openai/gpt-4.1"}),
+            ("assistant", {"model": "openai/gpt-4.1"}),
+            ("tool", {"tool_call_id": "call_abc", "name": "get_weather"}),
+            ("note", {}),
+            ("error", {"error_kind": "provider_error"}),
+        ],
+    )
+    def test_non_user_messages_reject_content_block_list(self, role, extra_fields):
+        data = {
+            "id": f"msg_blocks_{role}",
+            "timestamp": "2026-05-03T14:30:01+00:00",
+            "role": role,
+            "content": [{"type": "text", "text": "Hello"}],
+        }
+        data.update(extra_fields)
+
+        with pytest.raises(ChatMessageValidationError, match="content"):
+            ChatMessage.from_dict(data)
 
     def test_tool_message_requires_tool_call_id(self):
         with pytest.raises(ChatMessageValidationError, match="tool_call_id"):
