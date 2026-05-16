@@ -374,7 +374,7 @@ async def test_send_single_image_file_uses_send_photo(
 
 
 @pytest.mark.asyncio
-async def test_send_multiple_files_uses_send_media_group(
+async def test_send_mixed_single_image_and_document_sends_separate_messages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -394,11 +394,86 @@ async def test_send_multiple_files_uses_send_media_group(
         ],
     )
 
+    bot.send_photo.assert_awaited_once()
+    assert bot.send_photo.await_args.kwargs["chat_id"] == 12345
+    assert bot.send_photo.await_args.kwargs["caption"] == "batch caption"
+
+    bot.send_document.assert_awaited_once()
+    assert bot.send_document.await_args.kwargs["chat_id"] == 12345
+    assert "caption" not in bot.send_document.await_args.kwargs
+
+    bot.send_media_group.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_two_images_uses_single_homogeneous_media_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    await adapter.send(
+        "batch caption",
+        "12345",
+        files=[
+            FileData(filename="a.png", media_type="image/png", data=b"a"),
+            FileData(filename="b.jpg", media_type="image/jpeg", data=b"b"),
+        ],
+    )
+
     bot.send_media_group.assert_awaited_once()
     media = bot.send_media_group.await_args.kwargs["media"]
     assert len(media) == 2
+    assert {type(item).__name__ for item in media} == {"FakeInputMediaPhoto"}
     assert media[0].caption == "batch caption"
     assert media[1].caption is None
+    bot.send_photo.assert_not_awaited()
+    bot.send_document.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_mixed_batches_caption_only_on_first_item_of_first_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_fake_telegram_media(monkeypatch)
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    await adapter.send(
+        "batch caption",
+        "12345",
+        files=[
+            FileData(filename="a.png", media_type="image/png", data=b"a"),
+            FileData(filename="b.jpg", media_type="image/jpeg", data=b"b"),
+            FileData(filename="c.pdf", media_type="application/pdf", data=b"c"),
+            FileData(filename="d.pdf", media_type="application/pdf", data=b"d"),
+        ],
+    )
+
+    assert bot.send_media_group.await_count == 2
+    first_batch = bot.send_media_group.await_args_list[0].kwargs["media"]
+    second_batch = bot.send_media_group.await_args_list[1].kwargs["media"]
+
+    assert {type(item).__name__ for item in first_batch} == {"FakeInputMediaPhoto"}
+    assert {type(item).__name__ for item in second_batch} == {"FakeInputMediaDocument"}
+
+    assert first_batch[0].caption == "batch caption"
+    assert all(item.caption is None for item in first_batch[1:])
+    assert all(item.caption is None for item in second_batch)
+
+    bot.send_photo.assert_not_awaited()
+    bot.send_document.assert_not_awaited()
     await adapter.stop()
 
 
