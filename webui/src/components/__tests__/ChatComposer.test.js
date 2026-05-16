@@ -154,6 +154,30 @@ describe('ChatComposer', () => {
     ]);
   });
 
+  it('sends uploaded empty text files as embedded text blocks', async () => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-text-empty-1',
+      filename: 'empty.txt',
+      media_type: 'text/plain',
+      size_bytes: 0,
+      text_content: '',
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File([''], 'empty.txt', { type: 'text/plain' }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([{ type: 'text', text: '' }]);
+  });
+
   it('sends uploaded images as media blocks', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
