@@ -276,8 +276,7 @@
 
           if (
             hasTextMediaType(attachment.media_type) &&
-            typeof attachment.text_content === 'string' &&
-            attachment.text_content.length > 0
+            typeof attachment.text_content === 'string'
           ) {
             return {
               type: 'text',
