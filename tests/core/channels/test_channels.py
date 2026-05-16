@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.attachments import AttachmentStore
 from core.channels import (
     ChannelAdapter,
     ChannelConfig,
@@ -19,6 +20,7 @@ from core.channels import (
     ChannelService,
     ChannelStorage,
 )
+from core.channels.adapter import FileData
 from core.channels.telegram import TelegramChannelAdapter
 
 
@@ -47,11 +49,13 @@ def make_service(
     tmp_path: Path,
     *,
     known_agent_ids: set[str] | None = None,
+    attachment_store: AttachmentStore | None = None,
 ) -> ChannelService:
     return ChannelService(
         cast(Any, SimpleNamespace()),
         cast(Any, SimpleNamespace()),
         make_runtime(tmp_path, known_agent_ids=known_agent_ids),
+        attachment_store=attachment_store,
     )
 
 
@@ -78,7 +82,7 @@ class BlockingAdapter(ChannelAdapter):
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
-        self.sent_messages: list[tuple[str, str]] = []
+        self.sent_messages: list[tuple[str | None, str]] = []
 
     async def start(self) -> None:
         self.started.set()
@@ -87,7 +91,13 @@ class BlockingAdapter(ChannelAdapter):
     async def stop(self) -> None:
         self.stopped.set()
 
-    async def send(self, message: str, platform_target: str) -> None:
+    async def send(
+        self,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+    ) -> None:
         self.sent_messages.append((message, platform_target))
 
 
@@ -108,7 +118,13 @@ class FailingAdapter(ChannelAdapter):
     async def stop(self) -> None:
         self.stopped.set()
 
-    async def send(self, message: str, platform_target: str) -> None:
+    async def send(
+        self,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+    ) -> None:
         return
 
 
@@ -139,7 +155,13 @@ class DelayedStopAdapter(ChannelAdapter):
         self._events.append(f"stop:{self.label}:end")
         self.stopped.set()
 
-    async def send(self, message: str, platform_target: str) -> None:
+    async def send(
+        self,
+        message: str | None,
+        platform_target: str,
+        *,
+        files: list[FileData] | None = None,
+    ) -> None:
         return
 
 
@@ -216,6 +238,20 @@ def test_channel_service_adapter_factory_builds_telegram_adapter(
     adapter = service._create_adapter(make_config())
 
     assert isinstance(adapter, TelegramChannelAdapter)
+
+
+def test_channel_service_adapter_factory_injects_attachment_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "token")
+    attachment_store = cast(AttachmentStore, object())
+    service = make_service(tmp_path, attachment_store=attachment_store)
+
+    adapter = service._create_adapter(make_config())
+
+    assert isinstance(adapter, TelegramChannelAdapter)
+    assert adapter._attachment_store is attachment_store
 
 
 def test_channel_service_create_validates_agent_exists(tmp_path: Path) -> None:

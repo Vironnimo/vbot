@@ -206,8 +206,12 @@ class Runtime:
         self._chat_loop = ChatLoop(self, streaming=False, attachment_resolver=resolver)
         self._streaming_chat_loop = ChatLoop(self, streaming=True, attachment_resolver=resolver)
         self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
-        self._channel_service = ChannelService(self._trigger_service, self._chat_sessions, self)
-        self._wire_channel_attachment_store()
+        self._channel_service = ChannelService(
+            self._trigger_service,
+            self._chat_sessions,
+            self,
+            attachment_store=self._attachment_store,
+        )
         self._channel_service._notify_tool_registration_changed_hook = (
             self._reload_channel_tool_if_started
         )
@@ -352,26 +356,6 @@ class Runtime:
         except RuntimeError:
             return
         self._channel_service.start()
-
-    def _wire_channel_attachment_store(self) -> None:
-        if self._channel_service is None:
-            raise RuntimeError("Channel service not available")
-        attachment_store = self._attachment_store
-        if attachment_store is None:
-            raise RuntimeError("Attachment store not available")
-
-        original_create_adapter = cast(Any, self._channel_service)._create_adapter
-
-        def create_adapter_with_attachment(config: Any) -> Any:
-            adapter = original_create_adapter(config)
-            if (
-                getattr(adapter, "platform", None) == "telegram"
-                and getattr(adapter, "_attachment_store", None) is None
-            ):
-                adapter._attachment_store = attachment_store
-            return adapter
-
-        cast(Any, self._channel_service)._create_adapter = create_adapter_with_attachment
 
     def resolve_environment_credential(self, key: str) -> str:
         """Resolve one environment credential using runtime precedence rules."""
