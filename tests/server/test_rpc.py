@@ -2401,6 +2401,52 @@ async def test_chat_stream_uses_streaming_chat_loop(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_stream_prefers_runtime_streaming_chat_loop_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    captured: JsonObject = {}
+    run = StubDelegateRun(
+        run_id="runtime-stream-loop",
+        agent_id="coder",
+        session_id="session-one",
+        status="running",
+    )
+
+    class RuntimeStreamingLoop:
+        async def start_run(
+            self,
+            agent_id: str,
+            content: str | list[Any],
+            *,
+            session_id: str,
+        ) -> StubDelegateRun:
+            captured["agent_id"] = agent_id
+            captured["content"] = content
+            captured["session_id"] = session_id
+            return run
+
+    runtime_streaming_loop = RuntimeStreamingLoop()
+    state.runtime.streaming_chat_loop = runtime_streaming_loop
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["run_id"] == "runtime-stream-loop"
+    assert captured == {"agent_id": "coder", "content": "Hi", "session_id": "session-one"}
+    assert state.streaming_chat_loop is runtime_streaming_loop
+
+
+@pytest.mark.asyncio
 async def test_dispatch_validates_unknown_method_and_required_params(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
