@@ -16,6 +16,7 @@ import pytest
 
 import server.delegates as delegates
 from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
+from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
@@ -608,6 +609,30 @@ def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
     )
+
+
+class StubDelegateRun:
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        agent_id: str,
+        session_id: str,
+        status: str,
+        final_message: ChatMessage | None = None,
+    ) -> None:
+        self.id = run_id
+        self.agent_id = agent_id
+        self.session_id = session_id
+        self.status = SimpleNamespace(value=status)
+        self.events: list[Any] = []
+        self._final_message = final_message or ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="OK",
+        )
+
+    async def wait(self) -> ChatMessage:
+        return self._final_message
 
 
 @pytest.mark.asyncio
@@ -1990,6 +2015,168 @@ async def test_chat_send_requires_existing_session(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_send_accepts_content_block_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    captured: JsonObject = {}
+    run = StubDelegateRun(
+        run_id="run-list-send",
+        agent_id="coder",
+        session_id="session-one",
+        status="completed",
+        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Done"),
+    )
+
+    async def fake_start_run(
+        agent_id: str,
+        content: str | list[Any],
+        *,
+        session_id: str,
+    ) -> StubDelegateRun:
+        captured["agent_id"] = agent_id
+        captured["content"] = content
+        captured["session_id"] = session_id
+        return run
+
+    monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.send",
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": [
+                    {"type": "text", "text": "Please inspect this image."},
+                    {
+                        "type": "media",
+                        "attachment_id": "att-123",
+                        "filename": "screen.png",
+                        "media_type": "image/png",
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["status"] == "completed"
+    assert captured == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "content": [
+            TextBlock(type="text", text="Please inspect this image."),
+            MediaBlock(
+                type="media",
+                attachment_id="att-123",
+                filename="screen.png",
+                media_type="image/png",
+            ),
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_accepts_content_block_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    captured: JsonObject = {}
+    run = StubDelegateRun(
+        run_id="run-list-stream",
+        agent_id="coder",
+        session_id="session-one",
+        status="running",
+    )
+
+    class StubStreamingLoop:
+        async def start_run(
+            self,
+            agent_id: str,
+            content: str | list[Any],
+            *,
+            session_id: str,
+        ) -> StubDelegateRun:
+            captured["agent_id"] = agent_id
+            captured["content"] = content
+            captured["session_id"] = session_id
+            return run
+
+    monkeypatch.setattr(delegates, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": [
+                    {"type": "text", "text": "Review this document."},
+                    {
+                        "type": "file",
+                        "attachment_id": "att-456",
+                        "filename": "report.pdf",
+                        "media_type": "application/pdf",
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["status"] == "running"
+    assert response["result"]["sse_url"] == "/api/runs/run-list-stream/events"
+    assert captured == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "content": [
+            TextBlock(type="text", text="Review this document."),
+            FileBlock(
+                type="file",
+                attachment_id="att-456",
+                filename="report.pdf",
+                media_type="application/pdf",
+            ),
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_reject_invalid_content_type(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": 123,
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert response["error"]["message"] == (
+        "params.content must be a non-empty string or a list of content blocks"
+    )
+
+
+@pytest.mark.asyncio
 async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
     tmp_path: Path,
 ) -> None:
@@ -2211,6 +2398,52 @@ async def test_chat_stream_uses_streaming_chat_loop(tmp_path: Path) -> None:
     assert len(adapter.requests) == 0
     assert len(adapter.stream_requests) == 1
     assert response["result"]["sse_url"] == f"/api/runs/{run.id}/events"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_prefers_runtime_streaming_chat_loop_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    captured: JsonObject = {}
+    run = StubDelegateRun(
+        run_id="runtime-stream-loop",
+        agent_id="coder",
+        session_id="session-one",
+        status="running",
+    )
+
+    class RuntimeStreamingLoop:
+        async def start_run(
+            self,
+            agent_id: str,
+            content: str | list[Any],
+            *,
+            session_id: str,
+        ) -> StubDelegateRun:
+            captured["agent_id"] = agent_id
+            captured["content"] = content
+            captured["session_id"] = session_id
+            return run
+
+    runtime_streaming_loop = RuntimeStreamingLoop()
+    state.runtime.streaming_chat_loop = runtime_streaming_loop
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {"agent_id": "coder", "session_id": "session-one", "content": "Hi"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["run_id"] == "runtime-stream-loop"
+    assert captured == {"agent_id": "coder", "content": "Hi", "session_id": "session-one"}
+    assert state.streaming_chat_loop is runtime_streaming_loop
 
 
 @pytest.mark.asyncio

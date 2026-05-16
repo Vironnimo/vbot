@@ -7,13 +7,14 @@ from collections import deque
 from typing import TYPE_CHECKING, cast
 
 from core.chat import ActiveRunError, ChatLoop, ChatRunManager, Run
+from core.chat.content_blocks import ContentBlock
 from core.chat.runs import TERMINAL_EVENT_TYPES
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
 
-QueuedTrigger = tuple[str, bool, asyncio.Future[Run]]
+QueuedTrigger = tuple[str | list[ContentBlock], bool, asyncio.Future[Run]]
 SessionKey = tuple[str, str]
 
 _LOGGER = get_logger("automation")
@@ -37,7 +38,7 @@ class TriggerService:
     async def trigger_run(
         self,
         agent_id: str,
-        message: str,
+        message: str | list[ContentBlock],
         session_id: str | None = None,
         *,
         internal: bool = False,
@@ -83,7 +84,7 @@ class TriggerService:
         self,
         agent_id: str,
         session_id: str,
-        message: str,
+        message: str | list[ContentBlock],
         internal: bool,
         active_run: Run,
     ) -> Run:

@@ -258,6 +258,149 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_maps_user_media_blocks_to_anthropic_image_source(self, anthropic_adapter):
+        """Resolved media blocks map to Anthropic image base64 source blocks."""
+        # Arrange
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "media",
+                        "base64": "iVBORw0KGgoAAAANSUhEUgAA",
+                        "media_type": "image/png",
+                    }
+                ],
+            }
+        ]
+
+        # Act
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBORw0KGgoAAAANSUhEUgAA",
+                        },
+                    }
+                ],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_user_text_blocks_to_anthropic_text_parts(self, anthropic_adapter):
+        """Resolved text blocks keep Anthropic text-part wire shape."""
+        # Arrange
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "First line."},
+                    {"type": "text", "text": "Second line."},
+                ],
+            }
+        ]
+
+        # Act
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "First line."},
+                    {"type": "text", "text": "Second line."},
+                ],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_mixed_user_blocks_in_order(self, anthropic_adapter):
+        """Mixed resolved text/media blocks preserve order after conversion."""
+        # Arrange
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image:"},
+                    {
+                        "type": "media",
+                        "base64": "dGVzdC1pbWFnZS1ieXRlcw==",
+                        "media_type": "image/jpeg",
+                    },
+                    {"type": "text", "text": "Use one sentence."},
+                ],
+            }
+        ]
+
+        # Act
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image:"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": "dGVzdC1pbWFnZS1ieXRlcw==",
+                        },
+                    },
+                    {"type": "text", "text": "Use one sentence."},
+                ],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_keeps_string_user_content_behavior(self, anthropic_adapter):
+        """String user content keeps the existing single text-block mapping."""
+        # Arrange
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [{"role": "user", "content": "Hello from plain text."}]
+
+        # Act
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello from plain text."}],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_extracts_system_message(self, anthropic_adapter):
         """System-role messages are extracted to the system field."""
         # Arrange

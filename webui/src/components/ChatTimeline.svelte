@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte';
 
+  import { getAttachmentUrl } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
   import { visibleTimelineItems } from '../lib/chatState.js';
@@ -82,7 +83,9 @@
             ].includes(item.event.type);
 
   const shouldRenderMessage = (message) =>
-    Boolean(textFromMessage(message)) || hasReadableReasoning(message);
+    hasUserContentBlocks(message) ||
+    Boolean(textFromMessage(message)) ||
+    hasReadableReasoning(message);
 
   const labelForMessage = (message) => {
     if (message.role === 'user') {
@@ -135,8 +138,72 @@
     if (message.reasoning && !message.content) {
       return message.reasoning;
     }
-    return message.content ?? '';
+    if (typeof message.content === 'string') {
+      return message.content;
+    }
+    return '';
   };
+
+  const userContentBlocks = (message) => {
+    if (!Array.isArray(message?.content)) {
+      return [];
+    }
+    return message.content.filter((block) =>
+      isRenderableUserContentBlock(block),
+    );
+  };
+
+  const hasUserContentBlocks = (message) =>
+    message?.role === 'user' && userContentBlocks(message).length > 0;
+
+  const isTextContentBlock = (block) =>
+    isPlainObject(block) &&
+    block.type === 'text' &&
+    typeof block.text === 'string' &&
+    block.text.trim() !== '';
+
+  const isMediaContentBlock = (block) =>
+    isPlainObject(block) &&
+    block.type === 'media' &&
+    trimmedString(block.attachment_id) !== '';
+
+  const isImageMediaContentBlock = (block) =>
+    isMediaContentBlock(block) &&
+    trimmedString(block.media_type).startsWith('image/');
+
+  const isFileContentBlock = (block) =>
+    isPlainObject(block) &&
+    block.type === 'file' &&
+    trimmedString(block.attachment_id) !== '';
+
+  const isRenderableUserContentBlock = (block) =>
+    isTextContentBlock(block) ||
+    isMediaContentBlock(block) ||
+    isFileContentBlock(block);
+
+  const attachmentUrlForId = (attachmentId) => {
+    const normalizedId = trimmedString(attachmentId);
+    if (!normalizedId) {
+      return '';
+    }
+
+    try {
+      return getAttachmentUrl(normalizedId);
+    } catch {
+      return '';
+    }
+  };
+
+  const attachmentUrlForBlock = (block) =>
+    attachmentUrlForId(block?.attachment_id);
+
+  const attachmentFilename = (block) =>
+    trimmedString(block?.filename) ||
+    t('chat.attachment.fileLabel', 'Attached file');
+
+  const attachmentPreviewLabel = (block) =>
+    trimmedString(block?.filename) ||
+    t('chat.attachment.preview', 'Preview attachment');
 
   const hasReadableReasoning = (message) =>
     message.role === 'assistant' && Boolean(message.reasoning);
@@ -839,6 +906,68 @@
   </summary>
 {/snippet}
 
+{#snippet userContentBlock(block)}
+  {#if isTextContentBlock(block)}
+    <p class="msg-body-text">{block.text}</p>
+  {:else if isImageMediaContentBlock(block)}
+    {@const mediaUrl = attachmentUrlForBlock(block)}
+    {#if mediaUrl}
+      <a
+        class="inline-attachment"
+        href={mediaUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={attachmentFilename(block)}
+        aria-label={attachmentPreviewLabel(block)}
+      >
+        <img
+          class="inline-attachment-image"
+          src={mediaUrl}
+          alt={attachmentPreviewLabel(block)}
+          loading="lazy"
+        />
+        <span class="inline-attachment-name">{attachmentFilename(block)}</span>
+      </a>
+    {/if}
+  {:else if isFileContentBlock(block) || isMediaContentBlock(block)}
+    {@const fileUrl = attachmentUrlForBlock(block)}
+    <div class="inline-file">
+      <svg
+        class="inline-file-icon"
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        aria-hidden="true"
+      >
+        <path
+          d="M3.5 1.5h6.5l2.5 2.5v10.5H3.5z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+        />
+        <path
+          d="M10 1.5V4h2.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.2"
+        />
+      </svg>
+      {#if fileUrl}
+        <a
+          class="inline-file-link"
+          href={fileUrl}
+          download={attachmentFilename(block)}
+          title={attachmentFilename(block)}
+        >
+          {attachmentFilename(block)}
+        </a>
+      {:else}
+        <span class="inline-file-name">{attachmentFilename(block)}</span>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <section class="messages" bind:this={scrollContainer} aria-live="polite">
   <div class="messages__content">
     {#if timelineItems.length === 0}
@@ -1087,7 +1216,13 @@
                   <div class="reasoning-body">{item.message.reasoning}</div>
                 </details>
               {/if}
-              {#if textFromMessage(item.message)}
+              {#if hasUserContentBlocks(item.message)}
+                <div class="msg-body-blocks">
+                  {#each userContentBlocks(item.message) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
+                    {@render userContentBlock(block)}
+                  {/each}
+                </div>
+              {:else if textFromMessage(item.message)}
                 <p class="msg-body-text">{textFromMessage(item.message)}</p>
               {/if}
             </div>
@@ -1146,7 +1281,7 @@
                 <span>· {metaForEvent(item.event)}</span>
               {/if}
             </p>
-          {:else if textFromEvent(item.event)}
+          {:else if textFromEvent(item.event) || hasUserContentBlocks(messageFromEvent(item.event))}
             <article
               class:assistant={isAssistantItem(item)}
               class:user={isUserItem(item)}
@@ -1174,6 +1309,12 @@
                       {textFromEvent(item.event)}
                     </div>
                   </details>
+                {:else if hasUserContentBlocks(messageFromEvent(item.event))}
+                  <div class="msg-body-blocks">
+                    {#each userContentBlocks(messageFromEvent(item.event)) as block, blockIndex (`${item.id}-block-${blockIndex}`)}
+                      {@render userContentBlock(block)}
+                    {/each}
+                  </div>
                 {:else}
                   <p class="msg-body-text">{textFromEvent(item.event)}</p>
                 {/if}
@@ -1443,6 +1584,106 @@
 
   .msg.error .msg-author {
     color: var(--red);
+  }
+
+  .msg-body-blocks {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .msg-body-blocks .msg-body-text {
+    margin: 0;
+  }
+
+  .inline-attachment {
+    display: flex;
+    width: fit-content;
+    max-width: min(30rem, 100%);
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 8px;
+    background: var(--surface-2);
+    text-decoration: none;
+  }
+
+  .inline-attachment:hover {
+    border-color: rgba(232, 135, 10, 0.38);
+    background: rgba(232, 135, 10, 0.06);
+  }
+
+  .inline-attachment:focus-visible {
+    border-radius: 6px;
+    outline: 1px solid rgba(232, 135, 10, 0.4);
+    outline-offset: 2px;
+  }
+
+  .inline-attachment-image {
+    width: 100%;
+    max-height: 320px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    object-fit: contain;
+  }
+
+  .inline-attachment-name {
+    overflow: hidden;
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inline-file {
+    display: flex;
+    width: fit-content;
+    max-width: min(30rem, 100%);
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+  }
+
+  .inline-file-icon {
+    flex-shrink: 0;
+    color: var(--text-lo);
+  }
+
+  .inline-file-link,
+  .inline-file-name {
+    min-width: 0;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .inline-file-link {
+    border-bottom: 1px solid rgba(232, 135, 10, 0.3);
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .inline-file-link:hover {
+    border-bottom-color: var(--accent);
+    color: var(--text-hi);
+  }
+
+  .inline-file-link:focus-visible {
+    border-radius: 3px;
+    outline: 1px solid rgba(232, 135, 10, 0.4);
+    outline-offset: 2px;
+  }
+
+  .inline-file-name {
+    color: var(--text-med);
   }
 
   @media (max-width: 760px) {

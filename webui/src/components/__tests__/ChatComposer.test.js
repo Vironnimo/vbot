@@ -9,6 +9,12 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
+vi.mock('$lib/api.js', () => ({
+  uploadAttachment: vi.fn(),
+}));
+
+const { uploadAttachment } = await import('$lib/api.js');
+
 const { default: ChatComposer } = await import('../ChatComposer.svelte');
 
 describe('ChatComposer', () => {
@@ -18,6 +24,7 @@ describe('ChatComposer', () => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    uploadAttachment.mockReset();
   });
 
   afterEach(async () => {
@@ -120,6 +127,118 @@ describe('ChatComposer', () => {
 
     expect(input.value).toBe('$warning-skill');
   });
+
+  it('sends uploaded text files as embedded text blocks', async () => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-text-1',
+      filename: 'note.txt',
+      media_type: 'text/plain',
+      size_bytes: 5,
+      text_content: 'hello',
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File(['hello'], 'note.txt', { type: 'text/plain' }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      { type: 'text', text: 'hello' },
+    ]);
+  });
+
+  it('sends uploaded empty text files as embedded text blocks', async () => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-text-empty-1',
+      filename: 'empty.txt',
+      media_type: 'text/plain',
+      size_bytes: 0,
+      text_content: '',
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File([''], 'empty.txt', { type: 'text/plain' }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([{ type: 'text', text: '' }]);
+  });
+
+  it('sends uploaded images as media blocks', async () => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-image-1',
+      filename: 'photo.png',
+      media_type: 'image/png',
+      size_bytes: 7,
+      text_content: null,
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File(['pngdata'], 'photo.png', { type: 'image/png' }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'media',
+        attachment_id: 'attachment-image-1',
+        filename: 'photo.png',
+        media_type: 'image/png',
+      },
+    ]);
+  });
+
+  it('sends non-image binary uploads as file blocks', async () => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-file-1',
+      filename: 'paper.pdf',
+      media_type: 'application/pdf',
+      size_bytes: 11,
+      text_content: null,
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File(['pdf-content'], 'paper.pdf', { type: 'application/pdf' }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'file',
+        attachment_id: 'attachment-file-1',
+        filename: 'paper.pdf',
+        media_type: 'application/pdf',
+      },
+    ]);
+  });
 });
 
 function skillFixtures() {
@@ -139,4 +258,31 @@ function skillFixtures() {
 
 function composerInput() {
   return document.body.querySelector('#chat-composer-input');
+}
+
+function filePickerInput() {
+  return document.body.querySelector('.attachment-file-input');
+}
+
+async function selectFileFromPicker(file) {
+  const input = filePickerInput();
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [file],
+  });
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  await flushComposerAsyncWork();
+}
+
+function submitComposer() {
+  document.body
+    .querySelector('form.input-area')
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  flushSync();
+}
+
+async function flushComposerAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
+  flushSync();
 }

@@ -17,6 +17,7 @@ import {
   normalizeRpcError,
   readLogFile,
   rpc,
+  uploadAttachment,
   subscribeLogEvents,
   subscribeRunEvents,
   subscribeServerEvents,
@@ -209,6 +210,59 @@ describe('normalizeRpcError()', () => {
     expect(error).toMatchObject({
       code: 'rpc_error',
       message: 'RPC request failed',
+    });
+  });
+});
+
+describe('uploadAttachment()', () => {
+  it('returns embedded text_content when the upload payload includes it', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          attachment_id: 'attachment-text-1',
+          filename: 'notes.txt',
+          media_type: 'text/plain',
+          size_bytes: 5,
+          text_content: 'hello',
+        },
+        { status: 200 },
+      ),
+    );
+
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    await expect(
+      uploadAttachment(file, { fetch: fetchFunction }),
+    ).resolves.toEqual({
+      attachment_id: 'attachment-text-1',
+      filename: 'notes.txt',
+      media_type: 'text/plain',
+      size_bytes: 5,
+      text_content: 'hello',
+    });
+  });
+
+  it('defaults text_content to null when the upload payload omits it', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          attachment_id: 'attachment-image-1',
+          filename: 'photo.jpg',
+          media_type: 'image/jpeg',
+          size_bytes: 64,
+        },
+        { status: 200 },
+      ),
+    );
+
+    const file = new File(['binary'], 'photo.jpg', { type: 'image/jpeg' });
+    await expect(
+      uploadAttachment(file, { fetch: fetchFunction }),
+    ).resolves.toEqual({
+      attachment_id: 'attachment-image-1',
+      filename: 'photo.jpg',
+      media_type: 'image/jpeg',
+      size_bytes: 64,
+      text_content: null,
     });
   });
 });

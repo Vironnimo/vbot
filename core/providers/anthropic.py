@@ -623,6 +623,11 @@ def _to_anthropic_message(message: dict[str, Any]) -> dict[str, Any]:
             "role": "assistant",
             "content": _to_anthropic_assistant_content(message),
         }
+    if role == "user":
+        return {
+            "role": "user",
+            "content": _to_anthropic_user_content(message.get("content", "")),
+        }
     return {
         "role": role,
         "content": _to_anthropic_text_content(message.get("content", "")),
@@ -639,6 +644,37 @@ def _to_anthropic_tool_result_block(message: dict[str, Any]) -> dict[str, Any]:
         "tool_use_id": message["tool_call_id"],
         "content": message["content"],
     }
+
+
+def _to_anthropic_user_content(content: Any) -> list[dict[str, Any]]:
+    if not isinstance(content, list):
+        return _to_anthropic_text_content(content)
+
+    return [_to_anthropic_user_content_block(block) for block in content]
+
+
+def _to_anthropic_user_content_block(block: Any) -> dict[str, Any]:
+    if not isinstance(block, dict):
+        return {"type": "text", "text": str(block)}
+
+    block_type = block.get("type")
+    if block_type == "media":
+        base64_data = block.get("base64")
+        media_type = block.get("media_type")
+        if isinstance(base64_data, str) and isinstance(media_type, str):
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64_data,
+                },
+            }
+    if block_type == "text":
+        text = block.get("text")
+        return {"type": "text", "text": "" if text is None else str(text)}
+
+    return dict(block)
 
 
 def _to_anthropic_text_content(content: Any) -> list[dict[str, Any]]:

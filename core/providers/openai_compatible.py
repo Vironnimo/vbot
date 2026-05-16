@@ -469,11 +469,46 @@ def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:
             "tool_call_id": message["tool_call_id"],
             "content": message["content"],
         }
+    if role == "user":
+        return {
+            "role": "user",
+            "content": _to_openai_user_content(message.get("content", "")),
+        }
 
     return {
         "role": role,
         "content": message.get("content", ""),
     }
+
+
+def _to_openai_user_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+    return [_to_openai_user_content_part(part) for part in content]
+
+
+def _to_openai_user_content_part(part: Any) -> dict[str, Any]:
+    if not isinstance(part, dict):
+        return {"type": "text", "text": "" if part is None else str(part)}
+
+    part_type = part.get("type")
+    if part_type == "media":
+        base64_data = part.get("base64")
+        media_type = part.get("media_type")
+        if not isinstance(base64_data, str):
+            base64_data = "" if base64_data is None else str(base64_data)
+        if not isinstance(media_type, str) or not media_type:
+            media_type = "application/octet-stream"
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{base64_data}"},
+        }
+
+    if part_type == "text":
+        text = part.get("text")
+        return {"type": "text", "text": "" if text is None else str(text)}
+
+    return dict(part)
 
 
 def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
