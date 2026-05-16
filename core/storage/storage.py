@@ -28,6 +28,7 @@ PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
     "archive",
+    "attachments",
     "channels",
     "cron",
     "oauth",

@@ -39,6 +39,7 @@ from core.chat import (
     RunEvent,
     RunNotFoundError,
 )
+from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
@@ -621,7 +622,7 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    content = _required_string(params, "content")
+    content = _parse_chat_content(params, "content")
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
         _bridge_run_to_event_bus(state, run)
@@ -634,7 +635,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    content = _required_string(params, "content")
+    content = _parse_chat_content(params, "content")
     try:
         streaming_chat_loop = _streaming_chat_loop(state)
         run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
@@ -1280,6 +1281,34 @@ def _positive_integer(value: Any, label: str) -> int:
     return cast("int", value)
 
 
+def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:
+    value = params.get(key)
+    if isinstance(value, str):
+        if value:
+            return value
+    elif isinstance(value, list):
+        parsed_blocks: list[ContentBlock] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"params.{key}[{index}] must be an object",
+                )
+            try:
+                parsed_blocks.append(content_block_from_dict(item))
+            except ContentBlockError as exc:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"params.{key}[{index}] is invalid: {exc}",
+                ) from exc
+        return parsed_blocks
+
+    raise RpcError(
+        RPC_ERROR_INVALID_REQUEST,
+        f"params.{key} must be a non-empty string or a list of content blocks",
+    )
+
+
 def _required_string(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -1819,6 +1848,21 @@ def _streaming_chat_loop(state: Any) -> Any:
     chat_loop = getattr(state, "streaming_chat_loop", None)
     if chat_loop is not None:
         return chat_loop
+    runtime = getattr(state, "runtime", None)
+    if runtime is not None:
+        try:
+            chat_loop = runtime.streaming_chat_loop
+        except AttributeError:
+            chat_loop = getattr(runtime, "_streaming_chat_loop", None)
+        except RuntimeError:
+            if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+                "core.runtime"
+            ):
+                raise
+            chat_loop = getattr(runtime, "_streaming_chat_loop", None)
+        if chat_loop is not None:
+            state.streaming_chat_loop = chat_loop
+            return chat_loop
     chat_loop = ChatLoop(state.runtime, streaming=True)
     state.streaming_chat_loop = chat_loop
     return chat_loop

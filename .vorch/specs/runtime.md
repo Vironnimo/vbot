@@ -27,10 +27,12 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `os.environ`, instantiates the OAuth `TokenStore`, instantiates the central
   provider credential resolver (process environment takes precedence over the
   data-dir fallback for environment credentials), copies prompt
-  fragments, wires services, starts the `ProcessManager` sweeper when startup
+  fragments, instantiates the runtime-owned `AttachmentStore` using
+  `settings.json` `attachment_max_size_bytes`, wires services, starts the
+  `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools, creates the
-  shared `ChatRunManager`, creates the non-streaming automation `ChatLoop`, wires
-  `TriggerService`, wires and starts `ChannelService` when an event loop is active,
+  shared `ChatRunManager`, creates resolver-wired non-streaming and streaming
+  `ChatLoop` instances, wires `TriggerService`, wires and starts `ChannelService` when an event loop is active,
   registers the `channel_send` tool when at least one channel is active, wires
   and starts `CronService` when an event loop is active, registers the `cron`
   tool, creates the in-memory `SubAgentBatchTracker`, registers
@@ -48,6 +50,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `get_provider_credentials(provider_id)`.
 - `token_store` — OAuth token persistence service rooted at `<data_dir>/oauth/`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
+- `attachment_store` — runtime-owned `AttachmentStore` rooted at `<data_dir>/attachments/`.
 - `agents` — `AgentStore` for agent CRUD/workspaces.
 - `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `edit`, `glob`, `grep`, `process`, `read`, `subagent`, `subagent_result`, `write`) plus the internal `skill` tool when skills are loaded.
 - `process_manager` — shared in-memory `ProcessManager` service used by `bash`
@@ -58,6 +61,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `chat_run_manager` — shared `ChatRunManager` used by server chat flows and
   automation triggers. Runtime also exposes it as `runtime.chat_runs` for server
   compatibility.
+- `streaming_chat_loop` — resolver-wired streaming `ChatLoop` used by server SSE flows.
 - `trigger_service` — `TriggerService` for programmatic Run starts and
   in-memory busy-Session queueing.
 - `channel_service` — `ChannelService` for persisted channel configs, adapter
@@ -94,3 +98,6 @@ configured otherwise.
 - `ChannelService.start()` follows the same event-loop guard pattern as
   `CronService.start()`: when runtime startup happens without an active asyncio
   loop, the service is wired but listeners are not started.
+- Runtime owns the canonical resolver-wired chat loops. Server code should use
+  `runtime.chat_loop` / `runtime.streaming_chat_loop` when available instead of
+  constructing fresh `ChatLoop` instances and bypassing attachment resolution.

@@ -24,6 +24,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/api.js`
   - `rpc(method, params?, options?)` posts to `/api/rpc` and returns `result` or
      throws `ApiClientError` with a stable `code`.
+  - `uploadAttachment(file, options?)` posts one multipart file to `/api/upload`
+    and returns `{ attachment_id, filename, media_type, size_bytes }`.
+  - `getAttachmentUrl(attachmentId)` returns `/api/attachments/<id>` for use in
+    `<img>` or download links.
   - `listSessions(agentId, options?)` calls `session.list` and returns
     `{ sessions }` for one Agent.
   - `linkSessionToChannel(agentId, sessionId, channelId, platformConvId, options?)`
@@ -104,6 +108,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     backed by `session.link_channel`.
 - `webui/src/components/ChatComposer.svelte`
   - Supports `/skill-name` at the start of input and `$skill-name` inline autocomplete. Selection inserts only the trigger token and preserves the rest of the message text exactly; backend chat activation handles loading.
+  - Supports attachment uploads via file picker, image paste, and drag-and-drop.
+  - Maintains local pending attachments with `preview_url` object URLs and builds
+    canonical message `content` as `string` or `list[ContentBlock]` on send.
 - `webui/src/components/SkillAutocomplete.svelte`
   - Renders loadable skill name/description suggestions for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
@@ -150,6 +157,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/ChatTimeline.svelte`
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
+  - Renders user message content arrays block-by-block: `text` as normal message text,
+    image `media` via `/api/attachments/<id>`, and `file` as download links.
 - `webui/src/components/LogsView.svelte`
   - Loads the daily logs catalog on mount, selects the newest file by default,
     reads one file at a time through `log.read`, applies local level/search/sort
@@ -200,6 +209,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   clear the override.
 - Queue state is accessor-local/in-memory and scoped by Agent plus current
   Session. Queued messages are visible and removable before send.
+- Attachments are uploaded over the dedicated HTTP endpoints, not through RPC.
+  The outgoing chat payload still uses the canonical `content` field, switching
+  from plain string to `list[ContentBlock]` only when attachments are present.
 - Streaming output is accessor-local/in-memory. `streamingItems` preserves the
   provider-visible order of reasoning, assistant text, and tool-call deltas;
   the final `assistant_output` event clears the buffer and becomes the

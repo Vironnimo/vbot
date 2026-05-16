@@ -13,8 +13,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
+from core.chat.content_blocks import (
+    ContentBlock,
+    ContentBlockError,
+    FileBlock,
+    MediaBlock,
+    TextBlock,
+    content_block_from_dict,
+    content_block_to_dict,
+)
 from core.chat.runs import (
     ASSISTANT_OUTPUT_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
@@ -48,6 +57,9 @@ from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 from core.utils.tokens import estimate_tokens
+
+if TYPE_CHECKING:
+    from core.chat.block_resolver import ContentBlockResolver
 
 MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
 JsonObject = dict[str, Any]
@@ -135,7 +147,7 @@ class ChatMessage:
     id: str
     timestamp: str
     role: MessageRole
-    content: str | None = None
+    content: str | list[ContentBlock] | None = None
     model: str | None = None
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
@@ -157,7 +169,12 @@ class ChatMessage:
         )
 
     @classmethod
-    def user(cls, content: str, *, timestamp: datetime | None = None) -> ChatMessage:
+    def user(
+        cls,
+        content: str | list[ContentBlock],
+        *,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
         """Create a user message."""
         return cls(
             id=_new_message_id(),
@@ -246,7 +263,11 @@ class ChatMessage:
             "role": self.role,
         }
         _add_if_not_none(message, "model", self.model)
-        _add_if_not_none(message, "content", self.content)
+        if self.content is not None:
+            if isinstance(self.content, list):
+                message["content"] = [content_block_to_dict(block) for block in self.content]
+            else:
+                message["content"] = self.content
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
         _add_if_not_none(message, "usage", self.usage)
@@ -273,7 +294,7 @@ class ChatMessage:
             id=_require_string(data, "id"),
             timestamp=_require_string(data, "timestamp"),
             role=role,
-            content=_optional_string(data, "content"),
+            content=_parse_content(data),
             model=_optional_string(data, "model"),
             reasoning=_optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
@@ -668,18 +689,20 @@ class ChatLoop:
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         streaming: bool = False,
+        attachment_resolver: ContentBlockResolver | None = None,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
         self._runtime = runtime
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
+        self._attachment_resolver = attachment_resolver
         self._nesting_depth = 0
 
     async def send(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str | None = None,
     ) -> ChatMessage:
@@ -690,7 +713,7 @@ class ChatLoop:
     async def start_run(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str,
         internal: bool = False,
@@ -707,7 +730,7 @@ class ChatLoop:
     async def _start_run(
         self,
         agent_id: str,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         session_id: str | None,
         create_missing: bool,
@@ -727,7 +750,7 @@ class ChatLoop:
     async def _execute_run(
         self,
         run: Run,
-        content: str,
+        content: str | list[ContentBlock],
         *,
         internal: bool = False,
     ) -> ChatMessage:
@@ -748,12 +771,15 @@ class ChatLoop:
         try:
             run.raise_if_cancelled()
             if internal:
+                if not isinstance(content, str):
+                    raise ChatError("internal runs require string content")
                 session.add_note(content)
             else:
                 user_message = ChatMessage.user(content)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
-                self._activate_triggered_skills(agent, session, content)
+                if isinstance(content, str):
+                    self._activate_triggered_skills(agent, session, content)
             run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
@@ -837,9 +863,29 @@ class ChatLoop:
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
-        history = _embed_notes_into_request(session.load())
+        session_messages = session.load()
+        history = _embed_notes_into_request(session_messages)
         session.drain_pending_notes()
-        return [system_message.to_dict(), *session.skill_context_messages(), *history]
+        request_messages = [system_message.to_dict(), *session.skill_context_messages(), *history]
+
+        if self._attachment_resolver is None:
+            return request_messages
+        if not _session_has_any_content_blocks(session_messages):
+            return request_messages
+
+        # Use the most recently appended user turn as the current-turn marker.
+        # If that turn is plain text, all content blocks resolve as historical.
+        current_user_message = _last_user_message_with_content_blocks(
+            session_messages
+        ) or _last_user_message(session_messages)
+        if current_user_message is None:
+            return request_messages
+
+        return self._attachment_resolver.resolve_messages(
+            request_messages,
+            current_user_message_id=current_user_message.id,
+            vision_supported=_model_has_vision(self._runtime, agent),
+        )
 
     async def _send_until_final(
         self,
@@ -1279,6 +1325,29 @@ async def _close_adapter(adapter: Any) -> None:
         await result
 
 
+def _last_user_message_with_content_blocks(messages: list[ChatMessage]) -> ChatMessage | None:
+    for message in reversed(messages):
+        if message.role != "user":
+            continue
+        if isinstance(message.content, list):
+            return message
+        return None
+    return None
+
+
+def _last_user_message(messages: list[ChatMessage]) -> ChatMessage | None:
+    """Return the most recently appended user message regardless of content type."""
+    for message in reversed(messages):
+        if message.role == "user":
+            return message
+    return None
+
+
+def _session_has_any_content_blocks(messages: list[ChatMessage]) -> bool:
+    """Return True if any user message in the session carries list content."""
+    return any(message.role == "user" and isinstance(message.content, list) for message in messages)
+
+
 def _split_agent_model(model: str) -> tuple[str, str]:
     if not model:
         raise ChatError("agent has no model set")
@@ -1286,6 +1355,17 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     if not separator or not provider_id or not model_id:
         raise ChatError("agent model must use <provider>/<model-id>")
     return provider_id, model_id
+
+
+def _model_has_vision(runtime: Any, agent: Any) -> bool:
+    try:
+        provider_id, model_id = _split_agent_model(agent.model)
+        model = runtime.models.get(provider_id, model_id)
+    except Exception:
+        return False
+
+    capabilities = getattr(model, "capabilities", None)
+    return bool(getattr(capabilities, "vision", False))
 
 
 def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
@@ -1407,8 +1487,10 @@ def _skill_context_note_content(name: str, content: str) -> str:
 
 
 def _is_skill_context_note(message: ChatMessage) -> bool:
-    return message.role == "note" and bool(
-        message.content and message.content.startswith(SKILL_CONTEXT_NOTE_PREFIX)
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(SKILL_CONTEXT_NOTE_PREFIX)
     )
 
 
@@ -1417,7 +1499,7 @@ def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]
     for message in messages:
         if not _is_skill_context_note(message):
             continue
-        assert message.content is not None
+        assert isinstance(message.content, str)
         try:
             payload = json.loads(message.content.removeprefix(SKILL_CONTEXT_NOTE_PREFIX))
         except json.JSONDecodeError:
@@ -1453,9 +1535,15 @@ def _apply_usage_estimation(
     approximate input and output token counts.  Marks the result with
     ``"estimated": True`` so the frontend can display a tilde prefix.
     """
-    input_text = "".join(msg.get("content", "") or "" for msg in request_messages)
+    input_chunks: list[str] = []
+    for request_message in request_messages:
+        content = request_message.get("content")
+        if isinstance(content, str):
+            input_chunks.append(content)
+    input_text = "".join(input_chunks)
     estimated_input, _ = estimate_tokens(input_text)
-    estimated_output, _ = estimate_tokens(message.content or "")
+    output_text = message.content if isinstance(message.content, str) else ""
+    estimated_output, _ = estimate_tokens(output_text)
     usage: JsonObject = {
         "input_tokens": estimated_input,
         "output_tokens": estimated_output,
@@ -1508,6 +1596,26 @@ def _optional_string(data: JsonObject, key: str) -> str | None:
     return value
 
 
+def _parse_content(data: JsonObject) -> str | list[ContentBlock] | None:
+    value = data.get("content")
+    if value is None or isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        raise ChatMessageValidationError(
+            "content must be a string, an array of content blocks, or null"
+        )
+
+    blocks: list[ContentBlock] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ChatMessageValidationError("content list entries must be objects")
+        try:
+            blocks.append(content_block_from_dict(item))
+        except ContentBlockError as exc:
+            raise ChatMessageValidationError(f"invalid content block: {exc}") from exc
+    return blocks
+
+
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
     if role not in ("system", "user", "assistant", "tool", "note", "error"):
@@ -1523,6 +1631,10 @@ def _parse_tool_calls(value: Any) -> list[ToolCall] | None:
     if not isinstance(value, list):
         raise ChatMessageValidationError("tool_calls must be an array")
     return [ToolCall.from_dict(item) for item in value if _is_tool_call_object(item)]
+
+
+def _is_content_block(value: Any) -> bool:
+    return isinstance(value, (TextBlock, MediaBlock, FileBlock))
 
 
 def _is_tool_call_object(value: Any) -> JsonObject:
@@ -1561,6 +1673,8 @@ def _validate_system_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("system messages require model")
     if message.content is None:
         raise ChatMessageValidationError("system messages require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("system messages content must be a string")
     _reject_fields(
         message,
         "reasoning",
@@ -1576,6 +1690,15 @@ def _validate_system_message(message: ChatMessage) -> None:
 def _validate_user_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("user messages require content")
+    if isinstance(message.content, list):
+        if not message.content:
+            raise ChatMessageValidationError("user content block lists must not be empty")
+        if not all(_is_content_block(block) for block in message.content):
+            raise ChatMessageValidationError(
+                "user content block lists must contain only content blocks"
+            )
+    elif not isinstance(message.content, str):
+        raise ChatMessageValidationError("user messages content must be a string")
     _reject_fields(
         message,
         "model",
@@ -1592,6 +1715,8 @@ def _validate_user_message(message: ChatMessage) -> None:
 def _validate_assistant_message(message: ChatMessage) -> None:
     if message.model is None:
         raise ChatMessageValidationError("assistant messages require model")
+    if message.content is not None and not isinstance(message.content, str):
+        raise ChatMessageValidationError("assistant messages content must be a string")
     _reject_fields(message, "tool_call_id", "name", "error_kind")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
@@ -1602,6 +1727,8 @@ def _validate_assistant_message(message: ChatMessage) -> None:
 def _validate_tool_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("tool messages require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("tool messages content must be a string")
     if message.tool_call_id is None:
         raise ChatMessageValidationError("tool messages require tool_call_id")
     if message.name is None:
@@ -1620,6 +1747,8 @@ def _validate_tool_message(message: ChatMessage) -> None:
 def _validate_note_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("note messages require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("note messages content must be a string")
     _reject_fields(
         message,
         "model",
@@ -1636,6 +1765,8 @@ def _validate_note_message(message: ChatMessage) -> None:
 def _validate_error_message(message: ChatMessage) -> None:
     if message.content is None:
         raise ChatMessageValidationError("error messages require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("error messages content must be a string")
     if not message.error_kind:
         raise ChatMessageValidationError("error messages require error_kind")
     _reject_fields(

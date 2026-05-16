@@ -153,7 +153,9 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         assistant = await ChatLoop(runtime).send("coder", "Read note", session_id="session-one")
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
-        tool_result = json.loads(messages[2].content or "{}")
+        tool_message_content = messages[2].content
+        assert isinstance(tool_message_content, str)
+        tool_result = json.loads(tool_message_content)
         assert assistant.content == "I read: file content"
         assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
         assert tool_result["ok"] is True
@@ -201,7 +203,9 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
         assistant = await ChatLoop(runtime).send("coder", "Read missing", session_id="session-one")
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
-        tool_result = json.loads(messages[2].content or "{}")
+        tool_message_content = messages[2].content
+        assert isinstance(tool_message_content, str)
+        tool_result = json.loads(tool_message_content)
         assert assistant.content == "The file was missing, so I recovered."
         assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
         assert tool_result["ok"] is False

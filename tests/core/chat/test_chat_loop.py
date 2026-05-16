@@ -558,7 +558,11 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
         "assistant",
     ]
     assert all(
-        not (message.role == "user" and (message.content or "").startswith("<skill_content "))
+        not (
+            message.role == "user"
+            and isinstance(message.content, str)
+            and message.content.startswith("<skill_content ")
+        )
         for message in visible_messages
     )
 
@@ -1385,7 +1389,9 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
-    assert json.loads(messages[2].content or "{}") == tool_failure(
+    tool_message_content = messages[2].content
+    assert isinstance(tool_message_content, str)
+    assert json.loads(tool_message_content) == tool_failure(
         "tool_not_allowed",
         "Tool not allowed: get_weather",
     )
@@ -1430,8 +1436,12 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     tool_messages = [message for message in messages if message.role == "tool"]
-    glob_result = json.loads(tool_messages[0].content or "{}")
-    grep_result = json.loads(tool_messages[1].content or "{}")
+    glob_content = tool_messages[0].content
+    grep_content = tool_messages[1].content
+    assert isinstance(glob_content, str)
+    assert isinstance(grep_content, str)
+    glob_result = json.loads(glob_content)
+    grep_result = json.loads(grep_content)
     assert assistant.content == "Search complete"
     assert [message.name for message in tool_messages] == ["glob", "grep"]
     assert glob_result == tool_success({"content": "notes.txt"})
@@ -1480,7 +1490,9 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     failure = tool_failure("tool_not_allowed", "Tool not allowed: grep")
-    assert json.loads(messages[2].content or "{}") == failure
+    tool_message_content = messages[2].content
+    assert isinstance(tool_message_content, str)
+    assert json.loads(tool_message_content) == failure
     assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
         "tool_call": {"id": "call_grep", "index": 0, "name": "grep"},
         "result": failure,
@@ -1531,11 +1543,13 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
         "call_2",
     ]
     assert [event.payload["tool_call"]["id"] for event in result_events] == ["call_2", "call_1"]
-    assert [
-        json.loads(message.content or "{}")["data"]["id"]
-        for message in messages
-        if message.role == "tool"
-    ] == [
+    tool_result_ids: list[str] = []
+    for message in messages:
+        if message.role != "tool":
+            continue
+        assert isinstance(message.content, str)
+        tool_result_ids.append(json.loads(message.content)["data"]["id"])
+    assert tool_result_ids == [
         "call_1",
         "call_2",
     ]
@@ -1605,7 +1619,9 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert assistant.content == "Recovered"
     assert run.status == RunStatus.COMPLETED
-    assert json.loads(messages[2].content or "{}") == tool_failure("tool_execution_error", "boom")
+    tool_message_content = messages[2].content
+    assert isinstance(tool_message_content, str)
+    assert json.loads(tool_message_content) == tool_failure("tool_execution_error", "boom")
     assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
         "tool_call": {"id": "call_1", "index": 0, "name": "explode"},
         "result": tool_failure("tool_execution_error", "boom"),
@@ -1639,7 +1655,9 @@ async def test_legacy_dispatch_non_envelope_result_is_failure_envelope(tmp_path:
         "Tool handler must return a valid result envelope: legacy",
     )
     assert assistant.content == "Recovered"
-    assert json.loads(messages[2].content or "{}") == failure
+    tool_message_content = messages[2].content
+    assert isinstance(tool_message_content, str)
+    assert json.loads(tool_message_content) == failure
     run = next(iter(runtime.chat_runs._runs.values()))
     assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
         "tool_call": {"id": "call_1", "index": 0, "name": "legacy"},
