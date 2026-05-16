@@ -46,6 +46,26 @@ def test_upload_valid_jpeg_returns_attachment_metadata(tmp_path: Path) -> None:
     assert body["filename"] == "photo.jpg"
     assert body["media_type"] == "image/jpeg"
     assert body["size_bytes"] == len(payload)
+    assert body["text_content"] is None
+
+
+def test_upload_text_file_returns_embedded_text_content(tmp_path: Path) -> None:
+    payload = b"hello from text file\nsecond line"
+
+    with _create_client(tmp_path) as client:
+        response = client.post(
+            "/api/upload",
+            files={"file": ("note.txt", payload, "text/plain")},
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert isinstance(body["attachment_id"], str)
+    assert body["attachment_id"]
+    assert body["filename"] == "note.txt"
+    assert body["media_type"].startswith("text/")
+    assert body["size_bytes"] == len(payload)
+    assert body["text_content"] == "hello from text file\nsecond line"
 
 
 def test_upload_rejects_payload_over_20_mib_limit(tmp_path: Path) -> None:
