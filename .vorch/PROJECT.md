@@ -23,7 +23,7 @@ cli/           ← Server management. Imports core/. Used by both users and agen
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, chat, agents, tools, providers, channels,
+**Core modules:** runtime, models, chat, attachments, agents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
@@ -34,7 +34,7 @@ Automation now includes both `TriggerService` for queued programmatic run starts
 and `CronService` for persisted time-based scheduling rooted at `<data_dir>/cron/`.
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push)
-+ `/ws/logs` (selected log-file live tail) + SSE (streaming). No auth
++ `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth
 (single-user-local).
 
 **Data flow:** Accessors → HTTP/WS/SSE → server delegates → core (orchestration
@@ -48,7 +48,9 @@ higher precedence than the data-dir `.env`; vBot does not rewrite `os.environ`
 from `.env` values. `settings.json` may include `skill_directories`, an array of
 absolute or home-relative additional skill scan roots configured from the
 Settings UI. Saving skill directories through `settings.update` reloads the
-runtime skill registry immediately.
+runtime skill registry immediately. `settings.json` may also include
+`attachment_max_size_bytes`, an integer attachment upload limit used by the
+runtime-owned `AttachmentStore` (default 20 MiB).
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
@@ -110,7 +112,7 @@ pip install -e ".[dev]"
 Use the current Python interpreter directly. Do not assume a virtual
 environment for installs, quality gates, or runtime commands.
 
-**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), `croniter` (cron expression parsing / next-fire calculation), and `tzdata` (cross-platform IANA timezone data for cron scheduling). The `server` group includes `watchfiles` for the dedicated log-view watcher transport and `python-telegram-bot` for channel adapters. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, the log-view watcher dependency, Telegram channel adapter dependencies, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket, channel flows, and CLI tests. See `pyproject.toml` for exact packages.
+**Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies: `httpx`, `pyyaml` (direct `SKILL.md` YAML frontmatter parsing), `croniter` (cron expression parsing / next-fire calculation), and `tzdata` (cross-platform IANA timezone data for cron scheduling). The `server` group includes `watchfiles` for the dedicated log-view watcher transport, `python-telegram-bot` for channel adapters, and `python-multipart` for FastAPI multipart upload parsing. The `cli` group includes `psutil` for safe local process lookup during server lifecycle management. The `dev` group includes server transport dependencies, multipart upload parsing, the log-view watcher dependency, Telegram channel adapter dependencies, and CLI process-management dependencies so backend quality gates exercise FastAPI/SSE/WebSocket, channel flows, upload endpoints, and CLI tests. See `pyproject.toml` for exact packages.
 
 **Run:**
 ```bash
@@ -125,8 +127,9 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
-keys), `settings.json`, `logs/`, OAuth tokens under `oauth/`, scheduled cron
-jobs under `cron/jobs.json`, and all runtime data.
+keys), `settings.json`, `attachments/` blobs plus per-blob sidecar JSON,
+`logs/`, OAuth tokens under `oauth/`, scheduled cron jobs under `cron/jobs.json`,
+and all runtime data.
 
 ## Testing
 
@@ -207,6 +210,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/providers.md` | `core/providers/` | Provider config, adapter hierarchy, wire protocols, error classification |
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, JSONL sessions, chat-loop constraints |
+| `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
 | `.vorch/specs/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
 | `.vorch/specs/tools.md` | `core/tools/` | Tool metadata, allowlist filtering, provider definitions, dispatch |
 | `.vorch/specs/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |

@@ -8,7 +8,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Data Model
 
-Phase 2 creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
+Phase 2 creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `skills.md`.
 
@@ -20,6 +20,7 @@ as a read-only fallback credential source.
 - `appearance.language` — persisted WebUI language preference.
 - `skill_directories` — additional skill scan root paths configured from the Settings UI.
 - `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` — integer limits for sub-agent tool execution.
+- `attachment_max_size_bytes` — integer attachment upload limit for the runtime-owned `AttachmentStore`, default `20971520`.
 
 ## Interfaces
 
@@ -51,7 +52,9 @@ as a read-only fallback credential source.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
 - Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
+- `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.
 
 ## Constraints & Gotchas
 
 - Atomic writes use temp files in `<data_dir>/.tmp/`; callers must ensure directories exist through `ensure_directories()` or methods that call it.
+- `ensure_directories()` is the owner of the `<data_dir>/attachments/` root used by `AttachmentStore`; attachment code should not invent a parallel storage root.

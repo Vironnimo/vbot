@@ -71,9 +71,9 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   expressions with `croniter`, and returns `next_fire_at` for active cron jobs
   in `list` responses.
 - Built-in `channel_send` tool: flat name `channel_send`; schema includes
-  required `channel_id`, required `message`, and optional `platform_target`.
-  It delegates to `ChannelService.send()` and resolves `platform_target` from
-  session metadata `last_reply_target` when omitted.
+  required `channel_id`, optional `message`, optional `file_paths`, and optional
+  `platform_target`. It delegates to `ChannelService.send()` and resolves
+  `platform_target` from session metadata `last_reply_target` when omitted.
 
 ## Interfaces
 
@@ -160,9 +160,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   hook. When `platform_target` is omitted, it reads `last_reply_target` from
   `ChatSessionManager` metadata for the current `(agent_id, session_id)` and
   fails clearly if no target is available.
+- `channel_send` requires at least one of `message` or `file_paths`. When both
+  are present, `message` acts as the caption or accompanying text for the file send.
 - `channel_send` is present only while the runtime has at least one active
   channel. Runtime enable/disable flows re-register the tool to keep catalogs in
   sync.
+- `channel_send.file_paths` are ordinary local paths. The tool reads the files,
+  sniffs MIME types, builds channel `FileData` payloads, and keeps Telegram-specific
+  batching or media-group decisions inside the adapter layer.
 - `glob` is for path discovery. It accepts glob-style relative patterns such as
   `**/*.py`, includes files and directories, sorts matches relative to the
   search root, caps output at 100 matches, and returns no-match messages as

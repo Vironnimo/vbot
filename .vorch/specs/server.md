@@ -52,6 +52,11 @@ Clients call the vBot server contract; provider wire details stay behind
   each parsed entry includes `timestamp`, `level`, `logger_name`, `message`,
   and `continuation` for multiline tails. `cursor` is a short-lived handoff
   token for the follow-up log WebSocket subscription.
+- `POST /api/upload` accepts one multipart file upload and returns
+  `{ attachment_id, filename, media_type, size_bytes }`. Oversize uploads map
+  to HTTP 413; blocked MIME types map to HTTP 415.
+- `GET /api/attachments/{attachment_id}` returns the raw stored blob with the
+  stored `media_type` as Content-Type, or 404 when the attachment does not exist.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
 - `cron.create` accepts scheduled job fields and returns `{ id }`.
@@ -89,7 +94,8 @@ Clients call the vBot server contract; provider wire details stay behind
   return `{ ok: true }`.
 - `channel.status` accepts `{ id }` and returns `{ id, enabled, running }`.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
-  through the shared `ChatLoop.start_run()` execution model.
+  through the shared `ChatLoop.start_run()` execution model. `content` may be a
+  string or a JSON array of canonical content-block dicts.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
@@ -109,7 +115,8 @@ Clients call the vBot server contract; provider wire details stay behind
 
 - `server.app.create_app(runtime=None, config=None)` — creates the FastAPI app,
   starts/stops `Runtime` during lifespan, and wires `runtime`, the Runtime-owned
-  `ChatRunManager`, the server streaming `ChatLoop`, and the server event bus
+  `ChatRunManager`, the runtime-provided resolver-wired chat loops when available,
+  and the server event bus
   into `app.state`.
 - `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC
   methods to transport-only delegates.
@@ -174,13 +181,16 @@ Clients call the vBot server contract; provider wire details stay behind
   internal system reminders, not normal UI-visible chat messages.
 - Public history payloads include `role: "error"` messages so failed Runs remain
   visible after reload.
+- Attachment uploads stay outside the RPC envelope. WebUI and other accessors use
+  the dedicated HTTP endpoints instead of `POST /api/rpc` for blob transfer.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
   `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr`) are SSE-only.
   They must not be bridged to WebSocket lifecycle summaries.
 
 ## Constraints & gotchas
 
-- The server optional dependency group provides FastAPI, uvicorn, and websockets.
+- The server optional dependency group provides FastAPI, uvicorn, websockets,
+  and `python-multipart` for upload endpoint parsing.
   Server code should fail clearly if these extras are not installed.
 - Exact long-term payload schemas remain intentionally lightweight in Phase 3;
   keep schema decisions isolated in `server/delegates.py` and transport files.

@@ -18,7 +18,7 @@ container; a Run is one active execution inside that session.
 - `ChatMessage` — persisted canonical message with role-specific fields:
   - common: `id`, `timestamp`, `role`
   - `system`: `model`, `content`
-  - `user`: `content`
+  - `user`: `content` (`str` or `list[ContentBlock]`)
   - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `tool_calls`
   - `tool`: `tool_call_id`, `name`, `content`
   - `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
@@ -46,9 +46,11 @@ container; a Run is one active execution inside that session.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
-- `ChatLoop(runtime, max_tool_iterations=8, streaming=False)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
+- `ChatLoop(runtime, max_tool_iterations=8, streaming=False, attachment_resolver=None)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=..., internal=False) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager. Internal runs persist `content` as a `role: "note"` system reminder rather than a visible `role: "user"` message.
+- `core/chat/content_blocks.py` owns `TextBlock`, `MediaBlock`, `FileBlock`, plus dict round-trip helpers for persisted JSONL content lists.
+- `core/chat/block_resolver.py` owns last-mile attachment resolution from persisted content blocks to provider-ready dicts just before adapter calls.
 
 ## Phase 3 Server Contract Alignment
 
@@ -88,6 +90,8 @@ container; a Run is one active execution inside that session.
   called without an existing `session_id`, or create the named session if it
   does not yet exist. This describes current implementation behavior and should
   not be mistaken for the intended public/server product contract.
+- Only user messages may persist `list[ContentBlock]` content. System, assistant,
+  tool, note, and error messages remain string-or-null content only.
 - Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
@@ -102,6 +106,12 @@ container; a Run is one active execution inside that session.
 - If a retryable `ProviderError` escapes adapter retries and the Agent has a resolvable `fallback_model`, the chat loop may switch to that fallback for the rest of the current Run. The switch emits `model_fallback_activated` and persists a note so the next provider request sees the change as a `<system-reminder>`. The Agent config itself is not mutated, so the next turn starts from the primary model again.
 - Run-local model fallback is part of the shared ChatLoop execution path and therefore applies equally to direct and internal Runs that execute through that path.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
+- Attachment resolution happens in the chat layer, not inside provider adapters.
+  Current-turn `MediaBlock` image attachments become base64 provider-neutral media dicts;
+  historical media become text placeholders; `FileBlock` becomes a text note with
+  MIME type and local path; `TextBlock` stays embedded text.
+- Vision capability checks also happen in the chat layer. An image attachment sent
+  to a non-vision model raises a clear `ChatError`; there is no silent fallback.
 
 ## Token Usage
 
