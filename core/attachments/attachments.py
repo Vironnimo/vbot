@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ JsonObject = dict[str, Any]
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _OOXML_WILDCARD = "application/vnd.openxmlformats-officedocument.*"
+_UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _MIME_ALLOWLIST = frozenset(
     {
         "image/jpeg",
@@ -120,6 +122,7 @@ class AttachmentStore:
     def get(self, attachment_id: str) -> AttachmentRecord:
         """Load one attachment record by id from sidecar metadata."""
 
+        _validate_attachment_id(attachment_id)
         sidecar_path = self._sidecar_path(attachment_id)
         if not sidecar_path.exists():
             raise AttachmentNotFoundError(f"Attachment not found: {attachment_id}")
@@ -139,6 +142,7 @@ class AttachmentStore:
     def delete(self, attachment_id: str) -> None:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
+        _validate_attachment_id(attachment_id)
         for target_path in (self._blob_path(attachment_id), self._sidecar_path(attachment_id)):
             try:
                 target_path.unlink()
@@ -209,6 +213,11 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "text/plain"
 
     return "application/octet-stream"
+
+
+def _validate_attachment_id(attachment_id: str) -> None:
+    if not _UUID4_RE.match(attachment_id.lower()):
+        raise AttachmentNotFoundError(f"Invalid attachment id: {attachment_id}")
 
 
 def _sniff_ooxml_media_type(data: bytes) -> str | None:
