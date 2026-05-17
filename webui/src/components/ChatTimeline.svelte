@@ -10,6 +10,7 @@
     sessionState,
     agentName = '',
     onNavigateToSubAgent = () => {},
+    onRetry = () => {},
   } = $props();
 
   function isNearBottom(container) {
@@ -1280,6 +1281,11 @@
               {#if metaForEvent(item.event)}
                 <span>· {metaForEvent(item.event)}</span>
               {/if}
+              {#if item.event.type === 'run_failed'}
+                <button type="button" class="retry-btn" onclick={onRetry}
+                  >{t('chat.retryRun', 'Retry')}</button
+                >
+              {/if}
             </p>
           {:else if textFromEvent(item.event) || hasUserContentBlocks(messageFromEvent(item.event))}
             <article
@@ -1473,6 +1479,30 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     text-align: center;
+  }
+
+  .retry-btn {
+    margin-left: 7px;
+    border: 0;
+    border-bottom: 1px solid rgba(232, 135, 10, 0.28);
+    padding: 0;
+    background: transparent;
+    color: var(--text-med);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .retry-btn:hover {
+    border-bottom-color: rgba(232, 135, 10, 0.48);
+    color: var(--accent);
+  }
+
+  .retry-btn:focus-visible {
+    border-radius: 3px;
+    outline: 1px solid rgba(232, 135, 10, 0.35);
+    outline-offset: 3px;
   }
 
   .streaming-message .msg-author {
