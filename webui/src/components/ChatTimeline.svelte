@@ -23,18 +23,37 @@
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
-  let latestTerminalEventId = $derived.by(() => {
+  let latestTerminalState = $derived.by(() => {
     for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
       const item = timelineItems[index];
+      if (item?.type === 'assistant_run') {
+        const terminalType = item.terminalEvent?.type;
+        if (
+          typeof terminalType === 'string' &&
+          terminalType.startsWith('run_')
+        ) {
+          return {
+            itemId: item.id,
+            failed: terminalType === 'run_failed',
+          };
+        }
+        continue;
+      }
       if (
         item?.type === 'event' &&
         typeof item.event?.type === 'string' &&
         item.event.type.startsWith('run_')
       ) {
-        return item.id;
+        return {
+          itemId: item.id,
+          failed: item.event.type === 'run_failed',
+        };
       }
     }
-    return '';
+    return {
+      itemId: '',
+      failed: false,
+    };
   });
   let timelineSignature = $derived(
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
@@ -867,9 +886,11 @@
   const isTerminalEvent = (event) => event.type.startsWith('run_');
 
   const shouldRenderRetryButton = (item) =>
-    item?.type === 'event' &&
-    item.event?.type === 'run_failed' &&
-    item.id === latestTerminalEventId;
+    latestTerminalState.failed &&
+    item?.id === latestTerminalState.itemId &&
+    ((item.type === 'assistant_run' &&
+      item.terminalEvent?.type === 'run_failed') ||
+      (item.type === 'event' && item.event?.type === 'run_failed'));
 
   const labelForStreamingItem = (streamingItem) => {
     if (streamingItem.type === 'reasoning') {
@@ -1082,6 +1103,11 @@
               {#each runMetaParts(item) as metaPart (metaPart)}
                 <span class="msg-meta-extra">· {metaPart}</span>
               {/each}
+              {#if shouldRenderRetryButton(item)}
+                <button type="button" class="retry-btn" onclick={onRetry}
+                  >{t('chat.retryRun', 'Retry last turn')}</button
+                >
+              {/if}
             </div>
             <div class="msg-content assistant-run-content">
               {#each visibleRunChildren(item) as child (child.id)}
