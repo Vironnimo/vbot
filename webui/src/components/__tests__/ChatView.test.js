@@ -139,7 +139,7 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
-  it('bypasses queue and handles slash commands immediately while a run is active', async () => {
+  it('keeps slash skill triggers queued while allowing built-in /stop to bypass during an active run', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -176,6 +176,16 @@ describe('ChatView', () => {
 
     await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
 
+    sendComposerMessage('/debugging investigate this run');
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.queued-messages__content')
+          ?.textContent?.includes('/debugging investigate this run'),
+      100,
+    );
+
     sendComposerMessage('/stop');
 
     await waitForCondition(
@@ -186,7 +196,11 @@ describe('ChatView', () => {
     );
 
     expect(streamCalls).toEqual(['Start a long run', '/stop']);
-    expect(document.body.querySelector('.queued-messages')).toBeNull();
+    expect(
+      document.body
+        .querySelector('.queued-messages__content')
+        ?.textContent?.includes('/debugging investigate this run'),
+    ).toBe(true);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 
