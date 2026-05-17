@@ -12,6 +12,12 @@ from core.chat.chat import (
     ToolCall,
     ToolIterationLimitError,
 )
+from core.chat.commands import (
+    CommandDispatcher,
+    CommandHandled,
+    DispatchResult,
+    NotACommand,
+)
 from core.chat.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -49,9 +55,13 @@ __all__ = [
     "ChatSession",
     "ChatSessionError",
     "ChatSessionManager",
+    "CommandDispatcher",
+    "CommandHandled",
+    "DispatchResult",
     "ERROR_MESSAGE_PERSISTED_EVENT",
     "MAX_TOOL_ITERATIONS",
     "MODEL_FALLBACK_ACTIVATED_EVENT",
+    "NotACommand",
     "REASONING_DELTA_EVENT",
     "REASONING_EVENT",
     "RUN_CANCELLED_EVENT",

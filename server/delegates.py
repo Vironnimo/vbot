@@ -32,14 +32,22 @@ from core.chat import (
     ChatError,
     ChatLoop,
     ChatMessage,
+    ChatRunManager,
     ChatSessionError,
+    CommandDispatcher,
+    CommandHandled,
     Run,
     RunCancelledError,
     RunError,
     RunEvent,
     RunNotFoundError,
 )
-from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
+from core.chat.content_blocks import (
+    ContentBlock,
+    ContentBlockError,
+    TextBlock,
+    content_block_from_dict,
+)
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
@@ -163,6 +171,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _list_tools(state, params)
         case "skill.list":
             return _list_skills(state, params)
+        case "chat.commands":
+            return _list_commands(state, params)
         case "agent.list":
             return _list_agents(state)
         case "agent.create":
@@ -488,6 +498,32 @@ def _list_skills(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+def _list_commands(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "chat.commands does not accept params")
+    try:
+        command_items = [
+            {
+                "name": name,
+                "description": description,
+                "type": "command",
+            }
+            for name, description in sorted(CommandDispatcher.BUILT_IN_COMMANDS.items())
+        ]
+        skills = sorted(state.runtime.skills.list_all(), key=lambda skill: skill.name)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    skill_items = [
+        {
+            "name": skill.name,
+            "description": skill.description,
+            "type": "skill",
+        }
+        for skill in skills
+    ]
+    return {"items": [*command_items, *skill_items]}
+
+
 def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     name = _required_string(params, "name")
@@ -621,10 +657,44 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": active_session_id, "messages": messages}
 
 
+def _extract_command_text(content: str | list[ContentBlock]) -> str | None:
+    if isinstance(content, str):
+        return content
+
+    if len(content) != 1:
+        return None
+
+    block = content[0]
+    if isinstance(block, TextBlock):
+        return block.text
+    return None
+
+
+def _command_handled_response(reply: str | None) -> JsonObject:
+    return {
+        "command_handled": True,
+        "reply": reply or "",
+    }
+
+
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
+
+    command_text = _extract_command_text(content)
+    if command_text is not None:
+        try:
+            command_result = _state_command_dispatcher(state).dispatch(
+                agent_id,
+                session_id,
+                command_text,
+            )
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        if isinstance(command_result, CommandHandled):
+            return _command_handled_response(command_result.reply)
+
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
         _bridge_run_to_event_bus(state, run)
@@ -638,6 +708,20 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
+
+    command_text = _extract_command_text(content)
+    if command_text is not None:
+        try:
+            command_result = _state_command_dispatcher(state).dispatch(
+                agent_id,
+                session_id,
+                command_text,
+            )
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        if isinstance(command_result, CommandHandled):
+            return _command_handled_response(command_result.reply)
+
     try:
         streaming_chat_loop = _streaming_chat_loop(state)
         run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
@@ -1880,6 +1964,33 @@ def _streaming_chat_loop(state: Any) -> Any:
     chat_loop = ChatLoop(state.runtime, streaming=True)
     state.streaming_chat_loop = chat_loop
     return chat_loop
+
+
+def _state_command_dispatcher(state: Any) -> CommandDispatcher:
+    command_dispatcher = getattr(state, "command_dispatcher", None)
+    if isinstance(command_dispatcher, CommandDispatcher):
+        return command_dispatcher
+
+    runtime = getattr(state, "runtime", None)
+    if runtime is not None:
+        try:
+            command_dispatcher = runtime.command_dispatcher
+        except AttributeError:
+            command_dispatcher = getattr(runtime, "_command_dispatcher", None)
+        except RuntimeError:
+            if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+                "core.runtime"
+            ):
+                raise
+            command_dispatcher = getattr(runtime, "_command_dispatcher", None)
+
+        if isinstance(command_dispatcher, CommandDispatcher):
+            state.command_dispatcher = command_dispatcher
+            return command_dispatcher
+
+    fallback_dispatcher = CommandDispatcher(ChatRunManager())
+    state.command_dispatcher = fallback_dispatcher
+    return fallback_dispatcher
 
 
 def _publish_agent_event(state: Any, event_type: str, payload: JsonObject) -> None:

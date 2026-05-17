@@ -17,7 +17,7 @@ from core.attachments.attachments import (
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
 )
-from core.chat import ChatLoop, ChatRunManager, RunNotFoundError
+from core.chat import ChatLoop, ChatRunManager, CommandDispatcher, RunNotFoundError
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc
@@ -203,6 +203,7 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = _runtime_chat_runs(runtime)
     app.state.chat_loop = _runtime_chat_loop(runtime)
+    app.state.command_dispatcher = _runtime_command_dispatcher(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
@@ -247,6 +248,22 @@ def _runtime_chat_loop(runtime: Any) -> Any:
     if chat_loop is not None:
         return chat_loop
     return ChatLoop(runtime)
+
+
+def _runtime_command_dispatcher(runtime: Any) -> CommandDispatcher:
+    try:
+        command_dispatcher = runtime.command_dispatcher
+    except AttributeError:
+        command_dispatcher = getattr(runtime, "_command_dispatcher", None)
+    except RuntimeError:
+        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+            "core.runtime"
+        ):
+            raise
+        command_dispatcher = getattr(runtime, "_command_dispatcher", None)
+    if isinstance(command_dispatcher, CommandDispatcher):
+        return command_dispatcher
+    return CommandDispatcher(ChatRunManager())
 
 
 def _runtime_attachment_store(runtime: Any) -> AttachmentStore:

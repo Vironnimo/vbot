@@ -21,6 +21,7 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
     from core.chat.chat import ChatSessionManager
+    from core.chat.commands import CommandDispatcher
 
 _LOGGER = get_logger("channels")
 
@@ -238,11 +239,14 @@ class ChannelService:
         chat_sessions: ChatSessionManager,
         runtime: object,
         attachment_store: AttachmentStore | None = None,
+        *,
+        command_dispatcher: CommandDispatcher,
     ) -> None:
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
         self._runtime = runtime
         self._attachment_store = attachment_store
+        self._command_dispatcher = command_dispatcher
         self._storage = ChannelStorage(_resolve_runtime_data_root(runtime))
         self._adapters: dict[str, ChannelAdapter] = {}
         self._adapter_tasks: dict[str, asyncio.Task[None]] = {}
@@ -543,6 +547,7 @@ class ChannelService:
                 self._chat_sessions,
                 self._runtime,
                 attachment_store=self._attachment_store,
+                command_dispatcher=self._command_dispatcher,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")

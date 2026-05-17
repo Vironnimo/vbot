@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
 
   import { rpc, subscribeRunEvents } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -44,12 +44,16 @@
   let cancellingRun = $state(false);
   let historyError = $state('');
   let actionError = $state('');
+  let actionInfo = $state('');
   let availableSkills = $state([]);
+  let builtInCommandNames = $state([]);
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
   let viewingSessionReadOnly = $state(false);
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
+  const ACTION_INFO_TIMEOUT_MS = 4000;
+  let actionInfoTimeoutId = null;
 
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(getActiveSessionState());
@@ -63,6 +67,7 @@
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
+  const LOCAL_BUILT_IN_COMMAND_FALLBACKS = new Set(['stop']);
 
   const usageTotalTokens = (usage) => {
     const inputTokens = Number.isFinite(usage?.input_tokens)
@@ -164,17 +169,80 @@
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
-    loadSkills();
+    loadCommands();
     return () => closeSubscriptions();
   });
 
-  const loadSkills = async () => {
+  onDestroy(() => {
+    if (actionInfoTimeoutId !== null) {
+      clearTimeout(actionInfoTimeoutId);
+      actionInfoTimeoutId = null;
+    }
+  });
+
+  const setActionInfo = (message) => {
+    if (actionInfoTimeoutId !== null) {
+      clearTimeout(actionInfoTimeoutId);
+      actionInfoTimeoutId = null;
+    }
+
+    actionInfo = typeof message === 'string' ? message : '';
+
+    if (!actionInfo) {
+      return;
+    }
+
+    actionInfoTimeoutId = setTimeout(() => {
+      actionInfo = '';
+      actionInfoTimeoutId = null;
+    }, ACTION_INFO_TIMEOUT_MS);
+  };
+
+  const isRecognizedBuiltInCommand = (content) => {
+    if (typeof content !== 'string') {
+      return false;
+    }
+
+    const trimmed = content.trimStart();
+    if (!trimmed.startsWith('/')) {
+      return false;
+    }
+
+    const normalizedMessage = trimmed.trim().toLowerCase();
+    if (LOCAL_BUILT_IN_COMMAND_FALLBACKS.has(normalizedMessage.slice(1))) {
+      return true;
+    }
+
+    return builtInCommandNames.some(
+      (commandName) => normalizedMessage === `/${commandName}`,
+    );
+  };
+
+  const loadCommands = async () => {
     try {
-      const result = await rpc('skill.list');
-      availableSkills = Array.isArray(result?.skills) ? result.skills : [];
+      const result = await rpc('chat.commands');
+      const items = Array.isArray(result?.items) ? result.items : [];
+      builtInCommandNames = items
+        .filter(
+          (item) =>
+            item?.type === 'command' &&
+            typeof item?.name === 'string' &&
+            item.name.length > 0,
+        )
+        .map((item) => item.name.toLowerCase());
+      availableSkills = items
+        .filter(
+          (item) => typeof item?.name === 'string' && item.name.length > 0,
+        )
+        .map((item) => ({
+          name: item.name,
+          description: item.description ?? '',
+          type: item.type,
+        }));
     } catch (error) {
-      actionError = `${t('chat.skillsLoadError', 'Skill suggestions could not be loaded.')} ${error.message}`;
+      actionError = `${t('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${error.message}`;
       availableSkills = [];
+      builtInCommandNames = [];
     }
   };
 
@@ -328,7 +396,7 @@
     if (!agent || !sessionState) {
       return;
     }
-    if (isRunActive(sessionState)) {
+    if (isRunActive(sessionState) && !isRecognizedBuiltInCommand(content)) {
       enqueueMessage(sessionState, content);
       return;
     }
@@ -337,12 +405,17 @@
 
   const sendStream = async (agent, sessionState, content) => {
     actionError = '';
+    actionInfo = '';
     try {
       const run = await rpc('chat.stream', {
         agent_id: agent.id,
         session_id: sessionState.sessionId,
         content,
       });
+      if (run?.command_handled) {
+        setActionInfo(run.reply);
+        return true;
+      }
       startRun(sessionState, run);
       subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
       return true;
@@ -576,7 +649,7 @@
         />
       {/if}
       <div class="chat-view__surface">
-        {#if readOnlySessionActive || loadingHistory || historyError || actionError || activeSessionState?.error}
+        {#if readOnlySessionActive || loadingHistory || historyError || actionError || actionInfo || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             {#if readOnlySessionActive}
               <div class="chat-view__readonly-notice">
@@ -623,6 +696,9 @@
             {/if}
             {#if actionError}
               <p class="chat-view__error">{actionError}</p>
+            {/if}
+            {#if actionInfo}
+              <p class="chat-view__info">{actionInfo}</p>
             {/if}
             {#if activeSessionState?.error}
               <p class="chat-view__error">
@@ -806,10 +882,15 @@
   }
 
   .chat-view__notice,
+  .chat-view__info,
   .chat-view__error {
     margin: 0;
     color: var(--text-med);
     font-size: 12.5px;
+  }
+
+  .chat-view__info {
+    color: var(--text-med);
   }
 
   .chat-view__error {

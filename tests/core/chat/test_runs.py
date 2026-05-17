@@ -7,7 +7,14 @@ from typing import Any
 
 import pytest
 
-from core.chat import ActiveRunError, ChatRunManager, Run, RunCancelledError, RunStatus
+from core.chat import (
+    ActiveRunError,
+    ChatRunManager,
+    Run,
+    RunCancelledError,
+    RunNotFoundError,
+    RunStatus,
+)
 from core.chat.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
@@ -150,6 +157,37 @@ async def test_cancel_invokes_registered_abort_callback() -> None:
 
     assert callbacks == ["aborted"]
     assert run.status == RunStatus.CANCELLED
+
+
+async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        started.set()
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await started.wait()
+
+    cancelled_run = manager.cancel_by_session("coder", "session-one")
+
+    assert cancelled_run is run
+    assert run.cancel_requested is True
+
+    release.set()
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+
+async def test_cancel_by_session_without_active_run_raises_not_found() -> None:
+    manager = ChatRunManager()
+
+    with pytest.raises(RunNotFoundError, match="no active run"):
+        manager.cancel_by_session("coder", "session-one")
 
 
 async def test_failed_run_releases_session_lock() -> None:

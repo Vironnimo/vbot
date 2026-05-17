@@ -42,7 +42,8 @@ container; a Run is one active execution inside that session.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
-- `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, and allows parallel Runs in different Sessions.
+- `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, and allows parallel Runs in different Sessions.
+- `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins return a handled result with optional reply text; unknown slash text falls through so normal chat behavior, including skill activation, stays intact.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
@@ -79,6 +80,9 @@ container; a Run is one active execution inside that session.
   `cancelled`.
 - Run cancellation also calls the runtime `ProcessManager.cancel_scope(run.id)`
   hook so active host processes started by tools in that Run are killed.
+- Built-in slash commands are intercepted before `ChatLoop.start_run()` only
+  for pure-text messages. Attachment-bearing or multi-block messages bypass
+  command dispatch and continue through the normal Run path.
 
 ## Conventions
 
@@ -97,6 +101,10 @@ container; a Run is one active execution inside that session.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
 - User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
+- Recognized built-in slash commands (currently `/stop`) are not part of that
+  skill-activation path. They are handled earlier by the shared command
+  dispatcher; unrecognized slash text still reaches the existing skill-trigger
+  logic unchanged.
 - Normal server history responses and the standard WebUI timeline must filter out notes; only debug-specific surfaces may expose them intentionally.
 - Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results.
 - If a Session later continues with a different provider, stale `reasoning_meta`

@@ -14,7 +14,7 @@ from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptMana
 from core.attachments import AttachmentStore
 from core.automation import CronService, TriggerService
 from core.channels import ChannelService
-from core.chat import ChatLoop, ChatRunManager
+from core.chat import ChatLoop, ChatRunManager, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.chat import ChatSessionManager
 from core.extensions import ExtensionRegistry
@@ -126,6 +126,7 @@ class Runtime:
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._chat_run_manager: ChatRunManager | None = None
+        self._command_dispatcher: CommandDispatcher | None = None
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._streaming_chat_loop: ChatLoop | None = None
@@ -206,6 +207,7 @@ class Runtime:
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._chat_run_manager = ChatRunManager()
+        self._command_dispatcher = CommandDispatcher(self._chat_run_manager)
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
@@ -218,6 +220,7 @@ class Runtime:
             self._chat_sessions,
             self,
             attachment_store=self._attachment_store,
+            command_dispatcher=self._command_dispatcher,
         )
         self._channel_service._notify_tool_registration_changed_hook = (
             self._reload_channel_tool_if_started
@@ -283,6 +286,7 @@ class Runtime:
         self._subagent_batch_tracker = None
         self._chat_loop = None
         self._streaming_chat_loop = None
+        self._command_dispatcher = None
         self._chat_run_manager = None
         self.chat_runs = None
         self._system_prompts = None
@@ -562,6 +566,14 @@ class Runtime:
         if self._chat_run_manager is None:
             raise RuntimeError("Chat run manager service not available")
         return self._chat_run_manager
+
+    @property
+    def command_dispatcher(self) -> CommandDispatcher:
+        """Access to built-in slash command dispatch for chat entry points."""
+        self._ensure_started()
+        if self._command_dispatcher is None:
+            raise RuntimeError("Command dispatcher service not available")
+        return self._command_dispatcher
 
     @property
     def trigger_service(self) -> TriggerService:
