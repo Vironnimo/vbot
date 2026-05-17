@@ -183,6 +183,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _send_chat(state, params)
         case "chat.stream":
             return await _stream_chat(state, params)
+        case "chat.retry_last_turn":
+            return await _retry_chat(state, params)
         case "chat.cancel":
             return await _cancel_chat(state, params)
         case "channel.list":
@@ -639,6 +641,18 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     try:
         streaming_chat_loop = _streaming_chat_loop(state)
         run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
+        _bridge_run_to_event_bus(state, run)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+
+
+async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:
+    agent_id = _required_string(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        streaming_chat_loop = _streaming_chat_loop(state)
+        run = await streaming_chat_loop.retry_run(agent_id, session_id)
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
