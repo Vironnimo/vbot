@@ -41,6 +41,7 @@ Darin liegen unter anderem:
 
 - `.env` — API-Keys
 - `settings.json` — Instanz-Einstellungen
+- `extensions/` — lokale Python-Hooks und Erweiterungen
 - `agents/` — Agent-Konfigurationen
 - `workspace-<agent-id>/` — Agent-Workspaces
 
@@ -66,6 +67,105 @@ Die Port-Reihenfolge ist:
 2. `VBOT_SERVER_PORT`
 3. `settings.json`
 4. `8420`
+
+### Extensions und Hooks laden
+
+Beim Start scannt vBot automatisch dieses Verzeichnis:
+
+```text
+~/.vbot/extensions/
+```
+
+Zusätzliche Extension-Roots kannst du in `settings.json` über
+`extension_directories` eintragen:
+
+```json
+{
+  "server_port": 8420,
+  "extension_directories": [
+  "~/vbot-exts"
+  ]
+}
+```
+
+Unterstützte Entry-Point-Formen pro unmittelbarem Kind eines Extension-Roots:
+
+- `~/.vbot/extensions/block_write.py`
+- `~/.vbot/extensions/my_hooks/__init__.py`
+- `~/.vbot/extensions/my_hooks/extension.py`
+
+Wichtig:
+
+- Änderungen an Extensions werden erst nach einem Neustart von Server oder Runtime geladen.
+- Ladefehler loggen als `error`, Handlerfehler als `warn`. vBot läuft fail-open weiter.
+- `register(api)` darf synchron oder asynchron sein. Handler dürfen ebenfalls sync oder async sein.
+
+### Minimalbeispiel für eine Extension
+
+Lege zum Beispiel diese Datei an:
+
+```text
+~/.vbot/extensions/block_write.py
+```
+
+```python
+from core.tools.tools import tool_failure
+
+
+def register(api):
+  api.on("before_agent_start", append_rule)
+  api.on("tool_call", block_write)
+
+
+def append_rule(ctx, agent, session, messages, run):
+  return {
+    "system_prompt_append": (
+      "Bearbeite Dateien nur dann direkt, wenn du sie vorher gelesen oder gesucht hast."
+    )
+  }
+
+
+def block_write(ctx, tool_name, tool_call_id, input):
+  if tool_name != "write":
+    return None
+
+  return tool_failure(
+    "tool_blocked",
+    "Das write-Tool ist in dieser Instanz per lokaler Extension deaktiviert.",
+  )
+```
+
+Was dieses Beispiel macht:
+
+- `before_agent_start` hängt Text an den System-Prompt des aktuellen Runs an.
+- `tool_call` fängt jeden Tool-Call ab.
+- Wenn der Tool-Name `write` ist, liefert die Extension direkt ein Failure-Envelope zurück.
+- Dadurch wird das echte Tool nicht mehr ausgeführt.
+
+Wenn du Parameter nur umschreiben statt blockieren willst, mutiere `input`
+in-place und gib `None` zurück:
+
+```python
+def normalize_read_path(ctx, tool_name, tool_call_id, input):
+  if tool_name == "read" and input.get("path") == "README":
+    input["path"] = "README.md"
+```
+
+### Verfügbare Hook-Events
+
+- `run_start(ctx, session_id, agent_id)`
+- `run_end(ctx, session_id, agent_id, outcome)` mit `outcome = "success" | "error" | "cancelled"`
+- `before_agent_start(ctx, agent, session, messages, run)`
+- `context(ctx, messages)`
+- `tool_call(ctx, tool_name, tool_call_id, input)`
+- `tool_result(ctx, tool_name, tool_call_id, input, result)`
+
+Die wichtigsten Rückgaberegeln:
+
+- `before_agent_start`: gib `{"system_prompt_append": "..."}` zurück, um Text an den System-Prompt anzuhängen.
+- `context`: gib eine neue Message-Liste zurück, wenn du nur den nächsten LLM-Request verändern willst.
+- `tool_call`: gib ein vollständiges Tool-Result-Envelope zurück, wenn du den Tool-Call komplett ersetzen willst.
+- `tool_result`: gib ein Patch-Dict zurück; es wird flach auf das bestehende Result-Envelop gemerged.
 
 ## 4. Einen Agenten anlegen
 
