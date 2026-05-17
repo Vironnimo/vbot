@@ -31,7 +31,8 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `settings.json` `attachment_max_size_bytes`, wires services, starts the
   `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools, creates the
-  shared `ChatRunManager`, creates resolver-wired non-streaming and streaming
+  shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in
+  slash commands, creates resolver-wired non-streaming and streaming
   `ChatLoop` instances, wires `TriggerService`, wires and starts `ChannelService` when an event loop is active,
   registers the `channel_send` tool when at least one channel is active, wires
   and starts `CronService` when an event loop is active, registers the `cron`
@@ -61,6 +62,8 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `chat_run_manager` — shared `ChatRunManager` used by server chat flows and
   automation triggers. Runtime also exposes it as `runtime.chat_runs` for server
   compatibility.
+- `command_dispatcher` — shared `CommandDispatcher` for built-in slash
+  commands, used by server delegates and channel adapters before starting Runs.
 - `streaming_chat_loop` — resolver-wired streaming `ChatLoop` used by server SSE flows.
 - `trigger_service` — `TriggerService` for programmatic Run starts and
   in-memory busy-Session queueing.
@@ -101,3 +104,5 @@ configured otherwise.
 - Runtime owns the canonical resolver-wired chat loops. Server code should use
   `runtime.chat_loop` / `runtime.streaming_chat_loop` when available instead of
   constructing fresh `ChatLoop` instances and bypassing attachment resolution.
+- Runtime also owns the canonical `CommandDispatcher`; accessors should reuse
+  `runtime.command_dispatcher` instead of constructing ad-hoc command routers.
