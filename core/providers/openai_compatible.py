@@ -216,7 +216,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            NetworkError: Connection errors (retried, then raised).
+            ProviderTimeoutError: Timeout errors (retried, then raised).
             ProviderError: Other HTTP errors.
         """
 
@@ -273,7 +274,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            NetworkError: Connection and mid-stream read errors.
+            ProviderTimeoutError: Timeout errors during initial connection (retried, then raised).
             ProviderError: Other HTTP errors.
         """
         headers = await self._build_headers()
