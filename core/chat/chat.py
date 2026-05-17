@@ -40,6 +40,7 @@ from core.chat.streaming import (
     StreamingAccumulator,
     iter_with_chunk_timeout,
 )
+from core.extensions import ExtensionRegistry, HookContext
 from core.providers.errors import ProviderAuthError, ProviderRateLimitError, ProviderTimeoutError
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
@@ -581,9 +582,15 @@ class ChatSessionManager:
 class _EmittingToolRegistry(ToolRegistry):
     """Adapter that emits public lifecycle events around registry dispatch."""
 
-    def __init__(self, registry: Any, run: Run) -> None:
+    def __init__(
+        self,
+        registry: Any,
+        run: Run,
+        extension_registry: ExtensionRegistry | None = None,
+    ) -> None:
         self._registry = registry
         self._run = run
+        self._extension_registry = extension_registry
 
     async def dispatch(
         self,
@@ -603,7 +610,63 @@ class _EmittingToolRegistry(ToolRegistry):
                 }
             },
         )
-        result = await self._dispatch_with_failure_envelope(context, arguments, allowed_tools)
+        result: JsonObject | None = None
+        if self._extension_registry is not None:
+            ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
+            for extension_name, handler in self._extension_registry._handlers.get(
+                "tool_call",
+                [],
+            ):
+                try:
+                    hook_result = handler(
+                        ctx,
+                        tool_name=context.tool_name,
+                        tool_call_id=context.tool_call_id,
+                        input=arguments,
+                    )
+                    if inspect.isawaitable(hook_result):
+                        hook_result = await hook_result
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "Extension %r tool_call handler raised: %s",
+                        extension_name,
+                        exc,
+                    )
+                    continue
+                if isinstance(hook_result, dict):
+                    result = hook_result
+                    break
+
+        if result is None:
+            result = await self._dispatch_with_failure_envelope(context, arguments, allowed_tools)
+
+        if self._extension_registry is not None:
+            ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
+            for extension_name, handler in self._extension_registry._handlers.get(
+                "tool_result",
+                [],
+            ):
+                try:
+                    hook_result = handler(
+                        ctx,
+                        tool_name=context.tool_name,
+                        tool_call_id=context.tool_call_id,
+                        input=arguments,
+                        result=result,
+                    )
+                    if inspect.isawaitable(hook_result):
+                        hook_result = await hook_result
+                except Exception as exc:
+                    _LOGGER.warning(
+                        "Extension %r tool_result handler raised: %s",
+                        extension_name,
+                        exc,
+                    )
+                    continue
+                if isinstance(hook_result, dict):
+                    result = dict(result)
+                    result.update(hook_result)
+
         self._run.raise_if_cancelled()
         self._run.emit(
             TOOL_CALL_RESULT_EVENT,
@@ -767,8 +830,31 @@ class ChatLoop:
             run.agent_id,
             run.session_id,
         )
+        _run_succeeded = True
 
         try:
+            extension_registry = _runtime_extensions(self._runtime)
+            if extension_registry is not None:
+                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                for extension_name, handler in extension_registry._handlers.get(
+                    "run_start",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(
+                            extension_ctx,
+                            session_id=run.session_id,
+                            agent_id=run.agent_id,
+                        )
+                        if inspect.isawaitable(hook_result):
+                            await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r run_start handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
+
             run.raise_if_cancelled()
             if internal:
                 if not isinstance(content, str):
@@ -783,6 +869,48 @@ class ChatLoop:
             run.raise_if_cancelled()
             messages = self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
+
+            extension_registry = _runtime_extensions(self._runtime)
+            if extension_registry is not None:
+                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                prompt_appends: list[str] = []
+                for extension_name, handler in extension_registry._handlers.get(
+                    "before_agent_start",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(
+                            extension_ctx,
+                            agent=agent,
+                            session=session,
+                            messages=messages,
+                            run=run,
+                        )
+                        if inspect.isawaitable(hook_result):
+                            hook_result = await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r before_agent_start handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
+                        continue
+                    if isinstance(hook_result, dict) and isinstance(
+                        hook_result.get("system_prompt_append"),
+                        str,
+                    ):
+                        prompt_appends.append(hook_result["system_prompt_append"])
+
+                if prompt_appends and messages:
+                    system_content = messages[0].get("content")
+                    if isinstance(system_content, str):
+                        messages[0] = dict(messages[0])
+                        messages[0]["content"] = system_content + "\n" + "\n".join(prompt_appends)
+                    else:
+                        _LOGGER.debug(
+                            "before_agent_start: system message content is not a string; "
+                            "skipping append"
+                        )
 
             try:
                 return await self._send_until_final(
@@ -806,6 +934,7 @@ class ChatLoop:
                                 fb_connection_id,
                             )
                         except (ConfigError, VBotError) as construction_exc:
+                            _run_succeeded = False
                             _persist_run_error(run, session, construction_exc)
                             raise
                         run.add_cancel_callback(lambda: _close_adapter(fallback_adapter))
@@ -828,17 +957,51 @@ class ChatLoop:
                                 run,
                             )
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
+                            _run_succeeded = False
                             _persist_run_error(run, session, fallback_exc)
                             raise fallback_exc
                         finally:
                             await _close_adapter(fallback_adapter)
 
+                _run_succeeded = False
                 _persist_run_error(run, session, primary_exc)
                 raise
             except (ChatError, ConfigError, VBotError) as exc:
+                _run_succeeded = False
                 _persist_run_error(run, session, exc)
                 raise
         finally:
+            outcome: Literal["success", "error", "cancelled"]
+            if run.cancel_requested:
+                outcome = "cancelled"
+            elif _run_succeeded:
+                outcome = "success"
+            else:
+                outcome = "error"
+
+            extension_registry = _runtime_extensions(self._runtime)
+            if extension_registry is not None:
+                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                for extension_name, handler in extension_registry._handlers.get(
+                    "run_end",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(
+                            extension_ctx,
+                            session_id=run.session_id,
+                            agent_id=run.agent_id,
+                            outcome=outcome,
+                        )
+                        if inspect.isawaitable(hook_result):
+                            await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r run_end handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
+
             await _close_adapter(adapter)
 
     def _get_session(
@@ -903,11 +1066,34 @@ class ChatLoop:
             if pending_notes:
                 messages.append(_notes_to_synthetic_user_message(pending_notes))
             _sync_skill_context_messages(messages, session)
+            extension_registry = _runtime_extensions(self._runtime)
+            messages_for_request = [dict(message) for message in messages]
+            if extension_registry is not None:
+                extension_ctx = HookContext(session_id=run.session_id, agent_id=run.agent_id)
+                for extension_name, handler in extension_registry._handlers.get(
+                    "context",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(extension_ctx, messages=messages_for_request)
+                        if inspect.isawaitable(hook_result):
+                            hook_result = await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r context handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
+                        continue
+                    if isinstance(hook_result, list):
+                        messages_for_request = hook_result
+                        break
+
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
                 model_id,
-                messages,
+                messages_for_request,
                 tools,
                 run,
             )
@@ -1037,7 +1223,13 @@ class ChatLoop:
         run: Run,
     ) -> list[ChatMessage]:
         run.raise_if_cancelled()
-        executor = ToolExecutor(_EmittingToolRegistry(self._runtime.tools, run))
+        executor = ToolExecutor(
+            _EmittingToolRegistry(
+                self._runtime.tools,
+                run,
+                _runtime_extensions(self._runtime),
+            )
+        )
         results = await executor.execute_many(
             [
                 ScheduledToolCall(
@@ -1153,6 +1345,10 @@ def _runtime_run_manager(runtime: Any) -> ChatRunManager:
     run_manager = ChatRunManager()
     runtime.chat_runs = run_manager
     return run_manager
+
+
+def _runtime_extensions(runtime: Any) -> ExtensionRegistry | None:
+    return getattr(runtime, "extensions", None)
 
 
 def _runtime_data_root(runtime: Any) -> Path:
