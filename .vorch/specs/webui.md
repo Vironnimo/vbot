@@ -98,7 +98,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
 - `webui/src/components/ChatView.svelte`
-  - Loads `skill.list` on mount and passes the loadable `skills` array (not `invalid_skills`) to the composer for skill-trigger suggestions.
+  - Loads `chat.commands` on mount and passes the flat combined command/skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
+  - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
   - Owns the session drawer toggle plus local `viewingSessionId` override state.
     Selecting a session from the drawer loads its history without mutating the
     Agent's persisted `current_session_id`.
@@ -112,7 +113,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Maintains local pending attachments with `preview_url` object URLs and builds
     canonical message `content` as `string` or `list[ContentBlock]` on send.
 - `webui/src/components/SkillAutocomplete.svelte`
-  - Renders loadable skill name/description suggestions for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
+  - Renders a flat combined command/skill name/description list for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
   displayed from Agent data but omitted from public create/update payloads in
@@ -226,6 +227,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - Persisted error messages are visible chat timeline items with an error label and
   distinct red treatment.
 - Skill trigger autocomplete is a composer aid only. It must not fetch or inject skill content directly; `/skill-name` and `$skill-name` text is sent unchanged for backend deterministic activation.
+- Built-in command handling feedback is accessor-local UI state only. When the backend returns `{ command_handled: true, reply }`, ChatView shows the reply inline and must not subscribe to a Run stream for that submit.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`
   event arrives.

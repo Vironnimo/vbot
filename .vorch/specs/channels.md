@@ -4,7 +4,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 
 ## Overview
 
-`core/channels/` bridges external messaging platforms such as Telegram into the existing agentic loop. A Channel is an accessor-side transport abstraction, not a model provider: it receives inbound platform messages, resolves them into an Agent and Session, triggers a normal Run, and routes the final assistant text back to the platform. `ChannelService` owns persisted channel configs under `<data_dir>/channels/`, starts and stops one adapter task per enabled channel, and exposes proactive outbound send support for the `channel_send` tool. Channels reuse normal chat Sessions and the shared `TriggerService`; they do not own a separate conversation store. Telegram now also routes inbound photos/documents into canonical attachment-aware chat content.
+`core/channels/` bridges external messaging platforms such as Telegram into the existing agentic loop. A Channel is an accessor-side transport abstraction, not a model provider: it receives inbound platform messages, resolves them into an Agent and Session, intercepts recognized built-in slash commands on pure-text messages, otherwise triggers a normal Run, and routes the final assistant text back to the platform. `ChannelService` owns persisted channel configs under `<data_dir>/channels/`, starts and stops one adapter task per enabled channel, and exposes proactive outbound send support for the `channel_send` tool. Channels reuse normal chat Sessions, the shared `TriggerService`, and the shared `CommandDispatcher`; they do not own a separate conversation store. Telegram now also routes inbound photos/documents into canonical attachment-aware chat content.
 
 ## Data Model
 
@@ -53,6 +53,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Telegram adapter responsibilities:
   - long polling only in the first implementation
   - per-chat sequencing / batching in the adapter, not in `TriggerService`
+  - pure-text built-in slash commands are dispatched before `trigger_run`; handled commands reply immediately and do not start a Run
   - `run.subscribe()` reply delivery: only the final assistant text is forwarded
   - meaningful error reply on run failure or cancellation
   - outbound file sends decide between `send_photo`, `send_document`, and media groups inside the adapter
@@ -65,6 +66,8 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 
 - Closed architectural decisions D1-D8 from `stuff/channels.md` are binding for this domain.
 - Final assistant replies for inbound platform turns are automatic. Agents do not call `channel_send` for normal replies.
+- Recognized built-in slash commands are handled before `TriggerService`
+  queueing, but unknown slash text still follows the normal inbound chat path.
 - `channel_send` is for proactive outbound only.
 - `channel_send` may send text only, files only, or both; at least one payload is required.
 - Missing or empty `allowed_chat_ids` means deny-all for DM-capable channels.
