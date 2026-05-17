@@ -816,10 +816,26 @@ class ChatLoop:
             internal=internal,
         )
 
+    async def retry_run(self, agent_id: str, session_id: str) -> Run:
+        """Retry the last user turn without adding a new user message.
+
+        Only valid when the session already contains at least one user message.
+        """
+        session = self._get_session(agent_id, session_id, create_missing=False)
+        messages = session.load()
+        if not any(message.role == "user" for message in messages):
+            raise ChatSessionError("no user message in session to retry")
+        manager = _runtime_run_manager(self._runtime)
+        return await manager.start(
+            agent_id=agent_id,
+            session_id=session.id,
+            executor=lambda run: self._execute_run(run, content=None, retry=True),
+        )
+
     async def _start_run(
         self,
         agent_id: str,
-        content: str | list[ContentBlock],
+        content: str | list[ContentBlock] | None = None,
         *,
         session_id: str | None,
         create_missing: bool,
@@ -839,9 +855,10 @@ class ChatLoop:
     async def _execute_run(
         self,
         run: Run,
-        content: str | list[ContentBlock],
+        content: str | list[ContentBlock] | None = None,
         *,
         internal: bool = False,
+        retry: bool = False,
     ) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -882,11 +899,15 @@ class ChatLoop:
                         )
 
             run.raise_if_cancelled()
-            if internal:
+            if retry:
+                pass
+            elif internal:
                 if not isinstance(content, str):
                     raise ChatError("internal runs require string content")
                 session.add_note(content)
             else:
+                if content is None:
+                    raise ChatError("content is required for non-retry runs")
                 user_message = ChatMessage.user(content)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
