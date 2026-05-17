@@ -46,6 +46,7 @@
   let actionError = $state('');
   let actionInfo = $state('');
   let availableSkills = $state([]);
+  let builtInCommandNames = $state([]);
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
   let viewingSessionReadOnly = $state(false);
@@ -196,10 +197,34 @@
     }, ACTION_INFO_TIMEOUT_MS);
   };
 
+  const isRecognizedBuiltInCommand = (content) => {
+    if (typeof content !== 'string') {
+      return false;
+    }
+
+    const trimmed = content.trimStart();
+    if (!trimmed.startsWith('/')) {
+      return false;
+    }
+
+    const normalizedMessage = trimmed.trim().toLowerCase();
+    return builtInCommandNames.some(
+      (commandName) => normalizedMessage === `/${commandName}`,
+    );
+  };
+
   const loadCommands = async () => {
     try {
       const result = await rpc('chat.commands');
       const items = Array.isArray(result?.items) ? result.items : [];
+      builtInCommandNames = items
+        .filter(
+          (item) =>
+            item?.type === 'command' &&
+            typeof item?.name === 'string' &&
+            item.name.length > 0,
+        )
+        .map((item) => item.name.toLowerCase());
       availableSkills = items
         .filter(
           (item) => typeof item?.name === 'string' && item.name.length > 0,
@@ -207,10 +232,12 @@
         .map((item) => ({
           name: item.name,
           description: item.description ?? '',
+          type: item.type,
         }));
     } catch (error) {
       actionError = `${t('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${error.message}`;
       availableSkills = [];
+      builtInCommandNames = [];
     }
   };
 
@@ -364,9 +391,7 @@
     if (!agent || !sessionState) {
       return;
     }
-    const isSlashCommand =
-      typeof content === 'string' && content.trimStart().startsWith('/');
-    if (isRunActive(sessionState) && !isSlashCommand) {
+    if (isRunActive(sessionState) && !isRecognizedBuiltInCommand(content)) {
       enqueueMessage(sessionState, content);
       return;
     }
