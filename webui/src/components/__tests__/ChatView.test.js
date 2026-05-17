@@ -169,6 +169,65 @@ describe('ChatView', () => {
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
+  it('retries the current session when retry is requested from a read-only override', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        retryRunResponse: {
+          run_id: 'retry-run-1',
+          sse_url: '/api/runs/retry-run-1/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Sub-agent response'),
+      100,
+    );
+
+    expect(typeof mountedComponent.retryLastTurn).toBe('function');
+    await mountedComponent.retryLastTurn();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.retry_last_turn' &&
+            params?.agent_id === 'alpha' &&
+            params?.session_id === 'session-1',
+        ),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    });
+    expect(rpcMock).toHaveBeenCalledWith('chat.retry_last_turn', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    });
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.retry_last_turn', {
+      agent_id: 'alpha',
+      session_id: 'sub-session-1',
+    });
+  });
+
   it('loads selected session history from the sessions drawer', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -312,6 +371,7 @@ function createChatRpcMock({
   usage,
   contextWindow = 262144,
   sessionMessages,
+  retryRunResponse,
 } = {}) {
   const resolvedSessionMessages = {
     'session-1': [
@@ -361,6 +421,13 @@ function createChatRpcMock({
         ],
         invalid_skills: [],
       };
+    }
+
+    if (method === 'chat.retry_last_turn') {
+      if (retryRunResponse) {
+        return retryRunResponse;
+      }
+      throw new Error('Unexpected retry call');
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);

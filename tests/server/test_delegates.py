@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.chat import ChatMessage, ChatSessionManager
+from core.chat import ChatMessage, ChatSessionManager, Run
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from server.delegates import RUN_DELTA_EVENT_TYPES, SERVER_EVENT_TYPES, dispatch_rpc
 from server.events import ALLOWED_SERVER_EVENT_TYPES
@@ -25,6 +25,50 @@ def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:
 class HistoryAgentStore:
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id="session-one")
+
+
+class RetryLoopStub:
+    def __init__(self, run: Run) -> None:
+        self._run = run
+        self.calls: list[tuple[str, str]] = []
+
+    async def retry_run(self, agent_id: str, session_id: str) -> Run:
+        self.calls.append((agent_id, session_id))
+        return self._run
+
+
+@pytest.mark.asyncio
+async def test_chat_retry_last_turn_returns_streaming_run_response() -> None:
+    run = Run(run_id="run-retry", agent_id="parent", session_id="session-one")
+    retry_loop = RetryLoopStub(run)
+    state = SimpleNamespace(streaming_chat_loop=retry_loop)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.retry_last_turn",
+            "params": {"agent_id": "parent", "session_id": "session-one"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["run_id"] == "run-retry"
+    assert response["result"]["sse_url"] == "/api/runs/run-retry/events"
+    assert retry_loop.calls == [("parent", "session-one")]
+
+
+@pytest.mark.asyncio
+async def test_chat_retry_last_turn_requires_agent_id() -> None:
+    response = await dispatch_rpc(
+        SimpleNamespace(),
+        {
+            "method": "chat.retry_last_turn",
+            "params": {"session_id": "session-one"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio

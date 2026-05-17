@@ -1,11 +1,23 @@
 """Provider-specific exception classes.
 
-Domain-specific subclasses of ``ProviderError`` that classify HTTP and
-network errors by kind.  Each subclass hard-codes its ``retryable`` flag
-so that the retry utility can decide whether to re-attempt the call.
+Domain-specific provider exceptions and related network error classes.
+
+Provider subclasses hard-code their ``retryable`` flags so that the retry
+utility can decide whether to re-attempt the call.
 """
 
-from core.utils.errors import ProviderError
+from core.utils.errors import ProviderError, VBotError
+
+
+class NetworkError(VBotError):
+    """Network-level error (dropped connection, DNS failure, etc.).
+
+    Not a subclass of ProviderError - a network error is not provider-specific
+    and must not trigger model fallback. Retryable - the user can retry once
+    connectivity is restored.
+    """
+
+    retryable: bool = True
 
 
 class ProviderAuthError(ProviderError):

@@ -61,6 +61,21 @@ async def test_accumulates_visible_deltas_in_provider_order() -> None:
     assert fields.reasoning == "Think"
 
 
+async def test_partial_reasoning_is_none_without_reasoning_deltas() -> None:
+    accumulator = StreamingAccumulator()
+
+    assert accumulator.partial_reasoning is None
+
+
+async def test_partial_reasoning_returns_joined_reasoning_deltas() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta({"type": "reasoning_delta", "text": "Think"})
+    accumulator.add_delta({"type": "reasoning_delta", "text": " harder"})
+
+    assert accumulator.partial_reasoning == "Think harder"
+
+
 async def test_finalizes_empty_content_tool_only_response() -> None:
     accumulator = StreamingAccumulator()
 

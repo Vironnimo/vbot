@@ -429,6 +429,34 @@
     }
   };
 
+  const handleRetry = async () => {
+    if (readOnlySessionActive) {
+      clearSessionOverride();
+      await loadCurrentHistory();
+    }
+
+    const agent = selectedAgent(chatState);
+    const sessionState = activeSessionState;
+    if (!agent || !sessionState || isRunActive(sessionState)) {
+      return;
+    }
+    actionError = '';
+    try {
+      const run = await rpc('chat.retry_last_turn', {
+        agent_id: agent.id,
+        session_id: sessionState.sessionId,
+      });
+      startRun(sessionState, run);
+      subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
+    } catch (error) {
+      actionError = `${t('chat.retryError', 'Retry failed.')} ${error.message}`;
+    }
+  };
+
+  export async function retryLastTurn() {
+    await handleRetry();
+  }
+
   const handleRemoveQueuedMessage = (queuedMessageId) => {
     if (activeSessionState) {
       removeQueuedMessage(activeSessionState, queuedMessageId);
@@ -609,6 +637,7 @@
             sessionState={activeSessionState}
             agentName={activeAgent.name}
             onNavigateToSubAgent={navigateToSubAgent}
+            onRetry={handleRetry}
           />
         </div>
         <div class="chat-view__footer-stack">

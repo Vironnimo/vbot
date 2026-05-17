@@ -9,7 +9,7 @@ import os
 import re
 import uuid
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -39,10 +39,16 @@ from core.chat.runs import (
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
+    StreamingChunkTimeoutError,
     iter_with_chunk_timeout,
 )
 from core.extensions import ExtensionRegistry, HookContext
-from core.providers.errors import ProviderAuthError, ProviderRateLimitError, ProviderTimeoutError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
     ToolContext,
@@ -81,6 +87,7 @@ SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 ERROR_KIND_RATE_LIMIT = "rate_limit"
 ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_NETWORK = "network_error"
 ERROR_KIND_PROVIDER_OVERLOAD = "provider_overloaded"
 ERROR_KIND_TOOL_ITERATIONS = "tool_iterations_exceeded"
 ERROR_KIND_AUTH = "auth_error"
@@ -90,6 +97,7 @@ ERROR_KIND_PROVIDER_ERROR = "provider_error"
 ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
     ERROR_KIND_RATE_LIMIT: True,
     ERROR_KIND_TIMEOUT: True,
+    ERROR_KIND_NETWORK: True,
     ERROR_KIND_PROVIDER_OVERLOAD: True,
     ERROR_KIND_TOOL_ITERATIONS: True,
     ERROR_KIND_AUTH: False,
@@ -808,10 +816,26 @@ class ChatLoop:
             internal=internal,
         )
 
+    async def retry_run(self, agent_id: str, session_id: str) -> Run:
+        """Retry the last user turn without adding a new user message.
+
+        Only valid when the session already contains at least one user message.
+        """
+        session = self._get_session(agent_id, session_id, create_missing=False)
+        messages = session.load()
+        if not any(message.role == "user" for message in messages):
+            raise ChatSessionError("no user message in session to retry")
+        manager = _runtime_run_manager(self._runtime)
+        return await manager.start(
+            agent_id=agent_id,
+            session_id=session.id,
+            executor=lambda run: self._execute_run(run, content=None, retry=True),
+        )
+
     async def _start_run(
         self,
         agent_id: str,
-        content: str | list[ContentBlock],
+        content: str | list[ContentBlock] | None = None,
         *,
         session_id: str | None,
         create_missing: bool,
@@ -831,9 +855,10 @@ class ChatLoop:
     async def _execute_run(
         self,
         run: Run,
-        content: str | list[ContentBlock],
+        content: str | list[ContentBlock] | None = None,
         *,
         internal: bool = False,
+        retry: bool = False,
     ) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -874,11 +899,15 @@ class ChatLoop:
                         )
 
             run.raise_if_cancelled()
-            if internal:
+            if retry:
+                pass
+            elif internal:
                 if not isinstance(content, str):
                     raise ChatError("internal runs require string content")
                 session.add_note(content)
             else:
+                if content is None:
+                    raise ChatError("content is required for non-retry runs")
                 user_message = ChatMessage.user(content)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
@@ -1114,6 +1143,7 @@ class ChatLoop:
                 messages_for_request,
                 tools,
                 run,
+                note_hook=session.add_note,
             )
             run.raise_if_cancelled()
             if assistant_message.usage is None:
@@ -1150,6 +1180,7 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        note_hook: Callable[[str], None] | None = None,
     ) -> ChatMessage:
         if self._streaming:
             return await self._send_streaming_assistant_request(
@@ -1159,6 +1190,7 @@ class ChatLoop:
                 messages,
                 tools,
                 run,
+                note_hook=note_hook,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -1191,6 +1223,7 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        note_hook: Callable[[str], None] | None = None,
     ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
@@ -1215,6 +1248,7 @@ class ChatLoop:
                 run.raise_if_cancelled()
         except ProviderError as exc:
             if emitted_visible_delta or not _is_streaming_fallback_error(exc):
+                _maybe_persist_partial_thinking(accumulator, note_hook)
                 raise
             assistant_message = await self._send_non_streaming_assistant_request(
                 agent,
@@ -1225,6 +1259,9 @@ class ChatLoop:
             )
             _emit_assistant_events(run, assistant_message)
             return assistant_message
+        except BaseException:
+            _maybe_persist_partial_thinking(accumulator, note_hook)
+            raise
 
         assistant_message = _assistant_message_from_response(
             agent.model,
@@ -1424,6 +1461,17 @@ def _is_streaming_fallback_error(error: ProviderError) -> bool:
     return all(token in message for token in ("stream", "support"))
 
 
+def _maybe_persist_partial_thinking(
+    accumulator: StreamingAccumulator,
+    note_hook: Callable[[str], None] | None,
+) -> None:
+    if note_hook is None:
+        return
+    partial = accumulator.partial_reasoning
+    if partial:
+        note_hook(f"Partial thinking before interruption:\n{partial}")
+
+
 def _visible_message_payload(message: ChatMessage) -> JsonObject:
     data = message.to_dict()
     data.pop("reasoning_meta", None)
@@ -1510,6 +1558,10 @@ def _exception_to_error_kind(exc: Exception) -> str:
         return ERROR_KIND_RATE_LIMIT
     if isinstance(exc, ProviderTimeoutError):
         return ERROR_KIND_TIMEOUT
+    if isinstance(exc, StreamingChunkTimeoutError):
+        return ERROR_KIND_TIMEOUT
+    if isinstance(exc, NetworkError):
+        return ERROR_KIND_NETWORK
     if isinstance(exc, ProviderAuthError):
         return ERROR_KIND_AUTH
     if isinstance(exc, ProviderError):

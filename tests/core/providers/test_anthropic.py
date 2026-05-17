@@ -16,6 +16,7 @@ import respx
 
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import (
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -1120,6 +1121,20 @@ class TestSendErrorClassification:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_connect_error_raises_network_error(self, anthropic_adapter):
+        """Connection failures raise NetworkError."""
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ConnectError("connection failed"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection failed"),
+        ):
+            await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_500_raises_non_retryable_provider_error(self, anthropic_adapter):
         """HTTP 500 raises ProviderError with retryable=False."""
         # Arrange
@@ -1830,6 +1845,65 @@ class TestStreamSSE:
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             ):
                 pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_connect_error_raises_network_error(self, anthropic_adapter):
+        """stream() raises NetworkError on connection failures."""
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ConnectError("connection failed"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection failed"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+            ):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_read_error_raises_network_error(self, anthropic_adapter):
+        """stream() wraps mid-stream httpx.ReadError as NetworkError."""
+
+        request = httpx.Request("POST", ANTHROPIC_URL)
+
+        class _BrokenLineIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise httpx.ReadError("socket closed", request=request)
+
+        class _BrokenStreamResponse:
+            status_code = 200
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            def aiter_lines(self):
+                return _BrokenLineIterator()
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        broken_response = _BrokenStreamResponse()
+        with (
+            patch.object(
+                anthropic_adapter._client,
+                "send",
+                new=AsyncMock(return_value=broken_response),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: socket closed"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+        assert broken_response.closed is True
 
     @respx.mock
     @pytest.mark.asyncio
