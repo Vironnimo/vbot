@@ -268,9 +268,7 @@ class ChatRunManager:
         """Request cancellation for the active run in one session."""
         run = self._active_by_session.get((agent_id, session_id))
         if run is None or run.status != RunStatus.RUNNING:
-            raise RunNotFoundError(
-                f"no active run for agent '{agent_id}' session '{session_id}'"
-            )
+            raise RunNotFoundError(f"no active run for agent '{agent_id}' session '{session_id}'")
         run.request_cancel()
         return run
 
