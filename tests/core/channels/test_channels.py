@@ -22,6 +22,7 @@ from core.channels import (
 )
 from core.channels.adapter import FileData
 from core.channels.telegram import TelegramChannelAdapter
+from core.chat.commands import NotACommand
 
 
 class AgentStoreStub:
@@ -56,6 +57,7 @@ def make_service(
         cast(Any, SimpleNamespace()),
         make_runtime(tmp_path, known_agent_ids=known_agent_ids),
         attachment_store=attachment_store,
+        command_dispatcher=cast(Any, SimpleNamespace(dispatch=lambda *_args: NotACommand())),
     )
 
 

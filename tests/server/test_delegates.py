@@ -98,3 +98,43 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
         "Sub-agent batch completed." not in (message.get("content") or "")
         for message in response["result"]["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
+    skills = [
+        SimpleNamespace(name="debugging", description="Debug failures."),
+        SimpleNamespace(name="alpha", description="Alpha helper."),
+    ]
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            skills=SimpleNamespace(
+                list_all=lambda: skills,
+            )
+        )
+    )
+
+    response = await dispatch_rpc(state, {"method": "chat.commands", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "items": [
+                {
+                    "name": "stop",
+                    "description": "Cancel the active run for this session.",
+                    "type": "command",
+                },
+                {
+                    "name": "alpha",
+                    "description": "Alpha helper.",
+                    "type": "skill",
+                },
+                {
+                    "name": "debugging",
+                    "description": "Debug failures.",
+                    "type": "skill",
+                },
+            ]
+        },
+    }
