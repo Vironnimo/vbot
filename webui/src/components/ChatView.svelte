@@ -430,6 +430,11 @@
   };
 
   const handleRetry = async () => {
+    if (readOnlySessionActive) {
+      clearSessionOverride();
+      await loadCurrentHistory();
+    }
+
     const agent = selectedAgent(chatState);
     const sessionState = activeSessionState;
     if (!agent || !sessionState || isRunActive(sessionState)) {

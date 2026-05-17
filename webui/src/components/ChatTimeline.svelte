@@ -23,6 +23,19 @@
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
+  let latestTerminalEventId = $derived.by(() => {
+    for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
+      const item = timelineItems[index];
+      if (
+        item?.type === 'event' &&
+        typeof item.event?.type === 'string' &&
+        item.event.type.startsWith('run_')
+      ) {
+        return item.id;
+      }
+    }
+    return '';
+  });
   let timelineSignature = $derived(
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
@@ -853,6 +866,11 @@
 
   const isTerminalEvent = (event) => event.type.startsWith('run_');
 
+  const shouldRenderRetryButton = (item) =>
+    item?.type === 'event' &&
+    item.event?.type === 'run_failed' &&
+    item.id === latestTerminalEventId;
+
   const labelForStreamingItem = (streamingItem) => {
     if (streamingItem.type === 'reasoning') {
       return t('chat.event.thinking', 'Thinking').toUpperCase();
@@ -1281,9 +1299,9 @@
               {#if metaForEvent(item.event)}
                 <span>· {metaForEvent(item.event)}</span>
               {/if}
-              {#if item.event.type === 'run_failed'}
+              {#if shouldRenderRetryButton(item)}
                 <button type="button" class="retry-btn" onclick={onRetry}
-                  >{t('chat.retryRun', 'Retry')}</button
+                  >{t('chat.retryRun', 'Retry last turn')}</button
                 >
               {/if}
             </p>
