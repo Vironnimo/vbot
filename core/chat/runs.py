@@ -264,6 +264,16 @@ class ChatRunManager:
         await run._done.wait()  # noqa: SLF001 - manager owns run lifecycle internals.
         return run
 
+    def cancel_by_session(self, agent_id: str, session_id: str) -> Run:
+        """Request cancellation for the active run in one session."""
+        run = self._active_by_session.get((agent_id, session_id))
+        if run is None or run.status != RunStatus.RUNNING:
+            raise RunNotFoundError(
+                f"no active run for agent '{agent_id}' session '{session_id}'"
+            )
+        run.request_cancel()
+        return run
+
     def active_run(self, *, agent_id: str, session_id: str) -> Run | None:
         """Return the active run for a session, if one exists."""
         run = self._active_by_session.get((agent_id, session_id))
