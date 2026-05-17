@@ -97,6 +97,48 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
+  it('shows inline info and skips run subscription when a command is handled', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          command_handled: true,
+          reply: 'Run cancelled.',
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const composerInput = document.querySelector('#chat-composer-input');
+    expect(composerInput).toBeTruthy();
+    setInputValue(composerInput, '/stop');
+    flushSync();
+
+    const sendButton = document.querySelector('.send-btn');
+    expect(sendButton).toBeTruthy();
+    sendButton.click();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
+        'Run cancelled.',
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: '/stop',
+    });
+    expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+  });
+
   it('loads a sub-agent session override and shows it as read-only', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
@@ -372,6 +414,7 @@ function createChatRpcMock({
   contextWindow = 262144,
   sessionMessages,
   retryRunResponse,
+  streamResponse,
 } = {}) {
   const resolvedSessionMessages = {
     'session-1': [
@@ -409,18 +452,28 @@ function createChatRpcMock({
       throw new Error(`Unexpected session id: ${params.session_id}`);
     }
 
-    if (method === 'skill.list') {
+    if (method === 'chat.commands') {
       return {
-        skills: [
+        items: [
+          {
+            name: 'stop',
+            description: 'Cancel the active run for this session.',
+            type: 'command',
+          },
           {
             name: 'debugging',
             description: 'Investigate unclear bugs.',
-            valid: true,
-            warnings: [],
+            type: 'skill',
           },
         ],
-        invalid_skills: [],
       };
+    }
+
+    if (method === 'chat.stream') {
+      if (streamResponse) {
+        return streamResponse;
+      }
+      throw new Error('Unexpected stream call');
     }
 
     if (method === 'chat.retry_last_turn') {

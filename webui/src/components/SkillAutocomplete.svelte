@@ -59,7 +59,7 @@
     aria-label={t('skillAutocomplete.label', 'Skill suggestions')}
   >
     <div class="skill-autocomplete__eyebrow">
-      {t('skillAutocomplete.eyebrow', 'skills')}
+      {t('skillAutocomplete.eyebrow.commandsAndSkills', 'commands & skills')}
     </div>
     {#each matchingSkills as skill, index (skill.name)}
       <button
