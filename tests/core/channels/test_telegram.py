@@ -6,16 +6,17 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
-from core.channels.adapter import ConversationFacts, FileData
+from core.channels.adapter import ConversationFacts, FileData, MessageFacts, ReplyPlanFacts, RouteFacts
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
 from core.chat.chat import ChatSessionManager
+from core.chat.commands import CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.runs import ASSISTANT_OUTPUT_EVENT, Run
 
@@ -107,6 +108,11 @@ def make_failed_run(*, session_id: str, message: str) -> Run:
     return run
 
 
+def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
+    dispatch_result = NotACommand() if result is None else result
+    return SimpleNamespace(dispatch=Mock(return_value=dispatch_result))
+
+
 def make_adapter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -116,6 +122,7 @@ def make_adapter(
     trigger_run: AsyncMock | None = None,
     runtime: object | None = None,
     attachment_store: AttachmentStore | None = None,
+    command_dispatcher: object | None = None,
     set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
     if set_process_token:
@@ -126,6 +133,7 @@ def make_adapter(
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
     trigger_service = SimpleNamespace(trigger_run=trigger_mock)
+    resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
 
     adapter = TelegramChannelAdapter(
         make_config(dm_scope=dm_scope, allowed_chat_ids=allowed_chat_ids),
@@ -133,6 +141,7 @@ def make_adapter(
         cast(Any, chat_sessions),
         runtime=runtime if runtime is not None else SimpleNamespace(),
         attachment_store=attachment_store,
+        command_dispatcher=cast(Any, resolved_command_dispatcher),
     )
 
     bot = SimpleNamespace(
@@ -222,6 +231,7 @@ def test_constructor_requires_token_env_var(
             trigger_service=cast(Any, SimpleNamespace(trigger_run=AsyncMock())),
             chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
             runtime=SimpleNamespace(),
+            command_dispatcher=cast(Any, make_command_dispatcher()),
         )
 
 
@@ -237,6 +247,7 @@ def test_constructor_resolves_token_from_runtime_environment_contract(
         trigger_service=cast(Any, SimpleNamespace(trigger_run=AsyncMock())),
         chat_sessions=cast(Any, ChatSessionManager(tmp_path)),
         runtime=runtime,
+        command_dispatcher=cast(Any, make_command_dispatcher()),
     )
 
     assert adapter._token == "runtime-token"
@@ -325,6 +336,61 @@ async def test_completed_run_forwards_final_assistant_output(
     await drain_chat_queue(adapter, 12345)
 
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="final reply")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_plain_text_command_is_dispatched_before_trigger_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        command_dispatcher=command_dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/stop"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    command_dispatcher.dispatch.assert_called_once_with("assistant", "ch-tg-assistant-12345", "/stop")
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_non_text_content_skips_command_dispatch_and_triggers_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(return_value=make_completed_run(session_id=session_id, output_text="ok"))
+    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    queued = telegram_module._QueuedInboundMessage(
+        route=RouteFacts(agent_id="assistant", session_id=session_id),
+        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        message=MessageFacts(content=[TextBlock(type="text", text="/stop")]),
+    )
+
+    await adapter._process_queued_message(queued)
+
+    command_dispatcher.dispatch.assert_not_called()
+    trigger_mock.assert_awaited_once_with("assistant", queued.message.content, session_id)
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="ok")
     await adapter.stop()
 
 
