@@ -17,6 +17,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, ChatRunManager
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.chat import ChatSessionManager
+from core.extensions import ExtensionRegistry
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
@@ -122,6 +123,7 @@ class Runtime:
         self._tools: ToolRegistry | None = None
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
+        self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self.chat_runs: ChatRunManager | None = None
@@ -197,6 +199,11 @@ class Runtime:
                 invalid_skill_count,
             )
         register_skill_tool(self._tools, self._skills)
+        extension_dirs = self._extra_extension_directories(settings)
+        self._extensions = ExtensionRegistry.load(
+            self._storage.data_dir / "extensions",
+            extra_dirs=extension_dirs,
+        )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._chat_run_manager = ChatRunManager()
         self.chat_runs = self._chat_run_manager
@@ -264,6 +271,7 @@ class Runtime:
             self._process_manager.stop()
         self._process_manager = None
         self._skills = None
+        self._extensions = None
         self._chat_sessions = None
         if self._channel_service is not None:
             self._channel_service.stop()
@@ -325,6 +333,26 @@ class Runtime:
                 if self.logger is not None:
                     cast(Any, self.logger).warning(
                         "Ignoring invalid skill directory setting: %r", raw_directory
+                    )
+                continue
+            directories.append(Path(raw_directory).expanduser())
+        return directories
+
+    def _extra_extension_directories(self, settings: dict[str, object]) -> list[Path]:
+        raw_directories = settings.get("extension_directories", [])
+        if not isinstance(raw_directories, list):
+            if self.logger is not None:
+                cast(Any, self.logger).warning(
+                    "settings.extension_directories must be a list; ignoring value"
+                )
+            return []
+
+        directories: list[Path] = []
+        for raw_directory in raw_directories:
+            if not isinstance(raw_directory, str) or not raw_directory.strip():
+                if self.logger is not None:
+                    cast(Any, self.logger).warning(
+                        "Ignoring invalid extension directory setting: %r", raw_directory
                     )
                 continue
             directories.append(Path(raw_directory).expanduser())
@@ -514,6 +542,10 @@ class Runtime:
         if self._skills is None:
             raise RuntimeError("Skill service not available")
         return self._skills
+
+    @property
+    def extensions(self) -> ExtensionRegistry | None:
+        return self._extensions
 
     @property
     def chat_sessions(self) -> ChatSessionManager:
