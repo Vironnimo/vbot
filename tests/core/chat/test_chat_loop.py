@@ -28,7 +28,7 @@ from core.chat import (
     RunCancelledError,
     RunStatus,
 )
-from core.providers.errors import ProviderAuthError, ProviderRateLimitError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
@@ -248,6 +248,21 @@ class StalledStreamingStubAdapter(StubAdapter):
         yield {"type": "content_delta", "text": "partial"}
         await asyncio.sleep(1)
         yield {"type": "content_delta", "text": "late"}
+
+
+class MidStreamCancelledStubAdapter(StubAdapter):
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        yield {"type": "reasoning_delta", "text": "Need network."}
+        raise asyncio.CancelledError
 
 
 class StubRuntime:
@@ -1247,6 +1262,70 @@ async def test_streaming_mode_cancellation_closes_adapter_and_ignores_late_delta
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "run_cancelled",
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = MidStreamCancelledStubAdapter([])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(RunCancelledError):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "note"]
+    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+
+
+@pytest.mark.asyncio
+async def test_streaming_network_error_with_reasoning_persists_partial_thinking_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Need network."},
+                NetworkError("offline"),
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="offline"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+    assert messages[2].error_kind == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_streaming_network_error_without_reasoning_does_not_add_partial_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "partial"},
+                NetworkError("offline"),
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="offline"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "error"]
 
 
 @pytest.mark.asyncio
