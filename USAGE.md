@@ -1,27 +1,25 @@
 # Usage
 
-Diese Datei beschreibt, wie man den aktuellen Stand von vBot tatsächlich
-benutzt.
+This file describes how to use vBot in its current state.
 
-Wichtig: **Backend und Server funktionieren bereits, das echte Web-Chat-UI noch
-nicht.** Wenn du im Browser etwas Interaktives erwartest, ist das aktuell noch
-Phase 4. In `webui/` gibt es im Moment nur ein minimales Frontend-Scaffold.
+vBot is a local-first, single-user system. The same runtime is exposed through
+the server, WebUI, CLI, desktop shell, and channel integrations.
 
-## 1. Voraussetzungen
+## 1. Requirements
 
 - Python **3.11+**
 - Node.js
-- mindestens ein API-Key für einen konfigurierten Provider
+- at least one configured provider credential or OAuth connection
 
 ## 2. Setup
 
-### Dependencies installieren
+### Install Python dependencies
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-### Frontend-Abhängigkeiten
+### Install frontend dependencies
 
 ```bash
 cd webui
@@ -29,23 +27,27 @@ npm install
 cd ..
 ```
 
-## 3. Datenverzeichnis und Konfiguration
+## 3. Data Directory and Configuration
 
-Standardmäßig benutzt vBot das Datenverzeichnis:
+By default vBot uses this data directory:
 
 ```text
 ~/.vbot
 ```
 
-Darin liegen unter anderem:
+It contains, among other things:
 
-- `.env` — API-Keys
-- `settings.json` — Instanz-Einstellungen
-- `extensions/` — lokale Python-Hooks und Erweiterungen
-- `agents/` — Agent-Konfigurationen
-- `workspace-<agent-id>/` — Agent-Workspaces
+- `.env` for API keys and tokens
+- `settings.json` for instance settings
+- `extensions/` for local Python hooks and extensions
+- `agents/` for agent configurations and sessions
+- `workspace-<agent-id>/` for agent workspaces
+- `oauth/` for stored OAuth tokens
+- `attachments/` for uploaded files
+- `logs/` for daily log files
+- `cron/` for persisted schedules
 
-### Beispiel für `.env`
+### Example `.env`
 
 ```env
 OPENAI_API_KEY=...
@@ -53,56 +55,50 @@ OPENROUTER_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-### Beispiel für `settings.json`
+### Example `settings.json`
 
 ```json
 {
-  "server_port": 8420
+  "server_port": 8420,
+  "extension_directories": [
+    "~/vbot-exts"
+  ]
 }
 ```
 
-Die Port-Reihenfolge ist:
+Port resolution order is:
 
 1. `--port`
 2. `VBOT_SERVER_PORT`
 3. `settings.json`
 4. `8420`
 
-### Extensions und Hooks laden
+### Loading extensions and hooks
 
-Beim Start scannt vBot automatisch dieses Verzeichnis:
+At startup vBot automatically scans:
 
 ```text
 ~/.vbot/extensions/
 ```
 
-Zusätzliche Extension-Roots kannst du in `settings.json` über
-`extension_directories` eintragen:
+You can add more extension roots through `extension_directories` in
+`settings.json`.
 
-```json
-{
-  "server_port": 8420,
-  "extension_directories": [
-  "~/vbot-exts"
-  ]
-}
-```
-
-Unterstützte Entry-Point-Formen pro unmittelbarem Kind eines Extension-Roots:
+Supported entry-point forms for each direct child of an extension root:
 
 - `~/.vbot/extensions/block_write.py`
 - `~/.vbot/extensions/my_hooks/__init__.py`
 - `~/.vbot/extensions/my_hooks/extension.py`
 
-Wichtig:
+Important notes:
 
-- Änderungen an Extensions werden erst nach einem Neustart von Server oder Runtime geladen.
-- Ladefehler loggen als `error`, Handlerfehler als `warn`. vBot läuft fail-open weiter.
-- `register(api)` darf synchron oder asynchron sein. Handler dürfen ebenfalls sync oder async sein.
+- Extension changes are loaded on the next server or runtime restart.
+- Load failures log as `error`; handler failures log as `warn`. vBot continues fail-open.
+- `register(api)` may be sync or async. Handlers may also be sync or async.
 
-### Minimalbeispiel für eine Extension
+### Minimal extension example
 
-Lege zum Beispiel diese Datei an:
+For example, create:
 
 ```text
 ~/.vbot/extensions/block_write.py
@@ -120,7 +116,7 @@ def register(api):
 def append_rule(ctx, agent, session, messages, run):
   return {
     "system_prompt_append": (
-      "Bearbeite Dateien nur dann direkt, wenn du sie vorher gelesen oder gesucht hast."
+      "Only edit files directly after you have first read or searched them."
     )
   }
 
@@ -131,19 +127,19 @@ def block_write(ctx, tool_name, tool_call_id, input):
 
   return tool_failure(
     "tool_blocked",
-    "Das write-Tool ist in dieser Instanz per lokaler Extension deaktiviert.",
+    "The write tool is disabled in this instance by a local extension.",
   )
 ```
 
-Was dieses Beispiel macht:
+What this example does:
 
-- `before_agent_start` hängt Text an den System-Prompt des aktuellen Runs an.
-- `tool_call` fängt jeden Tool-Call ab.
-- Wenn der Tool-Name `write` ist, liefert die Extension direkt ein Failure-Envelope zurück.
-- Dadurch wird das echte Tool nicht mehr ausgeführt.
+- `before_agent_start` appends text to the system prompt for the current Run.
+- `tool_call` intercepts every tool call.
+- If the tool name is `write`, the extension returns a failure envelope directly.
+- That prevents the real tool from running.
 
-Wenn du Parameter nur umschreiben statt blockieren willst, mutiere `input`
-in-place und gib `None` zurück:
+If you only want to rewrite parameters instead of blocking the call, mutate
+`input` in place and return `None`:
 
 ```python
 def normalize_read_path(ctx, tool_name, tool_call_id, input):
@@ -151,131 +147,173 @@ def normalize_read_path(ctx, tool_name, tool_call_id, input):
     input["path"] = "README.md"
 ```
 
-### Verfügbare Hook-Events
+### Available hook events
 
 - `run_start(ctx, session_id, agent_id)`
-- `run_end(ctx, session_id, agent_id, outcome)` mit `outcome = "success" | "error" | "cancelled"`
+- `run_end(ctx, session_id, agent_id, outcome)` with `outcome = "success" | "error" | "cancelled"`
 - `before_agent_start(ctx, agent, session, messages, run)`
 - `context(ctx, messages)`
 - `tool_call(ctx, tool_name, tool_call_id, input)`
 - `tool_result(ctx, tool_name, tool_call_id, input, result)`
 
-Die wichtigsten Rückgaberegeln:
+Most important return rules:
 
-- `before_agent_start`: gib `{"system_prompt_append": "..."}` zurück, um Text an den System-Prompt anzuhängen.
-- `context`: gib eine neue Message-Liste zurück, wenn du nur den nächsten LLM-Request verändern willst.
-- `tool_call`: gib ein vollständiges Tool-Result-Envelope zurück, wenn du den Tool-Call komplett ersetzen willst.
-- `tool_result`: gib ein Patch-Dict zurück; es wird flach auf das bestehende Result-Envelop gemerged.
+- `before_agent_start`: return `{"system_prompt_append": "..."}` to append text to the system prompt.
+- `context`: return a new message list when you only want to change the next model request.
+- `tool_call`: return a full tool-result envelope when you want to replace the tool call entirely.
+- `tool_result`: return a patch dict; it is shallow-merged into the existing result envelope.
 
-## 4. Einen Agenten anlegen
+## 4. Starting the Server
 
-Aktuell gibt es noch keinen fertigen öffentlichen CLI- oder WebUI-Flow zum
-Anlegen von Agents. Für den momentanen Stand legst du einen Agenten am einfachsten
-mit einem kurzen Python-Snippet an.
-
-Beispiel:
-
-```python
-from core.runtime import Runtime
-from core.utils.config import Config
-
-runtime = Runtime(Config())
-runtime.start()
-
-runtime.agents.create(
-    "coder",
-    "Coder Agent",
-    model="openai/gpt-5.2",
-)
-
-runtime.stop()
-```
-
-Danach existiert:
-
-- `~/.vbot/agents/coder/agent.json`
-- `~/.vbot/agents/coder/sessions/`
-- `~/.vbot/workspace-coder/`
-
-Eingebaute Tools für Agents sind `read`, `edit` und `write`. Relative Pfade
-werden vom Workspace des jeweiligen Agents aus aufgelöst; absolute Pfade sind
-ebenfalls erlaubt.
-
-Beispielhafte aktuell vorhandene Modelle:
-
-- `openai/gpt-5.2`
-- `anthropic/claude-sonnet-4-20250219`
-- `openrouter/openai/gpt-5.2`
-- `openrouter/anthropic/claude-sonnet-4`
-
-## 5. Server starten
-
-Foreground:
+Foreground start:
 
 ```bash
 python server/main.py
 ```
 
-Mit eigenem Port:
+Managed background start via CLI:
+
+```bash
+python cli/main.py server start
+```
+
+Check status:
+
+```bash
+python cli/main.py server status
+```
+
+Stop the managed server:
+
+```bash
+python cli/main.py server stop
+```
+
+Restart the managed server:
+
+```bash
+python cli/main.py server restart
+```
+
+Start on a custom port:
 
 ```bash
 python server/main.py --port 9000
 ```
 
-Mit eigenem Datenverzeichnis:
+Start with a custom data directory:
 
 ```bash
 python server/main.py --data-dir ./dev-data
 ```
 
-Mit explizitem Host:
+Start with an explicit host and port:
 
 ```bash
 python server/main.py --host 127.0.0.1 --port 8420
 ```
 
-### Prüfen, ob der Server läuft
+### Check whether the server is running
 
-Im Browser oder per HTTP:
+In a browser or via HTTP:
 
 ```text
 http://127.0.0.1:8420/health
 ```
 
-Erwartete Antwort:
+Expected response:
 
 ```json
 {"status":"ok"}
 ```
 
-## 6. Das aktuelle Web-Interface öffnen
+## 5. Using the WebUI
 
-Das eigentliche Chat-Interface ist noch nicht fertig. Du kannst aber das
-vorhandene Frontend-Scaffold starten:
+For frontend development:
 
 ```bash
 cd webui
 npm run dev
 ```
 
-Dann die von Vite ausgegebene URL öffnen, meistens zum Beispiel:
+Then open the local Vite URL printed by the command, usually something like:
 
 ```text
 http://127.0.0.1:5173
 ```
 
-Derzeit zeigt diese Oberfläche nur den Platzhalter `vBot` an. Die Integration
-mit dem Server und ein echtes Chat-Fenster kommen erst in Phase 4.
+To build the WebUI for the server to serve from `/`:
 
-## 7. Den Server direkt per RPC benutzen
+```bash
+cd webui
+npm run build
+cd ..
+```
 
-Der nutzbare Weg in Phase 3 ist der Server-Vertrag über HTTP, SSE und WebSocket.
+Then open:
 
-### 7.1 Session explizit anlegen
+```text
+http://127.0.0.1:8420/
+```
 
-PowerShell-Beispiel:
+The WebUI currently includes:
 
-Voraussetzung: Der Agent `coder` existiert bereits.
+- Chat
+- Agents
+- Cron
+- System Prompt
+- Settings
+- Logs
+
+## 6. Using the Desktop Shell
+
+The desktop app is a thin pywebview wrapper around the normal server-served
+WebUI.
+
+Start it with the default target:
+
+```bash
+python desktop/main.py
+```
+
+Or target a specific server:
+
+```bash
+python desktop/main.py --host 127.0.0.1 --port 8420
+```
+
+Important notes:
+
+- The desktop shell does not start the server for you.
+- It expects a reachable vBot server.
+- If the server is healthy but has no built WebUI, the desktop shell stays open and shows an in-window message.
+
+## 7. Managing Agents
+
+The main user-facing path for agent management is the WebUI Agents view.
+
+From there you can create, update, and delete agents, choose models and
+connections, configure fallback models, toggle tools, and manage allowed
+skills.
+
+Each agent gets:
+
+- `~/.vbot/agents/<agent-id>/agent.json`
+- `~/.vbot/agents/<agent-id>/sessions/`
+- `~/.vbot/workspace-<agent-id>/`
+
+Built-in tools include `read`, `edit`, and `write`. Relative paths resolve from
+the agent workspace; absolute paths are also allowed.
+
+## 8. Using the Server RPC Directly
+
+The server contract is available over HTTP, SSE, and WebSocket.
+
+### 8.1 Create a session explicitly
+
+PowerShell example:
+
+Assumption: an agent with ID `coder` already exists.
 
 ```powershell
 $base = "http://127.0.0.1:8420"
@@ -293,7 +331,7 @@ $sessionId = $sessionResponse.result.session_id
 $sessionId
 ```
 
-### 7.2 Eine Nachricht senden und das Endergebnis gesammelt bekommen
+### 8.2 Send one message and wait for the complete result
 
 ```powershell
 $sendBody = @{
@@ -301,19 +339,19 @@ $sendBody = @{
   params = @{
     agent_id = "coder"
     session_id = $sessionId
-    content = "Sag kurz Hallo."
+    content = "Say hello in one short sentence."
   }
 } | ConvertTo-Json -Depth 5
 
 Invoke-RestMethod -Method Post -Uri "$base/api/rpc" -ContentType "application/json" -Body $sendBody
 ```
 
-`chat.send` wartet, bis der komplette Run beendet ist, und liefert dann das
-gesamte Ergebnis zurück.
+`chat.send` waits for the full Run to finish and then returns the complete
+result.
 
-### 7.3 Einen Run streamen
+### 8.3 Stream a Run
 
-Zuerst den Run starten:
+Start the Run first:
 
 ```powershell
 $streamBody = @{
@@ -321,7 +359,7 @@ $streamBody = @{
   params = @{
     agent_id = "coder"
     session_id = $sessionId
-    content = "Erkläre in zwei Sätzen, was vBot ist."
+    content = "Explain in two sentences what vBot is."
   }
 } | ConvertTo-Json -Depth 5
 
@@ -331,13 +369,13 @@ $runId = $streamResponse.result.run_id
 $sseUrl = $streamResponse.result.sse_url
 ```
 
-Dann den SSE-Stream öffnen, zum Beispiel mit `curl.exe`:
+Then open the SSE stream, for example with `curl.exe`:
 
 ```powershell
 curl.exe -N "$base$sseUrl"
 ```
 
-Dort erscheinen Event-Blöcke wie:
+Typical event blocks include:
 
 - `run_started`
 - `user_message_persisted`
@@ -347,7 +385,7 @@ Dort erscheinen Event-Blöcke wie:
 - `assistant_output`
 - `run_completed`
 
-### 7.4 Einen laufenden Run abbrechen
+### 8.4 Cancel a running Run
 
 ```powershell
 $cancelBody = @{
@@ -360,34 +398,66 @@ $cancelBody = @{
 Invoke-RestMethod -Method Post -Uri "$base/api/rpc" -ContentType "application/json" -Body $cancelBody
 ```
 
-`cancel` ist best effort: vBot stoppt so schnell wie möglich die weitere
-Ausführung, aber nicht jede bereits laufende externe Arbeit ist hart abbrechbar.
+Cancellation is best effort: vBot stops further execution as quickly as it can,
+but already-running external work is not always hard-abortable.
 
-## 8. WebSocket-Events
+## 9. WebSocket and Other Server Interfaces
 
-Zusätzlich zum SSE-Stream eines einzelnen Runs gibt es:
+App-wide server events are available at:
 
 ```text
 ws://127.0.0.1:8420/ws
 ```
 
-Dieser Kanal ist für allgemeine Server-Ereignisse gedacht, nicht für den
-primären Chat-Textstream eines einzelnen Runs.
+Live log streaming is available at:
 
-## 9. Frontend bauen
+```text
+ws://127.0.0.1:8420/ws/logs
+```
+
+Attachment endpoints:
+
+- `POST /api/upload`
+- `GET /api/attachments/{attachment_id}`
+
+## 10. CLI Channel Management
+
+The CLI also exposes channel-management commands through the running server.
+
+Examples:
+
+```bash
+python cli/main.py channel list
+python cli/main.py channel status --id my-channel
+python cli/main.py channel enable --id my-channel
+python cli/main.py channel disable --id my-channel
+python cli/main.py channel remove --id my-channel
+```
+
+Adding a channel follows this shape:
+
+```bash
+python cli/main.py channel add --id my-channel --platform telegram --agent coder --token-env TELEGRAM_BOT_TOKEN
+```
+
+Channel commands require a reachable vBot server because they are RPC-backed.
+
+## 11. Frontend Build and Preview
+
+Build the frontend:
 
 ```bash
 cd webui
 npm run build
 ```
 
-Zum lokalen Vorschau-Server:
+Run the local preview server:
 
 ```bash
 npm run preview
 ```
 
-## 10. Qualitätschecks
+## 12. Quality Checks
 
 Backend:
 
@@ -401,11 +471,8 @@ Frontend:
 python scripts/quality-frontend.py
 ```
 
-## 11. Was aktuell noch nicht fertig ist
+## 13. Notes and Limitations
 
-- kein echtes Chat-WebUI im Browser
-- keine fertigen CLI-Befehle für `server start`, `stop`, `restart`
-- keine Desktop-Shell
-- keine öffentliche Server-API zum Anlegen von Agents
-
-Wenn du wissen willst, was als Nächstes kommt, schau in `ROADMAP.md`.
+- A healthy server can exist without built WebUI assets. In that case `/health` works, but `/` may not.
+- The CLI is automation-safe and does not open a browser.
+- The desktop shell is only an accessor; it never manages the server process.
