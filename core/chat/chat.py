@@ -10,6 +10,7 @@ import re
 import uuid
 from collections import deque
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -599,6 +600,7 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         self._run.raise_if_cancelled()
+        original_arguments = deepcopy(arguments)
         self._run.emit(
             TOOL_CALL_STARTED_EVENT,
             {
@@ -606,7 +608,7 @@ class _EmittingToolRegistry(ToolRegistry):
                     "id": context.tool_call_id,
                     "index": context.tool_call_index,
                     "name": context.tool_name,
-                    "arguments": dict(arguments),
+                    "arguments": original_arguments,
                 }
             },
         )
@@ -634,7 +636,15 @@ class _EmittingToolRegistry(ToolRegistry):
                     )
                     continue
                 if isinstance(hook_result, dict):
-                    result = hook_result
+                    validated_override = _validated_extension_tool_hook_result(
+                        tool_name=context.tool_name,
+                        extension_name=extension_name,
+                        hook_name="tool_call",
+                        result=hook_result,
+                    )
+                    if validated_override is None:
+                        continue
+                    result = validated_override
                     break
 
         if result is None:
@@ -664,8 +674,16 @@ class _EmittingToolRegistry(ToolRegistry):
                     )
                     continue
                 if isinstance(hook_result, dict):
-                    result = dict(result)
-                    result.update(hook_result)
+                    patched_result = dict(result)
+                    patched_result.update(hook_result)
+                    validated_patch = _validated_extension_tool_hook_result(
+                        tool_name=context.tool_name,
+                        extension_name=extension_name,
+                        hook_name="tool_result",
+                        result=patched_result,
+                    )
+                    if validated_patch is not None:
+                        result = validated_patch
 
         self._run.raise_if_cancelled()
         self._run.emit(
@@ -1427,6 +1445,28 @@ def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
     if not is_tool_result_envelope(result):
         raise ValueError(f"Tool handler must return a valid result envelope: {tool_name}")
     return result
+
+
+def _validated_extension_tool_hook_result(
+    *,
+    tool_name: str,
+    extension_name: str,
+    hook_name: str,
+    result: Any,
+) -> JsonObject | None:
+    try:
+        validated = _validated_tool_result(tool_name, result)
+        json.dumps(validated, ensure_ascii=False, separators=(",", ":"))
+        return validated
+    except (TypeError, ValueError) as error:
+        _LOGGER.warning(
+            "Extension %r %s handler returned invalid tool result for %r: %s",
+            extension_name,
+            hook_name,
+            tool_name,
+            error,
+        )
+        return None
 
 
 def _triggered_skill_names(content: str) -> list[str]:
