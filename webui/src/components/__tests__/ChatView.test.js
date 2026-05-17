@@ -204,6 +204,72 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('uses local /stop fallback when command metadata cannot be loaded', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandsError: true,
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === 'Start a long run') {
+            return {
+              run_id: 'run-fallback-stop-1',
+              sse_url: '/api/runs/run-fallback-stop-1/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          if (content === '/stop') {
+            return {
+              command_handled: true,
+              reply: 'Run cancelled.',
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start a long run');
+
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+
+    sendComposerMessage('/debugging investigate this run');
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.queued-messages__content')
+          ?.textContent?.includes('/debugging investigate this run'),
+      100,
+    );
+
+    sendComposerMessage('/stop');
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
+        'Run cancelled.',
+      100,
+    );
+
+    expect(streamCalls).toEqual(['Start a long run', '/stop']);
+    expect(
+      document.body
+        .querySelector('.queued-messages__content')
+        ?.textContent?.includes('/debugging investigate this run'),
+    ).toBe(true);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('queues non-command messages while a run is active', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
@@ -607,6 +673,7 @@ function createChatRpcMock({
   retryRunResponse,
   streamResponse,
   streamHandler,
+  commandsError = false,
   commandItems,
 } = {}) {
   const resolvedSessionMessages = {
@@ -646,6 +713,9 @@ function createChatRpcMock({
     }
 
     if (method === 'chat.commands') {
+      if (commandsError) {
+        throw new Error('chat.commands unavailable');
+      }
       return {
         items: commandItems ?? [
           {

@@ -67,6 +67,7 @@
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
+  const LOCAL_BUILT_IN_COMMAND_FALLBACKS = new Set(['stop']);
 
   const usageTotalTokens = (usage) => {
     const inputTokens = Number.isFinite(usage?.input_tokens)
@@ -208,6 +209,10 @@
     }
 
     const normalizedMessage = trimmed.trim().toLowerCase();
+    if (LOCAL_BUILT_IN_COMMAND_FALLBACKS.has(normalizedMessage.slice(1))) {
+      return true;
+    }
+
     return builtInCommandNames.some(
       (commandName) => normalizedMessage === `/${commandName}`,
     );
