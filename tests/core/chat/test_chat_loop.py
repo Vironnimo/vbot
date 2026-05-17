@@ -1210,7 +1210,7 @@ async def test_streaming_mode_chunk_timeout_fails_run(
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
     assert [message.role for message in messages] == ["user", "error"]
-    assert messages[1].error_kind == "config_error"
+    assert messages[1].error_kind == "timeout"
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
@@ -2079,3 +2079,23 @@ class TestMessageToRequestDict:
 
         assert "usage" not in result
         assert result["content"] == "What is the weather?"
+
+
+class TestErrorKindClassification:
+    def test_streaming_chunk_timeout_maps_to_timeout(self) -> None:
+        from core.chat.chat import ERROR_KIND_TIMEOUT, _exception_to_error_kind
+        from core.chat.streaming import StreamingChunkTimeoutError
+
+        assert _exception_to_error_kind(StreamingChunkTimeoutError("stalled")) == ERROR_KIND_TIMEOUT
+
+    def test_network_error_maps_to_network_error_kind(self) -> None:
+        from core.chat.chat import ERROR_KIND_NETWORK, _exception_to_error_kind
+        from core.providers.errors import NetworkError
+
+        assert _exception_to_error_kind(NetworkError("offline")) == ERROR_KIND_NETWORK
+
+    def test_network_error_does_not_trigger_model_fallback(self) -> None:
+        from core.chat.chat import _is_model_fallback_trigger
+        from core.providers.errors import NetworkError
+
+        assert _is_model_fallback_trigger(NetworkError("offline")) is False

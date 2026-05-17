@@ -39,10 +39,16 @@ from core.chat.runs import (
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
+    StreamingChunkTimeoutError,
     iter_with_chunk_timeout,
 )
 from core.extensions import ExtensionRegistry, HookContext
-from core.providers.errors import ProviderAuthError, ProviderRateLimitError, ProviderTimeoutError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
     ToolContext,
@@ -81,6 +87,7 @@ SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 ERROR_KIND_RATE_LIMIT = "rate_limit"
 ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_NETWORK = "network_error"
 ERROR_KIND_PROVIDER_OVERLOAD = "provider_overloaded"
 ERROR_KIND_TOOL_ITERATIONS = "tool_iterations_exceeded"
 ERROR_KIND_AUTH = "auth_error"
@@ -90,6 +97,7 @@ ERROR_KIND_PROVIDER_ERROR = "provider_error"
 ERROR_KIND_LLM_VISIBLE: dict[str, bool] = {
     ERROR_KIND_RATE_LIMIT: True,
     ERROR_KIND_TIMEOUT: True,
+    ERROR_KIND_NETWORK: True,
     ERROR_KIND_PROVIDER_OVERLOAD: True,
     ERROR_KIND_TOOL_ITERATIONS: True,
     ERROR_KIND_AUTH: False,
@@ -1510,6 +1518,10 @@ def _exception_to_error_kind(exc: Exception) -> str:
         return ERROR_KIND_RATE_LIMIT
     if isinstance(exc, ProviderTimeoutError):
         return ERROR_KIND_TIMEOUT
+    if isinstance(exc, StreamingChunkTimeoutError):
+        return ERROR_KIND_TIMEOUT
+    if isinstance(exc, NetworkError):
+        return ERROR_KIND_NETWORK
     if isinstance(exc, ProviderAuthError):
         return ERROR_KIND_AUTH
     if isinstance(exc, ProviderError):
