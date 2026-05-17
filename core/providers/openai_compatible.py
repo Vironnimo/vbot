@@ -18,7 +18,7 @@ import httpx
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import ProviderError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
@@ -328,6 +328,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     tool_call_ids_by_index,
                 ):
                     yield normalized_delta
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
