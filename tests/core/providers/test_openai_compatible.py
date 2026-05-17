@@ -15,6 +15,7 @@ import pytest
 import respx
 
 from core.providers.errors import (
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -1440,6 +1441,35 @@ class TestStreamSSE:
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError, match="timed out"),
+        ):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_read_error_raises_network_error(self, openai_adapter):
+        """stream() wraps mid-stream httpx.ReadError as NetworkError."""
+
+        class _ReadErrorStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}\n\n'
+                raise httpx.ReadError("connection reset")
+
+            async def aclose(self) -> None:
+                pass
+
+        with (
+            patch.object(
+                openai_adapter._client,
+                "send",
+                new=AsyncMock(
+                    return_value=httpx.Response(
+                        200,
+                        stream=_ReadErrorStream(),
+                        headers={"content-type": "text/event-stream"},
+                    )
+                ),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: connection reset"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass

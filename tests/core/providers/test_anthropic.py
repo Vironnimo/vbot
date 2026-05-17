@@ -16,6 +16,7 @@ import respx
 
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import (
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -1830,6 +1831,48 @@ class TestStreamSSE:
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
             ):
                 pass
+
+    @pytest.mark.asyncio
+    async def test_stream_read_error_raises_network_error(self, anthropic_adapter):
+        """stream() wraps mid-stream httpx.ReadError as NetworkError."""
+
+        request = httpx.Request("POST", ANTHROPIC_URL)
+
+        class _BrokenLineIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise httpx.ReadError("socket closed", request=request)
+
+        class _BrokenStreamResponse:
+            status_code = 200
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            def aiter_lines(self):
+                return _BrokenLineIterator()
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        broken_response = _BrokenStreamResponse()
+        with (
+            patch.object(
+                anthropic_adapter._client,
+                "send",
+                new=AsyncMock(return_value=broken_response),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: socket closed"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+        assert broken_response.closed is True
 
     @respx.mock
     @pytest.mark.asyncio

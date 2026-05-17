@@ -27,7 +27,7 @@ import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import ProviderError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
@@ -393,6 +393,8 @@ class AnthropicAdapter(ProviderAdapter):
                             }
                 if parsed.get("type") == "message_stop":
                     break
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
