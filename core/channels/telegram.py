@@ -19,6 +19,7 @@ from core.channels.adapter import (
     RouteFacts,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
+from core.chat.commands import CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
 from core.chat.runs import (
     ASSISTANT_OUTPUT_EVENT,
@@ -51,6 +52,7 @@ class _QueuedInboundMessage:
     route: RouteFacts
     reply_plan: ReplyPlanFacts
     message: MessageFacts
+    command_checked: bool = False
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -65,12 +67,15 @@ class TelegramChannelAdapter(ChannelAdapter):
         chat_sessions: ChatSessionManager,
         runtime: object,
         attachment_store: AttachmentStore | None = None,
+        *,
+        command_dispatcher: CommandDispatcher,
     ) -> None:
         self._config = config
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
         self._runtime = runtime
         self._attachment_store = attachment_store
+        self._command_dispatcher = command_dispatcher
 
         token = _resolve_channel_token(config.token_env_var, runtime)
         if not isinstance(token, str) or not token.strip():
@@ -277,12 +282,24 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         route, reply_plan = self._prepare_inbound_route(conversation)
 
+        command_result = self._command_dispatcher.dispatch(
+            route.agent_id,
+            route.session_id,
+            message_text,
+        )
+        if isinstance(command_result, CommandHandled):
+            reply = command_result.reply
+            if isinstance(reply, str) and reply.strip():
+                await self.send(reply, reply_plan.platform_target)
+            return
+
         self._enqueue_chat_message(
             conversation.chat_id,
             _QueuedInboundMessage(
                 route=route,
                 reply_plan=reply_plan,
                 message=MessageFacts(content=message_text),
+                command_checked=True,
             ),
         )
 
@@ -603,6 +620,19 @@ class TelegramChannelAdapter(ChannelAdapter):
                 self._chat_workers.pop(chat_id, None)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
+        command_text = _command_text_from_content(queued.message.content)
+        if command_text is not None and not queued.command_checked:
+            dispatch_result = self._command_dispatcher.dispatch(
+                queued.route.agent_id,
+                queued.route.session_id,
+                command_text,
+            )
+            if isinstance(dispatch_result, CommandHandled):
+                reply = dispatch_result.reply
+                if isinstance(reply, str) and reply.strip():
+                    await self.send(reply, queued.reply_plan.platform_target)
+                return
+
         try:
             run = await self._trigger_service.trigger_run(
                 queued.route.agent_id,
@@ -700,6 +730,12 @@ def _extract_message_text(update: Any) -> str | None:
     if not text.strip():
         return None
     return text
+
+
+def _command_text_from_content(content: str | list[ContentBlock]) -> str | None:
+    if isinstance(content, str):
+        return content
+    return None
 
 
 def _extract_caption(message: Any) -> str | None:

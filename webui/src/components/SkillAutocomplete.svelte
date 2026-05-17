@@ -1,7 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
 
-  const MAX_VISIBLE_SKILLS = 8;
   const noop = () => {};
 
   let {
@@ -48,7 +47,7 @@
       ? items.filter((skill) => skill.searchText.includes(normalizedQuery))
       : items;
 
-    return filteredSkills.slice(0, MAX_VISIBLE_SKILLS);
+    return filteredSkills;
   }
 </script>
 
@@ -59,7 +58,7 @@
     aria-label={t('skillAutocomplete.label', 'Skill suggestions')}
   >
     <div class="skill-autocomplete__eyebrow">
-      {t('skillAutocomplete.eyebrow', 'skills')}
+      {t('skillAutocomplete.eyebrow.commandsAndSkills', 'commands & skills')}
     </div>
     {#each matchingSkills as skill, index (skill.name)}
       <button

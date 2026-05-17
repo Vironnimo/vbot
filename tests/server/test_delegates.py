@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from core.chat import ChatMessage, ChatSessionManager, Run
+from core.chat import (
+    ChatMessage,
+    ChatRunManager,
+    ChatSessionManager,
+    CommandDispatcher,
+    CommandHandled,
+    Run,
+)
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
 from server.delegates import RUN_DELTA_EVENT_TYPES, SERVER_EVENT_TYPES, dispatch_rpc
 from server.events import ALLOWED_SERVER_EVENT_TYPES
@@ -35,6 +43,17 @@ class RetryLoopStub:
     async def retry_run(self, agent_id: str, session_id: str) -> Run:
         self.calls.append((agent_id, session_id))
         return self._run
+
+
+class CommandHandledDispatcher(CommandDispatcher):
+    def __init__(self, reply: str) -> None:
+        super().__init__(ChatRunManager())
+        self._reply = reply
+        self.calls: list[tuple[str, str, str]] = []
+
+    def dispatch(self, agent_id: str, session_id: str, message_text: str) -> CommandHandled:
+        self.calls.append((agent_id, session_id, message_text))
+        return CommandHandled(reply=self._reply)
 
 
 @pytest.mark.asyncio
@@ -98,3 +117,75 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
         "Sub-agent batch completed." not in (message.get("content") or "")
         for message in response["result"]["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
+    skills = [
+        SimpleNamespace(name="debugging", description="Debug failures."),
+        SimpleNamespace(name="alpha", description="Alpha helper."),
+    ]
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            skills=SimpleNamespace(
+                list_all=lambda: skills,
+            )
+        )
+    )
+
+    response = await dispatch_rpc(state, {"method": "chat.commands", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "items": [
+                {
+                    "name": "stop",
+                    "description": "Cancel the active run for this session.",
+                    "type": "command",
+                },
+                {
+                    "name": "alpha",
+                    "description": "Alpha helper.",
+                    "type": "skill",
+                },
+                {
+                    "name": "debugging",
+                    "description": "Debug failures.",
+                    "type": "skill",
+                },
+            ]
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_slash_command_returns_handled_result_without_starting_run() -> None:
+    streaming_chat_loop = SimpleNamespace(start_run=AsyncMock())
+    command_dispatcher = CommandHandledDispatcher(reply="Run cancelled.")
+    state = SimpleNamespace(
+        command_dispatcher=command_dispatcher,
+        streaming_chat_loop=streaming_chat_loop,
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "content": "/stop",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "Run cancelled.",
+        },
+    }
+    assert command_dispatcher.calls == [("agent-1", "session-1", "/stop")]
+    streaming_chat_loop.start_run.assert_not_awaited()

@@ -19,6 +19,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `skill.list`, `agent.list`,
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `session.list`, `session.link_channel`, `chat.history`, `chat.send`,
+  `chat.commands`,
   `chat.stream`, `chat.cancel`, `channel.list`, `channel.create`,
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
   `channel.status`, `cron.create`, `cron.list`, `cron.update`,
@@ -65,6 +66,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `next_fire_at` for active cron jobs.
 - `cron.update`, `cron.delete`, `cron.enable`, and `cron.disable` return `{ ok: true }`.
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
+- `chat.commands` returns `{ items }`, a flat combined autocomplete list of
+  built-in commands and skills. Each item includes `{ name, description, type
+  }`, where `type` is `command` or `skill`.
 - `agent.delete` rejects deletion when it would leave zero Agents.
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
@@ -96,6 +100,10 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model. `content` may be a
   string or a JSON array of canonical content-block dicts.
+- Recognized built-in slash commands are intercepted before Run start only when
+  `content` resolves to pure text. In that case `chat.send` and `chat.stream`
+  return `{ command_handled: true, reply }` instead of starting a Run. Unknown
+  slash text still goes through the normal chat flow.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
@@ -155,6 +163,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - Opaque provider metadata such as `reasoning_meta` must not appear in public
   server payloads, including nested SSE/WebSocket event payloads.
 - Session creation is explicit at the server/product boundary.
+- `chat.commands` is the command/skill autocomplete RPC. It must stay flat and
+  type-tagged so accessors can merge built-in commands with skills without
+  changing the underlying skill-trigger behavior.
 - Only one active Run is allowed per Session; parallel Runs in different
   Sessions are allowed.
 - WebSocket is the persistent signalling channel for app-wide events (connection
