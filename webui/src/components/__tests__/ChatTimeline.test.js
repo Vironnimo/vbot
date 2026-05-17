@@ -125,6 +125,101 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('shows retry only for the latest failed assistant run and invokes callback', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-retry-latest-failed',
+    );
+    const onRetry = vi.fn();
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-old-failed',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-old-failed',
+      sequence: 2,
+      payload: { status: 'failed' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-latest-failed',
+      sequence: 3,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-latest-failed',
+      sequence: 4,
+      payload: { status: 'failed' },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        onRetry,
+      },
+    });
+    flushSync();
+
+    const retryButtons = document.querySelectorAll('.retry-btn');
+    expect(retryButtons).toHaveLength(1);
+    expect(retryButtons[0].textContent).toContain('Retry last turn');
+
+    retryButtons[0].click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides retry when a newer run completed after an older failure', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-retry-hidden-completed',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-old-failed',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-old-failed',
+      sequence: 2,
+      payload: { status: 'failed' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-latest-completed',
+      sequence: 3,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-latest-completed',
+      sequence: 4,
+      payload: { status: 'completed' },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.retry-btn')).toBeNull();
+  });
+
   it('renders error history messages with an error label and content', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -453,6 +453,10 @@
     }
   };
 
+  export async function retryLastTurn() {
+    await handleRetry();
+  }
+
   const handleRemoveQueuedMessage = (queuedMessageId) => {
     if (activeSessionState) {
       removeQueuedMessage(activeSessionState, queuedMessageId);
