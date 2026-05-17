@@ -114,6 +114,11 @@ class StreamingAccumulator:
         """Return the normalized finish reason, if the stream provided one."""
         return self._finish_reason
 
+    @property
+    def partial_reasoning(self) -> str | None:
+        """Return accumulated reasoning text so far, or None if empty."""
+        return _joined_or_none(self._reasoning_parts)
+
     def add_delta(self, delta: JsonObject) -> list[StreamingVisibleDelta]:
         """Accept one normalized provider delta and return public deltas to emit."""
         delta_type = _require_delta_type(delta)

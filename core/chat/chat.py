@@ -9,7 +9,7 @@ import os
 import re
 import uuid
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -1122,6 +1122,7 @@ class ChatLoop:
                 messages_for_request,
                 tools,
                 run,
+                note_hook=session.add_note,
             )
             run.raise_if_cancelled()
             if assistant_message.usage is None:
@@ -1158,6 +1159,7 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        note_hook: Callable[[str], None] | None = None,
     ) -> ChatMessage:
         if self._streaming:
             return await self._send_streaming_assistant_request(
@@ -1167,6 +1169,7 @@ class ChatLoop:
                 messages,
                 tools,
                 run,
+                note_hook=note_hook,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -1199,6 +1202,7 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        note_hook: Callable[[str], None] | None = None,
     ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
@@ -1223,6 +1227,7 @@ class ChatLoop:
                 run.raise_if_cancelled()
         except ProviderError as exc:
             if emitted_visible_delta or not _is_streaming_fallback_error(exc):
+                _maybe_persist_partial_thinking(accumulator, note_hook)
                 raise
             assistant_message = await self._send_non_streaming_assistant_request(
                 agent,
@@ -1233,6 +1238,9 @@ class ChatLoop:
             )
             _emit_assistant_events(run, assistant_message)
             return assistant_message
+        except BaseException:
+            _maybe_persist_partial_thinking(accumulator, note_hook)
+            raise
 
         assistant_message = _assistant_message_from_response(
             agent.model,
@@ -1430,6 +1438,17 @@ def _is_streaming_fallback_error(error: ProviderError) -> bool:
         return False
     message = str(error).lower()
     return all(token in message for token in ("stream", "support"))
+
+
+def _maybe_persist_partial_thinking(
+    accumulator: StreamingAccumulator,
+    note_hook: Callable[[str], None] | None,
+) -> None:
+    if note_hook is None:
+        return
+    partial = accumulator.partial_reasoning
+    if partial:
+        note_hook(f"Partial thinking before interruption:\n{partial}")
 
 
 def _visible_message_payload(message: ChatMessage) -> JsonObject:
