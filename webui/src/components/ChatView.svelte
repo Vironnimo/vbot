@@ -364,7 +364,9 @@
     if (!agent || !sessionState) {
       return;
     }
-    if (isRunActive(sessionState)) {
+    const isSlashCommand =
+      typeof content === 'string' && content.trimStart().startsWith('/');
+    if (isRunActive(sessionState) && !isSlashCommand) {
       enqueueMessage(sessionState, content);
       return;
     }
