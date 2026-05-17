@@ -1,7 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
 
-  const MAX_VISIBLE_SKILLS = 8;
   const noop = () => {};
 
   let {
@@ -48,7 +47,7 @@
       ? items.filter((skill) => skill.searchText.includes(normalizedQuery))
       : items;
 
-    return filteredSkills.slice(0, MAX_VISIBLE_SKILLS);
+    return filteredSkills;
   }
 </script>
 

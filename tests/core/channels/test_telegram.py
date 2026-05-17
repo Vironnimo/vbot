@@ -12,7 +12,13 @@ import pytest
 
 import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
-from core.channels.adapter import ConversationFacts, FileData, MessageFacts, ReplyPlanFacts, RouteFacts
+from core.channels.adapter import (
+    ConversationFacts,
+    FileData,
+    MessageFacts,
+    ReplyPlanFacts,
+    RouteFacts,
+)
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
 from core.chat.chat import ChatSessionManager
@@ -358,9 +364,132 @@ async def test_plain_text_command_is_dispatched_before_trigger_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", "ch-tg-assistant-12345", "/stop")
+    command_dispatcher.dispatch.assert_called_once_with(
+        "assistant", "ch-tg-assistant-12345", "/stop"
+    )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    command_dispatcher = make_command_dispatcher()
+    command_dispatcher.dispatch.side_effect = [
+        NotACommand(),
+        CommandHandled(reply="Run cancelled."),
+    ]
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=session_id)
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _platform_target: str) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(
+        adapter,
+        "_relay_run_events",
+        AsyncMock(side_effect=block_relay),
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="hello"),
+        SimpleNamespace(),
+    )
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/stop"),
+        SimpleNamespace(),
+    )
+    await asyncio.sleep(0)
+
+    first_call = command_dispatcher.dispatch.call_args_list[0]
+    second_call = command_dispatcher.dispatch.call_args_list[1]
+    assert first_call.args == ("assistant", session_id, "hello")
+    assert second_call.args == ("assistant", session_id, "/stop")
+    assert trigger_mock.await_count == 1
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
+
+    release_relay.set()
+    await drain_chat_queue(adapter, 12345)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    command_dispatcher = make_command_dispatcher()
+    command_dispatcher.dispatch.side_effect = [
+        NotACommand(),
+        NotACommand(),
+    ]
+    trigger_mock = AsyncMock(
+        return_value=Run(run_id="run-active", agent_id="assistant", session_id=session_id)
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    relay_started = asyncio.Event()
+    release_relay = asyncio.Event()
+
+    async def block_relay(_run: Run, _platform_target: str) -> None:
+        relay_started.set()
+        await release_relay.wait()
+
+    monkeypatch.setattr(
+        adapter,
+        "_relay_run_events",
+        AsyncMock(side_effect=block_relay),
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="hello"),
+        SimpleNamespace(),
+    )
+    await asyncio.wait_for(relay_started.wait(), timeout=1)
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="still queued"),
+        SimpleNamespace(),
+    )
+    await asyncio.sleep(0)
+
+    first_call = command_dispatcher.dispatch.call_args_list[0]
+    second_call = command_dispatcher.dispatch.call_args_list[1]
+    assert first_call.args == ("assistant", session_id, "hello")
+    assert second_call.args == ("assistant", session_id, "still queued")
+    assert trigger_mock.await_count == 1
+
+    queue = adapter._chat_queues.get("12345")
+    assert queue is not None
+    assert queue.qsize() == 1
+
+    release_relay.set()
+    await drain_chat_queue(adapter, 12345)
     await adapter.stop()
 
 
@@ -370,7 +499,9 @@ async def test_non_text_content_skips_command_dispatch_and_triggers_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ch-tg-assistant-12345"
-    trigger_mock = AsyncMock(return_value=make_completed_run(session_id=session_id, output_text="ok"))
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
     command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
     adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
         tmp_path,

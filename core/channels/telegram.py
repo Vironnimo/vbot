@@ -52,6 +52,7 @@ class _QueuedInboundMessage:
     route: RouteFacts
     reply_plan: ReplyPlanFacts
     message: MessageFacts
+    command_checked: bool = False
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -281,12 +282,24 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         route, reply_plan = self._prepare_inbound_route(conversation)
 
+        command_result = self._command_dispatcher.dispatch(
+            route.agent_id,
+            route.session_id,
+            message_text,
+        )
+        if isinstance(command_result, CommandHandled):
+            reply = command_result.reply
+            if isinstance(reply, str) and reply.strip():
+                await self.send(reply, reply_plan.platform_target)
+            return
+
         self._enqueue_chat_message(
             conversation.chat_id,
             _QueuedInboundMessage(
                 route=route,
                 reply_plan=reply_plan,
                 message=MessageFacts(content=message_text),
+                command_checked=True,
             ),
         )
 
@@ -608,7 +621,7 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
         command_text = _command_text_from_content(queued.message.content)
-        if command_text is not None:
+        if command_text is not None and not queued.command_checked:
             dispatch_result = self._command_dispatcher.dispatch(
                 queued.route.agent_id,
                 queued.route.session_id,

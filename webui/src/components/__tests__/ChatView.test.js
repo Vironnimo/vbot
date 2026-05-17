@@ -139,6 +139,183 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
+  it('bypasses queue and handles slash commands immediately while a run is active', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === 'Start a long run') {
+            return {
+              run_id: 'run-1',
+              sse_url: '/api/runs/run-1/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          if (content === '/stop') {
+            return {
+              command_handled: true,
+              reply: 'Run cancelled.',
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start a long run');
+
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+
+    sendComposerMessage('/stop');
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
+        'Run cancelled.',
+      100,
+    );
+
+    expect(streamCalls).toEqual(['Start a long run', '/stop']);
+    expect(document.body.querySelector('.queued-messages')).toBeNull();
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('queues non-command messages while a run is active', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === 'Start a long run') {
+            return {
+              run_id: 'run-2',
+              sse_url: '/api/runs/run-2/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start a long run');
+
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+
+    sendComposerMessage('Queue this while running');
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.queued-messages__content')
+          ?.textContent?.trim() === 'Queue this while running',
+      100,
+    );
+
+    expect(streamCalls).toEqual(['Start a long run']);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows all command and skill suggestions for an empty slash query', async () => {
+    const commandItems = [
+      { name: 'stop', description: 'Cancel the active run.', type: 'command' },
+      {
+        name: 'help',
+        description: 'Show available commands.',
+        type: 'command',
+      },
+      { name: 'status', description: 'Show run status.', type: 'command' },
+      { name: 'reset', description: 'Reset local UI state.', type: 'command' },
+      { name: 'retry', description: 'Retry the last run.', type: 'command' },
+      {
+        name: 'debugging',
+        description: 'Investigate unclear bugs.',
+        type: 'skill',
+      },
+      {
+        name: 'ctx7',
+        description: 'Fetch current framework docs.',
+        type: 'skill',
+      },
+      {
+        name: 'refactoring',
+        description: 'Refactor with strict scope.',
+        type: 'skill',
+      },
+      {
+        name: 'playwright-cli',
+        description: 'Automate browser testing.',
+        type: 'skill',
+      },
+      {
+        name: 'frontend-design',
+        description: 'Build intentional UI.',
+        type: 'skill',
+      },
+      {
+        name: 'glossary',
+        description: 'Maintain glossary terms.',
+        type: 'skill',
+      },
+      {
+        name: 'debug',
+        description: 'General debugging workflow.',
+        type: 'skill',
+      },
+    ];
+
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandItems,
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const composerInput = document.querySelector('#chat-composer-input');
+    expect(composerInput).toBeTruthy();
+    setInputValue(composerInput, '/');
+    composerInput.setSelectionRange(1, 1);
+    composerInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.querySelectorAll('.skill-autocomplete__option').length ===
+        commandItems.length,
+      100,
+    );
+
+    expect(
+      document.querySelectorAll('.skill-autocomplete__option'),
+    ).toHaveLength(commandItems.length);
+  });
+
   it('loads a sub-agent session override and shows it as read-only', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
@@ -415,6 +592,8 @@ function createChatRpcMock({
   sessionMessages,
   retryRunResponse,
   streamResponse,
+  streamHandler,
+  commandItems,
 } = {}) {
   const resolvedSessionMessages = {
     'session-1': [
@@ -454,7 +633,7 @@ function createChatRpcMock({
 
     if (method === 'chat.commands') {
       return {
-        items: [
+        items: commandItems ?? [
           {
             name: 'stop',
             description: 'Cancel the active run for this session.',
@@ -470,6 +649,9 @@ function createChatRpcMock({
     }
 
     if (method === 'chat.stream') {
+      if (typeof streamHandler === 'function') {
+        return streamHandler(params ?? {});
+      }
       if (streamResponse) {
         return streamResponse;
       }
@@ -517,6 +699,18 @@ function findButtonByText(text) {
 function setInputValue(input, value) {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function sendComposerMessage(content) {
+  const composerInput = document.querySelector('#chat-composer-input');
+  expect(composerInput).toBeTruthy();
+  setInputValue(composerInput, content);
+  flushSync();
+
+  const sendButton = document.querySelector('.send-btn');
+  expect(sendButton).toBeTruthy();
+  sendButton.click();
+  flushSync();
 }
 
 async function waitForCondition(check, attempts = 20) {
