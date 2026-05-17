@@ -1121,6 +1121,20 @@ class TestSendErrorClassification:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_connect_error_raises_network_error(self, anthropic_adapter):
+        """Connection failures raise NetworkError."""
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ConnectError("connection failed"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection failed"),
+        ):
+            await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_500_raises_non_retryable_provider_error(self, anthropic_adapter):
         """HTTP 500 raises ProviderError with retryable=False."""
         # Arrange
@@ -1826,6 +1840,23 @@ class TestStreamSSE:
         with (
             patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(ProviderTimeoutError, match="timed out"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+            ):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_connect_error_raises_network_error(self, anthropic_adapter):
+        """stream() raises NetworkError on connection failures."""
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ConnectError("connection failed"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection failed"),
         ):
             async for _ in anthropic_adapter.stream(
                 SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
