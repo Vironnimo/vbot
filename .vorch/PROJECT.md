@@ -23,7 +23,7 @@ cli/           ← Server management. Imports core/. Used by both users and agen
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, chat, attachments, agents, tools, providers, channels,
+**Core modules:** runtime, models, chat, attachments, extensions, agents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
@@ -49,8 +49,10 @@ from `.env` values. `settings.json` may include `skill_directories`, an array of
 absolute or home-relative additional skill scan roots configured from the
 Settings UI. Saving skill directories through `settings.update` reloads the
 runtime skill registry immediately. `settings.json` may also include
-`attachment_max_size_bytes`, an integer attachment upload limit used by the
-runtime-owned `AttachmentStore` (default 20 MiB).
+`extension_directories`, an array of absolute or home-relative additional
+extension scan roots loaded alongside `<data_dir>/extensions/` during runtime
+startup, plus `attachment_max_size_bytes`, an integer attachment upload limit
+used by the runtime-owned `AttachmentStore` (default 20 MiB).
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
@@ -196,6 +198,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   exact invariants that must survive refresh belong in
   `core/providers/github_copilot_policy.py` via exact-model overrides.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
+- **Extensions are in-process Python hook modules.** Runtime loads them from
+  `<data_dir>/extensions/` plus optional `extension_directories`, exposes them
+  as `runtime.extensions`, and treats hook execution as fail-open: extension
+  load/register failures log at error, handler failures log at warn, and normal
+  runs continue.
 - **Channel architecture decisions are fixed by `stuff/channels.md`.** Decisions D1-D8 are the binding contract for the first channel implementation: automatic final-reply routing via `run.subscribe()`, session metadata sidecars owned by `ChatSessionManager`, `channel_send` as proactive outbound only, adapter-local batching/sequencing, per-channel runtime start/stop, and deny-all default `allowed_chat_ids`.
 
 ## Specs
@@ -211,6 +218,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, JSONL sessions, chat-loop constraints |
 | `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |
+| `.vorch/specs/extensions.md` | `core/extensions/` | Extension hook loading, handler registration, runtime/chat event contracts |
 | `.vorch/specs/agent.md` | `core/agents/` | Agent schema, persistence, workspace lifecycle, archive-on-delete |
 | `.vorch/specs/tools.md` | `core/tools/` | Tool metadata, allowlist filtering, provider definitions, dispatch |
 | `.vorch/specs/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
