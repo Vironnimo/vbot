@@ -1,58 +1,49 @@
 # vBot
 
-vBot ist ein local-first Agent-Harness: ein asynchroner Python-Kernel, der
-KI-Agenten mit einem eigenen Workspace, Tool-Zugriff und einer Server-Schicht
-ausstattet.
+vBot is a local-first agent harness: an async Python runtime that gives AI
+agents their own workspace, persistent state, tool access, and multiple ways to
+interact with the same system.
 
-Aktuell ist der Backend-Kern bis einschließlich **Phase 3** umgesetzt:
+The project currently includes:
 
-- Provider- und Modell-System
-- persistierte Agents und Sessions
-- agentischer Chat-Loop mit Tool-Support
-- FastAPI-Server mit RPC, Server-Sent Events (SSE) und WebSocket-Events
+- a provider and model registry with multiple connection types
+- persistent agents, sessions, workspaces, attachments, and logs
+- an agentic chat loop with tool support, streaming, slash commands, and model fallback
+- a FastAPI server with RPC, Server-Sent Events (SSE), WebSocket events, log streaming, and attachment endpoints
+- a Svelte WebUI with Chat, Agents, Cron, System Prompt, Settings, and Logs views
+- a CLI for local server lifecycle management and channel management
+- a pywebview desktop shell that loads the normal server-served WebUI
+- local extensions, skills, cron jobs, and channel integrations
 
-Die eigentliche Chat-Weboberfläche ist **noch nicht fertig**. In `webui/`
-existiert im Moment nur das Frontend-Scaffold; das echte Chat-UI ist laut
-Roadmap für Phase 4 vorgesehen.
+vBot is designed as a local, single-user system. The server is the shared core;
+the WebUI, CLI, desktop shell, and channel adapters are accessors around it.
 
-## Projektstatus
-
-Bereits umgesetzt:
-
-- **Phase 1:** Provider + Models
-- **Phase 2:** Minimaler Chat im Backend
-- **Phase 3:** Server-Schicht mit `POST /api/rpc`, SSE und `/ws`
-
-Der Agent-Tool-Support umfasst die eingebauten Tools `read`, `edit` und
-`write`. Relative Pfade werden vom Workspace des Agents aus aufgelöst;
-absolute Pfade sind erlaubt.
-
-Noch offen:
-
-- **Phase 4:** WebUI mit echtem Chat
-- **Phase 5:** CLI für Server-Management
-- **Phase 6:** Desktop-Shell
-
-Details dazu stehen in `ROADMAP.md`.
-
-## Voraussetzungen
+## Requirements
 
 - Python **3.11+**
-- Node.js (für `webui/`)
+- Node.js for WebUI development and builds
 
-## Schnellstart
+## Quick Start
 
-### 1. Dependencies installieren
+### 1. Install Python dependencies
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-### 2. API-Schlüssel hinterlegen
+### 2. Install WebUI dependencies
 
-vBot liest Konfiguration standardmäßig aus `~/.vbot/`.
+```bash
+cd webui
+npm install
+cd ..
+```
 
-Lege dort eine Datei `.env` an, zum Beispiel:
+### 3. Add API keys
+
+vBot reads configuration from `~/.vbot/` by default.
+
+Create `~/.vbot/.env`, for example:
 
 ```env
 OPENAI_API_KEY=...
@@ -60,52 +51,101 @@ OPENROUTER_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
-### 3. Server starten
+### 4. Start the server
+
+Managed background start via CLI:
+
+```bash
+python cli/main.py server start
+```
+
+Alternative foreground start:
 
 ```bash
 python server/main.py
 ```
 
-Standardmäßig läuft der Server auf `http://127.0.0.1:8420`.
+Default server URL:
 
-Health-Check:
+```text
+http://127.0.0.1:8420
+```
+
+Health check:
 
 ```text
 http://127.0.0.1:8420/health
 ```
 
-### 4. Frontend-Scaffold starten
+### 5. Open the UI
+
+For WebUI development:
 
 ```bash
 cd webui
-npm install
 npm run dev
 ```
 
-Danach das von Vite ausgegebene lokale URL im Browser öffnen.
+Open the local Vite URL printed by the command.
 
-Wichtig: Das ist derzeit nur das WebUI-Scaffold. Ein echtes Chat-Fenster ist
-noch nicht implementiert.
+For the server-served WebUI:
 
-## Was der Server aktuell anbietet
+```bash
+cd webui
+npm run build
+cd ..
+```
 
-- `POST /api/rpc`
-  - `session.create`
-  - `chat.send`
-  - `chat.stream`
-  - `chat.cancel`
-- `GET /api/runs/{run_id}/events` für SSE-Streaming eines einzelnen Runs
-- `GET /health`
-- `WS /ws` für allgemeine Server-Events
+Then open:
 
-## Dokumentation
+```text
+http://127.0.0.1:8420/
+```
 
-- `USAGE.md` — praktische Nutzung des aktuellen Systems
-- `ROADMAP.md` — Projektphasen und Status
-- `GOALS.md` — stabile Verträge und Architekturentscheidungen
-- `PHASE3-SPEC.md` — Server-Architektur für Phase 3
+## Default Data Directory
 
-## Qualitätssicherung
+By default vBot stores runtime data under:
+
+```text
+~/.vbot
+```
+
+This includes, among other things:
+
+- `.env` for API keys and tokens
+- `settings.json` for instance settings
+- `agents/` for agent configs and sessions
+- `workspace-<agent-id>/` for agent workspaces
+- `extensions/` for local Python hooks
+- `oauth/` for OAuth tokens
+- `attachments/` for uploaded blobs
+- `logs/` for daily log files
+- `cron/` for persisted schedules
+
+## Server Interfaces
+
+The current server exposes:
+
+- `POST /api/rpc` for the RPC API
+- `GET /api/runs/{run_id}/events` for one Run SSE stream
+- `GET /ws` for app-wide server events
+- `GET /ws/logs` for live log streaming
+- `POST /api/upload` for attachment uploads
+- `GET /api/attachments/{attachment_id}` for attachment downloads
+- `GET /health` for server health
+
+## Main Access Paths
+
+- WebUI in the browser
+- CLI via `python cli/main.py ...`
+- Desktop shell via `python desktop/main.py`
+- HTTP, SSE, and WebSocket integrations against the server
+
+## Documentation
+
+- `USAGE.md` for detailed setup and workflows
+
+## Quality Checks
 
 Backend:
 
