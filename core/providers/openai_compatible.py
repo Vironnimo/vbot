@@ -18,7 +18,7 @@ import httpx
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import ProviderError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
@@ -216,7 +216,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            NetworkError: Connection errors (retried, then raised).
+            ProviderTimeoutError: Timeout errors (retried, then raised).
             ProviderError: Other HTTP errors.
         """
 
@@ -273,7 +274,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors (retried, then raised).
+            NetworkError: Connection and mid-stream read errors.
+            ProviderTimeoutError: Timeout errors during initial connection (retried, then raised).
             ProviderError: Other HTTP errors.
         """
         headers = await self._build_headers()
@@ -328,6 +330,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     tool_call_ids_by_index,
                 ):
                     yield normalized_delta
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 

@@ -10,6 +10,7 @@
     sessionState,
     agentName = '',
     onNavigateToSubAgent = () => {},
+    onRetry = () => {},
   } = $props();
 
   function isNearBottom(container) {
@@ -22,6 +23,38 @@
   let timelineItems = $derived(visibleTimelineItems(sessionState));
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
+  let latestTerminalState = $derived.by(() => {
+    for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
+      const item = timelineItems[index];
+      if (item?.type === 'assistant_run') {
+        const terminalType = item.terminalEvent?.type;
+        if (
+          typeof terminalType === 'string' &&
+          terminalType.startsWith('run_')
+        ) {
+          return {
+            itemId: item.id,
+            failed: terminalType === 'run_failed',
+          };
+        }
+        continue;
+      }
+      if (
+        item?.type === 'event' &&
+        typeof item.event?.type === 'string' &&
+        item.event.type.startsWith('run_')
+      ) {
+        return {
+          itemId: item.id,
+          failed: item.event.type === 'run_failed',
+        };
+      }
+    }
+    return {
+      itemId: '',
+      failed: false,
+    };
+  });
   let timelineSignature = $derived(
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
@@ -852,6 +885,13 @@
 
   const isTerminalEvent = (event) => event.type.startsWith('run_');
 
+  const shouldRenderRetryButton = (item) =>
+    latestTerminalState.failed &&
+    item?.id === latestTerminalState.itemId &&
+    ((item.type === 'assistant_run' &&
+      item.terminalEvent?.type === 'run_failed') ||
+      (item.type === 'event' && item.event?.type === 'run_failed'));
+
   const labelForStreamingItem = (streamingItem) => {
     if (streamingItem.type === 'reasoning') {
       return t('chat.event.thinking', 'Thinking').toUpperCase();
@@ -1063,6 +1103,11 @@
               {#each runMetaParts(item) as metaPart (metaPart)}
                 <span class="msg-meta-extra">· {metaPart}</span>
               {/each}
+              {#if shouldRenderRetryButton(item)}
+                <button type="button" class="retry-btn" onclick={onRetry}
+                  >{t('chat.retryRun', 'Retry last turn')}</button
+                >
+              {/if}
             </div>
             <div class="msg-content assistant-run-content">
               {#each visibleRunChildren(item) as child (child.id)}
@@ -1280,6 +1325,11 @@
               {#if metaForEvent(item.event)}
                 <span>· {metaForEvent(item.event)}</span>
               {/if}
+              {#if shouldRenderRetryButton(item)}
+                <button type="button" class="retry-btn" onclick={onRetry}
+                  >{t('chat.retryRun', 'Retry last turn')}</button
+                >
+              {/if}
             </p>
           {:else if textFromEvent(item.event) || hasUserContentBlocks(messageFromEvent(item.event))}
             <article
@@ -1473,6 +1523,30 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     text-align: center;
+  }
+
+  .retry-btn {
+    margin-left: 7px;
+    border: 0;
+    border-bottom: 1px solid rgba(232, 135, 10, 0.28);
+    padding: 0;
+    background: transparent;
+    color: var(--text-med);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.2;
+  }
+
+  .retry-btn:hover {
+    border-bottom-color: rgba(232, 135, 10, 0.48);
+    color: var(--accent);
+  }
+
+  .retry-btn:focus-visible {
+    border-radius: 3px;
+    outline: 1px solid rgba(232, 135, 10, 0.35);
+    outline-offset: 3px;
   }
 
   .streaming-message .msg-author {

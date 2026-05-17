@@ -222,7 +222,8 @@ Errors are classified by HTTP status code (not by parsing the body):
 - 429 → `ProviderRateLimitError` (retryable)
 - 502/503 → `ProviderError(retryable=True)`
 - Other 4xx/5xx → `ProviderError(retryable=False)`
-- Timeout/ConnectError → `ProviderTimeoutError` (retryable)
+- Timeout → `ProviderTimeoutError` (retryable)
+- ConnectError → `NetworkError` (retryable, does not trigger model fallback)
 
 **Reasoning:** vBot `thinking_effort` is adapter-translated. The generic OpenAI-compatible adapter emits `reasoning_effort: "low" | "medium" | "high"` for supported non-`none` values. Provider-specific subclasses own alternate wire formats.
 
@@ -447,14 +448,18 @@ Error classification parses this format for richer messages. Status codes:
 
 ## Error Classification
 
-All provider errors inherit from `ProviderError` (→ `VBotError` → `Exception`).
+Provider-specific API failures inherit from `ProviderError` (→ `VBotError` → `Exception`).
+Network connectivity failures use `NetworkError`, which inherits directly from
+`VBotError` so it remains retryable without being eligible for provider/model
+fallback.
 
 | Error class | `retryable` | When raised | Retried? |
 |---|---|---|---|
 | `ProviderError` | varies | Catch-all for unclassified HTTP errors | Only if `retryable=True` |
 | `ProviderAuthError` | `False` | 401/403 | Never |
 | `ProviderRateLimitError` | `True` | 429 | Yes |
-| `ProviderTimeoutError` | `True` | Connection/timeout errors | Yes |
+| `ProviderTimeoutError` | `True` | Request timeout errors | Yes |
+| `NetworkError` | `True` | Connection failures and dropped network reads | Yes |
 
 Source: `core/providers/errors.py`, `core/utils/errors.py`.
 

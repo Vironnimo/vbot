@@ -27,7 +27,7 @@ import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
-from core.providers.errors import ProviderError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
@@ -245,7 +245,8 @@ class AnthropicAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors.
+            NetworkError: Connection errors (retried, then raised).
+            ProviderTimeoutError: Timeout errors (retried, then raised).
             ProviderError: Other HTTP errors.
         """
 
@@ -307,7 +308,8 @@ class AnthropicAdapter(ProviderAdapter):
         Raises:
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
-            ProviderTimeoutError: Connection / timeout errors.
+            NetworkError: Connection and mid-stream read errors.
+            ProviderTimeoutError: Timeout errors during initial connection (retried, then raised).
             ProviderError: Other HTTP errors.
         """
         headers = await self._build_headers()
@@ -393,6 +395,8 @@ class AnthropicAdapter(ProviderAdapter):
                             }
                 if parsed.get("type") == "message_stop":
                     break
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 

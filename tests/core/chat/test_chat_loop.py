@@ -24,11 +24,12 @@ from core.chat import (
     ChatLoop,
     ChatMessage,
     ChatRunManager,
+    ChatSessionError,
     ChatSessionManager,
     RunCancelledError,
     RunStatus,
 )
-from core.providers.errors import ProviderAuthError, ProviderRateLimitError
+from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
@@ -248,6 +249,21 @@ class StalledStreamingStubAdapter(StubAdapter):
         yield {"type": "content_delta", "text": "partial"}
         await asyncio.sleep(1)
         yield {"type": "content_delta", "text": "late"}
+
+
+class MidStreamCancelledStubAdapter(StubAdapter):
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        yield {"type": "reasoning_delta", "text": "Need network."}
+        raise asyncio.CancelledError
 
 
 class StubRuntime:
@@ -1210,7 +1226,7 @@ async def test_streaming_mode_chunk_timeout_fails_run(
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
     assert [message.role for message in messages] == ["user", "error"]
-    assert messages[1].error_kind == "config_error"
+    assert messages[1].error_kind == "timeout"
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
@@ -1247,6 +1263,70 @@ async def test_streaming_mode_cancellation_closes_adapter_and_ignores_late_delta
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "run_cancelled",
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = MidStreamCancelledStubAdapter([])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(RunCancelledError):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "note"]
+    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+
+
+@pytest.mark.asyncio
+async def test_streaming_network_error_with_reasoning_persists_partial_thinking_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Need network."},
+                NetworkError("offline"),
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="offline"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert messages[1].content == "Partial thinking before interruption:\nNeed network."
+    assert messages[2].error_kind == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_streaming_network_error_without_reasoning_does_not_add_partial_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "partial"},
+                NetworkError("offline"),
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="offline"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in messages] == ["user", "error"]
 
 
 @pytest.mark.asyncio
@@ -1296,6 +1376,84 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
         await ChatLoop(runtime).start_run("coder", "Hi", session_id="missing-session")
 
     assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_retry_run_reuses_last_user_turn_without_appending_new_user_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+
+    run = await ChatLoop(runtime).retry_run("coder", "session-one")
+    assistant = await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert assistant.content == "Retried"
+    assert [message.role for message in messages] == ["user", "error", "assistant"]
+    assert sum(1 for message in messages if message.role == "user") == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_run_raises_chat_session_error_when_no_user_message_exists(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+
+    with pytest.raises(ChatSessionError, match="no user message in session to retry"):
+        await ChatLoop(runtime).retry_run("coder", "session-one")
+
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_retry_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStubAdapter()
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    await adapter.request_started.wait()
+
+    with pytest.raises(ActiveRunError, match="active run"):
+        await ChatLoop(runtime).retry_run("coder", "session-one")
+
+    first_run.request_cancel()
+    adapter.release.set()
+    with pytest.raises(RunCancelledError):
+        await first_run.wait()
+
+
+@pytest.mark.asyncio
+async def test_retry_run_embeds_previous_visible_error_as_system_reminder(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+
+    run = await ChatLoop(runtime).retry_run("coder", "session-one")
+    await run.wait()
+
+    request_messages = adapter.requests[0]["messages"]
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert (
+        "<system-reminder>\nProvider rate limited the previous run\n</system-reminder>"
+        in request_text
+    )
+    assert all(message["role"] != "error" for message in request_messages)
 
 
 @pytest.mark.asyncio
@@ -2079,3 +2237,23 @@ class TestMessageToRequestDict:
 
         assert "usage" not in result
         assert result["content"] == "What is the weather?"
+
+
+class TestErrorKindClassification:
+    def test_streaming_chunk_timeout_maps_to_timeout(self) -> None:
+        from core.chat.chat import ERROR_KIND_TIMEOUT, _exception_to_error_kind
+        from core.chat.streaming import StreamingChunkTimeoutError
+
+        assert _exception_to_error_kind(StreamingChunkTimeoutError("stalled")) == ERROR_KIND_TIMEOUT
+
+    def test_network_error_maps_to_network_error_kind(self) -> None:
+        from core.chat.chat import ERROR_KIND_NETWORK, _exception_to_error_kind
+        from core.providers.errors import NetworkError
+
+        assert _exception_to_error_kind(NetworkError("offline")) == ERROR_KIND_NETWORK
+
+    def test_network_error_does_not_trigger_model_fallback(self) -> None:
+        from core.chat.chat import _is_model_fallback_trigger
+        from core.providers.errors import NetworkError
+
+        assert _is_model_fallback_trigger(NetworkError("offline")) is False

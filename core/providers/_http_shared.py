@@ -8,7 +8,10 @@ exceptions.
 
 from __future__ import annotations
 
+import httpx
+
 from core.providers.errors import (
+    NetworkError,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -76,11 +79,13 @@ def classify_http_status(
 # ---------------------------------------------------------------------------
 
 
-def wrap_network_error(error: Exception) -> ProviderTimeoutError:
-    """Wrap an httpx network exception in ``ProviderTimeoutError``.
+def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
+    """Wrap an httpx network exception with the appropriate error type.
 
-    Converts ``httpx.TimeoutException`` and ``httpx.ConnectError`` into
-    ``ProviderTimeoutError`` (retryable).  Other exceptions are wrapped
-    as-is with a generic message.
+    Converts ``httpx.ConnectError`` into ``NetworkError`` (retryable and not
+    provider-specific), while timeout-related exceptions are wrapped as
+    ``ProviderTimeoutError`` (retryable).
     """
+    if isinstance(error, httpx.ConnectError):
+        return NetworkError(f"Connection failed: {error}")
     return ProviderTimeoutError(f"Request failed: {error}")
