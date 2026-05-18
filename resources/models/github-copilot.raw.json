@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-14T13:42:03.822858+00:00",
+  "fetched_at": "2026-05-18T10:15:31.029889+00:00",
   "provider_id": "github-copilot",
   "raw_response": {
     "data": [
@@ -643,36 +643,6 @@
         "preview": false,
         "vendor": "Azure OpenAI",
         "version": "gpt-4o-2024-08-06"
-      },
-      {
-        "capabilities": {
-          "family": "grok-code",
-          "limits": {
-            "max_context_window_tokens": 128000,
-            "max_output_tokens": 64000,
-            "max_prompt_tokens": 128000
-          },
-          "object": "model_capabilities",
-          "supports": {
-            "streaming": true,
-            "structured_outputs": true,
-            "tool_calls": true
-          },
-          "tokenizer": "o200k_base",
-          "type": "chat"
-        },
-        "id": "grok-code-fast-1",
-        "model_picker_category": "lightweight",
-        "model_picker_enabled": true,
-        "name": "Grok Code Fast 1",
-        "object": "model",
-        "policy": {
-          "state": "enabled",
-          "terms": "Enable access to the latest Grok Code Fast 1 model from xAI. If enabled, you instruct GitHub Copilot to send data to xAI Grok Code Fast 1. [Learn more about how GitHub Copilot serves Grok Code Fast 1](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#xai-models)."
-        },
-        "preview": false,
-        "vendor": "xAI",
-        "version": "grok-code-fast-1"
       },
       {
         "capabilities": {
@@ -1338,30 +1308,6 @@
       },
       {
         "capabilities": {
-          "family": "gpt-4",
-          "limits": {
-            "max_context_window_tokens": 32768,
-            "max_output_tokens": 4096,
-            "max_prompt_tokens": 32768
-          },
-          "object": "model_capabilities",
-          "supports": {
-            "streaming": true,
-            "tool_calls": true
-          },
-          "tokenizer": "cl100k_base",
-          "type": "chat"
-        },
-        "id": "gpt-4",
-        "model_picker_enabled": false,
-        "name": "GPT 4",
-        "object": "model",
-        "preview": false,
-        "vendor": "Azure OpenAI",
-        "version": "gpt-4-0613"
-      },
-      {
-        "capabilities": {
           "family": "gpt-4o",
           "limits": {
             "max_context_window_tokens": 128000,
@@ -1396,31 +1342,6 @@
         "preview": false,
         "vendor": "Azure OpenAI",
         "version": "gpt-4o-2024-11-20"
-      },
-      {
-        "capabilities": {
-          "family": "gpt-4o",
-          "limits": {
-            "max_context_window_tokens": 128000,
-            "max_output_tokens": 4096,
-            "max_prompt_tokens": 64000
-          },
-          "object": "model_capabilities",
-          "supports": {
-            "parallel_tool_calls": true,
-            "streaming": true,
-            "tool_calls": true
-          },
-          "tokenizer": "o200k_base",
-          "type": "chat"
-        },
-        "id": "gpt-4-o-preview",
-        "model_picker_enabled": false,
-        "name": "GPT-4o",
-        "object": "model",
-        "preview": false,
-        "vendor": "Azure OpenAI",
-        "version": "gpt-4o-2024-05-13"
       },
       {
         "capabilities": {

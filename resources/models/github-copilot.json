@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-14T13:42:03.822858+00:00",
+  "fetched_at": "2026-05-18T10:15:31.029889+00:00",
   "models": {
     "accounts/msft/routers/f185i3v4": {
       "capabilities": {
@@ -885,29 +885,6 @@
         }
       },
       "name": "GPT-5.5"
-    },
-    "grok-code-fast-1": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 128000,
-      "max_output_tokens": 64000,
-      "metadata": {
-        "github_copilot": {
-          "family": "grok-code",
-          "streaming": true,
-          "structured_outputs": true,
-          "tool_calls": true,
-          "vendor": "xAI",
-          "version": "grok-code-fast-1"
-        }
-      },
-      "name": "Grok Code Fast 1"
     },
     "oswe-vscode-prime": {
       "capabilities": {
