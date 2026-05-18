@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-14T13:42:04.823080+00:00",
+  "fetched_at": "2026-05-18T10:15:32.505653+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -179,7 +179,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 16384,
+      "context_window": 32768,
       "max_output_tokens": 2048,
       "name": "Magnum v4 72B"
     },
@@ -478,7 +478,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 120000,
+      "context_window": 131072,
       "max_output_tokens": 8000,
       "name": "Baidu: ERNIE 4.5 21B A3B"
     },
@@ -497,14 +497,14 @@
     },
     "baidu/ernie-4.5-300b-a47b": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": false
         },
         "tools": false,
         "vision": false
       },
-      "context_window": 123000,
+      "context_window": 131072,
       "max_output_tokens": 12000,
       "name": "Baidu: ERNIE 4.5 300B A47B "
     },
@@ -517,7 +517,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 30000,
+      "context_window": 131072,
       "max_output_tokens": 8000,
       "name": "Baidu: ERNIE 4.5 VL 28B A3B"
     },
@@ -530,9 +530,22 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 123000,
+      "context_window": 131072,
       "max_output_tokens": 16000,
       "name": "Baidu: ERNIE 4.5 VL 424B A47B "
+    },
+    "baidu/qianfan-ocr-fast": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 28672,
+      "name": "Baidu: Qianfan-OCR-Fast"
     },
     "bytedance-seed/seed-1.6": {
       "capabilities": {
@@ -718,14 +731,14 @@
     },
     "deepseek/deepseek-r1": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 64000,
+      "context_window": 163840,
       "max_output_tokens": 16000,
       "name": "DeepSeek: R1"
     },
@@ -764,7 +777,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 32768,
+      "context_window": 128000,
       "max_output_tokens": 32768,
       "name": "DeepSeek: R1 Distill Qwen 32B"
     },
@@ -830,7 +843,7 @@
         "vision": false
       },
       "context_window": 1048576,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 4096,
       "name": "DeepSeek: DeepSeek V4 Flash"
     },
     "deepseek/deepseek-v4-flash:free": {
@@ -842,8 +855,8 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 256000,
-      "max_output_tokens": 256000,
+      "context_window": 1048576,
+      "max_output_tokens": 384000,
       "name": "DeepSeek: DeepSeek V4 Flash (free)"
     },
     "deepseek/deepseek-v4-pro": {
@@ -1024,7 +1037,7 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 65536,
+      "context_window": 131072,
       "max_output_tokens": 65536,
       "name": "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)"
     },
@@ -1076,7 +1089,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 1048576,
+      "context_window": 1048756,
       "max_output_tokens": 65536,
       "name": "Google: Gemini 3.1 Pro Preview Custom Tools"
     },
@@ -1301,9 +1314,9 @@
       "max_output_tokens": 32768,
       "name": "inclusionAI: Ling-2.6-flash"
     },
-    "inclusionai/ring-2.6-1t:free": {
+    "inclusionai/ring-2.6-1t": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": true
         },
@@ -1312,7 +1325,7 @@
       },
       "context_window": 262144,
       "max_output_tokens": 65536,
-      "name": "inclusionAI: Ring-2.6-1T (free)"
+      "name": "inclusionAI: Ring-2.6-1T"
     },
     "inflection/inflection-3-pi": {
       "capabilities": {
@@ -1362,7 +1375,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 32768,
+      "context_window": 128000,
       "max_output_tokens": 4096,
       "name": "LiquidAI: LFM2-24B-A2B"
     },
@@ -1407,7 +1420,7 @@
     },
     "meta-llama/llama-3-70b-instruct": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": false
         },
@@ -1420,7 +1433,7 @@
     },
     "meta-llama/llama-3-8b-instruct": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": false
         },
@@ -1453,7 +1466,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 16384,
+      "context_window": 131072,
       "max_output_tokens": 16384,
       "name": "Meta: Llama 3.1 8B Instruct"
     },
@@ -1479,7 +1492,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 60000,
+      "context_window": 131072,
       "max_output_tokens": 4096,
       "name": "Meta: Llama 3.2 1B Instruct"
     },
@@ -1492,7 +1505,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 80000,
+      "context_window": 131072,
       "max_output_tokens": 4096,
       "name": "Meta: Llama 3.2 3B Instruct"
     },
@@ -1531,7 +1544,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 65536,
+      "context_window": 131072,
       "max_output_tokens": 4096,
       "name": "Meta: Llama 3.3 70B Instruct (free)"
     },
@@ -1557,7 +1570,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 327680,
+      "context_window": 10000000,
       "max_output_tokens": 16384,
       "name": "Meta: Llama 4 Scout"
     },
@@ -1609,20 +1622,20 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 128000,
+      "context_window": 131072,
       "max_output_tokens": 128000,
       "name": "Microsoft: Phi 4 Mini Instruct"
     },
     "microsoft/wizardlm-2-8x22b": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": false
         },
         "tools": false,
         "vision": false
       },
-      "context_window": 65535,
+      "context_window": 65536,
       "max_output_tokens": 8000,
       "name": "WizardLM-2 8x22B"
     },
@@ -1661,7 +1674,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
+      "context_window": 204800,
       "max_output_tokens": 196608,
       "name": "MiniMax: MiniMax M2"
     },
@@ -1687,7 +1700,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
+      "context_window": 204800,
       "max_output_tokens": 196608,
       "name": "MiniMax: MiniMax M2.1"
     },
@@ -1700,7 +1713,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
+      "context_window": 204800,
       "max_output_tokens": 196608,
       "name": "MiniMax: MiniMax M2.5"
     },
@@ -1713,7 +1726,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
+      "context_window": 204800,
       "max_output_tokens": 8192,
       "name": "MiniMax: MiniMax M2.5 (free)"
     },
@@ -1726,8 +1739,8 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 196608,
-      "max_output_tokens": 4096,
+      "context_window": 204800,
+      "max_output_tokens": 131072,
       "name": "MiniMax: MiniMax M2.7"
     },
     "mistralai/codestral-2508": {
@@ -1830,7 +1843,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 2824,
+      "context_window": 4096,
       "max_output_tokens": 4096,
       "name": "Mistral: Mistral 7B Instruct v0.1"
     },
@@ -2103,7 +2116,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 262142,
+      "context_window": 262144,
       "max_output_tokens": 262142,
       "name": "MoonshotAI: Kimi K2.6"
     },
@@ -2285,7 +2298,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 262144,
+      "context_window": 1000000,
       "max_output_tokens": 4096,
       "name": "NVIDIA: Nemotron 3 Super"
     },
@@ -2298,7 +2311,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 262144,
+      "context_window": 1000000,
       "max_output_tokens": 262144,
       "name": "NVIDIA: Nemotron 3 Super (free)"
     },
@@ -3377,7 +3390,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 32768,
+      "context_window": 131072,
       "max_output_tokens": 16384,
       "name": "Qwen2.5 72B Instruct"
     },
@@ -3390,7 +3403,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 32768,
+      "context_window": 131072,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen2.5 7B Instruct"
     },
@@ -3403,7 +3416,7 @@
         "tools": false,
         "vision": false
       },
-      "context_window": 32768,
+      "context_window": 128000,
       "max_output_tokens": 4096,
       "name": "Qwen2.5 Coder 32B Instruct"
     },
@@ -3455,7 +3468,7 @@
         "tools": false,
         "vision": true
       },
-      "context_window": 32000,
+      "context_window": 131072,
       "max_output_tokens": 4096,
       "name": "Qwen: Qwen2.5 VL 72B Instruct"
     },
@@ -3468,7 +3481,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 40960,
+      "context_window": 131702,
       "max_output_tokens": 40960,
       "name": "Qwen: Qwen3 14B"
     },
@@ -3507,7 +3520,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "max_output_tokens": 4096,
       "name": "Qwen: Qwen3 235B A22B Thinking 2507"
     },
@@ -3520,7 +3533,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 40960,
+      "context_window": 131072,
       "max_output_tokens": 20000,
       "name": "Qwen: Qwen3 30B A3B"
     },
@@ -3559,7 +3572,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 40960,
+      "context_window": 131072,
       "max_output_tokens": 16384,
       "name": "Qwen: Qwen3 32B"
     },
@@ -3572,7 +3585,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 40960,
+      "context_window": 131072,
       "max_output_tokens": 8192,
       "name": "Qwen: Qwen3 8B"
     },
@@ -3585,7 +3598,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 262144,
+      "context_window": 1048576,
       "max_output_tokens": 65536,
       "name": "Qwen: Qwen3 Coder 480B A35B"
     },
@@ -3650,7 +3663,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 262000,
+      "context_window": 1048576,
       "max_output_tokens": 262000,
       "name": "Qwen: Qwen3 Coder 480B A35B (free)"
     },
@@ -3715,7 +3728,7 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen3 Next 80B A3B Thinking"
     },
@@ -3754,7 +3767,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen3 VL 30B A3B Instruct"
     },
@@ -3780,7 +3793,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "context_window": 262144,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen3 VL 32B Instruct"
     },
@@ -3793,7 +3806,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "context_window": 256000,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen3 VL 8B Instruct"
     },
@@ -3806,7 +3819,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 131072,
+      "context_window": 256000,
       "max_output_tokens": 32768,
       "name": "Qwen: Qwen3 VL 8B Thinking"
     },
@@ -4239,97 +4252,6 @@
       "max_output_tokens": 8192,
       "name": "Writer: Palmyra X5"
     },
-    "x-ai/grok-3": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 3"
-    },
-    "x-ai/grok-3-beta": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": false
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 3 Beta"
-    },
-    "x-ai/grok-3-mini": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 3 Mini"
-    },
-    "x-ai/grok-3-mini-beta": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 3 Mini Beta"
-    },
-    "x-ai/grok-4": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 256000,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 4"
-    },
-    "x-ai/grok-4-fast": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 2000000,
-      "max_output_tokens": 30000,
-      "name": "xAI: Grok 4 Fast"
-    },
-    "x-ai/grok-4.1-fast": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 2000000,
-      "max_output_tokens": 30000,
-      "name": "xAI: Grok 4.1 Fast"
-    },
     "x-ai/grok-4.20": {
       "capabilities": {
         "json_mode": true,
@@ -4368,19 +4290,6 @@
       "context_window": 1000000,
       "max_output_tokens": 4096,
       "name": "xAI: Grok 4.3"
-    },
-    "x-ai/grok-code-fast-1": {
-      "capabilities": {
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        },
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 256000,
-      "max_output_tokens": 10000,
-      "name": "xAI: Grok Code Fast 1"
     },
     "xiaomi/mimo-v2-flash": {
       "capabilities": {
@@ -4501,7 +4410,7 @@
     },
     "z-ai/glm-4.5v": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": true
         },
@@ -4600,7 +4509,7 @@
         "vision": false
       },
       "context_window": 202752,
-      "max_output_tokens": 65535,
+      "max_output_tokens": 4096,
       "name": "Z.ai: GLM 5.1"
     },
     "z-ai/glm-5v-turbo": {
@@ -4690,7 +4599,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 262142,
+      "context_window": 262144,
       "max_output_tokens": 262142,
       "name": "MoonshotAI Kimi Latest"
     },
