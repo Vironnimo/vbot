@@ -622,8 +622,7 @@ class _StubAgents:
     def get(self, agent_id: str) -> object:
         return SimpleNamespace(
             id=agent_id,
-            model="provider/model",
-            connection="provider:default",
+            model="provider/model::default",
             temperature=0.0,
             thinking_effort="",
             allowed_tools=["*"],

@@ -94,7 +94,6 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            connection="fake-provider:api-key",
             thinking_effort="high",
         )
 
@@ -146,7 +145,6 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            connection="fake-provider:api-key",
         )
         Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
 
@@ -197,7 +195,6 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            connection="fake-provider:api-key",
         )
 
         assistant = await ChatLoop(runtime).send("coder", "Read missing", session_id="session-one")
@@ -250,7 +247,6 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
             "coder",
             "Coder Agent",
             model="fake-provider/fake-model-v1",
-            connection="fake-provider:api-key",
             allowed_tools=["read_file"],
             allowed_skills=["agent-cli"],
         )
