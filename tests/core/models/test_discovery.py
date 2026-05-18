@@ -21,6 +21,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
+OPENCODE_GO_MODELS_URL = "https://opencode-go.example/v1/models"
 API_KEY = "test-openrouter-key"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -78,6 +79,30 @@ def github_copilot_config() -> ProviderConfig:
         ],
         defaults={"max_tokens": 8192},
         extra_headers={"Copilot-Integration-Id": "vbot"},
+        models_endpoint="/models",
+    )
+
+
+@pytest.fixture()
+def opencode_go_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="opencode-go",
+        name="OpenCode Go",
+        adapter="opencode_go",
+        base_url="https://opencode-go.example/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENCODE_GO_API_KEY",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
         models_endpoint="/models",
     )
 
@@ -218,6 +243,37 @@ class TestPassthroughFilters:
 
 
 class TestRefreshModels:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_supports_opencode_go_discovery_adapter(
+        self,
+        tmp_path: Path,
+        opencode_go_config: ProviderConfig,
+    ):
+        resources_dir = tmp_path / "resources"
+        route = respx.get(OPENCODE_GO_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(
+                            model_id="deepseek/deepseek-r1",
+                            name="DeepSeek R1",
+                        )
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(opencode_go_config, API_KEY, resources_dir)
+
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("opencode-go", "deepseek/deepseek-r1")
+        assert result["provider_id"] == "opencode-go"
+        assert result["model_count"] == 1
+        assert model.name == "DeepSeek R1"
+        assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_refresh_models_writes_json_and_registry_reads_it(
