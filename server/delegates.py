@@ -42,6 +42,7 @@ from core.chat import (
     RunEvent,
     RunNotFoundError,
 )
+from core.chat.chat import parse_bare_model
 from core.chat.content_blocks import (
     ContentBlock,
     ContentBlockError,
@@ -1727,8 +1728,6 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "name",
         "model",
         "fallback_model",
-        "connection",
-        "fallback_connection",
         "temperature",
         "thinking_effort",
         "allowed_tools",
@@ -1757,7 +1756,7 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
         return value
-    if key in {"model", "fallback_model", "connection", "fallback_connection"}:
+    if key in {"model", "fallback_model"}:
         if not isinstance(value, str):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
         return value
@@ -1858,9 +1857,10 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
 
     Returns None if the model format is invalid or the model is not found.
     """
-    if "/" not in model:
+    bare_model = parse_bare_model(model)
+    if "/" not in bare_model:
         return None
-    provider_id, _, model_id = model.partition("/")
+    provider_id, _, model_id = bare_model.partition("/")
     if not provider_id or not model_id:
         return None
     try:
@@ -1876,8 +1876,6 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "name": agent.name,
         "model": agent.model,
         "fallback_model": agent.fallback_model,
-        "connection": agent.connection,
-        "fallback_connection": agent.fallback_connection,
         "workspace": agent.workspace,
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,

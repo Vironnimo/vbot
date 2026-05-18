@@ -15,7 +15,6 @@ from core.agents import (
     AgentStore,
     InvalidAgentIdError,
 )
-from core.agents.agents import _agent_from_dict
 
 TEMPLATE_FILES = ("SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md")
 
@@ -40,8 +39,6 @@ def test_agent_dataclass_is_frozen() -> None:
         name="Coder Agent",
         model="openai/gpt-5.2",
         fallback_model="",
-        connection="openai:api-key",
-        fallback_connection="",
         workspace="C:/workspace",
         temperature=0.1,
         thinking_effort="",
@@ -66,8 +63,6 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["name"] == "Coder Agent"
     assert data["model"] == ""
     assert data["fallback_model"] == ""
-    assert data["connection"] == ""
-    assert data["fallback_connection"] == ""
     assert data["workspace"] == str((store.data_dir / "workspace-coder").resolve())
     assert data["temperature"] == 0.1
     assert data["thinking_effort"] == ""
@@ -96,8 +91,6 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         "Research Agent",
         model="openrouter/deepseek/deepseek-v4-pro",
         fallback_model="openai/gpt-5.2",
-        connection="openrouter:api-key",
-        fallback_connection="openai:api-key",
         workspace=custom_workspace,
         temperature=0.7,
         thinking_effort="high",
@@ -106,8 +99,6 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     )
 
     assert agent.workspace == str(custom_workspace.resolve())
-    assert agent.connection == "openrouter:api-key"
-    assert agent.fallback_connection == "openai:api-key"
     assert agent.allowed_tools == []
     assert agent.allowed_skills == ["memory"]
     assert (custom_workspace / "SOUL.md").exists()
@@ -119,8 +110,6 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         ("name", "", "name must be a non-empty string"),
         ("model", 12, "model must be a string"),
         ("fallback_model", 12, "fallback_model must be a string"),
-        ("connection", 12, "connection must be a string"),
-        ("fallback_connection", 12, "fallback_connection must be a string"),
         ("temperature", "0.4", "temperature must be a number"),
         ("temperature", -0.1, "temperature must be between"),
         ("temperature", 2.1, "temperature must be between"),
@@ -192,7 +181,6 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         "coder",
         name="Updated Coder",
         model="openai/gpt-5.2",
-        connection="openai:api-key",
         allowed_tools=["read_file"],
     )
 
@@ -201,7 +189,6 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.updated_at >= original.updated_at
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
-    assert updated.connection == "openai:api-key"
     assert updated.allowed_tools == ["read_file"]
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
@@ -214,8 +201,6 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         ("name", "", "name must be a non-empty string"),
         ("model", 123, "model must be a string"),
         ("fallback_model", 123, "fallback_model must be a string"),
-        ("connection", 123, "connection must be a string"),
-        ("fallback_connection", 123, "fallback_connection must be a string"),
         ("temperature", True, "temperature must be a number"),
         ("temperature", 3.0, "temperature must be between"),
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
@@ -262,15 +247,6 @@ def test_update_can_set_current_session_id_to_existing_session(store: AgentStore
     assert updated.current_session_id != original.current_session_id
 
 
-def test_update_changes_connection_field(store: AgentStore) -> None:
-    store.create("coder", "Coder Agent", connection="openai:api-key")
-
-    updated = store.update("coder", connection="openai:oauth")
-
-    assert updated.connection == "openai:oauth"
-    assert store.get("coder").connection == "openai:oauth"
-
-
 def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
     store.create("coder", "Coder Agent")
 
@@ -296,34 +272,6 @@ def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore
     ).is_file()
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert normalized_data["current_session_id"] == loaded.current_session_id
-
-
-def test_load_agent_json_with_missing_connection_fields_defaults_empty(store: AgentStore) -> None:
-    store.create("manual", "Manual Agent", connection="openai:api-key")
-    agent_path = store.data_dir / "agents" / "manual" / "agent.json"
-    data = json.loads(agent_path.read_text(encoding="utf-8"))
-    data.pop("connection")
-    data.pop("fallback_connection")
-    agent_path.write_text(json.dumps(data), encoding="utf-8")
-
-    loaded = store.get("manual")
-
-    assert loaded.connection == ""
-    assert loaded.fallback_connection == ""
-
-
-def test_agent_from_dict_defaults_missing_connection_fields(store: AgentStore) -> None:
-    agent = store.create("manual", "Manual Agent", connection="openai:api-key")
-    agent_path = store.data_dir / "agents" / "manual" / "agent.json"
-    data = json.loads(agent_path.read_text(encoding="utf-8"))
-    data.pop("connection")
-    data.pop("fallback_connection")
-    data["current_session_id"] = agent.current_session_id
-
-    parsed = _agent_from_dict(data)
-
-    assert parsed.connection == ""
-    assert parsed.fallback_connection == ""
 
 
 def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
