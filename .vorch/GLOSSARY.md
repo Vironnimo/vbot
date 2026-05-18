@@ -17,7 +17,7 @@
 
 - `ProviderAdapter` (ABC) — defines the interface: `send()`, `stream()`
 - `OpenAICompatibleAdapter` — concrete class for the generic OpenAI `chat/completions` protocol. Used directly by fully compatible providers; mostly compatible providers should subclass it when runtime behavior or catalog discovery differs.
-- `OpenRouterAdapter` and `GitHubCopilotAdapter` — OpenAI-compatible subclasses that own provider-specific runtime or model-catalog knowledge.
+- `OpenCodeGoAdapter`, `OpenRouterAdapter`, and `GitHubCopilotAdapter` — OpenAI-compatible subclasses that own provider-specific runtime or model-catalog knowledge.
 - `AnthropicAdapter` — concrete class for Anthropic's Messages API. Own wire protocol, own message format, own thinking/reasoning parameters.
 - Custom adapters can inherit from `OpenAICompatibleAdapter` and override specific methods when a provider is mostly but not fully OpenAI-compatible.
 
