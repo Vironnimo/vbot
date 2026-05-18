@@ -1,0 +1,22 @@
+{
+  "id": "opencode-go",
+  "name": "OpenCode Go",
+  "adapter": "opencode_go",
+  "base_url": "https://opencode.ai/zen/go/v1",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "OPENCODE_GO_API_KEY"
+      }
+    }
+  ],
+  "defaults": {
+    "max_tokens": 4096
+  },
+  "models_endpoint": "/models"
+}

@@ -11,6 +11,7 @@ from core.providers.errors import (
 )
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     AuthConfig,
@@ -25,6 +26,7 @@ __all__ = [
     "ConnectionConfig",
     "GitHubCopilotAdapter",
     "OpenAICompatibleAdapter",
+    "OpenCodeGoAdapter",
     "OpenRouterAdapter",
     "ProviderCredentialResolver",
     "ProviderAdapter",
