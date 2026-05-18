@@ -3,11 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from core.chat.runs import ChatRunManager, RunNotFoundError
 
+if TYPE_CHECKING:
+    from core.agents.agents import Agent, AgentStore
+    from core.chat.chat import ChatMessage, ChatSessionManager
+    from core.models.models import ModelRegistry
+else:
+    Agent = Any
+    AgentStore = Any
+    ChatMessage = Any
+    ChatSessionManager = Any
+    ModelRegistry = Any
+
 CommandHandler = Callable[[str, str], "CommandHandled"]
+
+STATUS_PLACEHOLDER = "—"
+_STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
+_STATUS_MODEL_DISPLAY_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "status_model_display_override",
+    default=None,
+)
 
 
 @dataclass(frozen=True)
@@ -29,12 +50,25 @@ class CommandDispatcher:
     """Dispatches built-in slash commands before run startup."""
 
     BUILT_IN_COMMANDS: dict[str, str] = {
+        "status": "Show current session and runtime status.",
         "stop": "Cancel the active run for this session.",
     }
 
-    def __init__(self, chat_runs: ChatRunManager) -> None:
+    def __init__(
+        self,
+        chat_runs: ChatRunManager,
+        agents: AgentStore | None = None,
+        sessions: ChatSessionManager | None = None,
+        models: ModelRegistry | None = None,
+        started_at: datetime | None = None,
+    ) -> None:
         self._chat_runs = chat_runs
+        self._agents = agents
+        self._sessions = sessions
+        self._models = models
+        self._started_at = started_at
         self._commands: dict[str, CommandHandler] = {
+            "/status": self._handle_status,
             "/stop": self._handle_stop,
         }
 
@@ -52,3 +86,193 @@ class CommandDispatcher:
         except RunNotFoundError:
             return CommandHandled(reply="No active run to cancel.")
         return CommandHandled(reply="Run cancelled.")
+
+    def _handle_status(self, agent_id: str, session_id: str) -> CommandHandled:
+        agent: Agent | None = None
+        messages: list[ChatMessage] = []
+        context_window: int | None = None
+        model_display_name: str | None = None
+
+        try:
+            if self._agents is not None:
+                agent = self._agents.get(agent_id)
+        except Exception:
+            agent = None
+
+        try:
+            if self._sessions is not None:
+                messages = self._sessions.get(agent_id, session_id).load()
+        except Exception:
+            messages = []
+
+        if agent is not None and self._models is not None:
+            provider_id, separator, model_id = agent.model.partition("/")
+            if separator and model_id:
+                try:
+                    model = self._models.get(provider_id, model_id)
+                    context_window = model.context_window
+                    model_display_name = model.name
+                except KeyError:
+                    context_window = None
+                except Exception:
+                    context_window = None
+
+        token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
+        try:
+            text = build_status_text(agent, messages, context_window, self._started_at)
+        finally:
+            _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
+        return CommandHandled(reply=text)
+
+
+def build_status_text(
+    agent: Agent | None,
+    messages: list[ChatMessage],
+    context_window: int | None,
+    started_at: datetime | None,
+) -> str:
+    """Build human-readable status text for the current session and runtime state."""
+    now_utc = datetime.now(UTC)
+    now_local = now_utc.astimezone()
+
+    if agent is None:
+        agent_summary = STATUS_PLACEHOLDER
+        model_display = STATUS_PLACEHOLDER
+        fallback_model = STATUS_PLACEHOLDER
+        thinking_effort = STATUS_PLACEHOLDER
+        temperature = STATUS_PLACEHOLDER
+    else:
+        model_string = agent.model.strip() or STATUS_PLACEHOLDER
+        agent_summary = f"{agent.name} ({model_string})"
+        model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
+        fallback_model = agent.fallback_model.strip() or STATUS_PLACEHOLDER
+        thinking_effort = agent.thinking_effort.strip() or "default"
+        temperature = f"{agent.temperature:g}"
+
+    context_usage = _context_usage_text(messages, context_window)
+    session_started = _session_started_text(messages, now_utc)
+    turn_count = _turn_count_text(messages)
+    app_uptime = _app_uptime_text(started_at, now_utc)
+
+    lines = [
+        f"Agent: {agent_summary}",
+        f"Model display name: {model_display}",
+        f"Fallback model: {fallback_model}",
+        f"Thinking effort: {thinking_effort}",
+        f"Temperature: {temperature}",
+        f"Context usage: {context_usage}",
+        f"Session started: {session_started}",
+        f"Turn count: {turn_count}",
+        f"App uptime: {app_uptime}",
+        f"Current time: {now_local.strftime(_STATUS_TIME_FORMAT)}",
+    ]
+    return "\n".join(lines)
+
+
+def _model_display_name(model_string: str) -> str:
+    provider_id, separator, model_id = model_string.partition("/")
+    if not provider_id or not separator or not model_id:
+        return STATUS_PLACEHOLDER
+    return model_id
+
+
+def _context_usage_text(messages: list[ChatMessage], context_window: int | None) -> str:
+    if context_window is None or context_window <= 0:
+        return STATUS_PLACEHOLDER
+
+    latest_usage = _latest_assistant_usage(messages)
+    if latest_usage is None:
+        return STATUS_PLACEHOLDER
+
+    input_tokens, estimated = latest_usage
+    prefix = "~" if estimated else ""
+    return f"{prefix}{input_tokens} / {context_window}"
+
+
+def _turn_count_text(messages: list[ChatMessage]) -> str:
+    if not messages:
+        return STATUS_PLACEHOLDER
+    return str(sum(1 for message in messages if message.role == "user"))
+
+
+def _latest_assistant_usage(messages: list[ChatMessage]) -> tuple[int, bool] | None:
+    for message in reversed(messages):
+        if message.role != "assistant" or not isinstance(message.usage, dict):
+            continue
+        input_tokens = _coerce_int(message.usage.get("input_tokens"))
+        if input_tokens is None:
+            continue
+        return input_tokens, bool(message.usage.get("estimated"))
+    return None
+
+
+def _session_started_text(messages: list[ChatMessage], now_utc: datetime) -> str:
+    if not messages:
+        return STATUS_PLACEHOLDER
+
+    parsed_timestamp = _parse_utc_timestamp(messages[0].timestamp)
+    if parsed_timestamp is None:
+        return STATUS_PLACEHOLDER
+
+    local_started = parsed_timestamp.astimezone()
+    age_text = _format_duration(now_utc - parsed_timestamp)
+    return f"{local_started.strftime(_STATUS_TIME_FORMAT)} ({age_text} ago)"
+
+
+def _app_uptime_text(started_at: datetime | None, now_utc: datetime) -> str:
+    if started_at is None:
+        return STATUS_PLACEHOLDER
+    started_at_utc = _to_utc(started_at)
+    return _format_duration(now_utc - started_at_utc)
+
+
+def _to_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _parse_utc_timestamp(value: str) -> datetime | None:
+    normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized_value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(UTC)
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    return None
+
+
+def _format_duration(delta: timedelta) -> str:
+    total_seconds = max(0, int(delta.total_seconds()))
+    days, remainder = divmod(total_seconds, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+
+    parts: list[str] = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0 or days > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0 or hours > 0 or days > 0:
+        parts.append(f"{minutes}m")
+    parts.append(f"{seconds}s")
+    return " ".join(parts)
