@@ -78,7 +78,7 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
-MAX_TOOL_ITERATIONS = 8
+MAX_TOOL_ITERATIONS = 1000
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
@@ -1107,6 +1107,7 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
     ) -> ChatMessage:
+        tool_iteration_count = 0
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
@@ -1156,8 +1157,9 @@ class ChatLoop:
             if not assistant_message.tool_calls:
                 return assistant_message
 
-            if self._tool_iterations_exhausted(messages):
+            if tool_iteration_count >= self._max_tool_iterations:
                 raise ToolIterationLimitError("maximum tool iterations exceeded")
+            tool_iteration_count += 1
 
             tool_messages = await self._dispatch_tool_calls(
                 agent,
@@ -1323,14 +1325,6 @@ class ChatLoop:
             )
             for tool_call, result in zip(tool_calls, results, strict=True)
         ]
-
-    def _tool_iterations_exhausted(self, messages: list[JsonObject]) -> bool:
-        assistant_tool_messages = [
-            message
-            for message in messages
-            if message.get("role") == "assistant" and message.get("tool_calls")
-        ]
-        return len(assistant_tool_messages) > self._max_tool_iterations
 
     def _activate_triggered_skills(self, agent: Any, session: ChatSession, content: str) -> None:
         skill_registry = getattr(self._runtime, "skills", None)
