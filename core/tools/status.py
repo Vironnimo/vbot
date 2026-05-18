@@ -6,9 +6,12 @@ from datetime import datetime
 
 from core.agents.agents import AgentStore
 from core.chat.chat import ChatSessionManager
-from core.chat.commands import build_status_text
+from core.chat.commands import build_status_reply, build_status_text, resolve_status_model_details
 from core.models.models import ModelRegistry
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = "Show current session and runtime status."
@@ -30,31 +33,40 @@ def make_status_handler(
     def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
         agent = None
         messages = []
-        context_window = None
 
         try:
             agent = agents.get(context.agent_id)
         except Exception:
+            _LOGGER.warning(
+                "Failed to load agent %r while running status tool",
+                context.agent_id,
+                exc_info=True,
+            )
             agent = None
 
         try:
             messages = sessions.get(context.agent_id, context.session_id).load()
         except Exception:
+            _LOGGER.warning(
+                "Failed to load session %r for agent %r while running status tool",
+                context.session_id,
+                context.agent_id,
+                exc_info=True,
+            )
             messages = []
 
-        if agent is not None:
-            provider_id, separator, model_id = agent.model.partition("/")
-            if separator and model_id:
-                try:
-                    context_window = models.get(provider_id, model_id).context_window
-                except KeyError:
-                    context_window = None
-                except Exception:
-                    context_window = None
+        context_window, model_display_name = resolve_status_model_details(agent, models)
 
         try:
-            text = build_status_text(agent, messages, context_window, started_at)
+            text = build_status_reply(
+                agent,
+                messages,
+                context_window,
+                started_at,
+                model_display_name,
+            )
         except Exception:
+            _LOGGER.warning("Failed to build status tool reply", exc_info=True)
             text = build_status_text(None, [], None, None)
         return tool_success({"text": text})
 

@@ -92,6 +92,18 @@ class _StubModels:
         return self._model
 
 
+class _RecordingModels:
+    def __init__(self, model: Model) -> None:
+        self._model = model
+        self.calls: list[tuple[str, str]] = []
+
+    def get(self, provider_id: str, model_id: str) -> Model:
+        self.calls.append((provider_id, model_id))
+        if provider_id != "openai" or model_id != "gpt-5.2":
+            raise KeyError(model_id)
+        return self._model
+
+
 @pytest.mark.asyncio
 async def test_dispatch_stop_with_active_run_returns_cancelled_reply() -> None:
     manager = ChatRunManager()
@@ -183,6 +195,28 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
     assert "Model display name: GPT-5.2" in result.reply
     assert "Context usage: 1234 / 200000" in result.reply
     assert "Current time:" in result.reply
+
+
+def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    messages = [
+        ChatMessage.user("Status check", timestamp=session_started),
+    ]
+    models = _RecordingModels(_make_model(name="GPT-5.2 Registry"))
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agents=cast(AgentStore, _StubAgents(_make_agent(model="openai/gpt-5.2::primary"))),
+        sessions=cast(ChatSessionManager, _StubSessions(messages)),
+        models=cast(ModelRegistry, models),
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    assert "Model display name: GPT-5.2 Registry" in result.reply
+    assert models.calls == [("openai", "gpt-5.2")]
 
 
 def test_build_status_text_degraded_with_no_data() -> None:
