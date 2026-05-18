@@ -111,11 +111,13 @@ container; a Run is one active execution inside that session.
 - Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results, but note embedding must still preserve immediate assistant-tool adjacency within a tool-call sequence.
 - If a Session later continues with a different provider, stale `reasoning_meta`
   from the old provider must never be sent to the new provider.
-- `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
-- Runtime target resolution uses both `agent.model` and `agent.connection`: provider comes from `connection` (`<provider>:<connection-id>`), while adapter `model_id` still comes from the part after `/` in `model`. If `connection` is empty, the chat loop falls back to the first usable connection for the model provider in provider-config order.
+- `agent.model` must be in `<provider>/<model-id>` form and may optionally carry `::<connection-local-id>` at the end. An empty model or missing provider raises `ChatError` before an adapter request.
+- Runtime target resolution parses `agent.model` with `rpartition("::")`. When a suffix is present, the chat loop reconstructs the full connection ID as `<provider>:<connection-local-id>`. Without a suffix, the chat loop falls back to the first usable connection for the model provider in provider-config order.
 - If a retryable `ProviderError` escapes adapter retries and the Agent has a resolvable `fallback_model`, the chat loop may switch to that fallback for the rest of the current Run. The switch emits `model_fallback_activated` and persists a note so the next provider request sees the change as a `<system-reminder>`. The Agent config itself is not mutated, so the next turn starts from the primary model again.
+- `fallback_model` follows the same optional `::<connection-local-id>` convention as `model`; fallback resolution uses that suffix when present and otherwise auto-resolves the first usable connection for the fallback provider.
 - Run-local model fallback is part of the shared ChatLoop execution path and therefore applies equally to direct and internal Runs that execute through that path.
 - The chat loop does not prevalidate model existence in static model resources; unknown model IDs are left for the provider API to reject.
+- Surfaces that need the catalog model key rather than the pinned connection form, such as context-window lookup or display helpers, must strip the optional `::<connection-local-id>` suffix first.
 - Attachment resolution happens in the chat layer, not inside provider adapters.
   Current-turn `MediaBlock` image attachments become base64 provider-neutral media dicts;
   historical media become text placeholders; `FileBlock` becomes a text note with
