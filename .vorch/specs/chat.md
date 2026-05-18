@@ -34,7 +34,8 @@ container; a Run is one active execution inside that session.
 - `ChatSession.create(sessions_dir, session_id=None)` — creates an empty session file. Public/server-facing session creation uses a server-generated UUID session ID.
 - `ChatSession.append(message)` — appends one compact UTF-8 JSON object plus newline.
 - `ChatSession.load()` — returns validated `ChatMessage` objects in file order.
-- `ChatSession.add_note(content)` — persists a `role: "note"` message and enqueues it in-memory for the next provider request.
+- `ChatSession.add_note(content)` — enqueues a `role: "note"` message in-memory for the next provider request and persists it to JSONL, except during active tool dispatch where persistence is deferred until after that assistant turn's tool-result messages are appended.
+- `ChatSession.begin_defer_notes()` / `ChatSession.flush_deferred_notes()` — internal helpers that bracket tool dispatch so note persistence stays after the current assistant turn's tool-result span.
 - `ChatSession.drain_pending_notes()` — returns queued note messages and clears the in-memory pending-note buffer; it does not re-read the session file.
 - `ChatSession.activate_skill_context(name, data)` — stores one activated skill's `<skill_content>` context once per Session, persists it as an internal skill-context note, and returns a stable tool result envelope. Re-activating the same skill returns an already-active success envelope.
 - `ChatSession.skill_context_messages()` — returns restored activated skill contexts as provider request messages.
@@ -96,8 +97,9 @@ container; a Run is one active execution inside that session.
   not be mistaken for the intended public/server product contract.
 - Only user messages may persist `list[ContentBlock]` content. System, assistant,
   tool, note, and error messages remain string-or-null content only.
-- Current-turn `reasoning_meta` must be preserved unchanged during tool-use loops. Old `reasoning_meta` is not resent after completed turns by default.
+- Current-turn `reasoning` and `reasoning_meta` must be preserved unchanged during tool-use loops when the same assistant turn continues after tool results. Old completed-turn `reasoning` and `reasoning_meta` are not resent on later turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
+- Notes generated during a tool-use turn must not appear between an assistant message with `tool_calls` and that turn's tool-result messages, either in JSONL persistence or in the provider request history. Such notes are deferred until after the last tool result for that assistant turn.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
 - User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
@@ -106,7 +108,7 @@ container; a Run is one active execution inside that session.
   dispatcher; unrecognized slash text still reaches the existing skill-trigger
   logic unchanged.
 - Normal server history responses and the standard WebUI timeline must filter out notes; only debug-specific surfaces may expose them intentionally.
-- Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results.
+- Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results, but note embedding must still preserve immediate assistant-tool adjacency within a tool-call sequence.
 - If a Session later continues with a different provider, stale `reasoning_meta`
   from the old provider must never be sent to the new provider.
 - `agent.model` must be in `<provider>/<model-id>` form. An empty model or missing provider raises `ChatError` before an adapter request.
@@ -125,7 +127,7 @@ container; a Run is one active execution inside that session.
 
 - Provider adapters extract token usage from responses: OpenAI maps `prompt_tokens`/`completion_tokens` to canonical `input_tokens`/`output_tokens`; Anthropic maps directly from `usage.input_tokens`/`usage.output_tokens`. If a provider doesn't supply usage (e.g., local providers without usage reporting), the backend falls back to a 4-chars-per-token estimation via `estimate_tokens()` in `core/utils/tokens.py` and marks the result with `"estimated": true`.
 - `ChatMessage.assistant()` accepts an optional `usage: JsonObject | None` field (canonical keys: `input_tokens`, `output_tokens`; optional `estimated` boolean). Usage is only valid on assistant messages and is rejected on other roles by `from_dict()`.
-- `_message_to_request_dict()` strips `usage` (alongside `reasoning` and `reasoning_meta`) from assistant messages before they are sent to provider APIs. Usage is vBot-internal metadata and must not leak into provider request payloads.
+- `_message_to_request_dict()` strips `usage`, `reasoning`, and `reasoning_meta` from assistant history before it is sent to provider APIs. Readable `reasoning` still round-trips for reasoning-aware adapters on the active tool-continuation path, but stale completed-turn reasoning must not be resent on later follow-up turns.
 - The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal events for failed or cancelled runs do not include usage.
 - In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
 - GitHub Copilot endpoint helpers must emit the same normalized streaming shapes

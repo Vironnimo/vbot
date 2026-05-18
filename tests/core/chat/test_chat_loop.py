@@ -28,6 +28,7 @@ from core.chat import (
     ChatSessionManager,
     RunCancelledError,
     RunStatus,
+    ToolCall,
 )
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
@@ -499,6 +500,60 @@ async def test_note_added_between_tool_iterations_is_sent_on_next_request(
     assert all(
         message["role"] != "note" for request in adapter.requests for message in request["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["record_note"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": {}}],
+            },
+            {"content": "First turn complete", "tool_calls": None},
+            {"content": "Second turn complete", "tool_calls": None},
+        ]
+    )
+
+    def record_note(context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        context.add_note("Tool finished background work")
+        return tool_success({"ok": True})
+
+    tools = ToolRegistry()
+    tools.register("record_note", "Record note.", {"type": "object"}, record_note)
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+
+    persisted_after_first_turn = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.role for message in persisted_after_first_turn] == [
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "assistant",
+    ]
+    assert persisted_after_first_turn[3].content == "Tool finished background work"
+
+    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+
+    second_turn_request = adapter.requests[2]["messages"]
+    assert [message["role"] for message in second_turn_request] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert second_turn_request[4] == {
+        "role": "user",
+        "content": "<system-reminder>\nTool finished background work\n</system-reminder>",
+    }
 
 
 @pytest.mark.asyncio
@@ -2276,16 +2331,158 @@ async def test_estimation_with_tool_calls_in_history(
     assert assistant.usage["input_tokens"] > 0
 
 
-class TestMessageToRequestDict:
-    """Verify _message_to_request_dict strips vBot-internal fields from provider requests."""
+class TestEmbedNotesIntoRequest:
+    def test_defers_note_between_assistant_tool_calls_and_tool_result(self) -> None:
+        from core.chat.chat import _embed_notes_into_request
 
-    def test_strips_usage_from_assistant_message(self):
-        """Usage must not be sent to providers in follow-up request messages."""
+        messages = [
+            ChatMessage.user("Use the tool"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[ToolCall(id="call_1", name="record_note", arguments={})],
+            ),
+            ChatMessage.note("Tool finished background work"),
+            ChatMessage.tool(
+                tool_call_id="call_1",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in request] == ["user", "assistant", "tool", "user"]
+        assert request[-1] == {
+            "role": "user",
+            "content": "<system-reminder>\nTool finished background work\n</system-reminder>",
+        }
+
+    def test_defers_multiple_notes_within_one_tool_sequence(self) -> None:
+        from core.chat.chat import _embed_notes_into_request
+
+        messages = [
+            ChatMessage.user("Use tools"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[
+                    ToolCall(id="call_1", name="record_note", arguments={}),
+                    ToolCall(id="call_2", name="record_note", arguments={}),
+                ],
+            ),
+            ChatMessage.note("First note"),
+            ChatMessage.tool(
+                tool_call_id="call_1",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+            ChatMessage.note("Second note"),
+            ChatMessage.tool(
+                tool_call_id="call_2",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in request] == [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+            "user",
+        ]
+        assert request[-1] == {
+            "role": "user",
+            "content": (
+                "<system-reminder>\nFirst note\n</system-reminder>\n"
+                "<system-reminder>\nSecond note\n</system-reminder>"
+            ),
+        }
+
+    def test_note_between_two_tool_sequences_is_not_deferred(self) -> None:
+        from core.chat.chat import _embed_notes_into_request
+
+        messages = [
+            ChatMessage.user("Start"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[ToolCall(id="call_1", name="record_note", arguments={})],
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_1",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+            ChatMessage.note("Between sequences"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[ToolCall(id="call_2", name="record_note", arguments={})],
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_2",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in request] == [
+            "user",
+            "assistant",
+            "tool",
+            "user",
+            "assistant",
+            "tool",
+        ]
+        assert request[3] == {
+            "role": "user",
+            "content": "<system-reminder>\nBetween sequences\n</system-reminder>",
+        }
+
+    def test_notes_before_tool_sequence_emit_before_assistant_message(self) -> None:
+        from core.chat.chat import _embed_notes_into_request
+
+        messages = [
+            ChatMessage.note("Pre-sequence note"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[ToolCall(id="call_1", name="record_note", arguments={})],
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_1",
+                name="record_note",
+                content=json.dumps(tool_success({"ok": True})),
+            ),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in request] == ["user", "assistant", "tool"]
+        assert request[0] == {
+            "role": "user",
+            "content": "<system-reminder>\nPre-sequence note\n</system-reminder>",
+        }
+
+
+class TestMessageToRequestDict:
+    """Verify _message_to_request_dict strips assistant-only history metadata."""
+
+    def test_strips_reasoning_reasoning_meta_and_usage_from_assistant_message(self):
+        """Old assistant reasoning fields must not be resent on fresh follow-up turns."""
         from core.chat.chat import _message_to_request_dict
 
         message = ChatMessage.assistant(
             model="openai/gpt-4",
             content="Hello",
+            reasoning="Need context before reply.",
+            reasoning_meta={"opaque": "provider-signed"},
             usage={"input_tokens": 100, "output_tokens": 50},
         )
         result = _message_to_request_dict(message)
@@ -2294,6 +2491,48 @@ class TestMessageToRequestDict:
         assert "reasoning" not in result
         assert "reasoning_meta" not in result
         assert result["content"] == "Hello"
+
+    def test_opencode_adapter_maps_reasoning_content_when_current_turn_payload_includes_it(self):
+        """Current-turn assistant payloads still map reasoning to reasoning_content."""
+        from core.providers.opencode_go import OpenCodeGoAdapter
+
+        with_reasoning = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Answer.",
+            reasoning="Need to inspect prior tool output.",
+            reasoning_meta={"opaque": "signed"},
+        ).to_dict()
+        without_reasoning = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Answer without explicit reasoning.",
+        ).to_dict()
+
+        adapter = cast(OpenCodeGoAdapter, object.__new__(OpenCodeGoAdapter))
+        formatted_with_reasoning = adapter._format_assistant_message(with_reasoning)
+        formatted_without_reasoning = adapter._format_assistant_message(without_reasoning)
+
+        assert formatted_with_reasoning["reasoning_content"] == "Need to inspect prior tool output."
+        assert "reasoning_content" not in formatted_without_reasoning
+
+    def test_request_dict_strips_reasoning_before_adapter_history_formatting(self):
+        """History conversion should remove reasoning before adapter formatting runs."""
+        from core.chat.chat import _message_to_request_dict
+        from core.providers.opencode_go import OpenCodeGoAdapter
+
+        assistant_history_message = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Old answer.",
+            reasoning="Old reasoning that must not be resent.",
+            reasoning_meta={"opaque": "signed"},
+        )
+        request_history_message = _message_to_request_dict(assistant_history_message)
+        assert "reasoning" not in request_history_message
+        assert "reasoning_meta" not in request_history_message
+
+        adapter = cast(OpenCodeGoAdapter, object.__new__(OpenCodeGoAdapter))
+        formatted_history_message = adapter._format_assistant_message(request_history_message)
+
+        assert "reasoning_content" not in formatted_history_message
 
     def test_preserves_usage_on_non_assistant_messages(self):
         """User and tool messages never have usage, but the function should not strip it."""
