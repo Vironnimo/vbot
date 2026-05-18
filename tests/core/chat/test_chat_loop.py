@@ -1858,6 +1858,73 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_2", "name": "get_weather", "arguments": {"city": "Paris"}}
+                ],
+            },
+            {"content": "First run done", "tool_calls": None},
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_3", "name": "get_weather", "arguments": {"city": "Rome"}}
+                ],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_4", "name": "get_weather", "arguments": {"city": "Madrid"}}
+                ],
+            },
+            {"content": "Second run done", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"ok": True}),
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    chat_loop = ChatLoop(runtime, max_tool_iterations=2)
+
+    first = await chat_loop.send("coder", "Weather batch one", session_id="session-one")
+    second = await chat_loop.send("coder", "Weather batch two", session_id="session-one")
+
+    assert first.content == "First run done"
+    assert second.content == "Second run done"
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert all(message.role != "error" for message in messages)
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/unknown-new-model", allowed_tools=["*"])
     adapter = StubAdapter([ProviderError("provider failed", retryable=False)])  # type: ignore[list-item]
