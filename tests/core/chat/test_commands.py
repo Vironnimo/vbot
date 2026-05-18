@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 
+from core.agents.agents import Agent, AgentStore
 from core.chat import (
+    ChatMessage,
     ChatRunManager,
     CommandDispatcher,
     CommandHandled,
@@ -14,6 +18,78 @@ from core.chat import (
     Run,
     RunCancelledError,
 )
+from core.chat.chat import ChatSessionManager
+from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+
+
+def _make_agent(
+    *,
+    model: str = "openai/gpt-5.2",
+    fallback_model: str = "openai/gpt-5.1",
+    temperature: float = 0.3,
+    thinking_effort: str = "none",
+) -> Agent:
+    return Agent(
+        id="coder",
+        name="Coder",
+        model=model,
+        fallback_model=fallback_model,
+        workspace="workspace",
+        temperature=temperature,
+        thinking_effort=thinking_effort,
+        allowed_tools=["*"],
+        allowed_skills=["*"],
+        created_at="2026-05-18T10:00:00+00:00",
+        updated_at="2026-05-18T10:00:00+00:00",
+    )
+
+
+def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
+    return Model(
+        model_id=model_id,
+        name=name,
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=200_000,
+        max_output_tokens=8_192,
+    )
+
+
+class _StubAgents:
+    def __init__(self, agent: Agent) -> None:
+        self._agent = agent
+
+    def get(self, _agent_id: str) -> Agent:
+        return self._agent
+
+
+class _StubSession:
+    def __init__(self, messages: list[ChatMessage]) -> None:
+        self._messages = messages
+
+    def load(self) -> list[ChatMessage]:
+        return list(self._messages)
+
+
+class _StubSessions:
+    def __init__(self, messages: list[ChatMessage]) -> None:
+        self._session = _StubSession(messages)
+
+    def get(self, _agent_id: str, _session_id: str) -> _StubSession:
+        return self._session
+
+
+class _StubModels:
+    def __init__(self, model: Model) -> None:
+        self._model = model
+
+    def get(self, _provider_id: str, _model_id: str) -> Model:
+        return self._model
 
 
 @pytest.mark.asyncio
@@ -66,3 +142,90 @@ def test_dispatch_non_command_message_returns_not_a_command() -> None:
     result = dispatcher.dispatch("coder", "session-one", "hello")
 
     assert isinstance(result, NotACommand)
+
+
+def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    assert result.reply != ""
+    assert f"Agent: {STATUS_PLACEHOLDER}" in result.reply
+    assert "Current time:" in result.reply
+
+
+def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    messages = [
+        ChatMessage.user("Status check", timestamp=session_started),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="All systems go.",
+            usage={"input_tokens": 1234, "output_tokens": 42},
+            timestamp=session_started,
+        ),
+    ]
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agents=cast(AgentStore, _StubAgents(_make_agent())),
+        sessions=cast(ChatSessionManager, _StubSessions(messages)),
+        models=cast(ModelRegistry, _StubModels(_make_model())),
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    assert "Agent: Coder (openai/gpt-5.2)" in result.reply
+    assert "Model display name: GPT-5.2" in result.reply
+    assert "Context usage: 1234 / 200000" in result.reply
+    assert "Current time:" in result.reply
+
+
+def test_build_status_text_degraded_with_no_data() -> None:
+    text = build_status_text(None, [], None, None)
+
+    assert f"Agent: {STATUS_PLACEHOLDER}" in text
+    assert f"Model display name: {STATUS_PLACEHOLDER}" in text
+    assert f"Fallback model: {STATUS_PLACEHOLDER}" in text
+    assert f"Thinking effort: {STATUS_PLACEHOLDER}" in text
+    assert f"Temperature: {STATUS_PLACEHOLDER}" in text
+    assert f"Context usage: {STATUS_PLACEHOLDER}" in text
+    assert f"Session started: {STATUS_PLACEHOLDER}" in text
+    assert f"Turn count: {STATUS_PLACEHOLDER}" in text
+    assert f"App uptime: {STATUS_PLACEHOLDER}" in text
+    assert "Current time:" in text
+
+
+def test_build_status_text_with_full_data() -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    messages = [
+        ChatMessage.user("Status check", timestamp=session_started),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="All systems go.",
+            usage={"input_tokens": 987, "output_tokens": 12, "estimated": True},
+            timestamp=session_started,
+        ),
+    ]
+
+    text = build_status_text(
+        _make_agent(),
+        messages,
+        context_window=200_000,
+        started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
+    )
+
+    assert "Agent: Coder (openai/gpt-5.2)" in text
+    assert "Model display name: gpt-5.2" in text
+    assert "Fallback model: openai/gpt-5.1" in text
+    assert "Thinking effort: none" in text
+    assert "Temperature: 0.3" in text
+    assert "Context usage: ~987 / 200000" in text
+    assert "Session started:" in text
+    assert "Turn count: 1" in text
+    assert "App uptime:" in text
+    assert "Current time:" in text
