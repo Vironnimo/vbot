@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.agents.agents import AgentStore
-from core.chat.chat import ChatSessionManager
+from core.agents.agents import AgentNotFoundError, AgentStore
+from core.chat.chat import ChatSessionError, ChatSessionManager
 from core.chat.commands import build_status_reply, build_status_text, resolve_status_model_details
 from core.models.models import ModelRegistry
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
@@ -36,8 +36,15 @@ def make_status_handler(
 
         try:
             agent = agents.get(context.agent_id)
-        except Exception:
+        except AgentNotFoundError:
             _LOGGER.warning(
+                "Failed to load agent %r while running status tool",
+                context.agent_id,
+                exc_info=True,
+            )
+            agent = None
+        except Exception:
+            _LOGGER.error(
                 "Failed to load agent %r while running status tool",
                 context.agent_id,
                 exc_info=True,
@@ -46,8 +53,16 @@ def make_status_handler(
 
         try:
             messages = sessions.get(context.agent_id, context.session_id).load()
-        except Exception:
+        except ChatSessionError:
             _LOGGER.warning(
+                "Failed to load session %r for agent %r while running status tool",
+                context.session_id,
+                context.agent_id,
+                exc_info=True,
+            )
+            messages = []
+        except Exception:
+            _LOGGER.error(
                 "Failed to load session %r for agent %r while running status tool",
                 context.session_id,
                 context.agent_id,
@@ -66,7 +81,7 @@ def make_status_handler(
                 model_display_name,
             )
         except Exception:
-            _LOGGER.warning("Failed to build status tool reply", exc_info=True)
+            _LOGGER.error("Failed to build status tool reply", exc_info=True)
             text = build_status_text(None, [], None, None)
         return tool_success({"text": text})
 

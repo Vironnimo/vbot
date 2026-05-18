@@ -97,8 +97,13 @@ class CommandDispatcher:
         try:
             if self._agents is not None:
                 agent = self._agents.get(agent_id)
-        except Exception:
-            _LOGGER.warning(
+        except Exception as error:
+            log = (
+                _LOGGER.warning
+                if _has_exception_name(error, "AgentNotFoundError")
+                else _LOGGER.error
+            )
+            log(
                 "Failed to load agent %r while building /status reply",
                 agent_id,
                 exc_info=True,
@@ -108,8 +113,11 @@ class CommandDispatcher:
         try:
             if self._sessions is not None:
                 messages = self._sessions.get(agent_id, session_id).load()
-        except Exception:
-            _LOGGER.warning(
+        except Exception as error:
+            log = (
+                _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error
+            )
+            log(
                 "Failed to load session %r for agent %r while building /status reply",
                 session_id,
                 agent_id,
@@ -150,7 +158,7 @@ def resolve_status_model_details(
         )
         return None, None
     except Exception:
-        _LOGGER.warning(
+        _LOGGER.error(
             "Failed model registry lookup for %r/%r while building status",
             provider_id,
             model_id,
@@ -325,6 +333,10 @@ def _coerce_int(value: object) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _has_exception_name(error: BaseException, expected_name: str) -> bool:
+    return any(exception_type.__name__ == expected_name for exception_type in type(error).__mro__)
 
 
 def _format_duration(delta: timedelta) -> str:

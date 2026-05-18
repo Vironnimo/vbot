@@ -220,7 +220,15 @@ def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path)
     assert tool_result["ok"] is True
     data = cast(dict[str, Any], tool_result["data"])
     text = cast(str, data["text"])
-    assert text == command_result.reply
+
+    def _without_live_time_lines(status_text: str) -> list[str]:
+        return [
+            line
+            for line in status_text.splitlines()
+            if not line.startswith(("Session started:", "App uptime:", "Current time:"))
+        ]
+
+    assert _without_live_time_lines(text) == _without_live_time_lines(command_result.reply)
     assert "Model display name: GPT-5.2 Registry" in text
 
 
