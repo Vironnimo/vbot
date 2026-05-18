@@ -343,6 +343,8 @@ class ChatSession:
             raise ChatSessionError("session path must end with .jsonl")
         self.path = path
         self._pending_notes: deque[ChatMessage] = deque()
+        self._defer_notes = False
+        self._deferred_note_messages: list[ChatMessage] = []
         self._activated_skill_names: set[str] = set()
         self._activated_skill_contents: dict[str, str] = {}
 
@@ -375,10 +377,25 @@ class ChatSession:
         with self.path.open("a", encoding="utf-8", newline="") as session_file:
             session_file.write(payload + SESSION_LINE_ENDING)
 
+    def begin_defer_notes(self) -> None:
+        """Defer note persistence until tool-result messages have been appended."""
+        self._defer_notes = True
+
+    def flush_deferred_notes(self) -> None:
+        """Persist deferred notes and stop note deferral mode."""
+        deferred_notes = list(self._deferred_note_messages)
+        self._deferred_note_messages.clear()
+        self._defer_notes = False
+        for note in deferred_notes:
+            self.append(note)
+
     def add_note(self, content: str) -> None:
         """Persist a kernel-internal note and enqueue it for provider-request injection."""
         note = ChatMessage.note(content)
-        self.append(note)
+        if self._defer_notes:
+            self._deferred_note_messages.append(note)
+        else:
+            self.append(note)
         self._pending_notes.append(note)
 
     def drain_pending_notes(self) -> list[ChatMessage]:
@@ -1161,16 +1178,20 @@ class ChatLoop:
                 raise ToolIterationLimitError("maximum tool iterations exceeded")
             tool_iteration_count += 1
 
-            tool_messages = await self._dispatch_tool_calls(
-                agent,
-                assistant_message.tool_calls,
-                session,
-                run,
-            )
-            for tool_message in tool_messages:
-                run.raise_if_cancelled()
-                session.append(tool_message)
-                messages.append(tool_message.to_dict())
+            session.begin_defer_notes()
+            try:
+                tool_messages = await self._dispatch_tool_calls(
+                    agent,
+                    assistant_message.tool_calls,
+                    session,
+                    run,
+                )
+                for tool_message in tool_messages:
+                    run.raise_if_cancelled()
+                    session.append(tool_message)
+                    messages.append(tool_message.to_dict())
+            finally:
+                session.flush_deferred_notes()
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
 
@@ -1723,6 +1744,7 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
 def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
     pending_notes: list[ChatMessage] = []
+    deferred_until_after_tools: list[ChatMessage] = []
 
     for message in messages:
         if message.role == "note":
@@ -1736,10 +1758,24 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
                 pending_notes.append(message)
             continue
 
+        if message.role == "tool":
+            if pending_notes:
+                deferred_until_after_tools.extend(pending_notes)
+                pending_notes = []
+            request_messages.append(_message_to_request_dict(message))
+            continue
+
+        if deferred_until_after_tools:
+            request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
+            deferred_until_after_tools = []
+
         if pending_notes:
             request_messages.append(_notes_to_synthetic_user_message(pending_notes))
             pending_notes = []
         request_messages.append(_message_to_request_dict(message))
+
+    if deferred_until_after_tools:
+        request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
 
     if pending_notes:
         request_messages.append(_notes_to_synthetic_user_message(pending_notes))
