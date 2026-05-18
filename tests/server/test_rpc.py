@@ -35,8 +35,6 @@ class StubAgent:
     name: str = "Coder Agent"
     model: str = "openai/gpt-5.2"
     fallback_model: str = ""
-    connection: str = "openai:api-key"
-    fallback_connection: str = ""
     workspace: str = "C:/workspace"
     temperature: float = 0.1
     thinking_effort: str = ""
@@ -1698,7 +1696,7 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_agent_crud_accepts_and_returns_connection_fields(tmp_path: Path) -> None:
+async def test_agent_crud_rejects_connection_fields(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     create_response = await dispatch_rpc(
@@ -1727,24 +1725,24 @@ async def test_agent_crud_accepts_and_returns_connection_fields(tmp_path: Path) 
         },
     )
 
-    assert create_response["ok"] is True
-    assert create_response["result"]["connection"] == "openai:api-key"
-    assert create_response["result"]["fallback_connection"] == "anthropic:api-key"
-    assert update_response["ok"] is True
-    assert update_response["result"]["connection"] == "openai:oauth"
-    assert update_response["result"]["fallback_connection"] == ""
+    assert create_response["ok"] is False
+    assert create_response["error"]["code"] == "invalid_request"
+    assert "unsupported agent fields" in create_response["error"]["message"]
+    assert update_response["ok"] is False
+    assert update_response["error"]["code"] == "invalid_request"
+    assert "unsupported agent fields" in update_response["error"]["message"]
 
 
 @pytest.mark.asyncio
-async def test_agent_list_response_includes_connection_fields(tmp_path: Path) -> None:
+async def test_agent_list_response_omits_connection_fields(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
     response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
 
     assert response["ok"] is True
     agent = response["result"]["agents"][0]
-    assert agent["connection"] == "openai:api-key"
-    assert agent["fallback_connection"] == ""
+    assert "connection" not in agent
+    assert "fallback_connection" not in agent
 
 
 @pytest.mark.asyncio
@@ -1815,8 +1813,6 @@ async def test_agent_list_includes_null_context_window_for_model_without_provide
         ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
         ("agent.update", {"id": "coder", "name": ""}),
         ("agent.update", {"id": "coder", "model": 5}),
-        ("agent.update", {"id": "coder", "connection": 5}),
-        ("agent.update", {"id": "coder", "fallback_connection": 5}),
     ],
 )
 async def test_agent_rpc_rejects_malformed_mutable_payloads(
@@ -1998,8 +1994,12 @@ async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_chat_send_requires_existing_session(tmp_path: Path) -> None:
+async def test_chat_send_requires_existing_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     state = make_state(tmp_path, StubAdapter())
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     response = await dispatch_rpc(
         state,
@@ -2179,6 +2179,7 @@ async def test_chat_methods_reject_invalid_content_type(
 @pytest.mark.asyncio
 async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = StubAdapter(
         [
@@ -2190,6 +2191,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
             }
         ]
     )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -2219,6 +2221,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
 @pytest.mark.asyncio
 async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = StubAdapter(
         [
@@ -2232,6 +2235,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
             {"content": "Read the file", "tool_calls": None},
         ]
     )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     register_read_tool(state.runtime.tools)
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
@@ -2277,8 +2281,12 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(tmp_path: Path) -> None:
+async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -2303,8 +2311,12 @@ async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_second_run_in_same_session_is_rejected_while_active(tmp_path: Path) -> None:
+async def test_second_run_in_same_session_is_rejected_while_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -2334,8 +2346,12 @@ async def test_second_run_in_same_session_is_rejected_while_active(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_chat_cancel_marks_running_run_cancelled(tmp_path: Path) -> None:
+async def test_chat_cancel_marks_running_run_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     stream_response = await dispatch_rpc(
@@ -2358,8 +2374,12 @@ async def test_chat_cancel_marks_running_run_cancelled(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_send_uses_non_streaming_chat_loop(tmp_path: Path) -> None:
+async def test_chat_send_uses_non_streaming_chat_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = StubAdapter([{"content": "Complete response", "tool_calls": None}])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
@@ -2378,8 +2398,12 @@ async def test_chat_send_uses_non_streaming_chat_loop(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_uses_streaming_chat_loop(tmp_path: Path) -> None:
+async def test_chat_stream_uses_streaming_chat_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "Streamed response"}])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
