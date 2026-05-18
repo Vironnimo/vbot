@@ -7,6 +7,7 @@ all core services and manages the application lifecycle.
 import asyncio
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +49,7 @@ from core.tools import (
 )
 from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
+from core.tools.status import register_status_tool
 from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
@@ -133,6 +135,7 @@ class Runtime:
         self.chat_runs: ChatRunManager | None = None
         self._chat_loop: ChatLoop | None = None
         self._streaming_chat_loop: ChatLoop | None = None
+        self._started_at: datetime | None = None
         self._trigger_service: TriggerService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
@@ -152,6 +155,7 @@ class Runtime:
             logger.debug("Runtime already started — skipping")
             return
 
+        self._started_at = datetime.now(UTC)
         self.logger = self._log_manager.get_logger("core")
         self.logger.info("Runtime startup initiated")
 
@@ -210,7 +214,13 @@ class Runtime:
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         self._chat_run_manager = ChatRunManager()
-        self._command_dispatcher = CommandDispatcher(self._chat_run_manager)
+        self._command_dispatcher = CommandDispatcher(
+            self._chat_run_manager,
+            agents=self._agents,
+            sessions=self._chat_sessions,
+            models=self._models,
+            started_at=self._started_at,
+        )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
@@ -240,6 +250,13 @@ class Runtime:
             self,
             self._trigger_service,
             self._subagent_batch_tracker,
+        )
+        register_status_tool(
+            self._tools,
+            self._agents,
+            self._chat_sessions,
+            self._models,
+            self._started_at,
         )
         self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(

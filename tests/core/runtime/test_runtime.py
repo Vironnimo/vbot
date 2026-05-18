@@ -30,6 +30,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "grep",
     "process",
     "read",
+    "status",
     "subagent",
     "subagent_result",
     "write",
