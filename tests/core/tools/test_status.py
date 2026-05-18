@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import core.tools.status as status_tool_module
 from core.agents.agents import Agent, AgentNotFoundError, AgentStore
+from core.chat import ChatRunManager, CommandDispatcher, CommandHandled
 from core.chat.chat import ChatMessage, ChatSessionManager
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
@@ -16,11 +17,11 @@ from core.tools import ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
 
 
-def _make_agent() -> Agent:
+def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
     return Agent(
         id="coder",
         name="Coder",
-        model="openai/gpt-5.2",
+        model=model,
         fallback_model="openai/gpt-5.1",
         workspace="workspace",
         temperature=0.3,
@@ -32,10 +33,10 @@ def _make_agent() -> Agent:
     )
 
 
-def _make_model() -> Model:
+def _make_model(*, model_id: str = "gpt-5.2", name: str = "GPT-5.2") -> Model:
     return Model(
-        model_id="gpt-5.2",
-        name="GPT-5.2",
+        model_id=model_id,
+        name=name,
         capabilities=Capabilities(
             vision=True,
             tools=True,
@@ -110,6 +111,18 @@ class _StubModels:
         return self._model
 
 
+class _RecordingModels:
+    def __init__(self, model: Model) -> None:
+        self._model = model
+        self.calls: list[tuple[str, str]] = []
+
+    def get(self, provider_id: str, model_id: str) -> Model:
+        self.calls.append((provider_id, model_id))
+        if provider_id != "openai" or model_id != "gpt-5.2":
+            raise KeyError(model_id)
+        return self._model
+
+
 def test_status_tool_registered_with_correct_name() -> None:
     registry = ToolRegistry()
     register_status_tool(
@@ -152,6 +165,7 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
     text = cast(str, data["text"])
     assert text
     assert "Agent: Coder (openai/gpt-5.2)" in text
+    assert "Model display name: GPT-5.2" in text
 
 
 def test_status_tool_degrades_gracefully_when_agent_not_found(tmp_path: Path) -> None:
@@ -170,6 +184,64 @@ def test_status_tool_degrades_gracefully_when_agent_not_found(tmp_path: Path) ->
     data = cast(dict[str, Any], result["data"])
     text = cast(str, data["text"])
     assert f"Agent: {STATUS_PLACEHOLDER}" in text
+
+
+def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path) -> None:
+    session_started = datetime(2026, 5, 18, 10, 0, tzinfo=UTC)
+    started_at = datetime(2026, 5, 18, 9, 0, tzinfo=UTC)
+    messages = [
+        ChatMessage.user("Status check", timestamp=session_started),
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="All systems go.",
+            usage={"input_tokens": 1234, "output_tokens": 42},
+            timestamp=session_started,
+        ),
+    ]
+    agents = cast(AgentStore, _StubAgents(_make_agent()))
+    sessions = cast(ChatSessionManager, _StubSessions(messages))
+    models = cast(ModelRegistry, _StubModels(_make_model(name="GPT-5.2 Registry")))
+
+    dispatcher = CommandDispatcher(
+        ChatRunManager(),
+        agents=agents,
+        sessions=sessions,
+        models=models,
+        started_at=started_at,
+    )
+    command_result = dispatcher.dispatch("coder", "session-one", "/status")
+    assert isinstance(command_result, CommandHandled)
+    assert command_result.reply is not None
+
+    registry = ToolRegistry()
+    register_status_tool(registry, agents, sessions, models, started_at)
+    tool_result = asyncio.run(_dispatch(registry, tmp_path))
+
+    assert tool_result["ok"] is True
+    data = cast(dict[str, Any], tool_result["data"])
+    text = cast(str, data["text"])
+    assert text == command_result.reply
+    assert "Model display name: GPT-5.2 Registry" in text
+
+
+def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path) -> None:
+    recording_models = _RecordingModels(_make_model(name="GPT-5.2 Registry"))
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentStore, _StubAgents(_make_agent(model="openai/gpt-5.2::primary"))),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, recording_models),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path))
+
+    assert result["ok"] is True
+    data = cast(dict[str, Any], result["data"])
+    text = cast(str, data["text"])
+    assert "Model display name: GPT-5.2 Registry" in text
+    assert recording_models.calls == [("openai", "gpt-5.2")]
 
 
 def test_build_status_text_is_single_source_of_truth() -> None:

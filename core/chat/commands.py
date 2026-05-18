@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from core.chat.runs import ChatRunManager, RunNotFoundError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.agents.agents import Agent, AgentStore
@@ -22,6 +23,8 @@ else:
     ModelRegistry = Any
 
 CommandHandler = Callable[[str, str], "CommandHandled"]
+
+_LOGGER = get_logger("chat.commands")
 
 STATUS_PLACEHOLDER = "—"
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
@@ -90,39 +93,87 @@ class CommandDispatcher:
     def _handle_status(self, agent_id: str, session_id: str) -> CommandHandled:
         agent: Agent | None = None
         messages: list[ChatMessage] = []
-        context_window: int | None = None
-        model_display_name: str | None = None
 
         try:
             if self._agents is not None:
                 agent = self._agents.get(agent_id)
         except Exception:
+            _LOGGER.warning(
+                "Failed to load agent %r while building /status reply",
+                agent_id,
+                exc_info=True,
+            )
             agent = None
 
         try:
             if self._sessions is not None:
                 messages = self._sessions.get(agent_id, session_id).load()
         except Exception:
+            _LOGGER.warning(
+                "Failed to load session %r for agent %r while building /status reply",
+                session_id,
+                agent_id,
+                exc_info=True,
+            )
             messages = []
 
-        if agent is not None and self._models is not None:
-            provider_id, separator, model_id = agent.model.partition("/")
-            if separator and model_id:
-                try:
-                    model = self._models.get(provider_id, model_id)
-                    context_window = model.context_window
-                    model_display_name = model.name
-                except KeyError:
-                    context_window = None
-                except Exception:
-                    context_window = None
-
-        token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
-        try:
-            text = build_status_text(agent, messages, context_window, self._started_at)
-        finally:
-            _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
+        context_window, model_display_name = resolve_status_model_details(agent, self._models)
+        text = build_status_reply(
+            agent,
+            messages,
+            context_window,
+            self._started_at,
+            model_display_name,
+        )
         return CommandHandled(reply=text)
+
+
+def resolve_status_model_details(
+    agent: Agent | None,
+    models: ModelRegistry | None,
+) -> tuple[int | None, str | None]:
+    """Resolve context window and display name for status output from the model registry."""
+    if agent is None or models is None:
+        return None, None
+
+    provider_id, model_id = _parse_registry_model_key(agent.model)
+    if provider_id is None or model_id is None:
+        return None, None
+
+    try:
+        model = models.get(provider_id, model_id)
+    except KeyError:
+        _LOGGER.warning(
+            "Model registry entry missing for %r/%r while building status",
+            provider_id,
+            model_id,
+        )
+        return None, None
+    except Exception:
+        _LOGGER.warning(
+            "Failed model registry lookup for %r/%r while building status",
+            provider_id,
+            model_id,
+            exc_info=True,
+        )
+        return None, None
+
+    return model.context_window, model.name
+
+
+def build_status_reply(
+    agent: Agent | None,
+    messages: list[ChatMessage],
+    context_window: int | None,
+    started_at: datetime | None,
+    model_display_name: str | None,
+) -> str:
+    """Build status text while applying an optional model-display override."""
+    token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
+    try:
+        return build_status_text(agent, messages, context_window, started_at)
+    finally:
+        _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
 
 
 def build_status_text(
@@ -170,10 +221,25 @@ def build_status_text(
 
 
 def _model_display_name(model_string: str) -> str:
-    provider_id, separator, model_id = model_string.partition("/")
-    if not provider_id or not separator or not model_id:
+    _, model_id = _parse_registry_model_key(model_string)
+    if model_id is None:
         return STATUS_PLACEHOLDER
     return model_id
+
+
+def _parse_registry_model_key(model_string: str) -> tuple[str | None, str | None]:
+    normalized_model = _strip_pinned_connection_suffix(model_string.strip())
+    provider_id, separator, model_id = normalized_model.partition("/")
+    if not provider_id or not separator or not model_id:
+        return None, None
+    return provider_id, model_id
+
+
+def _strip_pinned_connection_suffix(model_string: str) -> str:
+    base_model, separator, _connection_id = model_string.rpartition("::")
+    if separator and base_model:
+        return base_model
+    return model_string
 
 
 def _context_usage_text(messages: list[ChatMessage], context_window: int | None) -> str:
