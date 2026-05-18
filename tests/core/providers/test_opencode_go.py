@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
+OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
 
 
 def test_public_package_exports_opencode_go_adapter() -> None:
@@ -179,3 +181,218 @@ class TestOpenCodeGoAdapter:
         )
 
         assert "reasoning_content" not in payload["messages"][0]
+
+
+class TestOpenCodeGoAdapterMinimaxRouting:
+    @pytest.mark.asyncio
+    async def test_constructor_accepts_runtime_factory_signature(
+        self,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        runtime_base_url = "https://runtime-opencode-go.example/v1"
+        runtime_auth = AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="RUNTIME_OPENCODE_GO_KEY",
+        )
+        adapter = OpenCodeGoAdapter(opencode_go_config, API_KEY, runtime_base_url, runtime_auth)
+
+        try:
+            assert str(adapter._client.base_url).rstrip("/") == runtime_base_url
+            assert str(adapter._anthropic._client.base_url).rstrip("/") == runtime_base_url
+            assert adapter._anthropic._auth_config.header == "x-api-key"
+            assert adapter._anthropic._auth_config.prefix == ""
+            assert adapter._anthropic._auth_config.credential_key == runtime_auth.credential_key
+        finally:
+            await adapter.aclose()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_minimax_send_uses_anthropic_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "fallback"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="minimax-m2.7",
+        )
+
+        assert messages_route.called
+        assert not chat_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_non_minimax_send_uses_openai_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "unused"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="deepseek/deepseek-v4-flash",
+        )
+
+        assert chat_route.called
+        assert not messages_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_minimax_stream_uses_anthropic_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text='event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text="data: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        chunks: list[dict[str, str]] = []
+        async for chunk in opencode_go_adapter.stream(
+            [{"role": "user", "content": "hello"}],
+            model_id="minimax-m2.7",
+        ):
+            chunks.append(chunk)
+
+        assert chunks == []
+        assert messages_route.called
+        assert not chat_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_non_minimax_stream_uses_openai_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text="data: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text='event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        chunks: list[dict[str, str]] = []
+        async for chunk in opencode_go_adapter.stream(
+            [{"role": "user", "content": "hello"}],
+            model_id="deepseek/deepseek-v4-flash",
+        ):
+            chunks.append(chunk)
+
+        assert chunks == []
+        assert chat_route.called
+        assert not messages_route.called
+
+    def test_normalize_response_routes_openai_by_choices_key(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        result = opencode_go_adapter.normalize_response(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+                "id": "1",
+            }
+        )
+
+        assert result["role"] == "assistant"
+        assert result["content"] == "hi"
+
+    def test_normalize_response_routes_anthropic_when_no_choices(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        result = opencode_go_adapter.normalize_response(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+            }
+        )
+
+        assert result["role"] == "assistant"
+        assert result["content"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_both_clients(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        base_client = AsyncMock()
+        anthropic_client = AsyncMock()
+        opencode_go_adapter._client = base_client
+        opencode_go_adapter._anthropic._client = anthropic_client
+
+        await opencode_go_adapter.aclose()
+
+        base_client.aclose.assert_awaited_once()
+        anthropic_client.aclose.assert_awaited_once()

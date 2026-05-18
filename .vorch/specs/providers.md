@@ -238,6 +238,7 @@ Errors are classified by HTTP status code (not by parsing the body):
 OpenCode Go is OpenAI-compatible for chat completions but requires one provider-specific assistant-message round-trip rule.
 
 - Runtime reasoning round-trip: when an internal assistant message carries non-empty `reasoning`, `OpenCodeGoAdapter` echoes it back on the wire as `reasoning_content`.
+- `minimax-m2.7` is the current exception to the normal OpenAI-compatible transport: `OpenCodeGoAdapter` routes that model through an internal `AnthropicAdapter` instance to `POST /messages` using the provider's configured base URL and `x-api-key` auth metadata. All other OpenCode Go models continue to use `POST /chat/completions`.
 - This behavior is intentionally subclass-local; the generic `OpenAICompatibleAdapter` does not infer provider-specific `reasoning_content` replay rules.
 
 ### OpenRouterAdapter

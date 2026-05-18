@@ -161,13 +161,13 @@
       "capabilities": {
         "json_mode": false,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
+      "context_window": 200000,
+      "max_output_tokens": 32768,
       "name": "minimax-m2.7"
     },
     "qwen3.5-plus": {
