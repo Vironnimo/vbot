@@ -88,6 +88,10 @@ Write tests **together with the feature** — never skip.
 
 **Rules:** Tests are independent (no shared state) and deterministic (no random, no real timestamps). If a bug is fixed, add a test that would have caught it.
 
+**When to involve the Tester:** The Orchestrator should proactively call the **Tester** for changes that affect stable, browser-visible behavior or live product flows that are hard to trust from code review alone, even if the user did not explicitly ask for testing. Good candidates: non-trivial WebUI changes, agent/settings/forms flows, chat surfaces where persisted output or rendered tool/thinking blocks can be verified after the fact, and regressions where browser evidence materially reduces ambiguity.
+
+**When not to involve the Tester:** Skip Tester for tiny presentational-only tweaks (for example color, spacing, border-radius), pure backend/internal refactors, and highly dynamic chat behavior that the current live-testing setup cannot judge reliably enough — for example token streaming quality, moment-to-moment "working" transitions, or other timing-sensitive transient states. In those cases rely on Builder tests plus review unless the user explicitly asks for live testing.
+
 For project-specific test framework, file naming, fixtures, and coverage targets → `.vorch/PROJECT.md` (Testing section).
 
 ## Dependencies
