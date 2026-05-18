@@ -18,6 +18,7 @@ import httpx
 from core.models.models import Model, ModelRegistry
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.utils.errors import VBotError
@@ -296,6 +297,7 @@ def _read_bool(data: Mapping[str, Any], key: str) -> bool:
 
 _DISCOVERY_ADAPTER_MAP = {
     "openai_compatible": OpenAICompatibleAdapter,
+    "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
     "github_copilot": GitHubCopilotAdapter,
 }
