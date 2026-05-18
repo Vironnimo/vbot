@@ -1728,8 +1728,6 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "name",
         "model",
         "fallback_model",
-        "connection",
-        "fallback_connection",
         "temperature",
         "thinking_effort",
         "allowed_tools",
@@ -1758,7 +1756,7 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
         return value
-    if key in {"model", "fallback_model", "connection", "fallback_connection"}:
+    if key in {"model", "fallback_model"}:
         if not isinstance(value, str):
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
         return value
@@ -1878,8 +1876,6 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "name": agent.name,
         "model": agent.model,
         "fallback_model": agent.fallback_model,
-        "connection": agent.connection,
-        "fallback_connection": agent.fallback_connection,
         "workspace": agent.workspace,
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,
