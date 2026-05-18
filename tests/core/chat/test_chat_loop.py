@@ -2277,7 +2277,7 @@ async def test_estimation_with_tool_calls_in_history(
 
 
 class TestMessageToRequestDict:
-    """Verify _message_to_request_dict strips vBot-internal fields from provider requests."""
+    """Verify _message_to_request_dict keeps reasoning but strips internal metadata."""
 
     def test_strips_usage_from_assistant_message(self):
         """Usage must not be sent to providers in follow-up request messages."""
@@ -2286,14 +2286,47 @@ class TestMessageToRequestDict:
         message = ChatMessage.assistant(
             model="openai/gpt-4",
             content="Hello",
+            reasoning="Need context before reply.",
+            reasoning_meta={"opaque": "provider-signed"},
             usage={"input_tokens": 100, "output_tokens": 50},
         )
         result = _message_to_request_dict(message)
 
         assert "usage" not in result
-        assert "reasoning" not in result
+        assert result["reasoning"] == "Need context before reply."
         assert "reasoning_meta" not in result
         assert result["content"] == "Hello"
+
+    def test_preserves_reasoning_when_present_and_maps_to_opencode_reasoning_content(self):
+        """Reasoning should survive request conversion for OpenCode Go round-trips."""
+        from core.chat.chat import _message_to_request_dict
+        from core.providers.opencode_go import OpenCodeGoAdapter
+
+        with_reasoning = _message_to_request_dict(
+            ChatMessage.assistant(
+                model="opencode-go/deepseek-v4-pro",
+                content="Answer.",
+                reasoning="Need to inspect prior tool output.",
+                reasoning_meta={"opaque": "signed"},
+            )
+        )
+        without_reasoning = _message_to_request_dict(
+            ChatMessage.assistant(
+                model="opencode-go/deepseek-v4-pro",
+                content="Answer without explicit reasoning.",
+            )
+        )
+
+        assert with_reasoning["reasoning"] == "Need to inspect prior tool output."
+        assert "reasoning" not in without_reasoning
+        assert "reasoning_meta" not in with_reasoning
+
+        adapter = cast(OpenCodeGoAdapter, object.__new__(OpenCodeGoAdapter))
+        formatted_with_reasoning = adapter._format_assistant_message(with_reasoning)
+        formatted_without_reasoning = adapter._format_assistant_message(without_reasoning)
+
+        assert formatted_with_reasoning["reasoning_content"] == "Need to inspect prior tool output."
+        assert "reasoning_content" not in formatted_without_reasoning
 
     def test_preserves_usage_on_non_assistant_messages(self):
         """User and tool messages never have usage, but the function should not strip it."""
