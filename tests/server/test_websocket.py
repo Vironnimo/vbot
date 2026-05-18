@@ -28,7 +28,9 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
             },
         ]
     )
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, adapter)))
+    runtime = StubRuntime(tmp_path, adapter)
+    runtime.agents.update("coder", model="openai/gpt-5.2::api-key")
+    app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
         client.post(
@@ -68,7 +70,9 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
             {"type": "content_delta", "text": "Hello"},
         ]
     )
-    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, adapter)))
+    runtime = StubRuntime(tmp_path, adapter)
+    runtime.agents.update("coder", model="openai/gpt-5.2::api-key")
+    app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
         client.post(

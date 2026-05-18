@@ -120,8 +120,6 @@ class Agent:
     created_at: str
     updated_at: str
     current_session_id: str = ""
-    connection: str = ""
-    fallback_connection: str = ""
 
 
 class AgentStore:
@@ -149,8 +147,6 @@ class AgentStore:
         *,
         model: str = DEFAULT_MODEL,
         fallback_model: str = DEFAULT_FALLBACK_MODEL,
-        connection: str = "",
-        fallback_connection: str = "",
         workspace: str | Path | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         thinking_effort: str = DEFAULT_THINKING_EFFORT,
@@ -167,10 +163,6 @@ class AgentStore:
         validated_model = _validate_string_field("model", model, allow_empty=True)
         validated_fallback_model = _validate_string_field(
             "fallback_model", fallback_model, allow_empty=True
-        )
-        validated_connection = _validate_string_field("connection", connection, allow_empty=True)
-        validated_fallback_connection = _validate_string_field(
-            "fallback_connection", fallback_connection, allow_empty=True
         )
         validated_temperature = _validate_temperature(temperature)
         validated_thinking_effort = _validate_thinking_effort(thinking_effort)
@@ -190,8 +182,6 @@ class AgentStore:
             name=validated_name,
             model=validated_model,
             fallback_model=validated_fallback_model,
-            connection=validated_connection,
-            fallback_connection=validated_fallback_connection,
             workspace=str(workspace_path.resolve()),
             temperature=validated_temperature,
             thinking_effort=validated_thinking_effort,
@@ -250,16 +240,13 @@ class AgentStore:
             "name",
             "model",
             "fallback_model",
-            "connection",
-            "fallback_connection",
             "current_session_id",
         }
         for field in sorted(string_fields & set(changes)):
             changes[field] = _validate_string_field(
                 field,
                 changes[field],
-                allow_empty=field
-                in {"model", "fallback_model", "connection", "fallback_connection"},
+                allow_empty=field in {"model", "fallback_model"},
             )
         if "temperature" in changes:
             changes["temperature"] = _validate_temperature(changes["temperature"])
@@ -596,12 +583,6 @@ def _agent_from_dict(data: dict[str, Any]) -> Agent:
         model=_validate_string_field("model", data["model"], allow_empty=True),
         fallback_model=_validate_string_field(
             "fallback_model", data["fallback_model"], allow_empty=True
-        ),
-        connection=_validate_string_field(
-            "connection", data.get("connection", ""), allow_empty=True
-        ),
-        fallback_connection=_validate_string_field(
-            "fallback_connection", data.get("fallback_connection", ""), allow_empty=True
         ),
         workspace=str(_validate_workspace(data["workspace"])),
         temperature=_validate_temperature(data["temperature"]),

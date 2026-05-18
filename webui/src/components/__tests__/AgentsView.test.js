@@ -81,10 +81,8 @@ describe('AgentsView', () => {
             {
               id: 'alpha',
               name: 'Alpha',
-              model: 'openai/gpt-5.2',
-              connection: 'openai:api-key',
-              fallback_model: 'anthropic/claude-sonnet-4-20250219',
-              fallback_connection: 'anthropic:api-key',
+              model: 'openai/gpt-5.2::api-key',
+              fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
               workspace: 'C:/agents/alpha',
               current_session_id: 'session-1',
               temperature: '',
@@ -163,9 +161,7 @@ describe('AgentsView', () => {
               id: 'alpha',
               name: 'Alpha',
               model: 'legacy/custom-model',
-              connection: '',
               fallback_model: '',
-              fallback_connection: '',
               workspace: 'C:/agents/alpha',
               current_session_id: 'session-1',
               temperature: '',
@@ -200,6 +196,48 @@ describe('AgentsView', () => {
       'Unavailable / custom: legacy/custom-model',
     );
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
+  });
+
+  it('keeps a saved unsuffixed model available and preserves it on save', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), model: 'openai/gpt-5.2' }],
+        connections: [
+          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+
+    await openSearchableDropdown('agent-model');
+    const modelOptionLabels = searchableOptionLabels('agent-model');
+    expect(modelOptionLabels).toContain('openai/gpt-5.2');
+    expect(modelOptionLabels).toContain('openai/gpt-5.2 (OAuth)');
+    expect(modelOptionLabels).toContain('openai/gpt-5.2 (API Key)');
+    expect(modelOptionLabels).not.toContain(
+      'Unavailable / custom: openai/gpt-5.2',
+    );
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1]).toMatchObject({
+      id: 'alpha',
+      model: 'openai/gpt-5.2',
+    });
   });
 
   it('renders one usable connection without a label suffix', async () => {
@@ -313,8 +351,7 @@ describe('AgentsView', () => {
         agents: [
           {
             ...baseAgent(),
-            fallback_model: 'anthropic/claude-sonnet-4-20250219',
-            fallback_connection: 'anthropic:api-key',
+            fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
           },
         ],
         connections: [
@@ -359,13 +396,11 @@ describe('AgentsView', () => {
     expect(updateCall[1]).toMatchObject({
       id: 'alpha',
       model: '',
-      connection: '',
       fallback_model: '',
-      fallback_connection: '',
     });
   });
 
-  it('sends selected create payload with connection and fallback_connection', async () => {
+  it('sends selected create payload with model connection suffixes', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [],
@@ -408,14 +443,12 @@ describe('AgentsView', () => {
     expect(createCall[1]).toMatchObject({
       id: 'bravo',
       name: 'Bravo',
-      model: 'openai/gpt-5.2',
-      connection: 'openai:api-key',
-      fallback_model: 'anthropic/claude-sonnet-4-20250219',
-      fallback_connection: 'anthropic:api-key',
+      model: 'openai/gpt-5.2::api-key',
+      fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
     });
   });
 
-  it('sends selected update payload with connection and fallback_connection', async () => {
+  it('sends selected update payload with model connection suffixes', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [baseAgent()],
@@ -454,10 +487,8 @@ describe('AgentsView', () => {
     );
     expect(updateCall[1]).toMatchObject({
       id: 'alpha',
-      model: 'openai/gpt-5.2',
-      connection: 'openai:oauth',
-      fallback_model: 'anthropic/claude-sonnet-4-20250219',
-      fallback_connection: 'anthropic:api-key',
+      model: 'openai/gpt-5.2::oauth',
+      fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
     });
   });
 
@@ -1001,10 +1032,8 @@ function baseAgent() {
   return {
     id: 'alpha',
     name: 'Alpha',
-    model: 'openai/gpt-5.2',
-    connection: 'openai:api-key',
+    model: 'openai/gpt-5.2::api-key',
     fallback_model: '',
-    fallback_connection: '',
     workspace: 'C:/agents/alpha',
     current_session_id: 'session-1',
     temperature: '0.1',

@@ -199,6 +199,7 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   `core/providers/github_copilot_policy.py` via exact-model overrides.
 - **System reminders are kernel-internal notes.** Chat sessions may persist `role: "note"` entries for background events. The chat loop embeds them into provider requests as synthetic user messages wrapped in `<system-reminder>` tags; provider adapters must never receive `role: "note"`, and the normal UI should not present notes as user messages.
 - **Built-in slash commands are a pre-run command layer, not skill triggers.** Recognized pure-text commands such as `/stop` are intercepted by a shared `CommandDispatcher` in server and channel entry points before any Run starts. Unknown slash text still goes through the normal chat path, so existing `/skill-name` activation behavior remains unchanged.
+- **Agent model strings may carry pinned connection suffixes.** Persisted `Agent.model` and `Agent.fallback_model` may end with `::<connection-local-id>` to pin a provider-local connection without separate `connection` fields. Runtime reconstructs `<provider>:<connection-local-id>` from the model prefix, and code that needs the plain catalog key must strip the suffix first.
 - **Extensions are in-process Python hook modules.** Runtime loads them from
   `<data_dir>/extensions/` plus optional `extension_directories`, exposes them
   as `runtime.extensions`, and treats hook execution as fail-open: extension

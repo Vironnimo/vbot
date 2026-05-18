@@ -759,8 +759,6 @@ function createAgent(overrides = {}) {
     name: 'Alpha',
     model: 'openrouter/anthropic/claude-sonnet-4',
     fallback_model: '',
-    connection: 'openrouter:api-key',
-    fallback_connection: '',
     workspace: 'C:/agents/alpha',
     temperature: '',
     thinking_effort: '',
