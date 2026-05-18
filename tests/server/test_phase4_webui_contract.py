@@ -87,8 +87,7 @@ def test_phase4_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -
                 "params": {
                     "id": "coder",
                     "name": "Coder",
-                    "model": "openai/gpt-5.2",
-                    "connection": "openai:api-key",
+                    "model": "openai/gpt-5.2::api-key",
                 },
             },
         )
@@ -167,8 +166,7 @@ def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
                 "method": "agent.update",
                 "params": {
                     "id": "main",
-                    "model": "openai/gpt-5.2",
-                    "connection": "openai:api-key",
+                    "model": "openai/gpt-5.2::api-key",
                 },
             },
         )
@@ -210,8 +208,7 @@ def test_phase4_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
                 "method": "agent.update",
                 "params": {
                     "id": "main",
-                    "model": "openai/gpt-5.2",
-                    "connection": "openai:api-key",
+                    "model": "openai/gpt-5.2::api-key",
                 },
             },
         )
