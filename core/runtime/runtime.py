@@ -24,6 +24,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
@@ -70,11 +71,13 @@ _ADAPTER_MAP: dict[
     str,
     type[OpenAICompatibleAdapter]
     | type[OpenRouterAdapter]
+    | type[OpenCodeGoAdapter]
     | type[GitHubCopilotAdapter]
     | type[AnthropicAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openrouter": OpenRouterAdapter,
+    "opencode_go": OpenCodeGoAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
 }
