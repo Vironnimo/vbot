@@ -1,161 +1,161 @@
 {
-  "fetched_at": "2026-05-18T10:15:31.907006+00:00",
+  "fetched_at": "2026-05-18T17:54:43.482185+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "deepseek-v4-flash"
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4 Flash"
     },
     "deepseek-v4-pro": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "deepseek-v4-pro"
+      "context_window": 1000000,
+      "max_output_tokens": 384000,
+      "name": "DeepSeek V4 Pro"
     },
     "glm-5": {
       "capabilities": {
         "json_mode": false,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "glm-5"
+      "context_window": 200000,
+      "max_output_tokens": 128000,
+      "name": "GLM 5"
     },
     "glm-5.1": {
       "capabilities": {
         "json_mode": false,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "glm-5.1"
+      "context_window": 200000,
+      "max_output_tokens": 128000,
+      "name": "GLM 5.1"
     },
     "hy3-preview": {
       "capabilities": {
         "json_mode": false,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
+      "context_window": 256000,
       "max_output_tokens": 4096,
-      "name": "hy3-preview"
+      "name": "HY3 Preview"
     },
     "kimi-k2.5": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "kimi-k2.5"
+      "context_window": 262144,
+      "max_output_tokens": 262144,
+      "name": "Kimi K2.5"
     },
     "kimi-k2.6": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "kimi-k2.6"
+      "context_window": 262144,
+      "max_output_tokens": 65536,
+      "name": "Kimi K2.6"
     },
     "mimo-v2-omni": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "mimo-v2-omni"
+      "context_window": 262144,
+      "max_output_tokens": 128000,
+      "name": "MiMo V2 Omni"
     },
     "mimo-v2-pro": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "mimo-v2-pro"
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "name": "MiMo V2 Pro"
     },
     "mimo-v2.5": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "mimo-v2.5"
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "name": "MiMo V2.5"
     },
     "mimo-v2.5-pro": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "mimo-v2.5-pro"
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "name": "MiMo V2.5 Pro"
     },
     "minimax-m2.5": {
       "capabilities": {
         "json_mode": false,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
         "vision": false
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "minimax-m2.5"
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "name": "MiniMax M2.5"
     },
     "minimax-m2.7": {
       "capabilities": {
@@ -166,35 +166,35 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 200000,
-      "max_output_tokens": 32768,
-      "name": "minimax-m2.7"
+      "context_window": 204800,
+      "max_output_tokens": 131072,
+      "name": "MiniMax M2.7"
     },
     "qwen3.5-plus": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "qwen3.5-plus"
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "name": "Qwen3.5 Plus"
     },
     "qwen3.6-plus": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
-          "supported": false
+          "supported": true
         },
         "tools": true,
-        "vision": false
+        "vision": true
       },
-      "context_window": 0,
-      "max_output_tokens": 4096,
-      "name": "qwen3.6-plus"
+      "context_window": 1000000,
+      "max_output_tokens": 64000,
+      "name": "Qwen3.6 Plus"
     }
   },
   "provider_id": "opencode-go",
