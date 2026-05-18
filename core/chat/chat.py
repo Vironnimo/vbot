@@ -1651,12 +1651,32 @@ def _session_has_any_content_blocks(messages: list[ChatMessage]) -> bool:
     return any(message.role == "user" and isinstance(message.content, list) for message in messages)
 
 
-def _split_agent_model(model: str) -> tuple[str, str]:
-    if not model:
+def parse_bare_model(model: str) -> str:
+    """Return a model string without an optional ``::connection-suffix`` part."""
+    before, separator, _suffix = model.rpartition("::")
+    if not separator:
+        return model
+    return before
+
+
+def parse_model_with_connection(model: str) -> tuple[str, str, str]:
+    """Parse ``<provider>/<model-id>[::connection-id]`` into provider/model/suffix parts."""
+    bare_model = parse_bare_model(model)
+    if not bare_model:
         raise ChatError("agent has no model set")
-    provider_id, separator, model_id = model.partition("/")
+
+    provider_id, separator, model_id = bare_model.partition("/")
     if not separator or not provider_id or not model_id:
         raise ChatError("agent model must use <provider>/<model-id>")
+
+    _before, suffix_separator, connection_suffix = model.rpartition("::")
+    if not suffix_separator:
+        connection_suffix = ""
+    return provider_id, model_id, connection_suffix
+
+
+def _split_agent_model(model: str) -> tuple[str, str]:
+    provider_id, model_id, _connection_suffix = parse_model_with_connection(model)
     return provider_id, model_id
 
 
@@ -1672,13 +1692,9 @@ def _model_has_vision(runtime: Any, agent: Any) -> bool:
 
 
 def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:
-    model_provider_id, _model_id = _split_agent_model(agent.model)
-    connection_id = getattr(agent, "connection", "")
-    if connection_id:
-        provider_id, separator, local_id = connection_id.partition(":")
-        if not separator or not provider_id or not local_id:
-            raise ChatError("agent connection must use <provider>:<connection-id>")
-        return provider_id, connection_id
+    model_provider_id, _model_id, connection_suffix = parse_model_with_connection(agent.model)
+    if connection_suffix:
+        return model_provider_id, f"{model_provider_id}:{connection_suffix}"
 
     return model_provider_id, _first_usable_connection_id(runtime, model_provider_id)
 
@@ -1689,16 +1705,18 @@ def _resolve_fallback(runtime: Any, agent: Any) -> tuple[str, str, str] | None:
         return None
 
     try:
-        fallback_provider_id, _fallback_model_id = _split_agent_model(fallback_model)
+        fallback_provider_id, _fallback_model_id, fallback_connection_suffix = (
+            parse_model_with_connection(fallback_model)
+        )
     except ChatError:
         return None
 
-    fallback_connection = getattr(agent, "fallback_connection", "")
-    if fallback_connection:
-        provider_id, separator, local_id = fallback_connection.partition(":")
-        if not separator or not provider_id or not local_id:
-            return None
-        return fallback_model, provider_id, fallback_connection
+    if fallback_connection_suffix:
+        return (
+            fallback_model,
+            fallback_provider_id,
+            f"{fallback_provider_id}:{fallback_connection_suffix}",
+        )
 
     try:
         fallback_connection_id = _first_usable_connection_id(runtime, fallback_provider_id)

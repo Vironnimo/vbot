@@ -51,19 +51,11 @@ class StubAgent:
     id: str
     model: str
     fallback_model: str = ""
-    connection: str | None = None
-    fallback_connection: str = ""
     temperature: float = 0.1
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
     workspace: Path | None = None
-
-    def __post_init__(self) -> None:
-        if self.connection is not None:
-            return
-        provider_id = self.model.split("/", 1)[0] if self.model else "openai"
-        object.__setattr__(self, "connection", f"{provider_id}:api-key")
 
 
 class StubAgents:
@@ -783,8 +775,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -810,12 +801,12 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
     assert assistant.content == "Recovered"
     assert [message.role for message in messages] == ["user", "note", "assistant"]
     assert messages[1].content == (
-        "Primary model unavailable. Switched to anthropic/claude-sonnet-4 for this run."
+        "Primary model unavailable. Switched to anthropic/claude-sonnet-4::api-key for this run."
     )
     assert len(fallback_events) == 1
     assert fallback_events[0].payload == {
         "from_model": "openai/gpt-5.2",
-        "to_model": "anthropic/claude-sonnet-4",
+        "to_model": "anthropic/claude-sonnet-4::api-key",
     }
     assert primary_adapter.requests[0]["model_id"] == "gpt-5.2"
     assert fallback_adapter.requests[0]["model_id"] == "claude-sonnet-4"
@@ -826,8 +817,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -857,8 +847,7 @@ async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter(
@@ -900,8 +889,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderAuthError("invalid credential")])  # type: ignore[list-item]
@@ -949,8 +937,7 @@ async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["echo"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -996,8 +983,7 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        fallback_model="anthropic/claude-sonnet-4",
-        fallback_connection="anthropic:api-key",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
         allowed_tools=["*"],
     )
     primary_adapter = StubAdapter([ProviderRateLimitError("primary rate limited")])  # type: ignore[list-item]
@@ -2007,11 +1993,10 @@ async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_chat_loop_uses_connection_from_agent(tmp_path: Path) -> None:
+async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
-        model="openai/gpt-5.2",
-        connection="openai:oauth",
+        model="openai/gpt-5.2::oauth",
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -2024,11 +2009,10 @@ async def test_chat_loop_uses_connection_from_agent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_loop_provider_comes_from_connection_id(tmp_path: Path) -> None:
+async def test_chat_loop_provider_comes_from_model_with_connection_suffix(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
-        model="openai/gpt-5.2",
-        connection="openrouter:api-key",
+        model="openrouter/gpt-5.2::api-key",
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -2047,11 +2031,10 @@ async def test_chat_loop_provider_comes_from_connection_id(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_chat_loop_empty_connection_falls_back_to_first_usable(tmp_path: Path) -> None:
+async def test_chat_loop_model_without_suffix_falls_back_to_first_usable(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        connection="",
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -2065,13 +2048,12 @@ async def test_chat_loop_empty_connection_falls_back_to_first_usable(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_chat_loop_empty_connection_prefers_first_usable_in_provider_order(
+async def test_chat_loop_model_without_suffix_prefers_first_usable_in_provider_order(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(
         id="coder",
         model="openai/gpt-5.2",
-        connection="",
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -2082,6 +2064,57 @@ async def test_chat_loop_empty_connection_prefers_first_usable_in_provider_order
 
     assert runtime.adapter_provider_id == "openai"
     assert runtime.adapter_connection_id == "openai:oauth"
+
+
+class TestParseModelWithConnection:
+    def test_no_suffix(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        assert parse_model_with_connection("openai/gpt-5.2") == (
+            "openai",
+            "gpt-5.2",
+            "",
+        )
+
+    def test_suffix_present(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        assert parse_model_with_connection("openai/gpt-5.2::oauth") == (
+            "openai",
+            "gpt-5.2",
+            "oauth",
+        )
+
+    def test_model_id_with_colon(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        assert parse_model_with_connection("openrouter/poolside/laguna-xs.2:free::api-key") == (
+            "openrouter",
+            "poolside/laguna-xs.2:free",
+            "api-key",
+        )
+
+    def test_empty_model_raises(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        with pytest.raises(ChatError, match="no model set"):
+            parse_model_with_connection("")
+
+    def test_model_id_with_slashes(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        assert parse_model_with_connection("openrouter/anthropic/claude-sonnet-4::oauth") == (
+            "openrouter",
+            "anthropic/claude-sonnet-4",
+            "oauth",
+        )
+
+
+class TestParseBareModel:
+    def test_strips_suffix(self) -> None:
+        from core.chat.chat import parse_bare_model
+
+        assert parse_bare_model("openai/gpt-5.2::oauth") == "openai/gpt-5.2"
 
 
 @pytest.mark.asyncio
