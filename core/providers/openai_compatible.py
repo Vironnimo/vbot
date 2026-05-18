@@ -533,7 +533,10 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
             for tool_call in message["tool_calls"]
         ]
     reasoning_meta = message.get("reasoning_meta")
-    if isinstance(reasoning_meta, dict) and reasoning_meta.get("_reasoning_key") == "reasoning_content":
+    if (
+        isinstance(reasoning_meta, dict)
+        and reasoning_meta.get("_reasoning_key") == "reasoning_content"
+    ):
         reasoning_text = message.get("reasoning")
         if isinstance(reasoning_text, str) and reasoning_text:
             openai_message["reasoning_content"] = reasoning_text
