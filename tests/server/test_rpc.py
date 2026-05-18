@@ -1758,6 +1758,19 @@ async def test_agent_list_includes_context_window_for_known_model(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_agent_list_includes_context_window_for_suffixed_model(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", model="openai/gpt-5.2::api-key")
+
+    response = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+
+    assert response["ok"] is True
+    agent = response["result"]["agents"][0]
+    assert agent["model"] == "openai/gpt-5.2::api-key"
+    assert agent["context_window"] == 256000
+
+
+@pytest.mark.asyncio
 async def test_agent_list_includes_null_context_window_for_unknown_model(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.update("coder", model="unknown/missing-model")

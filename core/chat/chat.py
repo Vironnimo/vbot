@@ -1661,7 +1661,11 @@ def parse_bare_model(model: str) -> str:
 
 def parse_model_with_connection(model: str) -> tuple[str, str, str]:
     """Parse ``<provider>/<model-id>[::connection-id]`` into provider/model/suffix parts."""
-    bare_model = parse_bare_model(model)
+    before, suffix_separator, connection_suffix = model.rpartition("::")
+    if suffix_separator and not connection_suffix:
+        raise ChatError("agent model connection suffix must not be empty")
+
+    bare_model = before if suffix_separator else model
     if not bare_model:
         raise ChatError("agent has no model set")
 
@@ -1669,7 +1673,6 @@ def parse_model_with_connection(model: str) -> tuple[str, str, str]:
     if not separator or not provider_id or not model_id:
         raise ChatError("agent model must use <provider>/<model-id>")
 
-    _before, suffix_separator, connection_suffix = model.rpartition("::")
     if not suffix_separator:
         connection_suffix = ""
     return provider_id, model_id, connection_suffix
