@@ -42,6 +42,7 @@ from core.chat import (
     RunEvent,
     RunNotFoundError,
 )
+from core.chat.chat import parse_bare_model
 from core.chat.content_blocks import (
     ContentBlock,
     ContentBlockError,
@@ -1858,9 +1859,10 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
 
     Returns None if the model format is invalid or the model is not found.
     """
-    if "/" not in model:
+    bare_model = parse_bare_model(model)
+    if "/" not in bare_model:
         return None
-    provider_id, _, model_id = model.partition("/")
+    provider_id, _, model_id = bare_model.partition("/")
     if not provider_id or not model_id:
         return None
     try:
