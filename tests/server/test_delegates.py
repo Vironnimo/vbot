@@ -140,6 +140,11 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
         "result": {
             "items": [
                 {
+                    "name": "status",
+                    "description": "Show current session and runtime status.",
+                    "type": "command",
+                },
+                {
                     "name": "stop",
                     "description": "Cancel the active run for this session.",
                     "type": "command",
