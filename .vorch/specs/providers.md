@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-13 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`.
+Last updated: 2026-05-18 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -51,7 +51,7 @@ Connection IDs exposed outside provider config are compositional: `<provider_id>
 class ProviderConfig:
     id: str                              # Unique provider identifier, used as registry key
     name: str                            # Human-readable name
-    adapter: str                         # Adapter class selector, e.g. "openai_compatible", "openrouter", "github_copilot", or "anthropic"
+    adapter: str                         # Adapter class selector, e.g. "openai_compatible", "opencode_go", "openrouter", "github_copilot", or "anthropic"
     base_url: str                        # Base URL for the provider API
     connections: list[ConnectionConfig]  # Authentication connections in display/preference order
     defaults: dict[str, Any] | None      # Default request params (max_tokens, temperature)
@@ -77,6 +77,7 @@ Copilot rejects it.
 
 **Adapter field** selects the class at runtime:
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
+- `"opencode_go"` → `OpenCodeGoAdapter`
 - `"openrouter"` → `OpenRouterAdapter`
 - `"github_copilot"` → `GitHubCopilotAdapter`
 - `"anthropic"` → `AnthropicAdapter`
@@ -149,6 +150,7 @@ class TokenGetter(Protocol):
 ```
 ProviderAdapter (ABC)          — core/providers/adapter.py
   ├── OpenAICompatibleAdapter  — core/providers/openai_compatible.py
+  │   ├── OpenCodeGoAdapter    — core/providers/opencode_go.py
   │   ├── OpenRouterAdapter    — core/providers/openrouter.py
   │   └── GitHubCopilotAdapter — core/providers/github_copilot.py
   └── AnthropicAdapter         — core/providers/anthropic.py
@@ -230,6 +232,13 @@ Errors are classified by HTTP status code (not by parsing the body):
 **Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
 
 **Catalog normalization:** `normalize_catalog_entry(raw, defaults)` reads standard OpenAI-compatible `/models` fields into a `Model`, including context window, max output tokens, vision, tools, JSON mode, and reasoning capability. Missing optional values fall back to provider defaults where applicable.
+
+### OpenCodeGoAdapter
+
+OpenCode Go is OpenAI-compatible for chat completions but requires one provider-specific assistant-message round-trip rule.
+
+- Runtime reasoning round-trip: when an internal assistant message carries non-empty `reasoning`, `OpenCodeGoAdapter` echoes it back on the wire as `reasoning_content`.
+- This behavior is intentionally subclass-local; the generic `OpenAICompatibleAdapter` does not infer provider-specific `reasoning_content` replay rules.
 
 ### OpenRouterAdapter
 
