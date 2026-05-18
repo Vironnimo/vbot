@@ -25,15 +25,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self,
         config: ProviderConfig,
         token_getter: TokenGetter | str,
+        base_url: str | None = None,
+        auth_config: AuthConfig | None = None,
     ) -> None:
-        super().__init__(config, token_getter)
+        super().__init__(config, token_getter, base_url, auth_config)
+        selected_auth_config = auth_config or config.connections[0].auth
         self._anthropic = AnthropicAdapter(
             config,
             token_getter,
+            base_url=base_url,
             auth_config=AuthConfig(
                 header="x-api-key",
                 prefix="",
-                credential_key=config.connections[0].auth.credential_key,
+                credential_key=selected_auth_config.credential_key,
             ),
         )
 

@@ -184,6 +184,28 @@ class TestOpenCodeGoAdapter:
 
 
 class TestOpenCodeGoAdapterMinimaxRouting:
+    @pytest.mark.asyncio
+    async def test_constructor_accepts_runtime_factory_signature(
+        self,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        runtime_base_url = "https://runtime-opencode-go.example/v1"
+        runtime_auth = AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="RUNTIME_OPENCODE_GO_KEY",
+        )
+        adapter = OpenCodeGoAdapter(opencode_go_config, API_KEY, runtime_base_url, runtime_auth)
+
+        try:
+            assert str(adapter._client.base_url).rstrip("/") == runtime_base_url
+            assert str(adapter._anthropic._client.base_url).rstrip("/") == runtime_base_url
+            assert adapter._anthropic._auth_config.header == "x-api-key"
+            assert adapter._anthropic._auth_config.prefix == ""
+            assert adapter._anthropic._auth_config.credential_key == runtime_auth.credential_key
+        finally:
+            await adapter.aclose()
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_minimax_send_uses_anthropic_path(
