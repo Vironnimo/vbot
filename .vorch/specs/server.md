@@ -75,7 +75,9 @@ Clients call the vBot server contract; provider wire details stay behind
   Agents. Cross-process/shared-data-dir locking is out of scope.
 - `settings.update` accepts supported `appearance`, `skills`, and `subagents` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
-  fields. `connection` and `fallback_connection` are optional string fields alongside `model` and `fallback_model`. `workspace` is intentionally not accepted through public RPC in Phase 4.
+  fields. `model` and `fallback_model` are optional string fields and may carry
+  an optional `::<connection-local-id>` suffix instead of separate connection
+  fields. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each

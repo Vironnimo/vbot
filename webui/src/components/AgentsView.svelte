@@ -407,6 +407,19 @@
       selectedModel.model,
       selectedModel.connectionLocalId,
     );
+    const modelExistsInCatalog = availableModels.some(
+      (model) => model.id === selectedModel.model,
+    );
+    const selectedModelOption =
+      selectedModel.model &&
+      !selectedModel.connectionLocalId &&
+      modelExistsInCatalog
+        ? {
+            value: selectedModel.model,
+            label: selectedModel.model,
+            isUnavailable: false,
+          }
+        : null;
     const emptyOption = {
       value: '',
       label: emptyLabel,
@@ -428,9 +441,12 @@
 
     if (
       !selectedValue ||
-      catalogOptions.some((option) => option.value === selectedValue)
+      catalogOptions.some((option) => option.value === selectedValue) ||
+      selectedModelOption
     ) {
-      return [emptyOption, ...catalogOptions];
+      return selectedModelOption
+        ? [emptyOption, selectedModelOption, ...catalogOptions]
+        : [emptyOption, ...catalogOptions];
     }
 
     return [
@@ -569,7 +585,11 @@
       return '';
     }
 
-    return `${model}::${connectionLocalId || ''}`;
+    if (!connectionLocalId) {
+      return model;
+    }
+
+    return `${model}::${connectionLocalId}`;
   }
 
   function parseModelSelectionValue(selectedValue) {

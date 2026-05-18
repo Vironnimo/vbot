@@ -2109,6 +2109,12 @@ class TestParseModelWithConnection:
             "oauth",
         )
 
+    def test_dangling_suffix_raises(self) -> None:
+        from core.chat.chat import parse_model_with_connection
+
+        with pytest.raises(ChatError, match="connection suffix must not be empty"):
+            parse_model_with_connection("openai/gpt-5.2::")
+
 
 class TestParseBareModel:
     def test_strips_suffix(self) -> None:
@@ -2124,6 +2130,21 @@ async def test_missing_provider_raises_chat_error_before_adapter_request(tmp_pat
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, provider_ids={"openai"})
 
     with pytest.raises(ChatError, match="provider not found: missing"):
+        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert runtime.adapter_provider_id is None
+    assert runtime.chat_sessions.list("coder") == []
+
+
+@pytest.mark.asyncio
+async def test_dangling_model_suffix_raises_chat_error_before_adapter_request(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2::", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ChatError, match="connection suffix must not be empty"):
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id is None
