@@ -13,7 +13,6 @@
   import { t } from '$lib/i18n.js';
 
   const EMPTY_VALUE = '—';
-  const MODEL_CONNECTION_VALUE_SEPARATOR = '\u001f';
   const WILDCARD_ACCESS = '*';
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
@@ -74,14 +73,12 @@
   let modelOptions = $derived(
     selectModelOptions(
       formValues.model,
-      formValues.connection,
       t('agents.form.modelPlaceholder', 'Default (no model selected)'),
     ),
   );
   let fallbackModelOptions = $derived(
     selectModelOptions(
       formValues.fallback_model,
-      formValues.fallback_connection,
       t('agents.form.fallbackModelPlaceholder', 'None'),
     ),
   );
@@ -93,14 +90,9 @@
   );
 
   $effect(() => {
-    modelSelectValue = selectModelValue(
-      formValues.model,
-      formValues.connection,
-      modelOptions,
-    );
+    modelSelectValue = selectModelValue(formValues.model, modelOptions);
     fallbackModelSelectValue = selectModelValue(
       formValues.fallback_model,
-      formValues.fallback_connection,
       fallbackModelOptions,
     );
   });
@@ -186,7 +178,7 @@
 
     if (agent) {
       formMode = AGENT_FORM_MODE_EDIT;
-      formValues = createConnectionAgentFormValues(agent);
+      formValues = createAgentFormValues(agent);
       onAgentSelected?.(agent);
     } else {
       startCreate();
@@ -198,7 +190,7 @@
   function startCreate() {
     selectedAgentId = '';
     formMode = AGENT_FORM_MODE_CREATE;
-    formValues = createConnectionAgentFormValues();
+    formValues = createAgentFormValues();
     formErrors = {};
     statusMessage = '';
   }
@@ -217,11 +209,6 @@
       );
       return;
     }
-
-    result.payload.connection = asText(formValues.connection).trim();
-    result.payload.fallback_connection = asText(
-      formValues.fallback_connection,
-    ).trim();
 
     isSaving = true;
     try {
@@ -409,19 +396,16 @@
     formValues.allowed_skills = nextItems;
   }
 
-  function createConnectionAgentFormValues(agent = {}) {
-    const values = createAgentFormValues(agent);
-    values.connection = asText(agent.connection);
-    values.fallback_connection = asText(agent.fallback_connection);
-
-    return values;
-  }
-
-  function selectModelOptions(selectedModel, selectedConnection, emptyLabel) {
+  function selectModelOptions(selectedModelValue, emptyLabel) {
     const connectionsByProvider = usableConnectionsByProvider();
+    const selectedModel = parseModelSelectionValue(selectedModelValue);
+    const selectedConnectionId = connectionIdFromModel(
+      selectedModel.model,
+      selectedModel.connectionLocalId,
+    );
     const selectedValue = modelSelectionValue(
-      selectedModel,
-      selectedConnection,
+      selectedModel.model,
+      selectedModel.connectionLocalId,
     );
     const emptyOption = {
       value: '',
@@ -433,7 +417,10 @@
         connectionsByProvider[model.provider_id] ?? [];
 
       return providerConnections.map((connection) => ({
-        value: modelSelectionValue(model.id, connection.id),
+        value: modelSelectionValue(
+          model.id,
+          connectionLocalIdFromConnectionId(connection.id),
+        ),
         label: modelOptionLabel(model, connection, providerConnections.length),
         isUnavailable: false,
       }));
@@ -450,7 +437,10 @@
       emptyOption,
       {
         value: selectedValue,
-        label: unavailableModelOptionLabel(selectedModel, selectedConnection),
+        label: unavailableModelOptionLabel(
+          selectedModel.model,
+          selectedConnectionId,
+        ),
         isUnavailable: true,
       },
       ...catalogOptions,
@@ -512,60 +502,90 @@
     return connection?.label || connectionId;
   }
 
-  function updateModelSelection(
-    modelFieldName,
-    connectionFieldName,
-    selectedValue,
-  ) {
-    const selection = parseModelSelectionValue(selectedValue);
-    formValues[modelFieldName] = selection.model;
-    formValues[connectionFieldName] = selection.connection;
-  }
-
-  function selectModelValue(model, connection, options) {
-    if (!model) {
+  function connectionLocalIdFromConnectionId(connectionId) {
+    if (!connectionId) {
       return '';
     }
 
-    const exactValue = modelSelectionValue(model, connection);
+    const separatorIndex = connectionId.indexOf(':');
+    if (separatorIndex === -1) {
+      return connectionId;
+    }
+
+    return connectionId.slice(separatorIndex + 1);
+  }
+
+  function connectionIdFromModel(model, connectionLocalId) {
+    if (!model || !connectionLocalId) {
+      return '';
+    }
+
+    const providerSeparatorIndex = model.indexOf('/');
+    if (providerSeparatorIndex === -1) {
+      return '';
+    }
+
+    const providerId = model.slice(0, providerSeparatorIndex);
+    if (!providerId) {
+      return '';
+    }
+
+    return `${providerId}:${connectionLocalId}`;
+  }
+
+  function updateModelSelection(modelFieldName, selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    formValues[modelFieldName] = modelSelectionValue(
+      selection.model,
+      selection.connectionLocalId,
+    );
+  }
+
+  function selectModelValue(modelValue, options) {
+    const selection = parseModelSelectionValue(modelValue);
+
+    if (!selection.model) {
+      return '';
+    }
+
+    const exactValue = modelSelectionValue(
+      selection.model,
+      selection.connectionLocalId,
+    );
 
     if (options.some((option) => option.value === exactValue)) {
       return exactValue;
     }
 
-    if (connection) {
+    if (selection.connectionLocalId) {
       return exactValue;
     }
 
-    return model;
+    return selection.model;
   }
 
-  function modelSelectionValue(model, connection) {
+  function modelSelectionValue(model, connectionLocalId) {
     if (!model) {
       return '';
     }
 
-    return `${model}${MODEL_CONNECTION_VALUE_SEPARATOR}${connection || ''}`;
+    return `${model}::${connectionLocalId || ''}`;
   }
 
   function parseModelSelectionValue(selectedValue) {
     if (!selectedValue) {
-      return { model: '', connection: '' };
+      return { model: '', connectionLocalId: '' };
     }
 
-    const separatorIndex = selectedValue.indexOf(
-      MODEL_CONNECTION_VALUE_SEPARATOR,
-    );
+    const separatorIndex = selectedValue.lastIndexOf('::');
 
     if (separatorIndex === -1) {
-      return { model: selectedValue, connection: '' };
+      return { model: selectedValue, connectionLocalId: '' };
     }
 
     return {
       model: selectedValue.slice(0, separatorIndex),
-      connection: selectedValue.slice(
-        separatorIndex + MODEL_CONNECTION_VALUE_SEPARATOR.length,
-      ),
+      connectionLocalId: selectedValue.slice(separatorIndex + 2),
     };
   }
 
@@ -598,10 +618,6 @@
 
   function displayValue(value) {
     return value || EMPTY_VALUE;
-  }
-
-  function asText(value) {
-    return value === null || value === undefined ? '' : String(value);
   }
 
   function viewErrorMessage(error, fallback) {
@@ -824,7 +840,7 @@
                 triggerClass="agents-view__dropdown"
                 panelClass="agents-view__search-panel"
                 onValueChange={(selectedValue) =>
-                  updateModelSelection('model', 'connection', selectedValue)}
+                  updateModelSelection('model', selectedValue)}
               />
             </label>
 
@@ -849,11 +865,7 @@
                 triggerClass="agents-view__dropdown"
                 panelClass="agents-view__search-panel"
                 onValueChange={(selectedValue) =>
-                  updateModelSelection(
-                    'fallback_model',
-                    'fallback_connection',
-                    selectedValue,
-                  )}
+                  updateModelSelection('fallback_model', selectedValue)}
               />
             </label>
 
