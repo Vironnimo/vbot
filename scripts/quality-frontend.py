@@ -98,17 +98,20 @@ def translate_to_parent_dir(paths: list[str]) -> list[str]:
 #   Tests  2 passed (2)
 #   Tests  1 failed | 2 passed (3)
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _VITEST_FAILED_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+failed\s+\|\s+(\d+)\s+passed\s+\((\d+)\)")
 _VITEST_PASSED_RE = re.compile(r"Tests\s+(\d+)\s+passed\s+\((\d+)\)")
 
 
 def parse_vitest_counts(output: str) -> tuple[int, int]:
     """Return ``(passed, total)`` from vitest verbose output."""
-    m = _VITEST_FAILED_PASSED_RE.search(output)
+    cleaned_output = _ANSI_ESCAPE_RE.sub("", output)
+
+    m = _VITEST_FAILED_PASSED_RE.search(cleaned_output)
     if m:
         return int(m.group(2)), int(m.group(3))
 
-    m = _VITEST_PASSED_RE.search(output)
+    m = _VITEST_PASSED_RE.search(cleaned_output)
     if m:
         return int(m.group(1)), int(m.group(2))
 

@@ -5,8 +5,8 @@ Usage:
     python scripts/test-env.py start [--host HOST] [--port PORT] [--data-dir DIR]
     python scripts/test-env.py stop [--host HOST] [--port PORT] [--data-dir DIR]
 
-``start`` builds the frontend (if needed), starts the server in the background,
-and waits until the health check passes. Prints the resolved URL and exits.
+``start`` builds the frontend, starts the server in the background, and waits
+until the health check passes. Prints the resolved URL and exits.
 
 ``stop`` stops a running server and confirms it is down.
 
@@ -25,6 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = PROJECT_ROOT / "webui"
 WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
+WEBUI_NODE_MODULES = WEBUI_DIR / "node_modules"
 HEALTH_TIMEOUT_SECONDS = 15
 
 
@@ -34,18 +35,16 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProc
 
 
 def build_frontend() -> int:
-    """Build the Svelte frontend if dist is missing. Returns 0 on success."""
-    if WEBUI_DIST.exists():
-        print("frontend.... already built (skipping)")
-        return 0
-
+    """Build the Svelte frontend for live testing. Returns 0 on success."""
     print("frontend.... building", end="", flush=True)
     npm = "npm"
-    install_result = _run([npm, "install"], cwd=WEBUI_DIR)
-    if install_result.returncode != 0:
-        print(" FAILED")
-        print(install_result.stderr)
-        return 1
+
+    if not WEBUI_NODE_MODULES.exists():
+        install_result = _run([npm, "install"], cwd=WEBUI_DIR)
+        if install_result.returncode != 0:
+            print(" FAILED")
+            print(install_result.stderr)
+            return 1
 
     build_result = _run([npm, "run", "build"], cwd=WEBUI_DIR)
     if build_result.returncode != 0:
