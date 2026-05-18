@@ -16,6 +16,12 @@ API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
 
 
+def test_public_package_exports_opencode_go_adapter() -> None:
+    from core.providers import OpenCodeGoAdapter as PublicOpenCodeGoAdapter
+
+    assert PublicOpenCodeGoAdapter is OpenCodeGoAdapter
+
+
 @pytest.fixture()
 def opencode_go_config() -> ProviderConfig:
     return ProviderConfig(
