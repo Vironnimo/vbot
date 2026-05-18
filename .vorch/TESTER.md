@@ -16,8 +16,8 @@ packages or set up the environment yourself.
 
 ## Starting the App
 
-Run the test-env script. It builds the frontend (if needed), starts the server,
-and waits until the health check passes:
+Run the test-env script. It rebuilds the frontend, starts the server, and
+waits until the health check passes:
 
 ```bash
 python scripts/test-env.py start
