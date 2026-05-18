@@ -13,6 +13,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
 from core.utils.config import Config
@@ -225,6 +226,24 @@ def test_runtime_model_fields(runtime: Runtime) -> None:
     assert model.context_window == 200000
     assert model.capabilities.vision is True
     assert model.capabilities.reasoning.supported is True
+
+
+def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """opencode_go provider adapter keys resolve to OpenCodeGoAdapter at runtime."""
+    # Arrange
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "opencode-go-token")
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+
+    # Act
+    adapter = runtime.get_adapter("opencode-go", "opencode-go:api-key")
+
+    # Assert
+    assert runtime.providers.get("opencode-go").adapter == "opencode_go"
+    assert isinstance(adapter, OpenCodeGoAdapter)
 
 
 def test_runtime_wires_copilot_adapter_with_model_metadata_lookup(runtime: Runtime) -> None:

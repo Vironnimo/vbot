@@ -167,6 +167,20 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             normalized["usage"] = usage
         return normalized
 
+    def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Convert an internal assistant message to its wire representation.
+
+        Subclasses may override this to inject provider-specific fields
+        (e.g. ``reasoning_content`` for DeepSeek-compatible endpoints).
+        """
+        return _to_openai_assistant_message(message)
+
+    def _format_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Convert one internal message to its wire representation."""
+        if message.get("role") == "assistant":
+            return self._format_assistant_message(message)
+        return _to_openai_message(message)
+
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -177,7 +191,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_kwargs = dict(kwargs)
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": [_to_openai_message(message) for message in messages],
+            "messages": [self._format_message(message) for message in messages],
         }
         _apply_openai_tools(payload, request_kwargs)
         _apply_openai_reasoning(payload, request_kwargs)
@@ -532,15 +546,7 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
             }
             for tool_call in message["tool_calls"]
         ]
-    reasoning_meta = message.get("reasoning_meta")
-    if (
-        isinstance(reasoning_meta, dict)
-        and reasoning_meta.get("_reasoning_key") == "reasoning_content"
-    ):
-        reasoning_text = message.get("reasoning")
-        if isinstance(reasoning_text, str) and reasoning_text:
-            openai_message["reasoning_content"] = reasoning_text
-    _apply_openai_reasoning_meta(openai_message, reasoning_meta)
+    _apply_openai_reasoning_meta(openai_message, message.get("reasoning_meta"))
     return openai_message
 
 
@@ -628,8 +634,6 @@ def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | 
     for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
-    if "reasoning_content" in message and "reasoning_details" not in message:
-        meta["_reasoning_key"] = "reasoning_content"
     return meta or None
 
 
