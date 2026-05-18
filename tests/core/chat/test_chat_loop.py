@@ -2472,10 +2472,10 @@ class TestEmbedNotesIntoRequest:
 
 
 class TestMessageToRequestDict:
-    """Verify _message_to_request_dict keeps reasoning but strips internal metadata."""
+    """Verify _message_to_request_dict strips assistant-only history metadata."""
 
-    def test_strips_usage_from_assistant_message(self):
-        """Usage must not be sent to providers in follow-up request messages."""
+    def test_strips_reasoning_reasoning_meta_and_usage_from_assistant_message(self):
+        """Old assistant reasoning fields must not be resent on fresh follow-up turns."""
         from core.chat.chat import _message_to_request_dict
 
         message = ChatMessage.assistant(
@@ -2488,33 +2488,24 @@ class TestMessageToRequestDict:
         result = _message_to_request_dict(message)
 
         assert "usage" not in result
-        assert result["reasoning"] == "Need context before reply."
+        assert "reasoning" not in result
         assert "reasoning_meta" not in result
         assert result["content"] == "Hello"
 
-    def test_preserves_reasoning_when_present_and_maps_to_opencode_reasoning_content(self):
-        """Reasoning should survive request conversion for OpenCode Go round-trips."""
-        from core.chat.chat import _message_to_request_dict
+    def test_opencode_adapter_maps_reasoning_content_when_current_turn_payload_includes_it(self):
+        """Current-turn assistant payloads still map reasoning to reasoning_content."""
         from core.providers.opencode_go import OpenCodeGoAdapter
 
-        with_reasoning = _message_to_request_dict(
-            ChatMessage.assistant(
-                model="opencode-go/deepseek-v4-pro",
-                content="Answer.",
-                reasoning="Need to inspect prior tool output.",
-                reasoning_meta={"opaque": "signed"},
-            )
-        )
-        without_reasoning = _message_to_request_dict(
-            ChatMessage.assistant(
-                model="opencode-go/deepseek-v4-pro",
-                content="Answer without explicit reasoning.",
-            )
-        )
-
-        assert with_reasoning["reasoning"] == "Need to inspect prior tool output."
-        assert "reasoning" not in without_reasoning
-        assert "reasoning_meta" not in with_reasoning
+        with_reasoning = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Answer.",
+            reasoning="Need to inspect prior tool output.",
+            reasoning_meta={"opaque": "signed"},
+        ).to_dict()
+        without_reasoning = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Answer without explicit reasoning.",
+        ).to_dict()
 
         adapter = cast(OpenCodeGoAdapter, object.__new__(OpenCodeGoAdapter))
         formatted_with_reasoning = adapter._format_assistant_message(with_reasoning)
@@ -2522,6 +2513,26 @@ class TestMessageToRequestDict:
 
         assert formatted_with_reasoning["reasoning_content"] == "Need to inspect prior tool output."
         assert "reasoning_content" not in formatted_without_reasoning
+
+    def test_request_dict_strips_reasoning_before_adapter_history_formatting(self):
+        """History conversion should remove reasoning before adapter formatting runs."""
+        from core.chat.chat import _message_to_request_dict
+        from core.providers.opencode_go import OpenCodeGoAdapter
+
+        assistant_history_message = ChatMessage.assistant(
+            model="opencode-go/deepseek-v4-pro",
+            content="Old answer.",
+            reasoning="Old reasoning that must not be resent.",
+            reasoning_meta={"opaque": "signed"},
+        )
+        request_history_message = _message_to_request_dict(assistant_history_message)
+        assert "reasoning" not in request_history_message
+        assert "reasoning_meta" not in request_history_message
+
+        adapter = cast(OpenCodeGoAdapter, object.__new__(OpenCodeGoAdapter))
+        formatted_history_message = adapter._format_assistant_message(request_history_message)
+
+        assert "reasoning_content" not in formatted_history_message
 
     def test_preserves_usage_on_non_assistant_messages(self):
         """User and tool messages never have usage, but the function should not strip it."""
