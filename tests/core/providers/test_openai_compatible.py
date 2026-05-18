@@ -21,7 +21,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_message
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
@@ -622,6 +622,49 @@ class TestSendSuccess:
             {"id": "call_abc", "name": "get_weather", "arguments": {}}
         ]
 
+    def test_normalize_response_marks_reasoning_content_for_round_trip(self, openai_adapter):
+        """DeepSeek-style reasoning_content is marked for later assistant replay."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "I think...",
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["reasoning"] == "I think..."
+        assert normalized["reasoning_meta"] == {"_reasoning_key": "reasoning_content"}
+
+    def test_normalize_response_does_not_mark_reasoning_content_when_details_present(
+        self,
+        openai_adapter,
+    ):
+        """OpenRouter-style reasoning_details suppresses DeepSeek replay marker."""
+        reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Visible reasoning",
+                        "reasoning_details": reasoning_details,
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["reasoning"] == "Visible reasoning"
+        assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
     def test_normalize_response_preserves_openrouter_reasoning_details(self, openrouter_adapter):
         """OpenRouter opaque reasoning_details are preserved unchanged."""
         reasoning_details = [{"type": "reasoning.text", "text": "opaque"}]
@@ -643,6 +686,22 @@ class TestSendSuccess:
         assert normalized["content"] == "Done"
         assert normalized["reasoning"] == "Visible reasoning"
         assert normalized["reasoning_meta"] == {"reasoning_details": reasoning_details}
+
+    def test_to_openai_message_reinserts_reasoning_content_when_marked(self):
+        """DeepSeek marker restores reasoning_content in assistant wire messages."""
+        internal_message = {
+            "role": "assistant",
+            "content": "Done",
+            "reasoning": "I think...",
+            "reasoning_meta": {"_reasoning_key": "reasoning_content"},
+        }
+
+        wire_message = _to_openai_message(internal_message)
+
+        assert wire_message["role"] == "assistant"
+        assert wire_message["content"] == "Done"
+        assert wire_message["reasoning_content"] == "I think..."
+        assert "reasoning" not in wire_message
 
 
 # ---------------------------------------------------------------------------
@@ -1149,6 +1208,48 @@ class TestStreamSSE:
                 },
             },
         ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_emits_and_accumulates_reasoning_content_round_trip_marker(
+        self,
+        openai_adapter,
+    ):
+        """DeepSeek reasoning chunks emit marker deltas that accumulate stably."""
+        # Arrange
+        first_chunk = {"choices": [{"delta": {"reasoning_content": "I "}}]}
+        second_chunk = {"choices": [{"delta": {"reasoning_content": "think"}}]}
+        sse_body = (
+            f"data: {json.dumps(first_chunk)}\n\n"
+            f"data: {json.dumps(second_chunk)}\n\n"
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        reasoning_meta_deltas = [
+            chunk["reasoning_meta"] for chunk in chunks if chunk.get("type") == "reasoning_meta"
+        ]
+        assert reasoning_meta_deltas == [
+            {"_reasoning_key": "reasoning_content"},
+            {"_reasoning_key": "reasoning_content"},
+        ]
+
+        finalized_reasoning_meta: dict[str, str] = {}
+        for chunk in chunks:
+            if chunk.get("type") != "reasoning_meta":
+                continue
+            finalized_reasoning_meta.update(chunk["reasoning_meta"])
+        assert finalized_reasoning_meta == {"_reasoning_key": "reasoning_content"}
 
     @respx.mock
     @pytest.mark.asyncio

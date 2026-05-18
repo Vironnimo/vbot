@@ -532,7 +532,15 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
             }
             for tool_call in message["tool_calls"]
         ]
-    _apply_openai_reasoning_meta(openai_message, message.get("reasoning_meta"))
+    reasoning_meta = message.get("reasoning_meta")
+    if (
+        isinstance(reasoning_meta, dict)
+        and reasoning_meta.get("_reasoning_key") == "reasoning_content"
+    ):
+        reasoning_text = message.get("reasoning")
+        if isinstance(reasoning_text, str) and reasoning_text:
+            openai_message["reasoning_content"] = reasoning_text
+    _apply_openai_reasoning_meta(openai_message, reasoning_meta)
     return openai_message
 
 
@@ -620,6 +628,8 @@ def _extract_openai_reasoning_meta(message: dict[str, Any]) -> dict[str, Any] | 
     for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
+    if "reasoning_content" in message and "reasoning_details" not in message:
+        meta["_reasoning_key"] = "reasoning_content"
     return meta or None
 
 
