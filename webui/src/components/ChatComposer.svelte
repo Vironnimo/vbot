@@ -26,6 +26,7 @@
   let attachmentToastMessage = $state('');
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
+  let _triggerClosed = false;
 
   let loadableSkills = $derived(availableSkills.filter((skill) => skill?.name));
   let autocompleteQuery = $derived.by(() => {
@@ -348,6 +349,7 @@
 
       if (event.key === 'Escape') {
         event.preventDefault();
+        _triggerClosed = true;
         triggerContext = null;
         activeSkillIndex = 0;
         return;
@@ -368,6 +370,7 @@
   };
 
   const handleInput = () => {
+    _triggerClosed = false;
     resizeInput();
     updateTriggerContext();
   };
@@ -399,6 +402,10 @@
   };
 
   const updateTriggerContext = () => {
+    if (_triggerClosed) {
+      return;
+    }
+
     if (!inputElement) {
       triggerContext = null;
       activeSkillIndex = 0;
@@ -467,6 +474,7 @@
     content = `${prefix}${insertedToken}${suffix}`;
     triggerContext = null;
     activeSkillIndex = 0;
+    _triggerClosed = true;
 
     await tick();
     inputElement?.focus();
