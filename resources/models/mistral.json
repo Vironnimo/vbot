@@ -1,0 +1,84 @@
+{
+  "provider_id": "mistral",
+  "source": "static",
+  "models": {
+    "mistral-large-latest": {
+      "name": "Mistral Large 3",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096
+    },
+    "mistral-medium-3": {
+      "name": "Mistral Medium 3.5",
+      "capabilities": {
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096
+    },
+    "mistral-small-latest": {
+      "name": "Mistral Small 4",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 32000,
+      "max_output_tokens": 4096
+    },
+    "magistral-medium-latest": {
+      "name": "Magistral Medium 1.2",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096
+    },
+    "codestral-latest": {
+      "name": "Codestral",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 256000,
+      "max_output_tokens": 4096
+    },
+    "devstral-latest": {
+      "name": "Devstral 2",
+      "capabilities": {
+        "vision": false,
+        "tools": true,
+        "json_mode": true,
+        "reasoning": {
+          "supported": false
+        }
+      },
+      "context_window": 128000,
+      "max_output_tokens": 4096
+    }
+  }
+}

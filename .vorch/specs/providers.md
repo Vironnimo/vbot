@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-18 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`.
+Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -79,6 +79,7 @@ Copilot rejects it.
 - `"openai_compatible"` → `OpenAICompatibleAdapter`
 - `"opencode_go"` → `OpenCodeGoAdapter`
 - `"openrouter"` → `OpenRouterAdapter`
+- `"mistral"` → `MistralAdapter`
 - `"github_copilot"` → `GitHubCopilotAdapter`
 - `"anthropic"` → `AnthropicAdapter`
 - Unknown value → `ConfigError` at adapter creation time
@@ -152,6 +153,7 @@ ProviderAdapter (ABC)          — core/providers/adapter.py
   ├── OpenAICompatibleAdapter  — core/providers/openai_compatible.py
   │   ├── OpenCodeGoAdapter    — core/providers/opencode_go.py
   │   ├── OpenRouterAdapter    — core/providers/openrouter.py
+  │   ├── MistralAdapter       — core/providers/mistral.py
   │   └── GitHubCopilotAdapter — core/providers/github_copilot.py
   └── AnthropicAdapter         — core/providers/anthropic.py
 ```
@@ -229,7 +231,7 @@ Errors are classified by HTTP status code (not by parsing the body):
 
 **Reasoning:** vBot `thinking_effort` is adapter-translated. The generic OpenAI-compatible adapter emits `reasoning_effort: "low" | "medium" | "high"` for supported non-`none` values. Provider-specific subclasses own alternate wire formats.
 
-**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
+**Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`/`thinking`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
 
 **Catalog normalization:** `normalize_catalog_entry(raw, defaults)` reads standard OpenAI-compatible `/models` fields into a `Model`, including context window, max output tokens, vision, tools, JSON mode, and reasoning capability. Missing optional values fall back to provider defaults where applicable.
 
@@ -253,6 +255,30 @@ reasoning and catalog schema.
 - Catalog normalization: reads OpenRouter `/models` fields such as
   `architecture.input_modalities`, `supported_parameters`, `context_length`, and
   `top_provider.max_completion_tokens`.
+
+### MistralAdapter
+
+Mistral uses the standard OpenAI-style `POST /chat/completions` runtime path but
+needs provider-specific reasoning and catalog handling.
+
+- Runtime reasoning: Mistral accepts only `reasoning_effort: "high" | "none"`.
+  `MistralAdapter` maps vBot `thinking_effort` values `medium`, `high`, `xhigh`,
+  and `max` to `"high"`; `none` maps to `"none"`; `low`, `minimal`, and unset
+  values omit the parameter.
+- Auth: bundled config uses `Authorization: Bearer <MISTRAL_API_KEY>` via an
+  `api_key` connection.
+- Catalog normalization: `GET /models` returns Mistral-specific entries with
+  `capabilities` and `max_context_length`. Discovery keeps only active chat
+  models (`capabilities.completion_chat == true` and not `archived`) and skips
+  other model families by raising `ValueError` for the discovery loop to ignore.
+- Capability mapping: `capabilities.vision` comes from `capabilities.vision`,
+  `capabilities.tools` from `capabilities.function_calling`, and `json_mode`
+  defaults to `true` for chat models.
+- Context and output limits: `context_window` comes from `max_context_length`.
+  `/models` does not provide a per-model max output limit, so
+  `max_output_tokens` falls back to the provider default.
+- Reasoning capability in the initial normalizer is currently inferred from
+  `magistral-` model ID prefixes.
 
 ### GitHubCopilotAdapter
 

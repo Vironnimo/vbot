@@ -48,3 +48,12 @@ class ProviderTimeoutError(ProviderError):
 
     def __init__(self, message: str = "") -> None:
         super().__init__(message, retryable=True)
+
+
+class CatalogEntrySkipped(VBotError):  # noqa: N818
+    """Signal that a model catalog entry should be skipped during discovery.
+
+    Raised by adapter normalize_catalog_entry() implementations for expected
+    non-error skip conditions (for example non-chat or archived models).
+    The discovery loop catches and discards it.
+    """
