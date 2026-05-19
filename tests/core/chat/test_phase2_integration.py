@@ -363,6 +363,7 @@ def _write_prompt_resources(resources: Path) -> None:
     (prompts_dir / "tools.md").write_text("Tools\n{tool_list}", encoding="utf-8")
     (prompts_dir / "channels.md").write_text("Channels\n{channel_list}", encoding="utf-8")
     (prompts_dir / "skills.md").write_text("Skills\n{skill_list}", encoding="utf-8")
+    (prompts_dir / "compaction.md").write_text("Summarize the conversation.", encoding="utf-8")
 
 
 def _write_workspace_templates(resources: Path) -> None:
