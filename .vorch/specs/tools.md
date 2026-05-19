@@ -37,6 +37,11 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `output_mode`. It searches file contents by regex by default or fixed string
   when `literal: true`. Relative paths resolve from `ToolContext.workspace`;
   absolute file or directory paths are allowed.
+- Built-in `web_fetch` tool: flat name `web_fetch`; schema includes required
+  `url` plus optional `include_links` and `raw` booleans. It fetches HTTP(S)
+  content with browser-like headers, rejects known SSRF-local targets, returns
+  non-HTML or `raw=True` bodies directly, and otherwise converts HTML into a
+  readable text summary under `data.content`.
 - Built-in `bash` tool: flat name `bash`; schema includes required `command` and
   optional `workdir`, `env`, `yield_after`, `background`, and `timeout`. It runs
   through the host shell, streams foreground stdout/stderr as Run delta events,
@@ -92,6 +97,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_write_tool(registry) -> None` — registers the built-in `write` tool.
 - `register_glob_tool(registry) -> None` — registers the built-in `glob` tool.
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
+- `register_web_fetch_tool(registry) -> None` — registers the built-in
+  `web_fetch` tool.
 - `register_bash_tool(registry, process_manager, trigger_service=None) -> None` — registers the
   built-in `bash` tool backed by the shared `ProcessManager`. When `trigger_service` is
   provided and a process transitions to background (explicit `background=True` or after
@@ -180,6 +187,17 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   expected path/search errors are failure envelopes.
 - `grep` may use `rg`/ripgrep when available on `PATH`, but must work via the
   Python fallback without requiring ripgrep as a dependency.
+- `web_fetch` accepts exactly `url`, `include_links`, and `raw`;
+  `additionalProperties` is false. It allows only `http` and `https` URLs,
+  validates each request target as public after URL parsing and DNS resolution,
+  rejects localhost/private/link-local/multicast/reserved targets including
+  obfuscated IP forms, retries transient HTTP 429/5xx responses up to 3 times
+  with exponential backoff plus jitter, and returns extracted text under
+  `data.content`.
+- `web_fetch` uses `httpx.AsyncClient` with browser-like headers and follows
+  redirects through explicit per-hop validation instead of blind auto-follow.
+  HTML responses are converted to readable text via BeautifulSoup; non-HTML or
+  `raw=True` responses return truncated response text unchanged.
 - `bash` resolves relative working directories from `ToolContext.workspace` and
   accepts absolute working directories unchanged. It uses the platform-native
   shell (`pwsh` on Windows, `bash -c` elsewhere) and blocks sensitive environment
