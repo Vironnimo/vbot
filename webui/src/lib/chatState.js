@@ -168,6 +168,21 @@ export function appendRunEvents(sessionState, events) {
   return sessionState.runEvents;
 }
 
+export function appendCompactionCheckpoint(sessionState, message) {
+  if (!message || message.role !== 'compaction_checkpoint') {
+    return;
+  }
+
+  if (
+    message.id &&
+    sessionState.messages.some((existing) => existing?.id === message.id)
+  ) {
+    return;
+  }
+
+  sessionState.messages = [...sessionState.messages, message];
+}
+
 export function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
@@ -304,6 +319,18 @@ function historyTimelineItems(messages) {
   let activeAssistantRun = null;
 
   for (const message of messages ?? []) {
+    if (message?.role === 'compaction_checkpoint') {
+      pushActiveAssistantRun(timelineItems, activeAssistantRun);
+      activeAssistantRun = null;
+      timelineItems.push({
+        id: `compaction-${message.id ?? message.timestamp}`,
+        type: 'compaction_separator',
+        timestamp: message.timestamp,
+        message,
+      });
+      continue;
+    }
+
     if (message?.role === 'user') {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;
@@ -349,7 +376,13 @@ function historyTimelineItems(messages) {
 }
 
 function isVisibleHistoryMessage(message) {
-  return ['user', 'assistant', 'tool', 'error'].includes(message?.role);
+  return [
+    'user',
+    'assistant',
+    'tool',
+    'error',
+    'compaction_checkpoint',
+  ].includes(message?.role);
 }
 
 function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {

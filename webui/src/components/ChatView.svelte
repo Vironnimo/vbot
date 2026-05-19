@@ -5,6 +5,7 @@
   import { t } from '$lib/i18n.js';
 
   import {
+    appendCompactionCheckpoint,
     appendRunEvent,
     canCreateNewSession,
     createChatState,
@@ -218,6 +219,14 @@
     );
   };
 
+  const isCompactCommand = (content) => {
+    if (typeof content !== 'string') {
+      return false;
+    }
+
+    return content.trim().toLowerCase() === '/compact';
+  };
+
   const loadCommands = async () => {
     try {
       const result = await rpc('chat.commands');
@@ -414,6 +423,9 @@
       });
       if (run?.command_handled) {
         setActionInfo(run.reply);
+        if (isCompactCommand(content)) {
+          await loadHistoryForSession(agent.id, sessionState.sessionId);
+        }
         return true;
       }
       startRun(sessionState, run);
@@ -436,6 +448,12 @@
       {
         onEvent: ({ data }) => {
           const event = appendRunEvent(sessionState, data);
+          if (
+            event?.type === 'compaction_completed' &&
+            event.payload?.message
+          ) {
+            appendCompactionCheckpoint(sessionState, event.payload.message);
+          }
           if (event && event.type.startsWith('run_')) {
             sendNextQueuedMessage(sessionState);
           }
