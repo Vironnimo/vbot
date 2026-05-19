@@ -19,6 +19,7 @@ CancelCallback = Callable[[], Any]
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
+COMPACTION_COMPLETED_EVENT = "compaction_completed"
 REASONING_EVENT = "reasoning"
 ASSISTANT_OUTPUT_DELTA_EVENT = "assistant_output_delta"
 REASONING_DELTA_EVENT = "reasoning_delta"

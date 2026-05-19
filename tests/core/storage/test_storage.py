@@ -14,10 +14,14 @@ from core.storage import (
 )
 
 
-def create_prompt_resources(resources_dir: Path) -> None:
+def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
-    for name in ("system.md", "runtime.md", "tools.md", "channels.md", "skills.md"):
+    prompt_names = ["system.md", "runtime.md", "tools.md", "channels.md", "skills.md"]
+    if include_compaction:
+        prompt_names.append("compaction.md")
+
+    for name in prompt_names:
         prompts_dir.joinpath(name).write_text(f"{name} bundled", encoding="utf-8")
 
 
@@ -196,6 +200,73 @@ def test_load_subagent_settings_reads_custom_values(tmp_path: Path) -> None:
     }
 
 
+def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    settings = storage.load_compaction_settings()
+
+    assert settings == {
+        "auto": True,
+        "threshold": 0.8,
+        "tail_tokens": 15_000,
+        "summary_model": None,
+    }
+
+
+def test_load_compaction_settings_reads_and_normalizes_values(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "compaction": {
+                "auto": False,
+                "threshold": 1,
+                "tail_tokens": 7_500,
+                "summary_model": "openrouter/anthropic/claude-sonnet-4",
+            }
+        }
+    )
+
+    settings = storage.load_compaction_settings()
+
+    assert settings == {
+        "auto": False,
+        "threshold": 1.0,
+        "tail_tokens": 7_500,
+        "summary_model": "openrouter/anthropic/claude-sonnet-4",
+    }
+
+
+def test_update_compaction_settings_persists_under_compaction_key(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "server_port": 8500,
+            "compaction": {
+                "auto": False,
+                "threshold": 0.9,
+                "tail_tokens": 12_000,
+                "summary_model": None,
+            },
+        }
+    )
+
+    updated = storage.update_compaction_settings(
+        {
+            "tail_tokens": 8_000,
+            "summary_model": "openai/gpt-4.1-mini",
+        }
+    )
+
+    assert updated == {
+        "auto": False,
+        "threshold": 0.9,
+        "tail_tokens": 8_000,
+        "summary_model": "openai/gpt-4.1-mini",
+    }
+    assert storage.load_compaction_settings() == updated
+    assert storage.load_settings() == {"compaction": updated, "server_port": 8500}
+
+
 def test_update_appearance_settings_persists_language_and_preserves_other_settings(
     tmp_path: Path,
 ) -> None:
@@ -310,6 +381,7 @@ def test_copy_prompt_fragments_preserves_existing_user_copy(tmp_path: Path) -> N
     assert (data_dir / "prompts" / "system.md").read_text(encoding="utf-8") == "custom"
     assert sorted(path.name for path in written_paths) == [
         "channels.md",
+        "compaction.md",
         "runtime.md",
         "skills.md",
         "tools.md",
@@ -346,6 +418,15 @@ def test_read_prompt_fragment_falls_back_to_bundled_resource(tmp_path: Path) -> 
     storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
 
     assert storage.read_prompt_fragment("skills.md") == "skills.md bundled"
+
+
+def test_read_prompt_fragment_compaction_name_passes_allowlist_check(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    create_prompt_resources(resources_dir, include_compaction=False)
+    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+
+    with pytest.raises(StorageError, match="Cannot read prompt fragment compaction.md"):
+        storage.read_prompt_fragment("compaction.md")
 
 
 def test_read_prompt_fragment_rejects_path_traversal(tmp_path: Path) -> None:

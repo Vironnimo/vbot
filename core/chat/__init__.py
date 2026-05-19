@@ -18,9 +18,11 @@ from core.chat.commands import (
     DispatchResult,
     NotACommand,
 )
+from core.chat.compaction import CompactionError, CompactionService, CompactionSettings
 from core.chat.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_DELTA_EVENT,
@@ -55,6 +57,10 @@ __all__ = [
     "ChatSession",
     "ChatSessionError",
     "ChatSessionManager",
+    "COMPACTION_COMPLETED_EVENT",
+    "CompactionError",
+    "CompactionService",
+    "CompactionSettings",
     "CommandDispatcher",
     "CommandHandled",
     "DispatchResult",
