@@ -403,6 +403,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "status",
         "subagent",
         "subagent_result",
+        "web_fetch",
         "write",
     ]
     assert [skill.name for skill in runtime.skills.list_all()] == [
