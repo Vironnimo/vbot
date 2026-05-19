@@ -9,6 +9,7 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.mistral import MistralAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -100,7 +101,7 @@ def test_normalize_catalog_entry_marks_magistral_models_as_reasoning_capable() -
 
 
 def test_normalize_catalog_entry_rejects_non_chat_models() -> None:
-    with pytest.raises(ValueError, match="Skipped non-chat model"):
+    with pytest.raises(CatalogEntrySkipped, match="Skipped non-chat model"):
         MistralAdapter.normalize_catalog_entry(
             raw_mistral_model(completion_chat=False),
             {"max_tokens": 8192},
@@ -108,7 +109,7 @@ def test_normalize_catalog_entry_rejects_non_chat_models() -> None:
 
 
 def test_normalize_catalog_entry_rejects_archived_models() -> None:
-    with pytest.raises(ValueError, match="Skipped non-chat model"):
+    with pytest.raises(CatalogEntrySkipped, match="Skipped non-chat model"):
         MistralAdapter.normalize_catalog_entry(
             raw_mistral_model(archived=True),
             {"max_tokens": 8192},
@@ -177,6 +178,23 @@ async def test_build_payload_does_not_set_reasoning_effort_for_low(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_build_payload_does_not_set_reasoning_effort_for_minimal(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="mistral-large-latest",
+        thinking_effort="minimal",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_build_payload_sets_reasoning_effort_none_when_disabled(
     mistral_adapter: MistralAdapter,
 ) -> None:
@@ -216,6 +234,26 @@ async def test_send_returns_normal_response(mistral_adapter: MistralAdapter) -> 
     assert response == SUCCESS_RESPONSE
 
 
+def test_normalize_response_extracts_message_thinking_as_reasoning(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Final answer",
+                    "thinking": "Reasoning trace",
+                }
+            }
+        ]
+    }
+
+    normalized = mistral_adapter.normalize_response(response)
+
+    assert normalized["reasoning"] == "Reasoning trace"
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_requests_usage_and_yields_content_delta(
@@ -238,3 +276,24 @@ async def test_stream_requests_usage_and_yields_content_delta(
     assert chunks == [{"type": "content_delta", "text": "Hi"}]
     assert request_body["stream"] is True
     assert request_body["stream_options"] == {"include_usage": True}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_yields_reasoning_delta_for_delta_thinking(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    sse_body = 'data: {"choices":[{"delta":{"thinking":"Reasoning delta"}}]}\n\ndata: [DONE]\n\n'
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for chunk in mistral_adapter.stream(SAMPLE_MESSAGES, model_id="mistral-large-latest"):
+        chunks.append(chunk)
+
+    assert chunks == [{"type": "reasoning_delta", "text": "Reasoning delta"}]

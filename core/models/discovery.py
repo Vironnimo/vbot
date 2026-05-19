@@ -16,6 +16,7 @@ from typing import Any, Protocol
 import httpx
 
 from core.models.models import Model, ModelRegistry
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -108,7 +109,7 @@ async def refresh_models(
                 continue
             try:
                 model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
-            except ValueError as exc:
+            except CatalogEntrySkipped as exc:
                 _LOGGER.debug(
                     "Skipping model during discovery for provider '%s': %s",
                     provider_config.id,

@@ -9,6 +9,7 @@ import httpx
 import pytest
 import respx
 
+import core.models.discovery as discovery_module
 from core.models.discovery import (
     ModelDiscoveryError,
     PassthroughModelFilter,
@@ -17,11 +18,13 @@ from core.models.discovery import (
     refresh_models,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
 OPENCODE_GO_MODELS_URL = "https://opencode-go.example/v1/models"
+STUB_DISCOVERY_MODELS_URL = "https://stub-provider.example/v1/models"
 API_KEY = "test-openrouter-key"
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -560,3 +563,128 @@ class TestRefreshModels:
 
         with pytest.raises(ModelDiscoveryError, match="Model discovery failed"):
             await refresh_models(openrouter_config, API_KEY, tmp_path / "resources")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_skips_catalog_entry_skipped_and_continues(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        class _SkipEntryAdapter:
+            @staticmethod
+            def normalize_catalog_entry(raw_model: dict, defaults: dict | None) -> Model:
+                if raw_model.get("id") == "skip-me":
+                    raise CatalogEntrySkipped("skip expected non-chat model")
+                return Model(
+                    model_id=str(raw_model["id"]),
+                    name=str(raw_model.get("name", "Kept Model")),
+                    capabilities=Capabilities(
+                        vision=False,
+                        tools=True,
+                        json_mode=True,
+                        reasoning=ReasoningCapabilities(supported=False),
+                    ),
+                    context_window=8192,
+                    max_output_tokens=2048,
+                )
+
+        provider_config = ProviderConfig(
+            id="stub-provider",
+            name="Stub Provider",
+            adapter="stub_skip_adapter",
+            base_url="https://stub-provider.example/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="STUB_PROVIDER_KEY",
+                    ),
+                )
+            ],
+            defaults={"max_tokens": 2048},
+            models_endpoint="/models",
+        )
+
+        monkeypatch.setitem(
+            discovery_module._DISCOVERY_ADAPTER_MAP,
+            "stub_skip_adapter",
+            _SkipEntryAdapter,
+        )
+        respx.get(STUB_DISCOVERY_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "skip-me", "name": "Skipped Model"},
+                        {"id": "keep-me", "name": "Kept Model"},
+                    ]
+                },
+            )
+        )
+        resources_dir = tmp_path / "resources"
+
+        result = await refresh_models(provider_config, API_KEY, resources_dir)
+
+        registry = ModelRegistry.load(resources_dir)
+        assert result["provider_id"] == "stub-provider"
+        assert result["model_count"] == 1
+        assert registry.get("stub-provider", "keep-me").name == "Kept Model"
+        with pytest.raises(KeyError):
+            registry.get("stub-provider", "skip-me")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_wraps_normalizer_value_error_as_discovery_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        class _ErroringAdapter:
+            @staticmethod
+            def normalize_catalog_entry(raw_model: dict, defaults: dict | None) -> Model:
+                raise ValueError("schema mismatch")
+
+        provider_config = ProviderConfig(
+            id="stub-provider",
+            name="Stub Provider",
+            adapter="stub_error_adapter",
+            base_url="https://stub-provider.example/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="STUB_PROVIDER_KEY",
+                    ),
+                )
+            ],
+            defaults={"max_tokens": 2048},
+            models_endpoint="/models",
+        )
+
+        monkeypatch.setitem(
+            discovery_module._DISCOVERY_ADAPTER_MAP,
+            "stub_error_adapter",
+            _ErroringAdapter,
+        )
+        respx.get(STUB_DISCOVERY_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": "broken-model", "name": "Broken Model"}]},
+            )
+        )
+        resources_dir = tmp_path / "resources"
+
+        with pytest.raises(ModelDiscoveryError, match="schema mismatch"):
+            await refresh_models(provider_config, API_KEY, resources_dir)
+
+        assert (resources_dir / "models" / "stub-provider.raw.json").exists()
+        assert not (resources_dir / "models" / "stub-provider.json").exists()
