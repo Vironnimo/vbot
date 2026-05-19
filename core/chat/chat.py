@@ -69,7 +69,15 @@ from core.utils.tokens import estimate_tokens
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
 
-MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
+MessageRole = Literal[
+    "system",
+    "user",
+    "assistant",
+    "tool",
+    "note",
+    "error",
+    "compaction_checkpoint",
+]
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat")
@@ -166,6 +174,7 @@ class ChatMessage:
     tool_call_id: str | None = None
     name: str | None = None
     error_kind: str | None = None
+    tail_boundary_id: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -264,6 +273,25 @@ class ChatMessage:
             name=name,
         )
 
+    @classmethod
+    def compaction_checkpoint(
+        cls,
+        *,
+        summary: str,
+        tail_boundary_id: str,
+        compacted_token_count: int,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a compaction checkpoint message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="compaction_checkpoint",
+            content=summary,
+            usage={"compacted_token_count": compacted_token_count},
+            tail_boundary_id=tail_boundary_id,
+        )
+
     def to_dict(self) -> JsonObject:
         """Return a canonical JSON-serializable message dictionary."""
         self.validate()
@@ -286,6 +314,7 @@ class ChatMessage:
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
+        _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
         return message
 
     @classmethod
@@ -313,6 +342,7 @@ class ChatMessage:
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
             error_kind=_optional_string(data, "error_kind"),
+            tail_boundary_id=_optional_string(data, "tail_boundary_id"),
         )
         message.validate()
         return message
@@ -333,6 +363,8 @@ class ChatMessage:
                 _validate_note_message(self)
             case "error":
                 _validate_error_message(self)
+            case "compaction_checkpoint":
+                _validate_compaction_checkpoint_message(self)
 
 
 class ChatSession:
@@ -1957,9 +1989,17 @@ def _parse_content(data: JsonObject) -> str | list[ContentBlock] | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool", "note", "error"):
+    if role not in (
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "error",
+        "compaction_checkpoint",
+    ):
         raise ChatMessageValidationError(
-            "role must be system, user, assistant, tool, note, or error"
+            "role must be system, user, assistant, tool, note, error, or compaction_checkpoint"
         )
     return cast(MessageRole, role)
 
@@ -2023,6 +2063,7 @@ def _validate_system_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2048,6 +2089,7 @@ def _validate_user_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2056,7 +2098,7 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")
-    _reject_fields(message, "tool_call_id", "name", "error_kind")
+    _reject_fields(message, "tool_call_id", "name", "error_kind", "tail_boundary_id")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -2080,6 +2122,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "usage",
         "tool_calls",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2098,6 +2141,7 @@ def _validate_note_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2117,6 +2161,42 @@ def _validate_error_message(message: ChatMessage) -> None:
         "tool_calls",
         "tool_call_id",
         "name",
+        "tail_boundary_id",
+    )
+
+
+def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("compaction checkpoints require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("compaction checkpoints content must be a string")
+    if message.tail_boundary_id is None:
+        raise ChatMessageValidationError("compaction checkpoints require tail_boundary_id")
+    if not message.tail_boundary_id:
+        raise ChatMessageValidationError(
+            "compaction checkpoints tail_boundary_id must be a non-empty string"
+        )
+
+    if message.usage is not None:
+        compacted_count = message.usage.get("compacted_token_count")
+        if (
+            isinstance(compacted_count, bool)
+            or not isinstance(compacted_count, int)
+            or compacted_count < 0
+        ):
+            raise ChatMessageValidationError(
+                "compaction checkpoints usage.compacted_token_count must be a non-negative integer"
+            )
+
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
     )
 
 

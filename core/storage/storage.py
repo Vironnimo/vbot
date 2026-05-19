@@ -15,7 +15,14 @@ from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 PROMPT_FRAGMENT_NAMES = frozenset(
-    {"system.md", "runtime.md", "tools.md", "channels.md", "skills.md"}
+    {
+        "system.md",
+        "runtime.md",
+        "tools.md",
+        "channels.md",
+        "skills.md",
+        "compaction.md",
+    }
 )
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
@@ -23,6 +30,12 @@ SUBAGENT_SETTING_DEFAULTS = {
     "max_subagent_depth": 4,
     "max_subagents_per_turn": 8,
     "subagent_timeout_minutes": 60,
+}
+COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
+    "auto": True,
+    "threshold": 0.8,
+    "tail_tokens": 15_000,
+    "summary_model": None,
 }
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
@@ -183,6 +196,30 @@ class StorageManager:
             key: self._normalize_subagent_integer(key, settings.get(key), default)
             for key, default in SUBAGENT_SETTING_DEFAULTS.items()
         }
+
+    def load_compaction_settings(self) -> dict[str, Any]:
+        """Return normalized persisted compaction settings."""
+
+        settings = self.load_settings()
+        return self._normalize_compaction_settings(settings.get("compaction"))
+
+    def update_compaction_settings(self, compaction: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist compaction settings and return normalized values."""
+
+        if not isinstance(compaction, Mapping):
+            raise StorageError("Compaction settings must be a mapping")
+
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        normalized_compaction = self._normalize_compaction_settings(
+            {
+                **self._normalize_compaction_settings(settings.get("compaction")),
+                **dict(compaction),
+            }
+        )
+        merged_settings["compaction"] = normalized_compaction
+        self.save_settings(merged_settings)
+        return dict(normalized_compaction)
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
         """Atomically write ``settings.json`` as UTF-8 JSON."""
@@ -371,6 +408,62 @@ class StorageManager:
         if value <= 0:
             raise StorageError(f"Sub-agent setting {key} must be positive")
         return cast("int", value)
+
+    @classmethod
+    def _normalize_compaction_settings(cls, compaction: Any) -> dict[str, Any]:
+        section = cls._coerce_compaction_section(compaction)
+        return {
+            "auto": cls._normalize_compaction_auto(section.get("auto")),
+            "threshold": cls._normalize_compaction_threshold(section.get("threshold")),
+            "tail_tokens": cls._normalize_compaction_tail_tokens(section.get("tail_tokens")),
+            "summary_model": cls._normalize_compaction_summary_model(section.get("summary_model")),
+        }
+
+    @staticmethod
+    def _coerce_compaction_section(compaction: Any) -> dict[str, Any]:
+        if compaction is None:
+            return {}
+        if not isinstance(compaction, Mapping):
+            raise StorageError("Expected settings.compaction to be an object")
+        return dict(compaction)
+
+    @staticmethod
+    def _normalize_compaction_auto(value: Any) -> bool:
+        if value is None:
+            return cast("bool", COMPACTION_SETTING_DEFAULTS["auto"])
+        if not isinstance(value, bool):
+            raise StorageError("Compaction setting auto must be a boolean")
+        return value
+
+    @staticmethod
+    def _normalize_compaction_threshold(value: Any) -> float:
+        if value is None:
+            return cast("float", COMPACTION_SETTING_DEFAULTS["threshold"])
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise StorageError("Compaction setting threshold must be a number")
+
+        normalized_value = float(value)
+        if normalized_value <= 0 or normalized_value > 1:
+            raise StorageError("Compaction setting threshold must be in (0, 1]")
+        return normalized_value
+
+    @staticmethod
+    def _normalize_compaction_tail_tokens(value: Any) -> int:
+        if value is None:
+            return cast("int", COMPACTION_SETTING_DEFAULTS["tail_tokens"])
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise StorageError("Compaction setting tail_tokens must be an integer")
+        if value <= 0:
+            raise StorageError("Compaction setting tail_tokens must be positive")
+        return value
+
+    @staticmethod
+    def _normalize_compaction_summary_model(value: Any) -> str | None:
+        if value is None:
+            return cast("str | None", COMPACTION_SETTING_DEFAULTS["summary_model"])
+        if not isinstance(value, str):
+            raise StorageError("Compaction setting summary_model must be a string or null")
+        return value
 
     @staticmethod
     def _validate_prompt_fragment_name(fragment_name: str) -> str:
