@@ -25,6 +25,7 @@
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
   let attachmentToastTimeoutId = null;
+  let _suppressSelectionUpdate = false;
 
   let loadableSkills = $derived(availableSkills.filter((skill) => skill?.name));
   let autocompleteQuery = $derived.by(() => {
@@ -323,6 +324,7 @@
     if (showSkillAutocomplete) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
+        _suppressSelectionUpdate = true;
         activeSkillIndex = Math.min(
           activeSkillIndex + 1,
           matchingSkillCount() - 1,
@@ -332,6 +334,7 @@
 
       if (event.key === 'ArrowUp') {
         event.preventDefault();
+        _suppressSelectionUpdate = true;
         activeSkillIndex = Math.max(activeSkillIndex - 1, 0);
         return;
       }
@@ -370,6 +373,11 @@
   };
 
   const handleSelection = () => {
+    if (_suppressSelectionUpdate) {
+      _suppressSelectionUpdate = false;
+      return;
+    }
+
     updateTriggerContext();
   };
 

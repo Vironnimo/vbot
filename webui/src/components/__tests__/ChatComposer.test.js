@@ -158,6 +158,65 @@ describe('ChatComposer', () => {
     expect(input.value).toBe('$warning-skill');
   });
 
+  it('keeps slash autocomplete keyboard navigation after arrow keyup', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        availableSkills: [
+          ...skillFixtures(),
+          {
+            name: 'status',
+            description: 'Show runtime status.',
+            valid: true,
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/';
+    input.setSelectionRange(1, 1);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(autocompleteOptions()).toHaveLength(3);
+    expect(autocompleteOptions()[0].getAttribute('aria-selected')).toBe('true');
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+
+    expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'ArrowDown', bubbles: true }),
+    );
+    flushSync();
+
+    expect(autocompleteOptions()[2].getAttribute('aria-selected')).toBe('true');
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+    );
+    flushSync();
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'ArrowUp', bubbles: true }),
+    );
+    flushSync();
+
+    expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
+  });
+
   it('sends uploaded text files as embedded text blocks', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
@@ -288,6 +347,12 @@ function skillFixtures() {
 
 function composerInput() {
   return document.body.querySelector('#chat-composer-input');
+}
+
+function autocompleteOptions() {
+  return Array.from(
+    document.body.querySelectorAll('.skill-autocomplete__option'),
+  );
 }
 
 function filePickerInput() {
