@@ -448,7 +448,13 @@
 
     const prefix = content.slice(0, triggerContext.start);
     const suffix = content.slice(triggerContext.end);
-    const insertedToken = `${triggerContext.marker}${skill.name}`;
+    const marker = triggerContext.marker;
+    const stripPattern = marker === '/' ? /^\/+/ : /^\$+/;
+    const normalizedSkillName = String(skill.name).replace(stripPattern, '');
+    if (!normalizedSkillName) {
+      return;
+    }
+    const insertedToken = `${marker}${normalizedSkillName}`;
     const nextCursorPosition = prefix.length + insertedToken.length;
     content = `${prefix}${insertedToken}${suffix}`;
     triggerContext = null;

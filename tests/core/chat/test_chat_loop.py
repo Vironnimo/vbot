@@ -912,6 +912,107 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
 
 
 @pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malformed(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "malformed-summary-model",
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        raise_on_connection={"missing-provider:api-key": KeyError("missing-provider:api-key")},
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "missing-provider/gpt-5.2::api-key",
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert runtime.adapter_provider_id == "missing-provider"
+    assert runtime.adapter_connection_id == "missing-provider:api-key"
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+
+
+@pytest.mark.asyncio
 async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

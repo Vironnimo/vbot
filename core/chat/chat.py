@@ -1416,7 +1416,7 @@ class ChatLoop:
             else:
                 connection_id = _first_usable_connection_id(self._runtime, provider_id)
             summary_adapter = self._runtime.get_adapter(provider_id, connection_id)
-        except (ChatError, ConfigError, VBotError):
+        except (ChatError, ConfigError, VBotError, KeyError):
             _LOGGER.warning(
                 "Invalid compaction summary model %r; using active run model instead.",
                 summary_model,

@@ -559,6 +559,19 @@ class StubAdapter:
         return cast(list[JsonObject], self._stream_deltas)
 
 
+class RecordingCompactionService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def compact(self, *args: Any, **kwargs: Any) -> ChatMessage:
+        self.calls += 1
+        return ChatMessage.compaction_checkpoint(
+            summary="Compacted context",
+            tail_boundary_id="tail-boundary",
+            compacted_token_count=1,
+        )
+
+
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self.resources_dir = tmp_path / "resources"
@@ -2171,6 +2184,85 @@ async def test_chat_send_requires_existing_session(
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
     assert "session does not exist" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_commands_returns_normalized_built_in_command_names(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.commands",
+            "params": {},
+        },
+    )
+
+    assert response["ok"] is True
+    command_names = [
+        item["name"] for item in response["result"]["items"] if item.get("type") == "command"
+    ]
+    assert command_names == ["compact", "status", "stop"]
+    assert all(not name.startswith("/") for name in command_names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_reject_compact_command_while_session_run_is_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter()
+    state = make_state(tmp_path, adapter)
+    compaction_service = RecordingCompactionService()
+    state.compaction_service = compaction_service
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_run_executor(_run: Any) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    active_run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=_blocking_run_executor,
+    )
+    await started.wait()
+
+    try:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": method,
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": "session-one",
+                    "content": " /COMPACT ",
+                },
+            },
+        )
+    finally:
+        release.set()
+        await active_run.wait()
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "Cannot compact while a run is active for this session.",
+        },
+    }
+    assert compaction_service.calls == 0
+    assert adapter.requests == []
+    assert adapter.stream_requests == []
 
 
 @pytest.mark.asyncio
