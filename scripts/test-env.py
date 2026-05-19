@@ -22,6 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli.server_management import CommandResult, resolve_instance
+from cli.server_management import start_server as start_server_command
+from cli.server_management import stop_server as stop_server_command
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = PROJECT_ROOT / "webui"
 WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
@@ -56,69 +60,56 @@ def build_frontend() -> int:
     return 0
 
 
+def _running_text(result: CommandResult) -> str:
+    if result.health and result.health.is_vbot:
+        return "yes"
+    if result.message in {"already running", "running", "started"}:
+        return "yes"
+    return "no"
+
+
+def _webui_text(result: CommandResult) -> str:
+    if result.webui is None:
+        return "unknown"
+    if result.webui.available:
+        return "available"
+    return "unavailable"
+
+
 def start_server(host: str, port: int | None, data_dir: str | None) -> int:
     """Start the vBot server and wait for health check. Returns 0 on success."""
-    cmd = [sys.executable, str(PROJECT_ROOT / "cli" / "main.py"), "server", "start"]
-    if port is not None:
-        cmd.extend(["--port", str(port)])
-    if data_dir is not None:
-        cmd.extend(["--data-dir", data_dir])
+    instance = resolve_instance(host=host, port=port, data_dir=data_dir)
+    result = start_server_command(instance)
 
-    result = _run(cmd)
-
-    # Print key lines from the CLI output
-    output_lines = result.stdout.strip().splitlines()
-    url_line = ""
-    running_line = ""
-    webui_line = ""
-    for line in output_lines:
-        if line.startswith("url:"):
-            url_line = line
-        elif line.startswith("running:"):
-            running_line = line
-        elif line.startswith("webui:"):
-            webui_line = line
-
-    if result.returncode != 0:
+    if not result.ok:
         print("server..... FAILED")
-        for line in output_lines:
-            print(f"  {line}")
-        if result.stderr.strip():
-            print(f"  {result.stderr.strip()}")
+        print(f"  result: {result.message}")
+        print(f"  running: {_running_text(result)}")
+        print(f"  url: {result.instance.url}")
+        print(f"  webui: {_webui_text(result)}")
         return 1
 
-    print(f"server..... {running_line.removeprefix('running:').strip()}")
-    print(f"url........ {url_line.removeprefix('url:').strip()}")
-    print(f"webui...... {webui_line.removeprefix('webui:').strip()}")
+    print(f"server..... {_running_text(result)}")
+    print(f"url........ {result.instance.url}")
+    print(f"webui...... {_webui_text(result)}")
 
     return 0
 
 
 def stop_server(host: str, port: int | None, data_dir: str | None) -> int:
     """Stop the vBot server. Returns 0 on success."""
-    cmd = [sys.executable, str(PROJECT_ROOT / "cli" / "main.py"), "server", "stop"]
-    if port is not None:
-        cmd.extend(["--port", str(port)])
-    if data_dir is not None:
-        cmd.extend(["--data-dir", data_dir])
+    instance = resolve_instance(host=host, port=port, data_dir=data_dir)
+    result = stop_server_command(instance)
 
-    result = _run(cmd)
-
-    output_lines = result.stdout.strip().splitlines()
-    running_line = ""
-    for line in output_lines:
-        if line.startswith("running:"):
-            running_line = line
-
-    if result.returncode != 0:
+    if not result.ok:
         print("stop....... FAILED")
-        for line in output_lines:
-            print(f"  {line}")
-        if result.stderr.strip():
-            print(f"  {result.stderr.strip()}")
+        print(f"  result: {result.message}")
+        print(f"  running: {_running_text(result)}")
+        print(f"  url: {result.instance.url}")
+        print(f"  webui: {_webui_text(result)}")
         return 1
 
-    print(f"stop....... {running_line.removeprefix('running:').strip() or 'confirmed'}")
+    print(f"stop....... {_running_text(result) or 'confirmed'}")
     return 0
 
 

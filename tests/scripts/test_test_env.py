@@ -2,6 +2,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "test-env.py"
 NPM_EXECUTABLE = "npm.cmd" if sys.platform == "win32" else "npm"
@@ -59,4 +61,93 @@ def test_build_frontend_installs_dependencies_when_missing(monkeypatch, tmp_path
     assert commands == [
         [NPM_EXECUTABLE, "install"],
         [NPM_EXECUTABLE, "run", "build"],
+    ]
+
+
+def test_start_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
+    module = _load_test_env_module()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8420",
+        log_path=tmp_path / "vbot.log",
+    )
+    calls = []
+
+    def fake_resolve_instance(**kwargs):
+        calls.append(("resolve", kwargs))
+        return instance
+
+    def fake_start_server(resolved_instance):
+        calls.append(("start", resolved_instance))
+        return CommandResult(
+            ok=True,
+            message="started",
+            instance=resolved_instance,
+            health=HealthProbeResult(reachable=True, is_vbot=True, status_code=200),
+            webui=WebUIProbeResult(available=True, status_code=200),
+            process_id=123,
+        )
+
+    monkeypatch.setattr(module, "resolve_instance", fake_resolve_instance)
+    monkeypatch.setattr(module, "start_server_command", fake_start_server)
+    monkeypatch.setattr(
+        module,
+        "_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("start should not shell out")),
+    )
+
+    assert module.start_server("0.0.0.0", 9000, "C:/tmp/vbot") == 0
+
+    captured = capsys.readouterr()
+    assert "server..... yes" in captured.out
+    assert "url........ http://127.0.0.1:8420" in captured.out
+    assert "webui...... available" in captured.out
+    assert calls == [
+        ("resolve", {"host": "0.0.0.0", "port": 9000, "data_dir": "C:/tmp/vbot"}),
+        ("start", instance),
+    ]
+
+
+def test_stop_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
+    module = _load_test_env_module()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8420",
+        log_path=tmp_path / "vbot.log",
+    )
+    calls = []
+
+    def fake_resolve_instance(**kwargs):
+        calls.append(("resolve", kwargs))
+        return instance
+
+    def fake_stop_server(resolved_instance):
+        calls.append(("stop", resolved_instance))
+        return CommandResult(
+            ok=True,
+            message="not running",
+            instance=resolved_instance,
+            health=HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+            webui=WebUIProbeResult(available=False),
+        )
+
+    monkeypatch.setattr(module, "resolve_instance", fake_resolve_instance)
+    monkeypatch.setattr(module, "stop_server_command", fake_stop_server)
+    monkeypatch.setattr(
+        module,
+        "_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("stop should not shell out")),
+    )
+
+    assert module.stop_server("127.0.0.1", None, None) == 0
+
+    captured = capsys.readouterr()
+    assert "stop....... no" in captured.out
+    assert calls == [
+        ("resolve", {"host": "127.0.0.1", "port": None, "data_dir": None}),
+        ("stop", instance),
     ]
