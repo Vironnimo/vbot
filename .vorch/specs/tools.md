@@ -42,6 +42,12 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   content with browser-like headers, rejects known SSRF-local targets, returns
   non-HTML or `raw=True` bodies directly, and otherwise converts HTML into a
   readable text summary under `data.content`.
+- Built-in `web_search` tool: flat name `web_search`; schema includes required
+  `query` plus optional `count`, `freshness`, `date_after`, and `date_before`.
+  It always registers at startup, resolves `BRAVE_API_KEY` through the runtime
+  environment-credential lookup, returns a `missing_api_key` failure envelope
+  when Brave is not configured, and otherwise calls the Brave Search API and
+  returns normalized search results under `data`.
 - Built-in `bash` tool: flat name `bash`; schema includes required `command` and
   optional `workdir`, `env`, `yield_after`, `background`, and `timeout`. It runs
   through the host shell, streams foreground stdout/stderr as Run delta events,
@@ -99,6 +105,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `register_grep_tool(registry) -> None` — registers the built-in `grep` tool.
 - `register_web_fetch_tool(registry) -> None` — registers the built-in
   `web_fetch` tool.
+- `register_web_search_tool(registry, credential_resolver) -> None` — registers
+  the built-in `web_search` tool backed by a credential resolver closure.
 - `register_bash_tool(registry, process_manager, trigger_service=None) -> None` — registers the
   built-in `bash` tool backed by the shared `ProcessManager`. When `trigger_service` is
   provided and a process transitions to background (explicit `background=True` or after
@@ -198,6 +206,18 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   redirects through explicit per-hop validation instead of blind auto-follow.
   HTML responses are converted to readable text via BeautifulSoup; non-HTML or
   `raw=True` responses return truncated response text unchanged.
+- `web_search` accepts exactly `query`, `count`, `freshness`, `date_after`, and
+  `date_before`; `additionalProperties` is false. It is Brave-only in v1 and
+  exposes no provider-selection argument.
+- `web_search` is always registered. At call time it resolves `BRAVE_API_KEY`
+  through the runtime credential resolver, returns `missing_api_key` when the
+  key is absent, validates caller-supplied date and freshness filters as
+  `validation_error`, and maps Brave/network failures to
+  `provider_request_failed`.
+- `web_search` uses `httpx.AsyncClient` with manual retry for transient 429/5xx
+  responses, normalizes Brave results to `{rank, title, url, description,
+  content_trust}`, and marks both per-result and top-level content as
+  `untrusted_web_content`.
 - `bash` resolves relative working directories from `ToolContext.workspace` and
   accepts absolute working directories unchanged. It uses the platform-native
   shell (`pwsh` on Windows, `bash -c` elsewhere) and blocks sensitive environment
