@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Sub-Agents, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Sub-Agents, Compaction, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -74,6 +74,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     with the rest of the Run rather than as a standalone chat message.
   - `role: "error"` history messages and live `error_message_persisted` Run events
     render as standalone message timeline items, never inside an assistant Run.
+  - `role: "compaction_checkpoint"` history messages and live `compaction_completed`
+    Run events become `compaction_separator` timeline items rather than normal
+    chat bubbles.
 - `webui/src/lib/toastState.js`
   - Pure helpers for app-level toast state: `createToastState()`, `addToast(...)`,
     and `dismissToast(...)`.
@@ -100,6 +103,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/ChatView.svelte`
   - Loads `chat.commands` on mount and passes the flat combined command/skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
   - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
+  - When a manual `/compact` command is handled without starting a Run, ChatView reloads the active session history so the new compaction separator appears immediately.
+  - When the backend rejects `/compact` because the target Session already has an active Run, ChatView surfaces the handled reply inline and does not start a second Run.
   - Owns the session drawer toggle plus local `viewingSessionId` override state.
     Selecting a session from the drawer loads its history without mutating the
     Agent's persisted `current_session_id`.
@@ -109,6 +114,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
     backed by `session.link_channel`.
 - `webui/src/components/ChatComposer.svelte`
   - Supports `/skill-name` at the start of input and `$skill-name` inline autocomplete. Selection inserts only the trigger token and preserves the rest of the message text exactly; backend chat activation handles loading.
+  - Built-in command autocomplete consumes bare command names from `chat.commands` and inserts the `/` prefix exactly once at compose time.
   - Supports attachment uploads via file picker, image paste, and drag-and-drop.
   - Maintains local pending attachments with `preview_url` object URLs and builds
     canonical message `content` as `string` or `list[ContentBlock]` on send.
@@ -144,9 +150,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
     without `provider_id` and then re-requests `model.list` after success.
   - Normalizes skill directory settings from `settings.skills.directories` and builds update payloads for `settings.update`.
   - Normalizes Sub-Agent settings from `settings.subagents` and builds update payloads for `settings.update`.
+  - Normalizes Compaction settings from `settings.compaction` and builds the corresponding `settings.update` payload.
 - `webui/src/components/SettingsView.svelte`
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
+  - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`.
   - Includes a Channels panel. It lists configured channels, hydrates per-row
     running state via `channel.status`, and supports create, edit, delete,
     enable, and disable actions through the `channel.*` RPC methods.
@@ -158,6 +166,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/ChatTimeline.svelte`
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
+  - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.
   - Renders user message content arrays block-by-block: `text` as normal message text,
     image `media` via `/api/attachments/<id>`, and `file` as download links.
 - `webui/src/components/LogsView.svelte`
@@ -222,10 +231,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
   single expandable tool row inside that block rather than rendered as separate
   chat messages.
 - Visible chat history accepts normal user, assistant, tool, and persisted error
-  messages; kernel-internal note/system-reminder entries must be filtered out if
-  they ever arrive from a server response.
+  messages plus persisted `compaction_checkpoint` records; kernel-internal
+  note/system-reminder entries must be filtered out if they ever arrive from a
+  server response.
 - Persisted error messages are visible chat timeline items with an error label and
   distinct red treatment.
+- Persisted `compaction_checkpoint` records are visible timeline markers only;
+  they must not render as normal message bubbles.
 - Skill trigger autocomplete is a composer aid only. It must not fetch or inject skill content directly; `/skill-name` and `$skill-name` text is sent unchanged for backend deterministic activation.
 - Built-in command handling feedback is accessor-local UI state only. When the backend returns `{ command_handled: true, reply }`, ChatView shows the reply inline and must not subscribe to a Run stream for that submit.
 - Partial tool-call argument JSON may be accumulated internally but must not be
@@ -242,7 +254,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   restore are out of scope for Phase 4.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains four sub-panels: General (server host, data directory), Skills (default skill path and extra scan directories), Providers (credential status, model counts, model database refresh), and Appearance (language preference). In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search
