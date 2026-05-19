@@ -24,6 +24,7 @@ from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
@@ -77,10 +78,12 @@ _ADAPTER_MAP: dict[
     | type[OpenRouterAdapter]
     | type[OpenCodeGoAdapter]
     | type[GitHubCopilotAdapter]
+    | type[MistralAdapter]
     | type[AnthropicAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openrouter": OpenRouterAdapter,
+    "mistral": MistralAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "github_copilot": GitHubCopilotAdapter,
     "anthropic": AnthropicAdapter,
