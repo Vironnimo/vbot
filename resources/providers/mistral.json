@@ -1,0 +1,23 @@
+{
+  "id": "mistral",
+  "name": "Mistral AI",
+  "adapter": "mistral",
+  "base_url": "https://api.mistral.ai/v1",
+  "connections": [
+    {
+      "id": "api-key",
+      "type": "api_key",
+      "label": "API Key",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer ",
+        "credential_key": "MISTRAL_API_KEY"
+      }
+    }
+  ],
+  "defaults": {
+    "max_tokens": 4096,
+    "temperature": 0.7
+  },
+  "models_endpoint": "/models"
+}
