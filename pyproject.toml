@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "vbot"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["httpx", "pyyaml", "croniter", "tzdata"]
+dependencies = ["httpx", "pyyaml", "croniter", "tzdata", "beautifulsoup4"]
 
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart"]
