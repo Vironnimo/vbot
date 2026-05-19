@@ -37,7 +37,7 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProc
 def build_frontend() -> int:
     """Build the Svelte frontend for live testing. Returns 0 on success."""
     print("frontend.... building", end="", flush=True)
-    npm = "npm"
+    npm = "npm.cmd" if sys.platform == "win32" else "npm"
 
     if not WEBUI_NODE_MODULES.exists():
         install_result = _run([npm, "install"], cwd=WEBUI_DIR)

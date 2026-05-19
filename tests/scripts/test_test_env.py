@@ -1,8 +1,10 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "test-env.py"
+NPM_EXECUTABLE = "npm.cmd" if sys.platform == "win32" else "npm"
 
 
 def _load_test_env_module():
@@ -34,7 +36,7 @@ def test_build_frontend_rebuilds_even_when_dist_exists(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "_run", fake_run)
 
     assert module.build_frontend() == 0
-    assert commands == [["npm", "run", "build"]]
+    assert commands == [[NPM_EXECUTABLE, "run", "build"]]
 
 
 def test_build_frontend_installs_dependencies_when_missing(monkeypatch, tmp_path):
@@ -54,4 +56,7 @@ def test_build_frontend_installs_dependencies_when_missing(monkeypatch, tmp_path
     monkeypatch.setattr(module, "_run", fake_run)
 
     assert module.build_frontend() == 0
-    assert commands == [["npm", "install"], ["npm", "run", "build"]]
+    assert commands == [
+        [NPM_EXECUTABLE, "install"],
+        [NPM_EXECUTABLE, "run", "build"],
+    ]
