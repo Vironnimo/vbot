@@ -217,6 +217,93 @@ describe('ChatComposer', () => {
     expect(autocompleteOptions()[1].getAttribute('aria-selected')).toBe('true');
   });
 
+  it('keeps popup closed after Escape keyup', () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { availableSkills: skillFixtures() },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/deb';
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(autocompleteOptions()).toHaveLength(1);
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+
+    expect(autocompleteOptions()).toHaveLength(0);
+  });
+
+  it('keeps popup closed after Enter selection keyup (slash)', async () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { availableSkills: skillFixtures() },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/deb';
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(autocompleteOptions()).toHaveLength(1);
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+    flushSync();
+
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }),
+    );
+    flushSync();
+
+    expect(input.value).toBe('/debugging');
+    expect(autocompleteOptions()).toHaveLength(0);
+  });
+
+  it('keeps popup closed after Enter selection keyup ($skill inline)', async () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { availableSkills: skillFixtures() },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = 'use $deb here';
+    input.setSelectionRange(8, 8);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(autocompleteOptions()).toHaveLength(1);
+
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+    flushSync();
+
+    input.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }),
+    );
+    flushSync();
+
+    expect(input.value).toContain('$debugging');
+    expect(autocompleteOptions()).toHaveLength(0);
+  });
+
   it('sends uploaded text files as embedded text blocks', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
