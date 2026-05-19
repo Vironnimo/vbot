@@ -152,6 +152,7 @@ export const englishCatalog = Object.freeze({
     'This historical session is read-only. Return to the current agent session to continue chatting.',
   'chat.returnToCurrentSession': 'Return to current session',
   'chat.runError': 'Run failed.',
+  'chat.compacted': 'Context compacted',
 
   'sessions.title': 'Sessions',
   'sessions.hide': 'Hide sessions',
@@ -375,6 +376,22 @@ export const englishCatalog = Object.freeze({
   'settings.subagents.timeoutMinutesDescription':
     'Maximum wait time for blocking sub-agent calls before they fail.',
   'settings.subagents.saveSuccess': 'Sub-agent settings updated.',
+  'settings.compaction.title': 'Compaction',
+  'settings.compaction.subtitle': 'Automatic context window management.',
+  'settings.compaction.auto': 'Auto-compact',
+  'settings.compaction.autoDescription':
+    'Automatically compact when the context threshold is reached.',
+  'settings.compaction.threshold': 'Threshold',
+  'settings.compaction.thresholdDescription':
+    'Compact when context usage exceeds this fraction (0–1).',
+  'settings.compaction.tailTokens': 'Tail tokens',
+  'settings.compaction.tailTokensDescription':
+    'Number of tokens preserved verbatim at the end of context.',
+  'settings.compaction.summaryModel': 'Summary model',
+  'settings.compaction.summaryModelDescription':
+    'Model used for summarization. Leave blank to use the active agent model.',
+  'settings.compaction.save': 'Save',
+  'settings.compaction.saved': 'Compaction settings saved.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',
