@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderMarkdown } from '../markdown.js';
+import { renderMarkdown, renderMarkdownStreaming } from '../markdown.js';
 
 describe('renderMarkdown()', () => {
   it('renders headings', () => {
@@ -58,6 +58,30 @@ describe('renderMarkdown()', () => {
 
     const html = renderMarkdown('```\nunterminated');
     expect(html).toContain('<pre><code>');
+  });
+
+  it('renders streaming content with an unclosed fence as a code block', () => {
+    const html = renderMarkdownStreaming('## Title\n\n```js\nconst value = 1;');
+
+    expect(html).toContain('<h2>Title</h2>');
+    expect(html).toContain('<pre><code>');
+    expect(html).toContain('const value = 1;');
+  });
+
+  it('falls back to normal rendering for closed fences while streaming', () => {
+    const html = renderMarkdownStreaming('```\nconst value = 1;\n```');
+
+    expect(html).toContain('<pre><code>');
+    expect(html).toContain('const value = 1;');
+  });
+
+  it('does not treat triple backticks inside code content as a closing fence', () => {
+    const html = renderMarkdownStreaming(
+      '```js\nconsole.log("``` not a fence");',
+    );
+
+    expect(html).toContain('<pre><code>');
+    expect(html).toContain('console.log(&quot;``` not a fence&quot;);');
   });
 
   it('returns an empty string for empty input', () => {

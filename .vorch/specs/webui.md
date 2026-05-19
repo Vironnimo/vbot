@@ -80,6 +80,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/lib/toastState.js`
   - Pure helpers for app-level toast state: `createToastState()`, `addToast(...)`,
     and `dismissToast(...)`.
+- `webui/src/lib/markdown.js`
+  - Owns the shared `markdown-it` singleton for assistant-output rendering and
+    exports `renderMarkdown(src)` for settled assistant text plus
+    `renderMarkdownStreaming(src)` for in-flight assistant text with open-fence
+    handling, both with raw HTML disabled plus safe external-link attributes.
 - `webui/src/lib/logsView.js`
   - Pure helpers for Logs tab state: initial state, catalog application,
     selected-file changes, append/reset stream merging, level option derivation,
@@ -167,6 +172,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
   - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.
+  - Renders assistant streaming output through `renderMarkdownStreaming(...)` and settled assistant run output plus persisted assistant messages through `renderMarkdown(...)`, all inside a scoped `.msg-markdown` container so normal agent replies display headings, lists, links, tables, and code fences as Markdown instead of raw source while long open fenced blocks remain inspectable during streaming.
   - Renders user message content arrays block-by-block: `text` as normal message text,
     image `media` via `/api/attachments/<id>`, and `file` as download links.
 - `webui/src/components/LogsView.svelte`
@@ -226,6 +232,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   provider-visible order of reasoning, assistant text, and tool-call deltas;
   the final `assistant_output` event clears the buffer and becomes the
   authoritative rendered message.
+- Assistant output Markdown rendering is accessor-side only. It applies to live
+  streaming assistant text, completed assistant output, and persisted assistant
+  history messages. User text, reasoning bodies, tool details, and error
+  messages remain plain pre-wrapped text.
 - Visible chat rendering treats an assistant Run as one assistant block. Tool
   lifecycle events (`tool_call_started` and `tool_call_result`) are merged into a
   single expandable tool row inside that block rather than rendered as separate
