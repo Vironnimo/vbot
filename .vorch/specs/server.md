@@ -45,7 +45,7 @@ Clients call the vBot server contract; provider wire details stay behind
   configured `models_endpoint` and a usable connection credential, skips
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
-- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, plus `subagents` settings for depth, per-turn count, and timeout limits.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, plus `subagents` settings for depth, per-turn count, and timeout limits, and `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`.
 - `log.list` returns available daily log filenames from `<data_dir>/logs/` as
   `{ files, default_file }`, sorted newest-first with `default_file` set to the
   newest item or `null` when none exist.
@@ -68,12 +68,13 @@ Clients call the vBot server contract; provider wire details stay behind
 - `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
 - `chat.commands` returns `{ items }`, a flat combined autocomplete list of
   built-in commands and skills. Each item includes `{ name, description, type
-  }`, where `type` is `command` or `skill`.
+  }`, where `type` is `command` or `skill`. Built-in command names are bare
+  tokens without the leading slash so accessors can insert them contextually.
 - `agent.delete` rejects deletion when it would leave zero Agents.
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
-- `settings.update` accepts supported `appearance`, `skills`, and `subagents` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`.
+- `settings.update` accepts supported `appearance`, `skills`, `subagents`, and `compaction` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
@@ -91,7 +92,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.history` returns visible persisted messages for `{ agent_id,
   session_id? }`. If `session_id` is omitted, it loads the Agent's
   `current_session_id`. Kernel-internal note messages are excluded from this
-  normal history response; persisted `role: "error"` messages are included.
+  normal history response; persisted `role: "error"` and `role: "compaction_checkpoint"` messages are included.
 - `channel.list` returns `{ channels }`, where each item includes the persisted
   channel config fields `{ id, platform, agent_id, dm_scope, allowed_chat_ids,
   token_env_var, enabled }`.
@@ -104,8 +105,11 @@ Clients call the vBot server contract; provider wire details stay behind
   string or a JSON array of canonical content-block dicts.
 - Recognized built-in slash commands are intercepted before Run start only when
   `content` resolves to pure text. In that case `chat.send` and `chat.stream`
-  return `{ command_handled: true, reply }` instead of starting a Run. Unknown
+  return `{ command_handled: true, reply }` instead of starting a Run. Current built-ins include `/stop` and `/compact`. Unknown
   slash text still goes through the normal chat flow.
+- `/compact` is only allowed when the target Session has no active Run. If the
+  Session already has an in-flight Run, the server returns a handled reply and
+  does not append a checkpoint.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
@@ -116,6 +120,7 @@ Clients call the vBot server contract; provider wire details stay behind
   includes persisted error-message events bridged as `run_output`, plus
   `model_fallback_activated` with payload `{ from_model, to_model }` when a Run
   switches to an Agent fallback model. App-level background failures use
+  `compaction_completed` with payload `{ message }` when auto-compaction appends a checkpoint during a Run, and
   `app_error` with an error payload for WebSocket clients.
   Provider OAuth completion uses `provider_auth_completed` with provider and
   public compositional connection identifiers plus a success flag; it must not
@@ -194,6 +199,7 @@ Clients call the vBot server contract; provider wire details stay behind
   internal system reminders, not normal UI-visible chat messages.
 - Public history payloads include `role: "error"` messages so failed Runs remain
   visible after reload.
+- Public history payloads also include `role: "compaction_checkpoint"` messages so accessors can render timeline separators after reload; they should not render them as normal chat bubbles.
 - Attachment uploads stay outside the RPC envelope. WebUI and other accessors use
   the dedicated HTTP endpoints instead of `POST /api/rpc` for blob transfer.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,

@@ -156,6 +156,10 @@ def test_dispatch_non_command_message_returns_not_a_command() -> None:
     assert isinstance(result, NotACommand)
 
 
+def test_built_in_commands_include_compact() -> None:
+    assert "compact" in CommandDispatcher.BUILT_IN_COMMANDS
+
+
 def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 

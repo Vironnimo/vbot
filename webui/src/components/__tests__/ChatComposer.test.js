@@ -61,6 +61,36 @@ describe('ChatComposer', () => {
     expect(input.value).toBe('/debugging');
   });
 
+  it('normalizes slash command names when inserting from autocomplete', async () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        availableSkills: [
+          {
+            name: '/compact',
+            description: 'Compact the current session context.',
+            type: 'command',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = '/com';
+    input.setSelectionRange(4, 4);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    document.body
+      .querySelector('.skill-autocomplete__option')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+    flushSync();
+
+    expect(input.value).toBe('/compact');
+  });
+
   it('inserts inline skill triggers without rewriting the message', async () => {
     const onSendMessage = vi.fn();
     mountedComponent = mount(ChatComposer, {

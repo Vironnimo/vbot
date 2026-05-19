@@ -53,6 +53,7 @@ class CommandDispatcher:
     """Dispatches built-in slash commands before run startup."""
 
     BUILT_IN_COMMANDS: dict[str, str] = {
+        "compact": "Compact the current session's context immediately.",
         "status": "Show current session and runtime status.",
         "stop": "Cancel the active run for this session.",
     }

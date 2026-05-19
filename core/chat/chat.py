@@ -27,6 +27,7 @@ from core.chat.content_blocks import (
 )
 from core.chat.runs import (
     ASSISTANT_OUTPUT_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_EVENT,
@@ -68,8 +69,17 @@ from core.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
+    from core.chat.compaction import CompactionService
 
-MessageRole = Literal["system", "user", "assistant", "tool", "note", "error"]
+MessageRole = Literal[
+    "system",
+    "user",
+    "assistant",
+    "tool",
+    "note",
+    "error",
+    "compaction_checkpoint",
+]
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat")
@@ -166,6 +176,7 @@ class ChatMessage:
     tool_call_id: str | None = None
     name: str | None = None
     error_kind: str | None = None
+    tail_boundary_id: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -264,6 +275,25 @@ class ChatMessage:
             name=name,
         )
 
+    @classmethod
+    def compaction_checkpoint(
+        cls,
+        *,
+        summary: str,
+        tail_boundary_id: str,
+        compacted_token_count: int,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create a compaction checkpoint message."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="compaction_checkpoint",
+            content=summary,
+            usage={"compacted_token_count": compacted_token_count},
+            tail_boundary_id=tail_boundary_id,
+        )
+
     def to_dict(self) -> JsonObject:
         """Return a canonical JSON-serializable message dictionary."""
         self.validate()
@@ -286,6 +316,7 @@ class ChatMessage:
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
+        _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
         return message
 
     @classmethod
@@ -313,6 +344,7 @@ class ChatMessage:
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
             error_kind=_optional_string(data, "error_kind"),
+            tail_boundary_id=_optional_string(data, "tail_boundary_id"),
         )
         message.validate()
         return message
@@ -333,6 +365,8 @@ class ChatMessage:
                 _validate_note_message(self)
             case "error":
                 _validate_error_message(self)
+            case "compaction_checkpoint":
+                _validate_compaction_checkpoint_message(self)
 
 
 class ChatSession:
@@ -796,6 +830,7 @@ class ChatLoop:
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         streaming: bool = False,
         attachment_resolver: ContentBlockResolver | None = None,
+        compaction_service: CompactionService | None = None,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
@@ -803,6 +838,7 @@ class ChatLoop:
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
         self._attachment_resolver = attachment_resolver
+        self._compaction_service = compaction_service
         self._nesting_depth = 0
 
     async def send(
@@ -1091,9 +1127,43 @@ class ChatLoop:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_message = ChatMessage.system(system_prompt, agent.model)
         session_messages = session.load()
-        history = _embed_notes_into_request(session_messages)
+        checkpoint = _latest_compaction_checkpoint(session_messages)
+
+        if checkpoint is None:
+            history = _embed_notes_into_request(session_messages)
+            request_messages = [
+                system_message.to_dict(),
+                *session.skill_context_messages(),
+                *history,
+            ]
+        else:
+            if checkpoint.tail_boundary_id is None:
+                raise ChatError("compaction checkpoint is missing tail boundary")
+
+            tail_messages = [
+                message
+                for message in _messages_from_boundary(
+                    session_messages,
+                    checkpoint.tail_boundary_id,
+                )
+                if message.role != "compaction_checkpoint"
+            ]
+            summary_text = checkpoint.content if isinstance(checkpoint.content, str) else ""
+            summary_synthetic_message: JsonObject = {
+                "role": "user",
+                "content": (
+                    f"{SYSTEM_REMINDER_OPEN_TAG}\n{summary_text}\n{SYSTEM_REMINDER_CLOSE_TAG}"
+                ),
+            }
+            history = _embed_notes_into_request(tail_messages)
+            request_messages = [
+                system_message.to_dict(),
+                *session.skill_context_messages(),
+                summary_synthetic_message,
+                *history,
+            ]
+
         session.drain_pending_notes()
-        request_messages = [system_message.to_dict(), *session.skill_context_messages(), *history]
 
         if self._attachment_resolver is None:
             return request_messages
@@ -1172,6 +1242,16 @@ class ChatLoop:
             messages.append(assistant_message.to_dict())
 
             if not assistant_message.tool_calls:
+                if self._compaction_service is not None:
+                    messages = await self._maybe_auto_compact(
+                        agent,
+                        adapter,
+                        model_id,
+                        session,
+                        messages,
+                        usage=assistant_message.usage,
+                        run=run,
+                    )
                 return assistant_message
 
             if tool_iteration_count >= self._max_tool_iterations:
@@ -1193,7 +1273,158 @@ class ChatLoop:
             finally:
                 session.flush_deferred_notes()
 
+            if self._compaction_service is not None:
+                messages = await self._maybe_auto_compact(
+                    agent,
+                    adapter,
+                    model_id,
+                    session,
+                    messages,
+                    usage=None,
+                    run=run,
+                )
+
         raise ToolIterationLimitError("maximum tool iterations exceeded")
+
+    async def _maybe_auto_compact(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        session: ChatSession,
+        messages: list[JsonObject],
+        usage: JsonObject | None,
+        *,
+        run: Run,
+    ) -> list[JsonObject]:
+        """Auto-compact when configured token thresholds are exceeded."""
+        if self._compaction_service is None:
+            return messages
+
+        storage = getattr(self._runtime, "storage", None)
+        if storage is None:
+            return messages
+
+        load_compaction_settings = getattr(storage, "load_compaction_settings", None)
+        if not callable(load_compaction_settings):
+            return messages
+
+        from core.chat.compaction import CompactionSettings
+
+        raw_settings = load_compaction_settings()
+        settings = CompactionSettings(
+            auto=bool(raw_settings["auto"]),
+            threshold=float(raw_settings["threshold"]),
+            tail_tokens=int(raw_settings["tail_tokens"]),
+            summary_model=raw_settings["summary_model"],
+        )
+        if not settings.auto:
+            return messages
+
+        context_window = self._resolve_context_window(agent)
+        if context_window is None:
+            return messages
+
+        if isinstance(usage, dict):
+            input_tokens_raw = usage.get("input_tokens")
+            input_tokens = (
+                input_tokens_raw
+                if isinstance(input_tokens_raw, int) and not isinstance(input_tokens_raw, bool)
+                else 0
+            )
+        else:
+            input_tokens = self._compaction_service.estimate_messages_tokens(messages)
+
+        if not self._compaction_service.should_auto_compact(
+            input_tokens,
+            context_window,
+            settings.threshold,
+        ):
+            return messages
+
+        summary_adapter, summary_model_id = self._resolve_summary_adapter(
+            agent,
+            adapter,
+            model_id,
+            settings,
+        )
+        close_summary_adapter = summary_adapter is not adapter
+        try:
+            checkpoint = await self._compaction_service.compact(
+                session.load(),
+                agent=agent,
+                summary_adapter=summary_adapter,
+                summary_model_id=summary_model_id,
+                storage=storage,
+                settings=settings,
+            )
+        except Exception:
+            _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
+            return messages
+        finally:
+            if close_summary_adapter:
+                await _close_adapter(summary_adapter)
+
+        session.append(checkpoint)
+        run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
+        return self._build_request_messages(agent, session)
+
+    def _resolve_context_window(self, agent: Any) -> int | None:
+        """Resolve context window for the active agent model from model registry."""
+        models = getattr(self._runtime, "models", None)
+        if models is None:
+            return None
+
+        bare_model = parse_bare_model(agent.model)
+        if "/" not in bare_model:
+            return None
+
+        provider_id, _, resolved_model_id = bare_model.partition("/")
+        if not provider_id or not resolved_model_id:
+            return None
+
+        try:
+            model_entry = models.get(provider_id, resolved_model_id)
+        except (KeyError, AttributeError):
+            return None
+
+        try:
+            return int(model_entry.context_window)
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    def _resolve_summary_adapter(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        settings: Any,
+    ) -> tuple[Any, str]:
+        """Resolve compaction summary adapter/model, defaulting to active run target."""
+        del agent
+
+        summary_model = settings.summary_model
+        if not isinstance(summary_model, str) or not summary_model:
+            return adapter, model_id
+
+        try:
+            provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
+                summary_model
+            )
+            if connection_suffix:
+                connection_id = f"{provider_id}:{connection_suffix}"
+            else:
+                connection_id = _first_usable_connection_id(self._runtime, provider_id)
+            summary_adapter = self._runtime.get_adapter(provider_id, connection_id)
+        except (ChatError, ConfigError, VBotError, KeyError):
+            _LOGGER.warning(
+                "Invalid compaction summary model %r; using active run model instead.",
+                summary_model,
+                exc_info=True,
+            )
+            return adapter, model_id
+
+        return summary_adapter, summary_model_id
 
     async def _send_assistant_request(
         self,
@@ -1763,6 +1994,20 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
     return data
 
 
+def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | None:
+    for message in reversed(messages):
+        if message.role == "compaction_checkpoint":
+            return message
+    return None
+
+
+def _messages_from_boundary(messages: list[ChatMessage], boundary_id: str) -> list[ChatMessage]:
+    for index, message in enumerate(messages):
+        if message.id == boundary_id:
+            return messages[index:]
+    raise ChatError(f"compaction boundary id not found: {boundary_id}")
+
+
 def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
     pending_notes: list[ChatMessage] = []
@@ -1957,9 +2202,17 @@ def _parse_content(data: JsonObject) -> str | list[ContentBlock] | None:
 
 def _require_role(data: JsonObject) -> MessageRole:
     role = data.get("role")
-    if role not in ("system", "user", "assistant", "tool", "note", "error"):
+    if role not in (
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "error",
+        "compaction_checkpoint",
+    ):
         raise ChatMessageValidationError(
-            "role must be system, user, assistant, tool, note, or error"
+            "role must be system, user, assistant, tool, note, error, or compaction_checkpoint"
         )
     return cast(MessageRole, role)
 
@@ -2023,6 +2276,7 @@ def _validate_system_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2048,6 +2302,7 @@ def _validate_user_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2056,7 +2311,7 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")
-    _reject_fields(message, "tool_call_id", "name", "error_kind")
+    _reject_fields(message, "tool_call_id", "name", "error_kind", "tail_boundary_id")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -2080,6 +2335,7 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "usage",
         "tool_calls",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2098,6 +2354,7 @@ def _validate_note_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
+        "tail_boundary_id",
     )
 
 
@@ -2117,6 +2374,42 @@ def _validate_error_message(message: ChatMessage) -> None:
         "tool_calls",
         "tool_call_id",
         "name",
+        "tail_boundary_id",
+    )
+
+
+def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
+    if message.content is None:
+        raise ChatMessageValidationError("compaction checkpoints require content")
+    if not isinstance(message.content, str):
+        raise ChatMessageValidationError("compaction checkpoints content must be a string")
+    if message.tail_boundary_id is None:
+        raise ChatMessageValidationError("compaction checkpoints require tail_boundary_id")
+    if not message.tail_boundary_id:
+        raise ChatMessageValidationError(
+            "compaction checkpoints tail_boundary_id must be a non-empty string"
+        )
+
+    if message.usage is not None:
+        compacted_count = message.usage.get("compacted_token_count")
+        if (
+            isinstance(compacted_count, bool)
+            or not isinstance(compacted_count, int)
+            or compacted_count < 0
+        ):
+            raise ChatMessageValidationError(
+                "compaction checkpoints usage.compacted_token_count must be a non-negative integer"
+            )
+
+    _reject_fields(
+        message,
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
     )
 
 

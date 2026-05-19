@@ -819,6 +819,9 @@
     if (item.type === 'assistant_run') {
       return item.timestamp ?? item.startTimestamp ?? item.endTimestamp;
     }
+    if (item.type === 'compaction_separator') {
+      return item.timestamp;
+    }
     return item.event.timestamp;
   };
 
@@ -1272,6 +1275,10 @@
               {/if}
             </div>
           </article>
+        {:else if item.type === 'compaction_separator'}
+          <div class="date-sep compaction-sep">
+            {t('chat.compacted', 'Context compacted')}
+          </div>
         {:else if item.type === 'event'}
           {#if isToolEvent(item.event)}
             <article class="msg assistant">

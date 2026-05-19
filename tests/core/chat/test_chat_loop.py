@@ -13,6 +13,7 @@ import pytest
 
 from core.chat import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     REASONING_DELTA_EVENT,
@@ -26,6 +27,7 @@ from core.chat import (
     ChatRunManager,
     ChatSessionError,
     ChatSessionManager,
+    Run,
     RunCancelledError,
     RunStatus,
     ToolCall,
@@ -270,6 +272,8 @@ class StubRuntime:
         raise_on_connection: dict[str, Exception] | None = None,
         provider_ids: set[str] | None = None,
         tools: ToolRegistry | None = None,
+        storage: Any | None = None,
+        models: Any | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
         self.chat_sessions = ChatSessionManager(data_dir)
@@ -281,6 +285,8 @@ class StubRuntime:
             {f"{agent.model.split('/', 1)[0]}:api-key"}
         )
         self.skills = StubSkills([])
+        self.storage = storage
+        self.models = models
         self.adapter = adapter
         self.adapters_by_connection = dict(adapters_by_connection or {})
         self.raise_on_connection = dict(raise_on_connection or {})
@@ -303,6 +309,90 @@ class StubProviderCredentials:
 
     def has_credentials(self, _provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id in self._usable_connection_ids
+
+
+@dataclass(frozen=True)
+class StubModelEntry:
+    context_window: int
+
+
+class StubModels:
+    def __init__(self, entries: dict[tuple[str, str], int]) -> None:
+        self._entries = {
+            (provider_id, model_id): StubModelEntry(context_window=context_window)
+            for (provider_id, model_id), context_window in entries.items()
+        }
+
+    def get(self, provider_id: str, model_id: str) -> StubModelEntry:
+        key = (provider_id, model_id)
+        if key not in self._entries:
+            raise KeyError(key)
+        return self._entries[key]
+
+
+class StubStorage:
+    def __init__(self, compaction_settings: JsonObject) -> None:
+        self._compaction_settings = dict(compaction_settings)
+
+    def load_compaction_settings(self) -> JsonObject:
+        return dict(self._compaction_settings)
+
+
+class StubCompactionService:
+    def __init__(
+        self,
+        *,
+        should_auto: bool,
+        estimated_tokens: int = 0,
+        checkpoint: ChatMessage | None = None,
+        compact_error: Exception | None = None,
+    ) -> None:
+        self._should_auto = should_auto
+        self._estimated_tokens = estimated_tokens
+        self._checkpoint = checkpoint
+        self._compact_error = compact_error
+        self.should_auto_calls: list[tuple[int, int, float]] = []
+        self.estimate_calls: list[list[JsonObject]] = []
+        self.compact_calls: list[JsonObject] = []
+
+    def should_auto_compact(
+        self,
+        input_tokens: int,
+        context_window: int,
+        threshold: float,
+    ) -> bool:
+        self.should_auto_calls.append((input_tokens, context_window, threshold))
+        return self._should_auto
+
+    def estimate_messages_tokens(self, messages: list[JsonObject]) -> int:
+        self.estimate_calls.append([dict(message) for message in messages])
+        return self._estimated_tokens
+
+    async def compact(
+        self,
+        messages: list[ChatMessage],
+        *,
+        agent: Any,
+        summary_adapter: Any,
+        summary_model_id: str,
+        storage: Any,
+        settings: Any,
+    ) -> ChatMessage:
+        self.compact_calls.append(
+            {
+                "message_roles": [message.role for message in messages],
+                "agent_id": getattr(agent, "id", None),
+                "summary_adapter": summary_adapter,
+                "summary_model_id": summary_model_id,
+                "storage": storage,
+                "summary_model": getattr(settings, "summary_model", None),
+            }
+        )
+        if self._compact_error is not None:
+            raise self._compact_error
+        if self._checkpoint is None:
+            raise AssertionError("StubCompactionService requires checkpoint for successful compact")
+        return self._checkpoint
 
 
 @pytest.mark.asyncio
@@ -561,6 +651,416 @@ async def test_request_messages_without_notes_keep_existing_shape(tmp_path: Path
     assert request_messages[0]["content"] == "System for coder"
     assert request_messages[1]["content"] == "Hi"
     assert all(message["role"] != "note" for message in request_messages)
+
+
+def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
+    from core.chat.chat import _latest_compaction_checkpoint
+
+    first_user = ChatMessage.user("first")
+    second_user = ChatMessage.user("second")
+    first_checkpoint = ChatMessage.compaction_checkpoint(
+        summary="checkpoint one",
+        tail_boundary_id=first_user.id,
+        compacted_token_count=10,
+    )
+    second_checkpoint = ChatMessage.compaction_checkpoint(
+        summary="checkpoint two",
+        tail_boundary_id=second_user.id,
+        compacted_token_count=20,
+    )
+
+    latest = _latest_compaction_checkpoint(
+        [first_user, first_checkpoint, second_user, second_checkpoint]
+    )
+
+    assert latest is second_checkpoint
+
+
+def test_compaction_latest_checkpoint_helper_returns_none_when_absent() -> None:
+    from core.chat.chat import _latest_compaction_checkpoint
+
+    assert _latest_compaction_checkpoint([ChatMessage.user("only")]) is None
+
+
+def test_compaction_messages_from_boundary_helper_slices_history() -> None:
+    from core.chat.chat import _messages_from_boundary
+
+    first = ChatMessage.user("first")
+    second = ChatMessage.assistant(model="openai/gpt-5.2", content="second")
+    third = ChatMessage.user("third")
+
+    sliced = _messages_from_boundary([first, second, third], second.id)
+
+    assert sliced == [second, third]
+
+
+def test_compaction_messages_from_boundary_helper_raises_for_missing_boundary() -> None:
+    from core.chat.chat import _messages_from_boundary
+
+    with pytest.raises(ChatError, match="compaction boundary id not found"):
+        _messages_from_boundary([ChatMessage.user("only")], "missing-id")
+
+
+def test_compaction_build_request_messages_without_checkpoint_keeps_existing_path(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
+
+    request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+
+    assert [message["role"] for message in request_messages] == ["system", "user", "assistant"]
+    assert request_messages[1]["content"] == "Hi"
+    assert request_messages[2]["content"] == "Hello"
+
+
+def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail_only(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+    session.append(ChatMessage.user("Old question"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
+    tail_user = ChatMessage.user("Tail question")
+    tail_assistant = ChatMessage.assistant(model=agent.model, content="Tail answer")
+    session.append(tail_user)
+    session.append(tail_assistant)
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted historical context.",
+            tail_boundary_id=tail_user.id,
+            compacted_token_count=123,
+        )
+    )
+
+    request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+
+    assert [message["role"] for message in request_messages] == [
+        "system",
+        "user",
+        "user",
+        "assistant",
+    ]
+    assert request_messages[1]["content"] == (
+        "<system-reminder>\nCompacted historical context.\n</system-reminder>"
+    )
+    assert request_messages[2]["content"] == "Tail question"
+    assert request_messages[3]["content"] == "Tail answer"
+    assert "Old question" not in request_text
+    assert all(message["role"] != "compaction_checkpoint" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="unused",
+        tail_boundary_id="unused",
+        compacted_token_count=1,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": False,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    result = await ChatLoop(
+        runtime,
+        compaction_service=cast(Any, compaction_service),
+    )._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert result == messages
+    assert compaction_service.should_auto_calls == []
+    assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2::oauth", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="unused",
+        tail_boundary_id="unused",
+        compacted_token_count=1,
+    )
+    compaction_service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.95,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    result = await ChatLoop(
+        runtime,
+        compaction_service=cast(Any, compaction_service),
+    )._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 20},
+        run=run,
+    )
+
+    assert result == messages
+    assert compaction_service.should_auto_calls == [(20, 100, 0.95)]
+    assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_messages(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    rebuilt = await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert [message.role for message in session.load()] == [
+        "user",
+        "assistant",
+        "compaction_checkpoint",
+    ]
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+    assert [message["role"] for message in rebuilt] == ["system", "user", "user", "assistant"]
+    assert rebuilt[1]["content"] == "<system-reminder>\nCompacted tail context.\n</system-reminder>"
+    assert rebuilt[2]["content"] == "Tail user"
+    assert rebuilt[3]["content"] == "Tail assistant"
+    assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malformed(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "malformed-summary-model",
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        raise_on_connection={"missing-provider:api-key": KeyError("missing-provider:api-key")},
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "missing-provider/gpt-5.2::api-key",
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    session.append(tail_user)
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        tail_boundary_id=tail_user.id,
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert runtime.adapter_provider_id == "missing-provider"
+    assert runtime.adapter_connection_id == "missing-provider:api-key"
+    assert len(compaction_service.compact_calls) == 1
+    assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
+    assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+
+
+@pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    compaction_service = StubCompactionService(
+        should_auto=True,
+        compact_error=RuntimeError("compaction broke"),
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+    messages = loop._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    with caplog.at_level("WARNING"):
+        result = await loop._maybe_auto_compact(
+            agent,
+            adapter,
+            "gpt-5.2",
+            session,
+            messages,
+            usage={"input_tokens": 90},
+            run=run,
+        )
+
+    assert result == messages
+    assert [message.role for message in session.load()] == ["user", "assistant"]
+    assert any(
+        "Compaction failed; continuing without compaction" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
