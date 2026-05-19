@@ -72,6 +72,13 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.web_fetch import (
+    WEB_FETCH_TOOL_DESCRIPTION,
+    WEB_FETCH_TOOL_NAME,
+    WEB_FETCH_TOOL_PARAMETERS,
+    register_web_fetch_tool,
+    web_fetch_handler,
+)
 from core.tools.write import (
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
@@ -138,6 +145,9 @@ __all__ = [
     "ToolNotFoundError",
     "ToolRegistry",
     "ToolSkillActivationHook",
+    "WEB_FETCH_TOOL_DESCRIPTION",
+    "WEB_FETCH_TOOL_NAME",
+    "WEB_FETCH_TOOL_PARAMETERS",
     "WRITE_TOOL_DESCRIPTION",
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
@@ -158,8 +168,10 @@ __all__ = [
     "register_read_tool",
     "register_skill_tool",
     "register_subagent_tools",
+    "register_web_fetch_tool",
     "register_write_tool",
     "tool_failure",
     "tool_success",
+    "web_fetch_handler",
     "write_handler",
 ]
