@@ -228,6 +228,7 @@ async def test_web_search_handler_brave_success(tmp_path: Path) -> None:
     assert route.called is True
     request = route.calls[0].request
     assert request.headers["X-Subscription-Token"] == "test-brave-api-key"
+    assert request.headers["Accept"] == "application/json"
     assert request.url.params["q"] == "vbot"
     assert request.url.params["count"] == "5"
 
