@@ -3,36 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import random
 import re
+import socket
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
-from bs4.element import PageElement
+from bs4 import BeautifulSoup, Comment, Tag
+from bs4.element import NavigableString, PageElement
 
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
 
 _MAX_URL_BYTES = 100 * 1024
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
 _CONTENT_TRUNCATED_MARKER = "\n\n[... content truncated ...]"
-
-_SSRF_BLOCKED_PREFIXES: tuple[str, ...] = (
-    "http://127.",
-    "https://127.",
-    "http://10.",
-    "https://10.",
-    "http://192.168.",
-    "https://192.168.",
-    "http://169.254.",
-    "https://169.254.",
-    "http://[::1]",
-    "https://[::1]",
-    "http://localhost",
-    "https://localhost",
-    "http://0.0.0.0",
-    "https://0.0.0.0",
-)
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -115,6 +100,10 @@ _RETRY_BACKOFF_FACTOR = 2
 _RETRY_JITTER_FACTOR = 0.5
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+_MAX_REDIRECTS = 10
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
+IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 WEB_FETCH_TOOL_NAME = "web_fetch"
 WEB_FETCH_TOOL_DESCRIPTION = (
@@ -147,9 +136,11 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
 
 
 def _make_client() -> httpx.AsyncClient:
-    """Create an AsyncClient with browser-like headers."""
+    """Create an AsyncClient with browser-like headers and manual redirects."""
     return httpx.AsyncClient(
-        headers=_BROWSER_HEADERS, follow_redirects=True, timeout=_REQUEST_TIMEOUT
+        headers=_BROWSER_HEADERS,
+        follow_redirects=False,
+        timeout=_REQUEST_TIMEOUT,
     )
 
 
@@ -571,23 +562,208 @@ def _coerce_bool(value: object, *, field_name: str, default: bool) -> bool:
     return value
 
 
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _parse_ipv4_component(value: str) -> int | None:
+    if not value:
+        return None
+    if value.startswith(("+", "-")):
+        return None
+
+    if value.lower().startswith("0x"):
+        digits = value[2:]
+        if not digits:
+            return None
+        base = 16
+    elif len(value) > 1 and value.startswith("0"):
+        digits = value[1:]
+        if not digits:
+            return 0
+        base = 8
+    else:
+        digits = value
+        base = 10
+
+    try:
+        return int(digits, base)
+    except ValueError:
+        return None
+
+
+def _parse_obfuscated_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    parts = host.split(".")
+
+    if len(parts) == 1:
+        value = _parse_ipv4_component(parts[0])
+        if value is None or value > 0xFFFFFFFF:
+            return None
+        return ipaddress.IPv4Address(value)
+
+    if len(parts) < 2 or len(parts) > 4:
+        return None
+
+    parsed_parts: list[int] = []
+    for part in parts:
+        value = _parse_ipv4_component(part)
+        if value is None:
+            return None
+        parsed_parts.append(value)
+
+    if len(parsed_parts) == 2:
+        first, second = parsed_parts
+        if first > 0xFF or second > 0xFFFFFF:
+            return None
+        packed = (first << 24) | second
+        return ipaddress.IPv4Address(packed)
+
+    if len(parsed_parts) == 3:
+        first, second, third = parsed_parts
+        if first > 0xFF or second > 0xFF or third > 0xFFFF:
+            return None
+        packed = (first << 24) | (second << 16) | third
+        return ipaddress.IPv4Address(packed)
+
+    first, second, third, fourth = parsed_parts
+    if first > 0xFF or second > 0xFF or third > 0xFF or fourth > 0xFF:
+        return None
+    return ipaddress.IPv4Address((first << 24) | (second << 16) | (third << 8) | fourth)
+
+
+def _parse_ip_literal(host: str) -> IpAddress | None:
+    host_without_zone = host.split("%", 1)[0]
+
+    try:
+        return ipaddress.ip_address(host_without_zone)
+    except ValueError:
+        pass
+
+    return _parse_obfuscated_ipv4(host_without_zone)
+
+
+def _is_blocked_ip(address: IpAddress) -> bool:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return _is_blocked_ip(address.ipv4_mapped)
+
+    return (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+async def _resolve_host_addresses(host: str, port: int) -> list[IpAddress]:
+    loop = asyncio.get_running_loop()
+
+    try:
+        info = await loop.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except socket.gaierror as error:
+        raise ValueError(f"unable to resolve host: {host}") from error
+
+    addresses: list[IpAddress] = []
+    seen: set[str] = set()
+    for family, _, _, _, socket_address in info:
+        if family not in {socket.AF_INET, socket.AF_INET6}:
+            continue
+
+        address_text = socket_address[0].split("%", 1)[0]
+        try:
+            address = ipaddress.ip_address(address_text)
+        except ValueError:
+            continue
+
+        key = str(address)
+        if key in seen:
+            continue
+        seen.add(key)
+        addresses.append(address)
+
+    if not addresses:
+        raise ValueError(f"unable to resolve host: {host}")
+
+    return addresses
+
+
+async def _validate_public_target(url: httpx.URL) -> None:
+    if url.scheme not in {"http", "https"}:
+        raise ValueError("only http/https URLs are allowed")
+
+    host = url.host
+    if host is None:
+        raise ValueError("url must include a valid host")
+
+    normalized_host = host.rstrip(".").lower()
+    if not normalized_host:
+        raise ValueError("url must include a valid host")
+
+    if normalized_host == "localhost":
+        raise ValueError("URL blocked (private/loopback address)")
+
+    literal_address = _parse_ip_literal(normalized_host)
+    if literal_address is not None:
+        if _is_blocked_ip(literal_address):
+            raise ValueError("URL blocked (private/loopback address)")
+        return
+
+    port = url.port if url.port is not None else _default_port_for_scheme(url.scheme)
+    for resolved in await _resolve_host_addresses(normalized_host, port):
+        if _is_blocked_ip(resolved):
+            raise ValueError("URL blocked (private/loopback address)")
+
+
 async def _sleep_for_retry(attempt: int) -> None:
     base_delay = _RETRY_INITIAL_DELAY_SECONDS * (_RETRY_BACKOFF_FACTOR**attempt)
     jitter = random.uniform(0, base_delay * _RETRY_JITTER_FACTOR)
     await asyncio.sleep(base_delay + jitter)
 
 
-async def _fetch_with_retry(client: httpx.AsyncClient, url: str) -> httpx.Response:
+async def _request_with_retry(client: httpx.AsyncClient, url: httpx.URL) -> httpx.Response:
     """Fetch a URL and retry retryable status codes with backoff and jitter."""
     for attempt in range(_RETRY_MAX_RETRIES + 1):
         response = await client.get(url)
-        try:
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError:
+        if response.status_code >= 400:
             if attempt >= _RETRY_MAX_RETRIES or response.status_code not in _RETRYABLE_STATUS_CODES:
-                raise
+                response.raise_for_status()
             await _sleep_for_retry(attempt)
+            continue
+
+        return response
+
+    raise RuntimeError("unreachable retry loop state")
+
+
+async def _fetch_with_retry(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """Fetch a URL, validating each redirect hop against SSRF rules."""
+    current_url = httpx.URL(url)
+
+    for redirect_count in range(_MAX_REDIRECTS + 1):
+        await _validate_public_target(current_url)
+
+        response = await _request_with_retry(client, current_url)
+        if response.status_code not in _REDIRECT_STATUS_CODES:
+            return response
+
+        next_request = response.next_request
+        if next_request is None:
+            return response
+
+        if redirect_count >= _MAX_REDIRECTS:
+            raise httpx.HTTPStatusError(
+                "too many redirects while fetching URL",
+                request=response.request,
+                response=response,
+            )
+
+        current_url = next_request.url
 
     raise RuntimeError("unreachable retry loop state")
 
@@ -617,16 +793,14 @@ async def web_fetch_handler(context: ToolContext, arguments: JsonObject) -> Json
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return tool_failure("validation_error", "only http/https URLs are allowed")
-    if not parsed.netloc:
+    if not parsed.netloc or parsed.hostname is None:
         return tool_failure("validation_error", "url must include a valid host")
-
-    lowered_url = url.lower()
-    if any(lowered_url.startswith(prefix) for prefix in _SSRF_BLOCKED_PREFIXES):
-        return tool_failure("validation_error", "URL blocked (private/loopback address)")
 
     try:
         async with _make_client() as client:
             response = await _fetch_with_retry(client, url)
+    except ValueError as error:
+        return tool_failure("validation_error", str(error))
     except httpx.HTTPStatusError as error:
         status = error.response.status_code if error.response is not None else "unknown"
         return tool_failure("request_error", f"HTTP {status} while fetching URL: {url}")
