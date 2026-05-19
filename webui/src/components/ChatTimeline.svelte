@@ -3,7 +3,7 @@
 
   import { getAttachmentUrl } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
-  import { renderMarkdown } from '$lib/markdown.js';
+  import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
 
   import { visibleTimelineItems } from '../lib/chatState.js';
 
@@ -244,6 +244,11 @@
 
   const hasAssistantContent = (message) =>
     message.role === 'assistant' && Boolean(message.content);
+
+  const isReasoningOnlyAssistantMessage = (message) =>
+    message.role === 'assistant' &&
+    Boolean(message.reasoning) &&
+    !message.content;
 
   const messageFromEvent = (event) => event.payload?.message ?? null;
 
@@ -1084,7 +1089,9 @@
               {:else}
                 <div class="msg-markdown streaming-text">
                   <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                  {@html renderMarkdown(item.streamingItem.content ?? '')}
+                  {@html renderMarkdownStreaming(
+                    item.streamingItem.content ?? '',
+                  )}
                   <span class="streaming-caret" aria-hidden="true"></span>
                 </div>
               {/if}
@@ -1218,7 +1225,9 @@
                     class:streaming-text={child.streaming}
                   >
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                    {@html renderMarkdown(child.content ?? '')}
+                    {@html child.streaming
+                      ? renderMarkdownStreaming(child.content ?? '')
+                      : renderMarkdown(child.content ?? '')}
                     {#if child.streaming}<span
                         class="streaming-caret"
                         aria-hidden="true"
@@ -1274,10 +1283,14 @@
                 </div>
               {:else if textFromMessage(item.message)}
                 {#if item.message.role === 'assistant'}
-                  <div class="msg-markdown">
-                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-                    {@html renderMarkdown(textFromMessage(item.message))}
-                  </div>
+                  {#if isReasoningOnlyAssistantMessage(item.message)}
+                    <p class="msg-body-text">{textFromMessage(item.message)}</p>
+                  {:else}
+                    <div class="msg-markdown">
+                      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                      {@html renderMarkdown(textFromMessage(item.message))}
+                    </div>
+                  {/if}
                 {:else}
                   <p class="msg-body-text">{textFromMessage(item.message)}</p>
                 {/if}

@@ -573,6 +573,43 @@ describe('ChatTimeline', () => {
     expect(strong.textContent).toBe('streaming');
   });
 
+  it('renders an open fenced code block while assistant output is streaming', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-streaming-open-fence',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-assistant-markdown-streaming-open-fence',
+      sequence: 1,
+      payload: {
+        content_delta: '## Title\n\n```js\nconst value = 1;',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const heading = document.querySelector(
+      '.assistant-run .msg-markdown.streaming-text h2',
+    );
+    const codeBlock = document.querySelector(
+      '.assistant-run .msg-markdown.streaming-text pre code',
+    );
+    expect(heading).toBeTruthy();
+    expect(heading.textContent).toBe('Title');
+    expect(codeBlock).toBeTruthy();
+    expect(codeBlock.textContent).toContain('const value = 1;');
+  });
+
   it('renders markdown headings for history assistant messages', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -600,6 +637,44 @@ describe('ChatTimeline', () => {
     const heading = document.querySelector('.msg.assistant .msg-markdown h2');
     expect(heading).toBeTruthy();
     expect(heading.textContent).toBe('Title');
+  });
+
+  it('keeps reasoning-only assistant history as plain text', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-assistant-reasoning-only-plain',
+    );
+    sessionState.messages = [
+      {
+        id: 'assistant-history-reasoning-only',
+        role: 'assistant',
+        content: null,
+        reasoning: '## Thinking **bold** [link](https://example.com)',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const assistantBodyText = document.querySelector(
+      '.msg.assistant .msg-body-text',
+    );
+    expect(assistantBodyText).toBeTruthy();
+    expect(assistantBodyText.textContent).toContain(
+      '## Thinking **bold** [link](https://example.com)',
+    );
+    expect(document.querySelector('.msg.assistant .msg-markdown')).toBeNull();
+    expect(document.querySelector('.msg.assistant h2')).toBeNull();
+    expect(document.querySelector('.msg.assistant strong')).toBeNull();
+    expect(document.querySelector('.msg.assistant a')).toBeNull();
   });
 
   it('uses human-readable label instead of raw JSON for known tool', () => {
