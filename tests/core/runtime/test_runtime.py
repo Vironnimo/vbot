@@ -34,6 +34,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "subagent",
     "subagent_result",
     "web_fetch",
+    "web_search",
     "write",
 ]
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"

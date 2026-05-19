@@ -52,7 +52,9 @@ runtime skill registry immediately. `settings.json` may also include
 `extension_directories`, an array of absolute or home-relative additional
 extension scan roots loaded alongside `<data_dir>/extensions/` during runtime
 startup, plus `attachment_max_size_bytes`, an integer attachment upload limit
-used by the runtime-owned `AttachmentStore` (default 20 MiB).
+used by the runtime-owned `AttachmentStore` (default 20 MiB). Optional built-in
+tool credentials such as `BRAVE_API_KEY` for `web_search` use that same process
+env → data-dir `.env` fallback resolution.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.

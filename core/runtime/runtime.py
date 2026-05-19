@@ -46,6 +46,7 @@ from core.tools import (
     register_read_tool,
     register_skill_tool,
     register_web_fetch_tool,
+    register_web_search_tool,
     register_write_tool,
 )
 from core.tools.cron import register_cron_tool
@@ -195,6 +196,7 @@ class Runtime:
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
         register_web_fetch_tool(self._tools)
+        register_web_search_tool(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
