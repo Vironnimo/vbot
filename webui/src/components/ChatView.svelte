@@ -68,7 +68,11 @@
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
-  const LOCAL_BUILT_IN_COMMAND_FALLBACKS = new Set(['stop']);
+  const LOCAL_BUILT_IN_COMMAND_FALLBACKS = new Set([
+    'compact',
+    'status',
+    'stop',
+  ]);
 
   const usageTotalTokens = (usage) => {
     const inputTokens = Number.isFinite(usage?.input_tokens)
@@ -199,6 +203,14 @@
     }, ACTION_INFO_TIMEOUT_MS);
   };
 
+  const normalizedBuiltInCommandName = (value) => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+
+    return value.trim().replace(/^\/+/, '').toLowerCase();
+  };
+
   const isRecognizedBuiltInCommand = (content) => {
     if (typeof content !== 'string') {
       return false;
@@ -210,13 +222,16 @@
     }
 
     const normalizedMessage = trimmed.trim().toLowerCase();
-    if (LOCAL_BUILT_IN_COMMAND_FALLBACKS.has(normalizedMessage.slice(1))) {
+    const commandName = normalizedBuiltInCommandName(normalizedMessage);
+    if (!commandName) {
+      return false;
+    }
+
+    if (LOCAL_BUILT_IN_COMMAND_FALLBACKS.has(commandName)) {
       return true;
     }
 
-    return builtInCommandNames.some(
-      (commandName) => normalizedMessage === `/${commandName}`,
-    );
+    return builtInCommandNames.includes(commandName);
   };
 
   const isCompactCommand = (content) => {
@@ -224,7 +239,12 @@
       return false;
     }
 
-    return content.trim().toLowerCase() === '/compact';
+    const trimmed = content.trim();
+    if (!trimmed.startsWith('/')) {
+      return false;
+    }
+
+    return normalizedBuiltInCommandName(trimmed) === 'compact';
   };
 
   const loadCommands = async () => {
@@ -238,16 +258,21 @@
             typeof item?.name === 'string' &&
             item.name.length > 0,
         )
-        .map((item) => item.name.toLowerCase());
+        .map((item) => normalizedBuiltInCommandName(item.name))
+        .filter((name) => name.length > 0);
       availableSkills = items
         .filter(
           (item) => typeof item?.name === 'string' && item.name.length > 0,
         )
         .map((item) => ({
-          name: item.name,
+          name:
+            item.type === 'command'
+              ? normalizedBuiltInCommandName(item.name)
+              : item.name,
           description: item.description ?? '',
           type: item.type,
-        }));
+        }))
+        .filter((item) => item.name.length > 0);
     } catch (error) {
       actionError = `${t('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${error.message}`;
       availableSkills = [];

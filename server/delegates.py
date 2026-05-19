@@ -512,7 +512,7 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     try:
         command_items = [
             {
-                "name": name,
+                "name": name.removeprefix("/"),
                 "description": description,
                 "type": "command",
             }
@@ -757,6 +757,16 @@ async def _handle_compact_command(state: Any, agent_id: str, session_id: str) ->
         return _command_handled_response("Compaction is not available.")
 
     runtime = state.runtime
+    chat_runs = getattr(state, "chat_runs", None)
+    if not isinstance(chat_runs, ChatRunManager):
+        chat_runs = getattr(runtime, "chat_runs", None)
+    if isinstance(chat_runs, ChatRunManager):
+        active_run = chat_runs.active_run(agent_id=agent_id, session_id=session_id)
+        if active_run is not None:
+            return _command_handled_response(
+                "Cannot compact while a run is active for this session."
+            )
+
     agent = runtime.agents.get(agent_id)
     session = runtime.chat_sessions.get(agent_id, session_id)
     messages = session.load()
