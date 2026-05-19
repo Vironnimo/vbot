@@ -17,13 +17,16 @@ import httpx
 
 from core.models.models import Model, ModelRegistry
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 OVERRIDE_FILE_SUFFIX = ".overrides.json"
+_LOGGER = get_logger("models.discovery")
 
 
 class ModelDiscoveryError(VBotError):
@@ -103,7 +106,15 @@ async def refresh_models(
         for raw_model in raw_models:
             if not raw_filter.accepts(raw_model):
                 continue
-            model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
+            try:
+                model = adapter_class.normalize_catalog_entry(raw_model, provider_config.defaults)
+            except ValueError as exc:
+                _LOGGER.debug(
+                    "Skipping model during discovery for provider '%s': %s",
+                    provider_config.id,
+                    exc,
+                )
+                continue
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
 
@@ -299,5 +310,6 @@ _DISCOVERY_ADAPTER_MAP = {
     "openai_compatible": OpenAICompatibleAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
+    "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,
 }
