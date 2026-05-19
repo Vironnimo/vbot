@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.errors import CatalogEntrySkipped
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _parse_optional_int,
@@ -37,7 +38,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             capabilities_raw = {}
 
         if raw.get("archived") is True or capabilities_raw.get("completion_chat") is not True:
-            raise ValueError(f"Skipped non-chat model: {raw.get('id')}")
+            raise CatalogEntrySkipped(f"Skipped non-chat model: {raw.get('id')}")
 
         context_window = _parse_optional_int(raw.get("max_context_length")) or 0
         reasoning_supported = any(
