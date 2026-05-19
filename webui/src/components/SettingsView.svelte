@@ -3,6 +3,7 @@
 
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
+  import * as settingsViewHelpers from '$lib/settingsView.js';
   import {
     CHANNEL_DM_SCOPES,
     CHANNEL_FORM_MODE_CREATE,
@@ -38,6 +39,60 @@
     isOAuthConnection,
     isLanguageSaveDisabled,
   } from '$lib/settingsView.js';
+
+  const COMPACTION_SETTING_DEFAULTS = Object.freeze({
+    auto: true,
+    threshold: 0.8,
+    tail_tokens: 15000,
+    summary_model: null,
+  });
+
+  function normalizeCompactionSettingsFallback(rawSettings) {
+    const compaction = rawSettings?.compaction ?? {};
+    const threshold = Number(compaction.threshold);
+    const tailTokens = Number(compaction.tail_tokens);
+    const summaryModel =
+      typeof compaction.summary_model === 'string'
+        ? compaction.summary_model.trim()
+        : '';
+
+    return {
+      auto:
+        typeof compaction.auto === 'boolean'
+          ? compaction.auto
+          : COMPACTION_SETTING_DEFAULTS.auto,
+      threshold:
+        Number.isFinite(threshold) && threshold > 0 && threshold <= 1
+          ? threshold
+          : COMPACTION_SETTING_DEFAULTS.threshold,
+      tail_tokens:
+        Number.isInteger(tailTokens) && tailTokens > 0
+          ? tailTokens
+          : COMPACTION_SETTING_DEFAULTS.tail_tokens,
+      summary_model: summaryModel.length > 0 ? summaryModel : null,
+    };
+  }
+
+  function buildCompactionSettingsPayloadFallback(formValues) {
+    return {
+      compaction: normalizeCompactionSettingsFallback({
+        compaction: formValues,
+      }),
+    };
+  }
+
+  function getCompactionSettingsFallback(settings) {
+    return normalizeCompactionSettingsFallback(settings);
+  }
+
+  const normalizeCompactionSettings =
+    settingsViewHelpers.normalizeCompactionSettings ??
+    normalizeCompactionSettingsFallback;
+  const buildCompactionSettingsPayload =
+    settingsViewHelpers.buildCompactionSettingsPayload ??
+    buildCompactionSettingsPayloadFallback;
+  const getCompactionSettings =
+    settingsViewHelpers.getCompactionSettings ?? getCompactionSettingsFallback;
 
   let {
     providerAuthEvent = null,
@@ -84,6 +139,17 @@
         ),
     },
     {
+      id: 'compaction',
+      labelKey: 'settings.compaction.title',
+      labelFallback: 'Compaction',
+      label: () => t('settings.compaction.title', 'Compaction'),
+      subtitle: () =>
+        t(
+          'settings.compaction.subtitle',
+          'Automatic context window management.',
+        ),
+    },
+    {
       id: 'providers',
       labelKey: 'settings.providers.title',
       labelFallback: 'Providers',
@@ -124,6 +190,7 @@
   let selectedLanguageId = $state('en');
   let skillDirectories = $state([]);
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
+  let compactionSettings = $state(normalizeCompactionSettings(null));
   let newSkillDirectory = $state('');
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
@@ -204,6 +271,14 @@
         normalizeSubAgentSettings(settings),
       ),
   );
+  let compactionSettingsSaveDisabled = $derived(
+    loading ||
+      saving ||
+      compactionSettingsMatch(
+        compactionSettings,
+        getCompactionSettings(settings),
+      ),
+  );
 
   onMount(() => {
     loadSettings();
@@ -239,6 +314,7 @@
     selectedLanguageId = language;
     skillDirectories = getSkillDirectories(nextSettings);
     subAgentSettings = normalizeSubAgentSettings(nextSettings);
+    compactionSettings = getCompactionSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
   }
@@ -334,6 +410,29 @@
     }
   }
 
+  async function saveCompactionSettings() {
+    if (compactionSettingsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+    saveNotice = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        buildCompactionSettingsPayload(compactionSettings),
+      );
+      applySettings(nextSettings);
+      saveNotice = t('settings.compaction.saved', 'Compaction settings saved.');
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   function addSkillDirectory() {
     const directory = newSkillDirectory.trim();
     if (!directory) {
@@ -379,6 +478,15 @@
     saveNotice = '';
   }
 
+  function handleCompactionSettingChange(key, value) {
+    compactionSettings = {
+      ...compactionSettings,
+      [key]: value,
+    };
+    saveError = '';
+    saveNotice = '';
+  }
+
   function subAgentSettingsMatch(left, right) {
     const normalizedLeft = normalizeSubAgentSettings({ subagents: left });
     const normalizedRight = normalizeSubAgentSettings({ subagents: right });
@@ -390,6 +498,22 @@
         normalizedRight.max_subagents_per_turn &&
       normalizedLeft.subagent_timeout_minutes ===
         normalizedRight.subagent_timeout_minutes
+    );
+  }
+
+  function compactionSettingsMatch(left, right) {
+    const normalizedLeft = normalizeCompactionSettings({
+      compaction: left,
+    });
+    const normalizedRight = normalizeCompactionSettings({
+      compaction: right,
+    });
+
+    return (
+      normalizedLeft.auto === normalizedRight.auto &&
+      normalizedLeft.threshold === normalizedRight.threshold &&
+      normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
+      normalizedLeft.summary_model === normalizedRight.summary_model
     );
   }
 
@@ -1006,6 +1130,17 @@
           >
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
           </button>
+        {:else if activePanelId === 'compaction' && !loading && !loadError}
+          <button
+            class="btn-primary s-save-button"
+            type="button"
+            disabled={compactionSettingsSaveDisabled}
+            onclick={saveCompactionSettings}
+          >
+            {saving
+              ? t('common.saving', 'Saving…')
+              : t('settings.compaction.save', 'Save')}
+          </button>
         {:else if activePanelId === 'providers' && !loading && !loadError && hasRefreshEligibleProvider}
           <button
             class="btn-primary s-refresh-button"
@@ -1284,6 +1419,135 @@
             onclick={saveSubAgentSettings}
           >
             {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
+          </button>
+        {:else if activePanelId === 'compaction'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.compaction.auto', 'Auto-compact')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.compaction.autoDescription',
+                  'Automatically compact when the context threshold is reached.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--checkbox">
+              <label class="s-checkbox-wrap">
+                <input
+                  class="s-checkbox"
+                  type="checkbox"
+                  checked={compactionSettings.auto === true}
+                  aria-label={t('settings.compaction.auto', 'Auto-compact')}
+                  onchange={(event) =>
+                    handleCompactionSettingChange(
+                      'auto',
+                      event.currentTarget.checked,
+                    )}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.compaction.threshold', 'Threshold')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.compaction.thresholdDescription',
+                  'Compact when context usage exceeds this fraction (0–1).',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                class="s-input"
+                type="number"
+                min="0.05"
+                max="1"
+                step="0.05"
+                value={compactionSettings.threshold}
+                aria-label={t('settings.compaction.threshold', 'Threshold')}
+                oninput={(event) =>
+                  handleCompactionSettingChange(
+                    'threshold',
+                    event.currentTarget.value,
+                  )}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.compaction.tailTokens', 'Tail tokens')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.compaction.tailTokensDescription',
+                  'Number of tokens preserved verbatim at the end of context.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                class="s-input"
+                type="number"
+                min="1"
+                step="1000"
+                value={compactionSettings.tail_tokens}
+                aria-label={t('settings.compaction.tailTokens', 'Tail tokens')}
+                oninput={(event) =>
+                  handleCompactionSettingChange(
+                    'tail_tokens',
+                    event.currentTarget.value,
+                  )}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.compaction.summaryModel', 'Summary model')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.compaction.summaryModelDescription',
+                  'Model used for summarization. Leave blank to use the active agent model.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <input
+                class="s-input"
+                type="text"
+                value={compactionSettings.summary_model ?? ''}
+                aria-label={t(
+                  'settings.compaction.summaryModel',
+                  'Summary model',
+                )}
+                oninput={(event) =>
+                  handleCompactionSettingChange(
+                    'summary_model',
+                    event.currentTarget.value,
+                  )}
+              />
+            </div>
+          </div>
+
+          <button
+            class="btn-primary s-save-button s-save-button--inline"
+            type="button"
+            disabled={compactionSettingsSaveDisabled}
+            onclick={saveCompactionSettings}
+          >
+            {saving
+              ? t('common.saving', 'Saving…')
+              : t('settings.compaction.save', 'Save')}
           </button>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
@@ -2162,6 +2426,23 @@
     gap: 10px;
     width: min(360px, 100%);
     min-width: 220px;
+  }
+
+  .s-row-control--checkbox {
+    width: auto;
+    min-width: 0;
+  }
+
+  .s-checkbox-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .s-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
   }
 
   .s-row-actions {

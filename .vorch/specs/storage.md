@@ -10,7 +10,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 Phase 2 creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
 
-Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `skills.md`.
+Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
 `<data_dir>/.env` stores user-owned secrets such as provider API keys and acts
 as a read-only fallback credential source.
@@ -20,6 +20,7 @@ as a read-only fallback credential source.
 - `appearance.language` — persisted WebUI language preference.
 - `skill_directories` — additional skill scan root paths configured from the Settings UI.
 - `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` — integer limits for sub-agent tool execution.
+- `compaction` — automatic history-compaction settings `{ auto, threshold, tail_tokens, summary_model }`.
 - `attachment_max_size_bytes` — integer attachment upload limit for the runtime-owned `AttachmentStore`, default `20971520`.
 
 ## Interfaces
@@ -38,6 +39,7 @@ as a read-only fallback credential source.
 - `load_appearance_settings() -> dict[str, str]` and `update_appearance_settings(appearance)` — read/write the supported Appearance settings subset.
 - `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
 - `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
+- `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 
@@ -50,6 +52,7 @@ as a read-only fallback credential source.
 - `.env` values must not be copied back into `os.environ`; callers receive
   snapshots instead.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
+- `compaction.md` is allowlisted for backend prompt loading but is not part of the normal system-prompt editor/viewer surface.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
 - Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 - `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.

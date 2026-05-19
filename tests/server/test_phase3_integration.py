@@ -162,6 +162,14 @@ class IntegrationStorage:
             "subagent_timeout_minutes": 60,
         }
 
+    def load_compaction_settings(self) -> JsonObject:
+        return {
+            "auto": True,
+            "threshold": 0.8,
+            "tail_tokens": 15000,
+            "summary_model": None,
+        }
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -376,6 +384,12 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "max_subagent_depth": 4,
                 "max_subagents_per_turn": 8,
                 "subagent_timeout_minutes": 60,
+            },
+            "compaction": {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15000,
+                "summary_model": None,
             },
         },
     }

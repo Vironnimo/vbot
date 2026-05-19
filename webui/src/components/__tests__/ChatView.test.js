@@ -270,6 +270,72 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('recognizes /compact when command metadata includes a leading slash', async () => {
+    const streamCalls = [];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandItems: [
+          {
+            name: '/compact',
+            description: 'Compact the current session context.',
+            type: 'command',
+          },
+          {
+            name: 'debugging',
+            description: 'Investigate unclear bugs.',
+            type: 'skill',
+          },
+        ],
+        streamHandler: ({ content }) => {
+          streamCalls.push(content);
+          if (content === 'Start a long run') {
+            return {
+              run_id: 'run-compact-1',
+              sse_url: '/api/runs/run-compact-1/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          if (content === '/compact') {
+            return {
+              command_handled: true,
+              reply: 'Context compacted.',
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start a long run');
+
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+
+    sendComposerMessage('/compact');
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.chat-view__info')?.textContent?.trim() ===
+        'Context compacted.',
+      100,
+    );
+
+    expect(streamCalls).toEqual(['Start a long run', '/compact']);
+    const queuedContent =
+      document.body.querySelector('.queued-messages__content')?.textContent ??
+      '';
+    expect(queuedContent.includes('/compact')).toBe(false);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('queues non-command messages while a run is active', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
