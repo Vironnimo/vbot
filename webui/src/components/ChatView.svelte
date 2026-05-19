@@ -934,6 +934,7 @@
 
   .chat-view__info {
     color: var(--text-med);
+    white-space: pre-wrap;
   }
 
   .chat-view__error {

@@ -139,6 +139,62 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
+  it('shows inline info when /status command is handled', async () => {
+    const statusReply =
+      'Agent: Alpha\nModel: claude-sonnet-4\nSession started: 2026-05-19';
+
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandItems: [
+          {
+            name: 'status',
+            description: 'Show current agent and session status.',
+            type: 'command',
+          },
+        ],
+        streamHandler: ({ content }) => {
+          if (content === '/status') {
+            return {
+              command_handled: true,
+              reply: statusReply,
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/status');
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.chat-view__info')
+          ?.textContent?.includes('Agent: Alpha'),
+      100,
+    );
+
+    const inlineInfo = document.body.querySelector('.chat-view__info');
+    expect(inlineInfo?.textContent).toContain(
+      'Agent: Alpha\nModel: claude-sonnet-4',
+    );
+    expect(inlineInfo?.textContent).toContain('Session started: 2026-05-19');
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: '/status',
+    });
+    expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+  });
+
   it('keeps slash skill triggers queued while allowing built-in /stop to bypass during an active run', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
