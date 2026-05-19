@@ -269,14 +269,24 @@ async def test_web_search_handler_brave_http_error(tmp_path: Path) -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_network_error(tmp_path: Path) -> None:
+async def test_web_search_handler_brave_network_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+
+    sleep_attempts: list[int] = []
+
+    async def _fake_sleep(attempt: int) -> None:
+        sleep_attempts.append(attempt)
+
+    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
 
     def _raise_connect_error(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection failed", request=request)
 
-    respx.get(_BRAVE_ENDPOINT).mock(side_effect=_raise_connect_error)
+    route = respx.get(_BRAVE_ENDPOINT).mock(side_effect=_raise_connect_error)
 
     result = await web_search_handler(
         make_context(workspace),
@@ -285,6 +295,45 @@ async def test_web_search_handler_brave_network_error(tmp_path: Path) -> None:
     )
 
     assert_failure_envelope(result, "provider_request_failed")
+    assert len(route.calls) == 4
+    assert sleep_attempts == [0, 1, 2]
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_web_search_handler_retries_transient_http_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    sleep_attempts: list[int] = []
+
+    async def _fake_sleep(attempt: int) -> None:
+        sleep_attempts.append(attempt)
+
+    monkeypatch.setattr("core.tools.web_search._sleep_for_retry", _fake_sleep)
+
+    route = respx.get(_BRAVE_ENDPOINT).mock(
+        side_effect=[
+            httpx.Response(status_code, json={"error": {"message": "temporary failure"}}),
+            httpx.Response(200, json={"web": {"results": []}}),
+        ]
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["result_count"] == 0
+    assert len(route.calls) == 2
+    assert sleep_attempts == [0]
 
 
 @respx.mock
