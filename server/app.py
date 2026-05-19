@@ -18,6 +18,7 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
 )
 from core.chat import ChatLoop, ChatRunManager, CommandDispatcher, RunNotFoundError
+from core.chat.compaction import CompactionService, SummarizationStrategy
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc
@@ -202,7 +203,15 @@ def _initialize_app_state(
 ) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = _runtime_chat_runs(runtime)
-    app.state.chat_loop = _runtime_chat_loop(runtime)
+    app.state.compaction_service = CompactionService(SummarizationStrategy())
+    chat_loop = _runtime_chat_loop(runtime)
+    chat_loop._compaction_service = app.state.compaction_service
+    app.state.chat_loop = chat_loop
+
+    streaming_chat_loop = getattr(runtime, "streaming_chat_loop", None)
+    if streaming_chat_loop is not None:
+        streaming_chat_loop._compaction_service = app.state.compaction_service
+
     app.state.command_dispatcher = _runtime_command_dispatcher(runtime)
     app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))

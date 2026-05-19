@@ -387,6 +387,47 @@ class StubStorage:
             "subagent_timeout_minutes": int(self._settings.get("subagent_timeout_minutes", 60)),
         }
 
+    def load_compaction_settings(self) -> JsonObject:
+        defaults: JsonObject = {
+            "auto": True,
+            "threshold": 0.8,
+            "tail_tokens": 15_000,
+            "summary_model": None,
+        }
+        stored = self._settings.get("compaction")
+        if not isinstance(stored, dict):
+            return dict(defaults)
+
+        normalized = dict(defaults)
+        if isinstance(stored.get("auto"), bool):
+            normalized["auto"] = stored["auto"]
+
+        threshold = stored.get("threshold")
+        if isinstance(threshold, int | float) and not isinstance(threshold, bool):
+            normalized["threshold"] = float(threshold)
+
+        tail_tokens = stored.get("tail_tokens")
+        if isinstance(tail_tokens, int) and not isinstance(tail_tokens, bool):
+            normalized["tail_tokens"] = tail_tokens
+
+        summary_model = stored.get("summary_model")
+        if isinstance(summary_model, str) or summary_model is None:
+            normalized["summary_model"] = summary_model
+
+        return normalized
+
+    def update_compaction_settings(self, compaction: object) -> JsonObject:
+        if not isinstance(compaction, dict):
+            raise StorageError("Compaction settings must be an object")
+
+        current = self.load_compaction_settings()
+        current.update(compaction)
+        self._settings = {
+            **self._settings,
+            "compaction": dict(current),
+        }
+        return dict(current)
+
     def load_settings(self) -> JsonObject:
         return dict(self._settings)
 
@@ -736,6 +777,12 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "max_subagent_depth": 4,
             "max_subagents_per_turn": 8,
             "subagent_timeout_minutes": 60,
+        },
+        "compaction": {
+            "auto": True,
+            "threshold": 0.8,
+            "tail_tokens": 15000,
+            "summary_model": None,
         },
     }
     assert "sk-live-secret" not in str(response)
@@ -1543,6 +1590,42 @@ async def test_settings_update_persists_subagent_settings_and_returns_full_paylo
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_compaction_settings_and_returns_full_payload(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "compaction": {
+                    "auto": False,
+                    "threshold": 0.9,
+                    "tail_tokens": 12000,
+                    "summary_model": "openai/gpt-5.2",
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_compaction_settings() == {
+        "auto": False,
+        "threshold": 0.9,
+        "tail_tokens": 12000,
+        "summary_model": "openai/gpt-5.2",
+    }
+    assert response["result"]["compaction"] == {
+        "auto": False,
+        "threshold": 0.9,
+        "tail_tokens": 12000,
+        "summary_model": "openai/gpt-5.2",
+    }
+
+
+@pytest.mark.asyncio
 async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
     tmp_path: Path,
 ) -> None:
@@ -1649,6 +1732,30 @@ async def test_settings_update_maps_storage_validation_errors_to_domain_error(
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
     assert "Unsupported appearance language" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_compaction_threshold_out_of_range(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "compaction": {
+                    "auto": True,
+                    "threshold": 1.5,
+                    "tail_tokens": 15000,
+                    "summary_model": None,
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "params.compaction.threshold" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -1965,6 +2072,45 @@ async def test_chat_history_filters_internal_notes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_history_includes_compaction_checkpoints(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="compaction-session")
+    state.runtime.agents.update("coder", current_session_id="compaction-session")
+    user_message = ChatMessage.user(content="Visible request")
+    session.append(user_message)
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted context summary",
+            tail_boundary_id=user_message.id,
+            compacted_token_count=321,
+        )
+    )
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="Visible response",
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    messages = response["result"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "compaction_checkpoint",
+        "assistant",
+    ]
+    checkpoint = messages[1]
+    assert checkpoint["content"] == "Compacted context summary"
+    assert checkpoint["tail_boundary_id"] == user_message.id
+    assert checkpoint["usage"] == {"compacted_token_count": 321}
+
+
+@pytest.mark.asyncio
 async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="usage-session")
@@ -2025,6 +2171,41 @@ async def test_chat_send_requires_existing_session(
     assert response["ok"] is False
     assert response["error"]["code"] == "domain_error"
     assert "session does not exist" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_compact_command_when_service_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    adapter = StubAdapter()
+    state = make_state(tmp_path, adapter)
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": " /COMPACT ",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "Compaction is not available.",
+        },
+    }
+    assert adapter.requests == []
+    assert adapter.stream_requests == []
 
 
 @pytest.mark.asyncio

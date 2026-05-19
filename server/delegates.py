@@ -36,13 +36,20 @@ from core.chat import (
     ChatSessionError,
     CommandDispatcher,
     CommandHandled,
+    CompactionSettings,
     Run,
     RunCancelledError,
     RunError,
     RunEvent,
     RunNotFoundError,
 )
-from core.chat.chat import parse_bare_model
+from core.chat.chat import (
+    _close_adapter,
+    _resolve_agent_connection,
+    _split_agent_model,
+    parse_bare_model,
+    parse_model_with_connection,
+)
 from core.chat.content_blocks import (
     ContentBlock,
     ContentBlockError,
@@ -684,6 +691,12 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _parse_chat_content(params, "content")
 
     command_text = _extract_command_text(content)
+    if command_text and command_text.strip().lower() == "/compact":
+        try:
+            return await _handle_compact_command(state, agent_id, session_id)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+
     if command_text is not None:
         try:
             command_result = _state_command_dispatcher(state).dispatch(
@@ -711,6 +724,12 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _parse_chat_content(params, "content")
 
     command_text = _extract_command_text(content)
+    if command_text and command_text.strip().lower() == "/compact":
+        try:
+            return await _handle_compact_command(state, agent_id, session_id)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+
     if command_text is not None:
         try:
             command_result = _state_command_dispatcher(state).dispatch(
@@ -730,6 +749,106 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+
+
+async def _handle_compact_command(state: Any, agent_id: str, session_id: str) -> JsonObject:
+    compaction_service = getattr(state, "compaction_service", None)
+    if compaction_service is None:
+        return _command_handled_response("Compaction is not available.")
+
+    runtime = state.runtime
+    agent = runtime.agents.get(agent_id)
+    session = runtime.chat_sessions.get(agent_id, session_id)
+    messages = session.load()
+    raw_settings = runtime.storage.load_compaction_settings()
+    settings = CompactionSettings(
+        auto=raw_settings["auto"],
+        threshold=raw_settings["threshold"],
+        tail_tokens=raw_settings["tail_tokens"],
+        summary_model=raw_settings["summary_model"],
+    )
+
+    provider_id, connection_id = _resolve_agent_connection(runtime, agent)
+    adapter = runtime.get_adapter(provider_id, connection_id)
+    _model_provider_id, model_id = _split_agent_model(agent.model)
+    summary_adapter = adapter
+    summary_model_id = model_id
+
+    try:
+        summary_adapter, summary_model_id = _resolve_summary_adapter_for_compact(
+            runtime,
+            adapter,
+            model_id,
+            settings,
+        )
+        checkpoint = await compaction_service.compact(
+            messages,
+            agent=agent,
+            summary_adapter=summary_adapter,
+            summary_model_id=summary_model_id,
+            storage=runtime.storage,
+            settings=settings,
+        )
+        session.append(checkpoint)
+    except Exception as exc:
+        return _command_handled_response(f"Compaction failed: {exc}")
+    finally:
+        await _close_adapter(adapter)
+        if summary_adapter is not adapter:
+            await _close_adapter(summary_adapter)
+
+    return _command_handled_response("Context compacted.")
+
+
+def _resolve_summary_adapter_for_compact(
+    runtime: Any,
+    adapter: Any,
+    model_id: str,
+    settings: CompactionSettings,
+) -> tuple[Any, str]:
+    summary_model = settings.summary_model
+    if not isinstance(summary_model, str):
+        return adapter, model_id
+
+    normalized_summary_model = summary_model.strip()
+    if not normalized_summary_model:
+        return adapter, model_id
+
+    try:
+        provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
+            normalized_summary_model
+        )
+    except ChatError:
+        return adapter, model_id
+
+    connection_id: str | None = None
+    if connection_suffix:
+        connection_id = f"{provider_id}:{connection_suffix}"
+    else:
+        try:
+            provider = runtime.providers.get(provider_id)
+        except Exception:
+            return adapter, model_id
+
+        credential_resolver = getattr(runtime, "provider_credentials", None)
+        if credential_resolver is None:
+            return adapter, model_id
+
+        for connection in provider.connections:
+            candidate_connection_id = f"{provider_id}:{connection.id}"
+            if credential_resolver.has_credentials(provider_id, candidate_connection_id):
+                connection_id = candidate_connection_id
+                break
+
+    if connection_id is None:
+        return adapter, model_id
+
+    try:
+        summary_adapter = runtime.get_adapter(provider_id, connection_id)
+    except Exception:
+        return adapter, model_id
+
+    return summary_adapter, summary_model_id
 
 
 async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -1174,6 +1293,8 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
                 reload_skills()
         if "subagents" in settings_update:
             _update_subagent_settings(state.runtime.storage, settings_update["subagents"])
+        if "compaction" in settings_update:
+            state.runtime.storage.update_compaction_settings(settings_update["compaction"])
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -1278,7 +1399,7 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
 
 
 def _parse_settings_update(params: JsonObject) -> JsonObject:
-    supported_sections = {"appearance", "skills", "subagents"}
+    supported_sections = {"appearance", "skills", "subagents", "compaction"}
     unsupported_sections = sorted(set(params) - supported_sections)
     if unsupported_sections:
         raise RpcError(
@@ -1299,6 +1420,9 @@ def _parse_settings_update(params: JsonObject) -> JsonObject:
 
     if "subagents" in params:
         parsed_update["subagents"] = _parse_subagents_update(params["subagents"])
+
+    if "compaction" in params:
+        parsed_update["compaction"] = _parse_compaction_update(params["compaction"])
 
     return parsed_update
 
@@ -1369,6 +1493,60 @@ def _parse_subagents_update(subagents: Any) -> JsonObject:
     return {
         field: _positive_integer(subagents[field], f"params.subagents.{field}")
         for field in SUBAGENT_SETTING_FIELDS
+    }
+
+
+def _parse_compaction_update(compaction: Any) -> JsonObject:
+    if not isinstance(compaction, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.compaction must be an object")
+
+    supported_fields = {"auto", "threshold", "tail_tokens", "summary_model"}
+    unsupported_fields = sorted(set(compaction) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported compaction settings: {', '.join(unsupported_fields)}",
+        )
+
+    required_fields = ("auto", "threshold", "tail_tokens", "summary_model")
+    missing_fields = [field for field in required_fields if field not in compaction]
+    if missing_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"missing compaction settings: {', '.join(missing_fields)}",
+        )
+
+    auto = compaction["auto"]
+    if not isinstance(auto, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.compaction.auto must be a boolean")
+
+    threshold_value = compaction["threshold"]
+    if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.compaction.threshold must be a number",
+        )
+    threshold = float(threshold_value)
+    if threshold <= 0 or threshold > 1:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.compaction.threshold must be in (0, 1]",
+        )
+
+    tail_tokens = _positive_integer(compaction["tail_tokens"], "params.compaction.tail_tokens")
+
+    summary_model = compaction["summary_model"]
+    if summary_model is not None and not isinstance(summary_model, str):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.compaction.summary_model must be a string or null",
+        )
+
+    return {
+        "auto": auto,
+        "threshold": threshold,
+        "tail_tokens": tail_tokens,
+        "summary_model": summary_model,
     }
 
 
@@ -1501,6 +1679,7 @@ def _settings_response(state: Any) -> JsonObject:
     runtime = state.runtime
     appearance = runtime.storage.load_appearance_settings()
     subagents = runtime.storage.load_subagent_settings()
+    compaction = runtime.storage.load_compaction_settings()
     server_bind = _server_bind_response(state)
 
     response = {
@@ -1523,6 +1702,7 @@ def _settings_response(state: Any) -> JsonObject:
             "available_languages": runtime.storage.supported_appearance_languages(),
         },
         "subagents": {field: subagents[field] for field in SUBAGENT_SETTING_FIELDS},
+        "compaction": dict(compaction),
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
     if callable(skill_directory_loader):
@@ -1849,7 +2029,7 @@ def _visible_message(message: ChatMessage) -> JsonObject:
 
 
 def _is_visible_history_message(message: ChatMessage) -> bool:
-    return message.role not in ("note",)
+    return message.role != "note"
 
 
 def _resolve_context_window(state: Any, model: str) -> int | None:
