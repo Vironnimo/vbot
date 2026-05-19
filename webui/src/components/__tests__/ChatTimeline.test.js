@@ -443,6 +443,240 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.inline-attachment-image')).toBeNull();
   });
 
+  it('renders markdown bold in completed assistant run output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-bold',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-assistant-markdown-bold',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: '**bold**',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const strong = document.querySelector(
+      '.assistant-run .msg-markdown strong',
+    );
+    expect(strong).toBeTruthy();
+    expect(strong.textContent).toBe('bold');
+  });
+
+  it('renders markdown code blocks in completed assistant run output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-code-block',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-assistant-markdown-code-block',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: '```\nconst value = 1;\n```',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const pre = document.querySelector('.assistant-run .msg-markdown pre');
+    expect(pre).toBeTruthy();
+    expect(pre.textContent).toContain('const value = 1;');
+  });
+
+  it('keeps markdown-like user text as plain text', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-markdown-literal',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-markdown-literal',
+        role: 'user',
+        content: '**bold**',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const userBodyText = document.querySelector('.msg.user .msg-body-text');
+    expect(userBodyText).toBeTruthy();
+    expect(userBodyText.textContent).toContain('**bold**');
+    expect(document.querySelector('.msg.user strong')).toBeNull();
+  });
+
+  it('renders markdown while assistant output is streaming', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-streaming',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-assistant-markdown-streaming',
+      sequence: 1,
+      payload: {
+        content_delta: '**streaming**',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const strong = document.querySelector(
+      '.assistant-run .msg-markdown.streaming-text strong',
+    );
+    expect(strong).toBeTruthy();
+    expect(strong.textContent).toBe('streaming');
+  });
+
+  it('renders an open fenced code block while assistant output is streaming', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-streaming-open-fence',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-assistant-markdown-streaming-open-fence',
+      sequence: 1,
+      payload: {
+        content_delta: '## Title\n\n```js\nconst value = 1;',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const heading = document.querySelector(
+      '.assistant-run .msg-markdown.streaming-text h2',
+    );
+    const codeBlock = document.querySelector(
+      '.assistant-run .msg-markdown.streaming-text pre code',
+    );
+    expect(heading).toBeTruthy();
+    expect(heading.textContent).toBe('Title');
+    expect(codeBlock).toBeTruthy();
+    expect(codeBlock.textContent).toContain('const value = 1;');
+  });
+
+  it('renders markdown headings for history assistant messages', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-assistant-markdown-heading',
+    );
+    sessionState.messages = [
+      {
+        id: 'assistant-history-heading',
+        role: 'assistant',
+        content: '## Title',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const heading = document.querySelector('.msg.assistant .msg-markdown h2');
+    expect(heading).toBeTruthy();
+    expect(heading.textContent).toBe('Title');
+  });
+
+  it('keeps reasoning-only assistant history as plain text', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-assistant-reasoning-only-plain',
+    );
+    sessionState.messages = [
+      {
+        id: 'assistant-history-reasoning-only',
+        role: 'assistant',
+        content: null,
+        reasoning: '## Thinking **bold** [link](https://example.com)',
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const assistantBodyText = document.querySelector(
+      '.msg.assistant .msg-body-text',
+    );
+    expect(assistantBodyText).toBeTruthy();
+    expect(assistantBodyText.textContent).toContain(
+      '## Thinking **bold** [link](https://example.com)',
+    );
+    expect(document.querySelector('.msg.assistant .msg-markdown')).toBeNull();
+    expect(document.querySelector('.msg.assistant h2')).toBeNull();
+    expect(document.querySelector('.msg.assistant strong')).toBeNull();
+    expect(document.querySelector('.msg.assistant a')).toBeNull();
+  });
+
   it('uses human-readable label instead of raw JSON for known tool', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -1258,7 +1492,7 @@ describe('ChatTimeline', () => {
       true,
     );
     expect(renderedChildren[1].classList.contains('run-tool-event')).toBe(true);
-    expect(renderedChildren[2].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[2].classList.contains('msg-markdown')).toBe(true);
     expect(renderedChildren[0].textContent).toContain(
       'Thinking starts and keeps going',
     );
@@ -1332,11 +1566,11 @@ describe('ChatTimeline', () => {
     const renderedChildren = Array.from(runContent.children);
 
     expect(renderedChildren).toHaveLength(3);
-    expect(renderedChildren[0].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[0].classList.contains('msg-markdown')).toBe(true);
     expect(renderedChildren[0].textContent).toContain('First answer');
     expect(renderedChildren[1].classList.contains('run-tool-event')).toBe(true);
     expect(renderedChildren[1].textContent).toContain('read');
-    expect(renderedChildren[2].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[2].classList.contains('msg-markdown')).toBe(true);
     expect(renderedChildren[2].textContent).toContain('Second answer');
   });
 
@@ -1530,7 +1764,7 @@ describe('ChatTimeline', () => {
     expect(renderedChildren[0].classList.contains('reasoning-block')).toBe(
       true,
     );
-    expect(renderedChildren[1].classList.contains('msg-body-text')).toBe(true);
+    expect(renderedChildren[1].classList.contains('msg-markdown')).toBe(true);
     expect(
       document.body.textContent.match(/Summarize the result\./g),
     ).toHaveLength(1);

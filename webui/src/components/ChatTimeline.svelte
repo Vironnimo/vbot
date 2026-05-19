@@ -3,6 +3,7 @@
 
   import { getAttachmentUrl } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
 
   import { visibleTimelineItems } from '../lib/chatState.js';
 
@@ -243,6 +244,11 @@
 
   const hasAssistantContent = (message) =>
     message.role === 'assistant' && Boolean(message.content);
+
+  const isReasoningOnlyAssistantMessage = (message) =>
+    message.role === 'assistant' &&
+    Boolean(message.reasoning) &&
+    !message.content;
 
   const messageFromEvent = (event) => event.payload?.message ?? null;
 
@@ -1081,12 +1087,13 @@
                   </div>
                 </details>
               {:else}
-                <p class="msg-body-text streaming-text">
-                  {item.streamingItem.content}<span
-                    class="streaming-caret"
-                    aria-hidden="true"
-                  ></span>
-                </p>
+                <div class="msg-markdown streaming-text">
+                  <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                  {@html renderMarkdownStreaming(
+                    item.streamingItem.content ?? '',
+                  )}
+                  <span class="streaming-caret" aria-hidden="true"></span>
+                </div>
               {/if}
             </div>
           </article>
@@ -1213,15 +1220,19 @@
                     </details>
                   {/if}
                 {:else if child.type === 'assistant_output'}
-                  <p
-                    class="msg-body-text"
+                  <div
+                    class="msg-markdown"
                     class:streaming-text={child.streaming}
                   >
-                    {child.content}{#if child.streaming}<span
+                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                    {@html child.streaming
+                      ? renderMarkdownStreaming(child.content ?? '')
+                      : renderMarkdown(child.content ?? '')}
+                    {#if child.streaming}<span
                         class="streaming-caret"
                         aria-hidden="true"
                       ></span>{/if}
-                  </p>
+                  </div>
                 {:else if child.type === 'model_fallback'}
                   <div class="model-fallback-notice">
                     {t('chat.modelFallbackActivated', 'Switched to {model}', {
@@ -1271,7 +1282,18 @@
                   {/each}
                 </div>
               {:else if textFromMessage(item.message)}
-                <p class="msg-body-text">{textFromMessage(item.message)}</p>
+                {#if item.message.role === 'assistant'}
+                  {#if isReasoningOnlyAssistantMessage(item.message)}
+                    <p class="msg-body-text">{textFromMessage(item.message)}</p>
+                  {:else}
+                    <div class="msg-markdown">
+                      <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                      {@html renderMarkdown(textFromMessage(item.message))}
+                    </div>
+                  {/if}
+                {:else}
+                  <p class="msg-body-text">{textFromMessage(item.message)}</p>
+                {/if}
               {/if}
             </div>
           </article>
