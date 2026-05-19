@@ -189,12 +189,15 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   Python fallback without requiring ripgrep as a dependency.
 - `web_fetch` accepts exactly `url`, `include_links`, and `raw`;
   `additionalProperties` is false. It allows only `http` and `https` URLs,
-  blocks a fixed SSRF-deny prefix set for localhost and private-network targets,
-  retries transient HTTP 429/5xx responses up to 3 times with exponential
-  backoff plus jitter, and returns extracted text under `data.content`.
+  validates each request target as public after URL parsing and DNS resolution,
+  rejects localhost/private/link-local/multicast/reserved targets including
+  obfuscated IP forms, retries transient HTTP 429/5xx responses up to 3 times
+  with exponential backoff plus jitter, and returns extracted text under
+  `data.content`.
 - `web_fetch` uses `httpx.AsyncClient` with browser-like headers and follows
-  redirects. HTML responses are converted to readable text via BeautifulSoup;
-  non-HTML or `raw=True` responses return truncated response text unchanged.
+  redirects through explicit per-hop validation instead of blind auto-follow.
+  HTML responses are converted to readable text via BeautifulSoup; non-HTML or
+  `raw=True` responses return truncated response text unchanged.
 - `bash` resolves relative working directories from `ToolContext.workspace` and
   accepts absolute working directories unchanged. It uses the platform-native
   shell (`pwsh` on Windows, `bash -c` elsewhere) and blocks sensitive environment
