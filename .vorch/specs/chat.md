@@ -46,7 +46,7 @@ container; a Run is one active execution inside that session.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
 - `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, and allows parallel Runs in different Sessions.
-- `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins return a handled result with optional reply text; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins include `/new`, `/stop`, and `/compact`.
+- `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins return a handled result with optional reply text; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins include `/stop` and `/compact`.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
@@ -107,7 +107,7 @@ container; a Run is one active execution inside that session.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
 - User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
-- Recognized built-in slash commands (currently `/new`, `/stop`, and `/compact`) are not part of that
+- Recognized built-in slash commands (currently `/stop` and `/compact`) are not part of that
   skill-activation path. They are handled earlier by the shared command
   dispatcher; unrecognized slash text still reaches the existing skill-trigger
   logic unchanged.

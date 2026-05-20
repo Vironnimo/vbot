@@ -104,6 +104,7 @@ class CommandDispatcher:
                     reply="A new session can be started after the current run finishes.",
                 )
 
+            self._agents.get(agent_id)
             new_session = self._sessions.create(agent_id)
             self._agents.update(agent_id, current_session_id=new_session.id)
             return CommandHandled(reply=f"New session started: {new_session.id}")
