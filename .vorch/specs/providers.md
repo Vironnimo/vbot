@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. OpenAI-compatible adapters may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
+Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. All adapter families may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -536,7 +536,7 @@ model = runtime.get_model("openrouter", "anthropic/claude-sonnet-4")  # → Mode
 2. Validates that `connection_id` has the same provider prefix and maps to a known provider-local connection ID
 3. Resolves connection credentials through the central provider credential resolver — `api_key` credentials come from environment or data-dir `.env`; token-store backed `oauth` credentials come from `TokenStore`; missing credential → `ConfigError`
 4. Selects adapter class: `provider_config.adapter` → `_ADAPTER_MAP` lookup — unknown → `ConfigError`
-5. Instantiates adapter with `(provider_config, token_getter, connection.base_url, connection.auth)`; adapters use the provider base URL unless the connection overrides it. GitHub Copilot additionally receives a narrow model metadata lookup so its runtime policy can read `Model.metadata` for exact model IDs.
+5. Instantiates adapter with `(provider_config, token_getter, connection.base_url, connection.auth, model_lookup=...)`; adapters use the provider base URL unless the connection overrides it. The injected lookup is provider-scoped and backed by `ModelRegistry`, so adapters can read normalized `Model` facts for exact model IDs without direct registry access.
 6. Returns wired `ProviderAdapter` instance
 
 `ProviderCredentialResolver` supports both provider-level and connection-level calls:
