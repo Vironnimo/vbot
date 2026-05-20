@@ -66,15 +66,32 @@
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
+  const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
 
   let activeViewId = $state(navigationItems[0].id);
   let agents = $state([]);
-  let selectedAgentId = $state('');
+  let selectedAgentId = $state(
+    (typeof localStorage !== 'undefined' &&
+      localStorage.getItem(SELECTED_AGENT_KEY)) ||
+      '',
+  );
   let agentsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let toastState = $state(createToastState());
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
+
+  $effect(() => {
+    try {
+      if (selectedAgentId) {
+        localStorage.setItem(SELECTED_AGENT_KEY, selectedAgentId);
+      } else {
+        localStorage.removeItem(SELECTED_AGENT_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
+  });
 
   const selectView = (viewId) => {
     activeViewId = viewId;

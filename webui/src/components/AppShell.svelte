@@ -84,6 +84,9 @@
             {:else if item.id === 'agents'}
               <circle cx="8" cy="5" r="2.5" />
               <path d="M2 14c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+            {:else if item.id === 'cron'}
+              <circle cx="8" cy="8" r="6" />
+              <path d="M8 4.5V8l2.5 2.5" />
             {:else if item.id === 'system-prompt'}
               <rect x="2" y="2" width="12" height="12" rx="2" />
               <path d="M5 6h6M5 9h4" />
