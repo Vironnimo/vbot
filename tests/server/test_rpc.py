@@ -2204,7 +2204,7 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
     command_names = [
         item["name"] for item in response["result"]["items"] if item.get("type") == "command"
     ]
-    assert command_names == ["compact", "status", "stop"]
+    assert command_names == ["compact", "new", "status", "stop"]
     assert all(not name.startswith("/") for name in command_names)
 
 
