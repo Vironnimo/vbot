@@ -621,14 +621,6 @@
           ? t('sessions.hide', 'Hide sessions')
           : t('sessions.title', 'Sessions')}
       </button>
-      <button
-        type="button"
-        class="btn-outline chat-refresh"
-        onclick={loadAgents}
-        disabled={chatState.loadingAgents}
-      >
-        {t('common.refresh', 'Refresh')}
-      </button>
       {#if activeSessionState && isRunActive(activeSessionState)}
         <button
           type="button"
@@ -1009,7 +1001,6 @@
       justify-content: flex-end;
     }
 
-    .chat-refresh,
     .token-badge {
       display: none;
     }
