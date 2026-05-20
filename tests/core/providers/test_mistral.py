@@ -598,6 +598,124 @@ async def test_stream_typed_list_delta_text_yields_content_delta(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_stream_typed_list_delta_yields_finish_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "text", "text": "Text1"},
+                    ]
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_yields_usage_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "text", "text": "Text1"},
+                    ]
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 21, "completion_tokens": 8},
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "usage", "input_tokens": 21, "output_tokens": 8},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_with_finish_and_usage_preserves_order(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "thinking", "thinking": "Think1"},
+                        {"type": "text", "text": "Text1"},
+                    ]
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 34, "completion_tokens": 13},
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "reasoning_delta", "text": "Think1"},
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "finish", "reason": "stop"},
+        {"type": "usage", "input_tokens": 34, "output_tokens": 13},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_stream_string_content_delta_delegates_to_base(
     mistral_adapter: MistralAdapter,
 ) -> None:
