@@ -54,6 +54,7 @@ class CommandDispatcher:
 
     BUILT_IN_COMMANDS: dict[str, str] = {
         "compact": "Compact the current session's context immediately.",
+        "new": "Start a new session for the current agent.",
         "status": "Show current session and runtime status.",
         "stop": "Cancel the active run for this session.",
     }
@@ -72,6 +73,7 @@ class CommandDispatcher:
         self._models = models
         self._started_at = started_at
         self._commands: dict[str, CommandHandler] = {
+            "/new": self._handle_new,
             "/status": self._handle_status,
             "/stop": self._handle_stop,
         }
@@ -90,6 +92,23 @@ class CommandDispatcher:
         except RunNotFoundError:
             return CommandHandled(reply="No active run to cancel.")
         return CommandHandled(reply="Run cancelled.")
+
+    def _handle_new(self, agent_id: str, session_id: str) -> CommandHandled:
+        if self._sessions is None or self._agents is None:
+            return CommandHandled(reply="Session management is not available.")
+
+        try:
+            active_run = self._chat_runs.active_run(agent_id=agent_id, session_id=session_id)
+            if active_run is not None:
+                return CommandHandled(
+                    reply="A new session can be started after the current run finishes.",
+                )
+
+            new_session = self._sessions.create(agent_id)
+            self._agents.update(agent_id, current_session_id=new_session.id)
+            return CommandHandled(reply=f"New session started: {new_session.id}")
+        except Exception:
+            raise
 
     def _handle_status(self, agent_id: str, session_id: str) -> CommandHandled:
         agent: Agent | None = None
