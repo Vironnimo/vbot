@@ -40,6 +40,10 @@ class ProviderAdapter(ABC):
     remain opaque to callers outside the chat core.
     """
 
+    def __init__(self, model_lookup: ModelLookup | None = None) -> None:
+        """Store the optional provider-scoped model lookup contract."""
+        self._model_lookup = model_lookup
+
     @abstractmethod
     async def aclose(self) -> None:
         """Close the HTTP client and release resources.
