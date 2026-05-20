@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-18T17:54:42.584511+00:00",
+  "fetched_at": "2026-05-20T12:22:18.795053+00:00",
   "provider_id": "github-copilot",
   "raw_response": {
     "data": [
@@ -161,6 +161,52 @@
       },
       {
         "capabilities": {
+          "family": "gemini-3.5-flash",
+          "limits": {
+            "max_context_window_tokens": 200000,
+            "max_output_tokens": 64000,
+            "max_prompt_tokens": 128000,
+            "vision": {
+              "max_prompt_image_size": 3145728,
+              "max_prompt_images": 10,
+              "supported_media_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ]
+            }
+          },
+          "object": "model_capabilities",
+          "supports": {
+            "max_thinking_budget": 24000,
+            "min_thinking_budget": 256,
+            "parallel_tool_calls": true,
+            "reasoning_effort": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "streaming": true,
+            "tool_calls": true,
+            "vision": true
+          },
+          "tokenizer": "o200k_base",
+          "type": "chat"
+        },
+        "id": "gemini-3.5-flash",
+        "model_picker_category": "lightweight",
+        "model_picker_enabled": true,
+        "name": "Gemini 3.5 Flash",
+        "object": "model",
+        "preview": false,
+        "supported_endpoints": [
+          "/chat/completions"
+        ],
+        "vendor": "Google",
+        "version": "gemini-3.5-flash"
+      },
+      {
+        "capabilities": {
           "family": "gpt-5.2-codex",
           "limits": {
             "max_context_window_tokens": 400000,
@@ -251,10 +297,6 @@
         "model_picker_enabled": true,
         "name": "GPT-5.3-Codex",
         "object": "model",
-        "policy": {
-          "state": "enabled",
-          "terms": "Enable access to the latest GPT-5.3-Codex model from OpenAI. [Learn more about how GitHub Copilot serves GPT-5.3-Codex](https://gh.io/copilot-openai)."
-        },
         "preview": false,
         "supported_endpoints": [
           "/responses",

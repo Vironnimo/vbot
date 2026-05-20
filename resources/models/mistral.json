@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-20T09:52:24.995428+00:00",
+  "fetched_at": "2026-05-20T12:22:19.674617+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -96,7 +96,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -330,7 +330,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -343,7 +343,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -356,7 +356,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -369,7 +369,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -382,7 +382,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -421,7 +421,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -434,7 +434,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -473,7 +473,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
@@ -486,7 +486,7 @@
       "capabilities": {
         "json_mode": true,
         "reasoning": {
-            "supported": true
+          "supported": true
         },
         "tools": true,
         "vision": true
