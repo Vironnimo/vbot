@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
@@ -20,6 +20,8 @@ from core.providers.openai_compatible import (
     _read_optional_non_empty_string,
     _read_string,
 )
+from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.token_getter import TokenGetter
 
 MISTRAL_HIGH_REASONING_EFFORTS = {"medium", "high", "xhigh", "max"}
 MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES = ("magistral-medium",)
@@ -27,6 +29,17 @@ MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES = ("magistral-medium",)
 
 class MistralAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with Mistral-specific catalog and reasoning behavior."""
+
+    def __init__(
+        self,
+        config: ProviderConfig,
+        token_getter: TokenGetter | str,
+        base_url: str | None = None,
+        auth_config: AuthConfig | None = None,
+        model_reasoning_supported_lookup: Callable[[str], bool | None] | None = None,
+    ) -> None:
+        super().__init__(config, token_getter, base_url, auth_config)
+        self._model_reasoning_supported_lookup = model_reasoning_supported_lookup
 
     @classmethod
     def normalize_catalog_entry(
@@ -73,6 +86,11 @@ class MistralAdapter(OpenAICompatibleAdapter):
         thinking_effort = kwargs.pop("thinking_effort", "")
         payload = super()._build_payload(messages, model_id, **kwargs)
 
+        if self._model_reasoning_supported(model_id) is False:
+            payload.pop("reasoning_effort", None)
+            payload.pop("prompt_mode", None)
+            return payload
+
         use_prompt_mode_reasoning = any(
             model_id.startswith(prefix) for prefix in MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES
         )
@@ -91,6 +109,11 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 payload["reasoning_effort"] = "none"
 
         return payload
+
+    def _model_reasoning_supported(self, model_id: str) -> bool | None:
+        if self._model_reasoning_supported_lookup is None:
+            return None
+        return self._model_reasoning_supported_lookup(model_id)
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         message = _first_choice_message(response)
