@@ -1,94 +1,94 @@
 {
-  "fetched_at": "2026-05-18T17:54:43.482185+00:00",
+  "fetched_at": "2026-05-20T12:22:20.146336+00:00",
   "provider_id": "opencode-go",
   "raw_response": {
     "data": [
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "minimax-m2.7",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "minimax-m2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "kimi-k2.6",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "kimi-k2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "glm-5.1",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "glm-5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "deepseek-v4-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "deepseek-v4-flash",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "qwen3.6-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "qwen3.5-plus",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "mimo-v2-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "mimo-v2-omni",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "mimo-v2.5-pro",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "mimo-v2.5",
         "object": "model",
         "owned_by": "opencode"
       },
       {
-        "created": 1779126889,
+        "created": 1779279741,
         "id": "hy3-preview",
         "object": "model",
         "owned_by": "opencode"

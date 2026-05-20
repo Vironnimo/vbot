@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-18T17:54:44.110727+00:00",
+  "fetched_at": "2026-05-20T12:22:20.872695+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -894,7 +894,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 1048576,
+      "context_window": 1000000,
       "max_output_tokens": 8192,
       "name": "Google: Gemini 2.0 Flash"
     },
@@ -1092,6 +1092,19 @@
       "context_window": 1048756,
       "max_output_tokens": 65536,
       "name": "Google: Gemini 3.1 Pro Preview Custom Tools"
+    },
+    "google/gemini-3.5-flash": {
+      "capabilities": {
+        "json_mode": true,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "name": "Google: Gemini 3.5 Flash"
     },
     "google/gemma-2-27b-it": {
       "capabilities": {
@@ -3859,7 +3872,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 81920,
+      "max_output_tokens": 4096,
       "name": "Qwen: Qwen3.5-35B-A3B"
     },
     "qwen/qwen3.5-397b-a17b": {
@@ -3950,7 +3963,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 262144,
+      "max_output_tokens": 4096,
       "name": "Qwen: Qwen3.6 35B A3B"
     },
     "qwen/qwen3.6-flash": {
@@ -4436,7 +4449,7 @@
     },
     "z-ai/glm-4.6v": {
       "capabilities": {
-        "json_mode": false,
+        "json_mode": true,
         "reasoning": {
           "supported": true
         },
@@ -4508,8 +4521,8 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 202752,
-      "max_output_tokens": 4096,
+      "context_window": 202800,
+      "max_output_tokens": 202800,
       "name": "Z.ai: GLM 5.1"
     },
     "z-ai/glm-5v-turbo": {

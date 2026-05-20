@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-18T17:54:42.584511+00:00",
+  "fetched_at": "2026-05-20T12:22:18.795053+00:00",
   "models": {
     "accounts/msft/routers/f185i3v4": {
       "capabilities": {
@@ -323,6 +323,39 @@
         }
       },
       "name": "Gemini 3.1 Pro"
+    },
+    "gemini-3.5-flash": {
+      "capabilities": {
+        "json_mode": false,
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "family": "gemini-3.5-flash",
+          "max_thinking_budget": 24000,
+          "min_thinking_budget": 256,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Google",
+          "version": "gemini-3.5-flash"
+        }
+      },
+      "name": "Gemini 3.5 Flash"
     },
     "gpt-3.5-turbo": {
       "capabilities": {
