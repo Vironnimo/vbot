@@ -162,6 +162,7 @@ ProviderAdapter (ABC)          — core/providers/adapter.py
 
 ```python
 class ProviderAdapter(ABC):
+  def __init__(self, model_lookup: ModelLookup | None = None) -> None: ...
     @abstractmethod
     async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict: ...
     @abstractmethod
@@ -173,6 +174,7 @@ class ProviderAdapter(ABC):
 - `stream()` — streaming request, yields normalized provider-agnostic delta dicts (`content_delta`, `reasoning_delta`, `tool_call_delta`, internal-only `reasoning_meta`, `usage`, `finish`), never raw provider SSE chunks
 - `messages` is a list of dicts — the chat layer serializes `ChatMessage` objects via `.to_dict()` before passing them to the adapter
 - `model_id` is the exact string sent to the provider API (no remapping)
+- `__init__(model_lookup=None)` stores the provider-scoped, read-only catalog lookup on `self._model_lookup` for all adapter families.
 - `**kwargs` carries provider-specific overrides (temperature, max_tokens, thinking config, etc.)
 - `normalize_response()` converts provider raw responses into canonical assistant fields: `content`, `reasoning`, `reasoning_meta`, and `tool_calls`.
 
@@ -207,7 +209,7 @@ this adapter.
 - Caller `**kwargs` merged in last (highest priority)
 - `extra_headers` added to request headers
 - Auth: `Authorization: Bearer <api_key>` (configurable via `AuthConfig`)
-- Construction contract: `OpenAICompatibleAdapter` may receive an optional `model_lookup(model_id) -> Model | None`, a provider-scoped, read-only lookup over the normalized catalog. Runtime wires this for the OpenAI-compatible adapter family so subclasses can consume catalog facts without direct registry access or file I/O.
+- Construction contract: `OpenAICompatibleAdapter` participates in the shared `ProviderAdapter` base contract and may receive `model_lookup(model_id) -> Model | None`, a provider-scoped, read-only lookup over the normalized catalog. Runtime wires this for all adapters so subclasses can consume catalog facts without direct registry access or file I/O.
 
 **Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. The base adapter always merges `stream_options: {"include_usage": true}` into streaming payloads so OpenAI-compatible usage chunks can be captured without provider-name checks. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
 
@@ -242,7 +244,7 @@ OpenCode Go is OpenAI-compatible for chat completions but requires one provider-
 
 - Runtime reasoning round-trip: when an internal assistant message carries non-empty `reasoning`, `OpenCodeGoAdapter` echoes it back on the wire as `reasoning_content`.
 - `minimax-m2.7` is the current exception to the normal OpenAI-compatible transport: `OpenCodeGoAdapter` routes that model through an internal `AnthropicAdapter` instance to `POST /messages` using the provider's configured base URL and `x-api-key` auth metadata. All other OpenCode Go models continue to use `POST /chat/completions`.
-- Constructor contract: `OpenCodeGoAdapter` keeps the shared optional `model_lookup` parameter from `OpenAICompatibleAdapter` even though it does not currently use catalog facts at runtime.
+- Constructor contract: `OpenCodeGoAdapter` accepts the shared optional `model_lookup` parameter through the `ProviderAdapter` base contract even though it does not currently use catalog facts at runtime.
 - This behavior is intentionally subclass-local; the generic `OpenAICompatibleAdapter` does not infer provider-specific `reasoning_content` replay rules.
 
 ### OpenRouterAdapter
@@ -411,6 +413,8 @@ and other unsanitized provider data are not stored in model catalogs.
 ### AnthropicAdapter
 
 **Wire protocol** — Anthropic Messages API, own format.
+
+- Constructor contract: `AnthropicAdapter` accepts the shared optional `model_lookup` parameter through the `ProviderAdapter` base contract even though it does not currently consume catalog facts at runtime.
 
 **Endpoint:** `POST /messages`
 
