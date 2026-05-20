@@ -322,7 +322,7 @@ def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runt
 
 
 def test_runtime_wires_anthropic_adapter_with_model_lookup(runtime: Runtime) -> None:
-    """Anthropic adapters receive a runtime-backed model lookup."""
+    """Anthropic adapters get a provider-scoped runtime model lookup."""
     # Arrange
     provider_config = ProviderConfig(
         id="anthropic",
@@ -347,14 +347,60 @@ def test_runtime_wires_anthropic_adapter_with_model_lookup(runtime: Runtime) -> 
         runtime.providers,
         process_env={"ANTHROPIC_API_KEY": "anthropic-token"},
     )
-    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+    anthropic_model = Model(
+        model_id="shared-model-id",
+        name="Anthropic Shared Model",
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=200000,
+        max_output_tokens=8192,
+        metadata={},
+    )
+    runtime._models = ModelRegistry(  # type: ignore[attr-defined]
+        {
+            ("anthropic", "shared-model-id"): anthropic_model,
+            ("openrouter", "shared-model-id"): Model(
+                model_id="shared-model-id",
+                name="OpenRouter Shared Model",
+                capabilities=Capabilities(
+                    vision=True,
+                    tools=True,
+                    json_mode=True,
+                    reasoning=ReasoningCapabilities(supported=False),
+                ),
+                context_window=128000,
+                max_output_tokens=4096,
+                metadata={},
+            ),
+            ("openrouter", "openrouter-only-model"): Model(
+                model_id="openrouter-only-model",
+                name="OpenRouter Only Model",
+                capabilities=Capabilities(
+                    vision=False,
+                    tools=True,
+                    json_mode=True,
+                    reasoning=ReasoningCapabilities(supported=False),
+                ),
+                context_window=64000,
+                max_output_tokens=4096,
+                metadata={},
+            ),
+        }
+    )
 
     # Act
     adapter = runtime.get_adapter("anthropic", "anthropic:api-key")
 
     # Assert
     assert isinstance(adapter, AnthropicAdapter)
-    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+    lookup = adapter._model_lookup  # type: ignore[attr-defined]
+    assert lookup is not None
+    assert lookup("shared-model-id") == anthropic_model
+    assert lookup("openrouter-only-model") is None
 
 
 def test_runtime_wires_copilot_adapter_with_model_metadata_lookup(runtime: Runtime) -> None:
