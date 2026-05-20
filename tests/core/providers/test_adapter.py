@@ -88,6 +88,16 @@ class TestProviderAdapterABC:
         adapter = _StubAdapter()
         assert isinstance(adapter, ProviderAdapter)
 
+    def test_constructor_stores_model_lookup_callable(self) -> None:
+        """ProviderAdapter stores an injected model_lookup callable."""
+
+        def lookup(model_id: str):
+            _ = model_id
+            return None
+
+        adapter = _StubAdapter(model_lookup=lookup)
+        assert adapter._model_lookup is lookup
+
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
         """Response normalization is optional for ABC construction but required at use."""
         adapter = _StubAdapter()

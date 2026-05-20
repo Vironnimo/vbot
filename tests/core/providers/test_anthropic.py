@@ -230,6 +230,32 @@ def custom_adapter():
 
 
 # ---------------------------------------------------------------------------
+# Constructor contract
+# ---------------------------------------------------------------------------
+
+
+class TestConstructorContract:
+    """Verify the shared optional model_lookup constructor contract."""
+
+    def test_constructor_defaults_model_lookup_to_none(self):
+        """Constructing without model_lookup keeps _model_lookup unset (None)."""
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY)
+
+        assert adapter._model_lookup is None
+
+    def test_constructor_stores_model_lookup_callable(self):
+        """Constructing with model_lookup stores the callable for later adapter use."""
+
+        def model_lookup(model_id: str):
+            _ = model_id
+            return None
+
+        adapter = AnthropicAdapter(ANTHROPIC_CONFIG, API_KEY, model_lookup=model_lookup)
+
+        assert adapter._model_lookup is model_lookup
+
+
+# ---------------------------------------------------------------------------
 # send() — request format
 # ---------------------------------------------------------------------------
 
