@@ -13,6 +13,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
+from core.providers.mistral import MistralAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
@@ -343,6 +344,65 @@ def test_runtime_copilot_metadata_lookup_falls_back_for_unknown_model(runtime: R
     unknown_policy = adapter._policy_for_model("unknown-model")  # type: ignore[attr-defined]
     assert unknown_policy.endpoint_path == "/chat/completions"
     assert unknown_policy.supports_tools is False
+
+
+def test_runtime_wires_mistral_adapter_with_reasoning_support_lookup(runtime: Runtime) -> None:
+    """Mistral adapters receive runtime model capability lookup for reasoning suppression."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="mistral",
+        name="Mistral AI",
+        adapter="mistral",
+        base_url="https://api.mistral.ai/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="MISTRAL_API_KEY",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
+    )
+    runtime._providers = ProviderRegistry({"mistral": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"MISTRAL_API_KEY": "mistral-token"},
+    )
+    runtime._models = ModelRegistry(  # type: ignore[attr-defined]
+        {
+            ("mistral", "mistral-medium-latest"): Model(
+                model_id="mistral-medium-latest",
+                name="Mistral Medium",
+                capabilities=Capabilities(
+                    vision=False,
+                    tools=True,
+                    json_mode=True,
+                    reasoning=ReasoningCapabilities(supported=False),
+                ),
+                context_window=128000,
+                max_output_tokens=8192,
+                metadata={},
+            )
+        }
+    )
+
+    # Act
+    adapter = runtime.get_adapter("mistral", "mistral:api-key")
+
+    # Assert
+    assert isinstance(adapter, MistralAdapter)
+    payload = adapter._build_payload(
+        [{"role": "user", "content": "Hello"}],
+        "mistral-medium-latest",
+        thinking_effort="high",
+    )
+    assert "reasoning_effort" not in payload
+    assert "prompt_mode" not in payload
 
 
 # ------------------------------------------------------------------

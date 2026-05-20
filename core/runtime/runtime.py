@@ -689,6 +689,15 @@ class Runtime:
                 self._github_copilot_model_metadata,
             )
 
+        if adapter_class is MistralAdapter:
+            return MistralAdapter(
+                provider_config,
+                token_getter,
+                connection.base_url,
+                connection.auth,
+                self._mistral_model_reasoning_supported,
+            )
+
         return adapter_class(provider_config, token_getter, connection.base_url, connection.auth)
 
     def _github_copilot_model_metadata(self, model_id: str) -> Mapping[str, Any] | None:
@@ -696,6 +705,14 @@ class Runtime:
             return self.models.get("github-copilot", model_id).metadata
         except KeyError:
             return None
+
+    def _mistral_model_reasoning_supported(self, model_id: str) -> bool | None:
+        catalog_model_id = model_id.split("::", 1)[0]
+        try:
+            model = self.models.get("mistral", catalog_model_id)
+        except KeyError:
+            return None
+        return model.capabilities.reasoning.supported
 
     def _get_token_getter(
         self,
