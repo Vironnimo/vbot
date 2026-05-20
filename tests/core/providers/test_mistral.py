@@ -49,6 +49,22 @@ def mistral_adapter(mistral_config: ProviderConfig) -> MistralAdapter:
     return MistralAdapter(mistral_config, API_KEY)
 
 
+@pytest.fixture()
+def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> MistralAdapter:
+    def _model_reasoning_supported(model_id: str) -> bool | None:
+        if model_id == "mistral-medium-latest":
+            return False
+        if model_id.startswith("magistral-medium"):
+            return True
+        return None
+
+    return MistralAdapter(
+        mistral_config,
+        API_KEY,
+        model_reasoning_supported_lookup=_model_reasoning_supported,
+    )
+
+
 def raw_mistral_model(
     *,
     model_id: str = "mistral-large-latest",
@@ -233,6 +249,132 @@ async def test_build_payload_sets_reasoning_effort_none_when_disabled(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_build_payload_magistral_medium_uses_prompt_mode_reasoning(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-medium-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["prompt_mode"] == "reasoning"
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_medium_2509_uses_prompt_mode_reasoning(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-medium-2509",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["prompt_mode"] == "reasoning"
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_small_uses_reasoning_effort(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-small-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning_effort"] == "high"
+    assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_mistral_small_uses_reasoning_effort(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="mistral-small-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning_effort"] == "high"
+    assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_mistral_medium_suppresses_reasoning_when_lookup_disables_it(
+    mistral_adapter_with_reasoning_lookup: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter_with_reasoning_lookup.send(
+        SAMPLE_MESSAGES,
+        model_id="mistral-medium-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning_effort" not in request_body
+    assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_medium_lookup_keeps_prompt_mode_reasoning(
+    mistral_adapter_with_reasoning_lookup: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter_with_reasoning_lookup.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-medium-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["prompt_mode"] == "reasoning"
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_medium_none_effort_sends_no_reasoning_params(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-medium-latest",
+        thinking_effort="none",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning_effort" not in request_body
+    assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_build_payload_omits_reasoning_effort_when_not_provided(
     mistral_adapter: MistralAdapter,
 ) -> None:
@@ -272,6 +414,72 @@ def test_normalize_response_extracts_message_thinking_as_reasoning(
 
     normalized = mistral_adapter.normalize_response(response)
 
+    assert normalized["reasoning"] == "Reasoning trace"
+
+
+def test_normalize_response_typed_list_extracts_text_and_reasoning(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "ThinkA"},
+                        {"type": "text", "text": "AnswerA"},
+                    ],
+                }
+            }
+        ]
+    }
+
+    normalized = mistral_adapter.normalize_response(response)
+
+    assert normalized["content"] == "AnswerA"
+    assert normalized["reasoning"] == "ThinkA"
+
+
+def test_normalize_response_typed_list_multiple_text_blocks_concatenated(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "A"},
+                        {"type": "text", "text": "B"},
+                    ],
+                }
+            }
+        ]
+    }
+
+    normalized = mistral_adapter.normalize_response(response)
+
+    assert normalized["content"] == "AB"
+
+
+def test_normalize_response_string_content_delegates_to_base(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "plain string",
+                    "thinking": "Reasoning trace",
+                }
+            }
+        ]
+    }
+
+    normalized = mistral_adapter.normalize_response(response)
+
+    assert normalized["content"] == "plain string"
     assert normalized["reasoning"] == "Reasoning trace"
 
 
@@ -318,3 +526,213 @@ async def test_stream_yields_reasoning_delta_for_delta_thinking(
         chunks.append(chunk)
 
     assert chunks == [{"type": "reasoning_delta", "text": "Reasoning delta"}]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_thinking_yields_reasoning_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "thinking", "thinking": "Think1"},
+                    ]
+                }
+            }
+        ]
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [{"type": "reasoning_delta", "text": "Think1"}]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_text_yields_content_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "text", "text": "Text1"},
+                    ]
+                }
+            }
+        ]
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [{"type": "content_delta", "text": "Text1"}]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_yields_finish_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "text", "text": "Text1"},
+                    ]
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_yields_usage_delta(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "text", "text": "Text1"},
+                    ]
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 21, "completion_tokens": 8},
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "usage", "input_tokens": 21, "output_tokens": 8},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_typed_list_delta_with_finish_and_usage_preserves_order(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "content": [
+                        {"type": "thinking", "thinking": "Think1"},
+                        {"type": "text", "text": "Text1"},
+                    ]
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 34, "completion_tokens": 13},
+    }
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [
+        {"type": "reasoning_delta", "text": "Think1"},
+        {"type": "content_delta", "text": "Text1"},
+        {"type": "finish", "reason": "stop"},
+        {"type": "usage", "input_tokens": 34, "output_tokens": 13},
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_string_content_delta_delegates_to_base(
+    mistral_adapter: MistralAdapter,
+) -> None:
+    chunk = {"choices": [{"delta": {"content": "Hi"}}]}
+    sse_body = f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n"
+    respx.post(MISTRAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks = []
+    async for stream_chunk in mistral_adapter.stream(
+        SAMPLE_MESSAGES, model_id="mistral-large-latest"
+    ):
+        chunks.append(stream_chunk)
+
+    assert chunks == [{"type": "content_delta", "text": "Hi"}]

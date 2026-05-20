@@ -339,7 +339,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 if data.strip() == SSE_DONE_MARKER:
                     break
                 raw_chunk = json.loads(data)
-                for normalized_delta in _normalize_openai_stream_chunk(
+                for normalized_delta in self._normalize_stream_chunk(
                     raw_chunk,
                     tool_call_ids_by_index,
                 ):
@@ -348,6 +348,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
+
+    def _normalize_stream_chunk(
+        self,
+        raw_chunk: dict[str, Any],
+        tool_call_ids_by_index: dict[int, str],
+    ) -> list[dict[str, Any]]:
+        return _normalize_openai_stream_chunk(raw_chunk, tool_call_ids_by_index)
 
 
 def _normalize_openai_stream_chunk(
