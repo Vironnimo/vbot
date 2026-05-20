@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
@@ -317,6 +318,42 @@ def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runt
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+
+
+def test_runtime_wires_anthropic_adapter_with_model_lookup(runtime: Runtime) -> None:
+    """Anthropic adapters receive a runtime-backed model lookup."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="anthropic",
+        name="Anthropic",
+        adapter="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="x-api-key",
+                    prefix="",
+                    credential_key="ANTHROPIC_API_KEY",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"anthropic": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"ANTHROPIC_API_KEY": "anthropic-token"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("anthropic", "anthropic:api-key")
+
+    # Assert
+    assert isinstance(adapter, AnthropicAdapter)
     assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
