@@ -68,10 +68,15 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   envelope with the skill name, activation status, message, and resource list.
   It is system-managed and not part of user-managed tool catalogs.
 - Built-in `subagent` tool: flat name `subagent`; schema includes required
-  `content`, optional `agent_id`, and optional `blocking`. It creates a new
-  persisted Session for the target Agent, starts a sub-agent Run, enforces
-  configured depth/per-turn limits, and returns either a running descriptor or a
-  completed result envelope.
+  `content`, optional `agent_id`, optional `blocking`, and optional
+  `session_id`. When `session_id` is provided the tool routes into that
+  existing Session instead of creating a new one; it fails with
+  `session_not_found` if the session file does not exist, `session_busy` if
+  that Session already has an active Run, or `invalid_arguments` if the caller
+  targets its own active Session. It otherwise creates a new persisted Session
+  for the target Agent, starts a sub-agent Run, enforces configured
+  depth/per-turn limits, and returns either a running descriptor or a completed
+  result envelope.
 - Built-in `subagent_result` tool: flat name `subagent_result`; schema includes
   required `session_id` plus optional `agent_id` and `run_id`. It fetches a
   live Run result when available or falls back to the last non-empty assistant
