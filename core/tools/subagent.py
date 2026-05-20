@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from core.agents import AgentNotFoundError, InvalidAgentIdError
 from core.chat import (
+    ActiveRunError,
     ChatMessage,
     ChatRunManager,
     ChatSessionError,
@@ -32,7 +33,7 @@ SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
 _LOGGER = get_logger("tools.subagent")
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Spawn a sub-agent run in a new persisted session. Use non-blocking mode for "
+    "Spawn a sub-agent run in a persisted session. Use non-blocking mode for "
     "parallel work, or blocking mode when the caller must wait for the result."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
@@ -164,14 +165,24 @@ class SubAgentBatchTracker:
             )
         )
 
-    def mark_fetched(self, parent_key: ParentKey, sub_session_id: str) -> None:
-        """Mark matching sub-agent session results as already fetched by the parent."""
+    def mark_fetched(
+        self,
+        parent_key: ParentKey,
+        sub_session_id: str,
+        sub_run_id: str | None = None,
+    ) -> None:
+        """Mark one sub-agent result as fetched by run id within a session."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return
-        for entry in batch.entries.values():
-            if entry.session_id == sub_session_id:
-                entry.fetched = True
+
+        target_run_id = sub_run_id or self.run_id_for_session(parent_key, sub_session_id)
+        if target_run_id is None:
+            return
+        entry = batch.entries.get(target_run_id)
+        if entry is None or entry.session_id != sub_session_id:
+            return
+        entry.fetched = True
 
     def run_id_for_session(self, parent_key: ParentKey, sub_session_id: str) -> str | None:
         """Return the registered run id for a sub-agent session in a parent batch."""
@@ -296,7 +307,14 @@ async def _handle_subagent(
                 f"session already has an active run: {session_id}",
             )
 
-    sub_run = await _start_subagent_run(runtime, target_agent_id, session.id, content, context)
+    try:
+        sub_run = await _start_subagent_run(runtime, target_agent_id, session.id, content, context)
+    except ActiveRunError:
+        return tool_failure(
+            "session_busy",
+            f"session already has an active run: {session.id}",
+        )
+
     batch_tracker.register(parent_key, target_agent_id, session.id, sub_run.id)
     _attach_parent_cancellation(runtime, context.run_id, sub_run)
 
@@ -321,14 +339,14 @@ async def _handle_subagent(
             status=RunStatus.FAILED.value,
             message=f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
         )
-        batch_tracker.mark_fetched(parent_key, session.id)
+        batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         return tool_failure(
             "subagent_timeout",
             f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
         )
 
-    batch_tracker.mark_fetched(parent_key, session.id)
+    batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
     batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
     return tool_success(result)
 
@@ -353,9 +371,8 @@ async def _handle_subagent_result(
         return tool_failure("invalid_arguments", "run_id must be a string")
 
     parent_key = _parent_key(context)
-    batch_tracker.mark_fetched(parent_key, session_id)
-
     resolved_run_id = run_id or batch_tracker.run_id_for_session(parent_key, session_id)
+    batch_tracker.mark_fetched(parent_key, session_id, resolved_run_id)
     result: JsonObject
     if resolved_run_id:
         try:
