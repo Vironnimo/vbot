@@ -97,6 +97,23 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
+  it('does not render a refresh button in the chat header', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    expect(findButtonByText('Sessions')).toBeTruthy();
+    expect(findButtonByText('New Session')).toBeTruthy();
+    expect(findButtonByText('Refresh')).toBeFalsy();
+    expect(document.body.querySelector('.chat-refresh')).toBeNull();
+  });
+
   it('shows inline info and skips run subscription when a command is handled', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
