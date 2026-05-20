@@ -99,6 +99,7 @@ class FakeRunManager:
         )
         self.started: list[tuple[str, str, Any, Run]] = []
         self.runs: dict[str, Run] = {self.parent_run.id: self.parent_run}
+        self.busy_sessions: dict[tuple[str, str], Run] = {}
         self.next_result: Any | None = None
         self.next_error: BaseException | None = None
 
@@ -121,6 +122,9 @@ class FakeRunManager:
             return self.runs[run_id]
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
+
+    def active_run(self, *, agent_id: str, session_id: str) -> Run | None:
+        return self.busy_sessions.get((agent_id, session_id))
 
     async def _complete_next(self, run: Run, result: Any) -> None:
         await asyncio.sleep(0)
@@ -222,6 +226,20 @@ async def test_batch_tracker_logs_trigger_failures(monkeypatch: pytest.MonkeyPat
     assert str(log_calls[0][2]) == "trigger failed"
 
 
+async def test_batch_tracker_prefers_most_recent_run_for_reused_session() -> None:
+    # Arrange
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "shared-session", "run-one")
+    tracker.register(parent_key, "worker", "shared-session", "run-two")
+
+    # Act
+    run_id = tracker.run_id_for_session(parent_key, "shared-session")
+
+    # Assert
+    assert run_id == "run-two"
+
+
 async def test_register_subagent_tools_registers_both_public_tools() -> None:
     # Arrange
     registry = ToolRegistry()
@@ -304,6 +322,128 @@ async def test_subagent_tool_validates_target_agent_before_creating_session(
     assert result["error"]["code"] == "agent_not_found"
     assert manager.started == []
     assert list((tmp_path / "agents").glob("missing")) == []
+
+
+async def test_subagent_tool_creates_new_session_when_no_session_id_provided(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    existing_sessions = runtime.chat_sessions.list(context.agent_id)
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    new_session_id = result["data"]["session_id"]
+    assert manager.started[0][1] == new_session_id
+    assert len(runtime.chat_sessions.list(context.agent_id)) == len(existing_sessions) + 1
+
+
+async def test_subagent_tool_routes_into_existing_session_when_session_id_provided(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="existing-sub-session")
+    existing_session_ids = [session.id for session in runtime.chat_sessions.list(context.agent_id)]
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "existing-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["session_id"] == "existing-sub-session"
+    assert manager.started[0][1] == "existing-sub-session"
+    assert [
+        session.id for session in runtime.chat_sessions.list(context.agent_id)
+    ] == existing_session_ids
+
+
+async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "missing-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "session_not_found"
+    assert manager.started == []
+
+
+async def test_subagent_tool_rejects_busy_session(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="busy-sub-session")
+    manager.busy_sessions[(context.agent_id, "busy-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="busy-sub-session",
+    )
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "busy-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "session_busy"
+    assert manager.started == []
+
+
+async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": context.session_id},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.started == []
 
 
 async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
