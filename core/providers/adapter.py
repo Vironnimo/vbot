@@ -5,11 +5,16 @@ Adapters translate between vBot's request format and the provider's
 wire protocol.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from core.models.models import Model
+
 JsonObject = dict[str, Any]
+ModelLookup = Callable[[str], "Model | None"]
 
 
 class ProviderAdapter(ABC):
