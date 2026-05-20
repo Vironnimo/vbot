@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
@@ -78,12 +78,14 @@ class AnthropicAdapter(ProviderAdapter):
         token_getter: TokenGetter | str,
         base_url: str | None = None,
         auth_config: AuthConfig | None = None,
+        model_lookup: ModelLookup | None = None,
     ) -> None:
         self._config = config
         self._token_getter = (
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
         )
         self._auth_config = auth_config or config.connections[0].auth
+        super().__init__(model_lookup=model_lookup)
         self._client = httpx.AsyncClient(
             base_url=base_url or config.base_url,
             timeout=60.0,
