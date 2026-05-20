@@ -16,7 +16,6 @@ from core.providers.openai_compatible import (
 )
 
 MISTRAL_HIGH_REASONING_EFFORTS = {"medium", "high", "xhigh", "max"}
-MISTRAL_REASONING_ID_PREFIXES = {"magistral-"}
 
 
 class MistralAdapter(OpenAICompatibleAdapter):
@@ -41,9 +40,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             raise CatalogEntrySkipped(f"Skipped non-chat model: {raw.get('id')}")
 
         context_window = _parse_optional_int(raw.get("max_context_length")) or 0
-        reasoning_supported = any(
-            model_id.startswith(prefix) for prefix in MISTRAL_REASONING_ID_PREFIXES
-        )
+        reasoning_supported = capabilities_raw.get("reasoning", False) is True
 
         return Model(
             model_id=model_id,
