@@ -38,6 +38,7 @@ describe('App', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    localStorage.clear();
     init('en');
     mountedComponent = null;
     listLogsMock.mockReset();
@@ -64,6 +65,7 @@ describe('App', () => {
     }
 
     document.body.innerHTML = '';
+    localStorage.clear();
     rpcMock.mockReset();
   });
 
@@ -124,6 +126,72 @@ describe('App', () => {
     ).toBe('2026-05-11.log');
     expect(document.body.textContent).toContain('Current file: 2026-05-11.log');
   });
+
+  it('persists the selected agent and restores it after remount', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-alpha',
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-beta',
+      },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(agentTabByName('Beta')).toBeTruthy();
+    });
+
+    agentTabByName('Beta')?.click();
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(localStorage.getItem('vbot.selectedAgentId')).toBe('beta');
+    });
+
+    await unmount(mountedComponent);
+    mountedComponent = null;
+    rpcMock.mockClear();
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Beta');
+      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        agent_id: 'beta',
+        session_id: 'session-beta',
+      });
+    });
+  });
+
+  it('renders the cron navigation item with a clock icon', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const cronButton = Array.from(document.querySelectorAll('nav button')).find(
+      (button) => button.textContent?.includes('Cron'),
+    );
+
+    expect(cronButton).toBeTruthy();
+    expect(
+      cronButton?.querySelector(
+        'svg.app-shell__nav-icon circle[cx="8"][cy="8"][r="6"]',
+      ),
+    ).toBeTruthy();
+    expect(
+      cronButton?.querySelector(
+        'svg.app-shell__nav-icon path[d="M8 4.5V8l2.5 2.5"]',
+      ),
+    ).toBeTruthy();
+  });
 });
 
 async function waitForAssertion(assertion) {
@@ -150,10 +218,50 @@ function createEmptyChatRpcMock() {
       return { agents: [] };
     }
 
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+
     if (method === 'skill.list') {
       return { skills: [], invalid_skills: [] };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);
   };
+}
+
+function createChatRpcMock(agents) {
+  return async (method, params) => {
+    if (method === 'agent.list') {
+      return { agents };
+    }
+
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+
+    if (method === 'chat.history') {
+      return {
+        agent_id: params?.agent_id ?? '',
+        session_id: params?.session_id ?? '',
+        messages: [],
+      };
+    }
+
+    if (method === 'skill.list') {
+      return { skills: [], invalid_skills: [] };
+    }
+
+    throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
+function agentTabByName(name) {
+  return Array.from(document.querySelectorAll('.agent-tabs .agent-tab')).find(
+    (button) => button.textContent?.includes(name),
+  );
+}
+
+function activeAgentTab() {
+  return document.querySelector('.agent-tabs .agent-tab.active');
 }
