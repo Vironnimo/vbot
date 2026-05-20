@@ -6,7 +6,6 @@ all core services and manages the application lifecycle.
 
 import asyncio
 import os
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -20,7 +19,7 @@ from core.chat.block_resolver import ContentBlockResolver
 from core.chat.chat import ChatSessionManager
 from core.extensions import ExtensionRegistry
 from core.models.models import Model, ModelRegistry
-from core.providers.adapter import ProviderAdapter
+from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -680,39 +679,25 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        if adapter_class is GitHubCopilotAdapter:
-            return GitHubCopilotAdapter(
+        if issubclass(adapter_class, OpenAICompatibleAdapter):
+            return adapter_class(
                 provider_config,
                 token_getter,
                 connection.base_url,
                 connection.auth,
-                self._github_copilot_model_metadata,
-            )
-
-        if adapter_class is MistralAdapter:
-            return MistralAdapter(
-                provider_config,
-                token_getter,
-                connection.base_url,
-                connection.auth,
-                self._mistral_model_reasoning_supported,
+                model_lookup=self._model_lookup_for(provider_id),
             )
 
         return adapter_class(provider_config, token_getter, connection.base_url, connection.auth)
 
-    def _github_copilot_model_metadata(self, model_id: str) -> Mapping[str, Any] | None:
-        try:
-            return self.models.get("github-copilot", model_id).metadata
-        except KeyError:
-            return None
+    def _model_lookup_for(self, provider_id: str) -> ModelLookup:
+        def _lookup(model_id: str) -> Model | None:
+            try:
+                return self.models.get(provider_id, model_id)
+            except KeyError:
+                return None
 
-    def _mistral_model_reasoning_supported(self, model_id: str) -> bool | None:
-        catalog_model_id = model_id.split("::", 1)[0]
-        try:
-            model = self.models.get("mistral", catalog_model_id)
-        except KeyError:
-            return None
-        return model.capabilities.reasoning.supported
+        return _lookup
 
     def _get_token_getter(
         self,

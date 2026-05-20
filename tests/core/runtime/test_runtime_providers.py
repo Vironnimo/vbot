@@ -14,6 +14,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.mistral import MistralAdapter
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
@@ -247,6 +248,78 @@ def test_runtime_get_adapter_selects_opencode_go_adapter_from_provider_config(
     assert isinstance(adapter, OpenCodeGoAdapter)
 
 
+def test_runtime_wires_opencode_go_adapter_with_model_lookup(runtime: Runtime) -> None:
+    """OpenCodeGo adapters receive a runtime-backed model lookup."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="opencode-go",
+        name="OpenCode Go",
+        adapter="opencode_go",
+        base_url="https://api.opencodego.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENCODE_GO_API_KEY",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"opencode-go": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OPENCODE_GO_API_KEY": "opencode-go-token"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("opencode-go", "opencode-go:api-key")
+
+    # Assert
+    assert isinstance(adapter, OpenCodeGoAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+
+
+def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runtime) -> None:
+    """OpenAI-compatible adapters receive a runtime-backed model lookup."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_API_KEY",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"openai": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OPENAI_API_KEY": "openai-token"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("openai", "openai:api-key")
+
+    # Assert
+    assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+
+
 def test_runtime_wires_copilot_adapter_with_model_metadata_lookup(runtime: Runtime) -> None:
     """Copilot adapters receive a narrow runtime metadata lookup."""
     # Arrange
@@ -346,8 +419,10 @@ def test_runtime_copilot_metadata_lookup_falls_back_for_unknown_model(runtime: R
     assert unknown_policy.supports_tools is False
 
 
-def test_runtime_wires_mistral_adapter_with_reasoning_support_lookup(runtime: Runtime) -> None:
-    """Mistral adapters receive runtime model capability lookup for reasoning suppression."""
+def test_runtime_wires_mistral_adapter_with_model_lookup_for_reasoning_suppression(
+    runtime: Runtime,
+) -> None:
+    """Mistral reasoning suppression is driven by runtime-backed model lookup."""
     # Arrange
     provider_config = ProviderConfig(
         id="mistral",
