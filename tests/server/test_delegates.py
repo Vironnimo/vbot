@@ -145,6 +145,11 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "type": "command",
                 },
                 {
+                    "name": "new",
+                    "description": "Start a new session for the current agent.",
+                    "type": "command",
+                },
+                {
                     "name": "status",
                     "description": "Show current session and runtime status.",
                     "type": "command",
