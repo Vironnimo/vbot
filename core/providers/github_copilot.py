@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 import httpx
@@ -39,8 +39,6 @@ from core.providers.openai_compatible import (
     _read_optional_mapping,
     _read_string,
 )
-from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.token_getter import TokenGetter
 from core.utils.retry import retry_async
 
 OPENAI_REASONING_COPILOT_MODEL_POLICY = copilot_model_policy("gpt-5-mini")
@@ -48,17 +46,6 @@ OPENAI_REASONING_COPILOT_MODEL_POLICY = copilot_model_policy("gpt-5-mini")
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
-
-    def __init__(
-        self,
-        config: ProviderConfig,
-        token_getter: TokenGetter | str,
-        base_url: str | None = None,
-        auth_config: AuthConfig | None = None,
-        model_metadata_lookup: Callable[[str], Mapping[str, Any] | None] | None = None,
-    ) -> None:
-        super().__init__(config, token_getter, base_url, auth_config)
-        self._model_metadata_lookup = model_metadata_lookup
 
     def _build_payload(
         self,
@@ -175,8 +162,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
 
     def _policy_for_model(self, model_id: str) -> GitHubCopilotModelPolicy:
         metadata = None
-        if self._model_metadata_lookup is not None:
-            metadata = self._model_metadata_lookup(model_id)
+        if self._model_lookup is not None:
+            model = self._model_lookup(model_id)
+            if model is not None:
+                metadata = model.metadata
         return copilot_model_policy(model_id, metadata)
 
     def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:

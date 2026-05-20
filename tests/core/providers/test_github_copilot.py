@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -11,6 +12,7 @@ import respx
 
 from core.chat.chat import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
+from core.models.models import Model
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
@@ -120,19 +122,31 @@ def _raw_copilot_models() -> dict[str, dict]:
     return {entry["id"]: entry for entry in data}
 
 
-def _copilot_metadata(model_id: str) -> dict:
+def _copilot_model(model_id: str) -> Model:
     raw_models = _raw_copilot_models()
-    return dict(GitHubCopilotAdapter.normalize_catalog_entry(raw_models[model_id], {}).metadata)
+    return GitHubCopilotAdapter.normalize_catalog_entry(raw_models[model_id], {})
 
 
-def _copilot_metadata_lookup(model_id: str) -> dict | None:
+def _copilot_model_with_metadata(model_id: str, metadata: dict) -> Model:
+    base_model = GitHubCopilotAdapter.normalize_catalog_entry(
+        {
+            "id": model_id,
+            "name": model_id,
+            "capabilities": {"supports": {}},
+        },
+        {},
+    )
+    return replace(base_model, metadata=metadata)
+
+
+def _copilot_metadata_lookup(model_id: str) -> Model | None:
     synthetic_metadata = SYNTHETIC_COPILOT_METADATA_BY_MODEL_ID.get(model_id)
     if synthetic_metadata is not None:
-        return synthetic_metadata
+        return _copilot_model_with_metadata(model_id, synthetic_metadata)
     raw_models = _raw_copilot_models()
     if model_id not in raw_models:
         return None
-    return _copilot_metadata(model_id)
+    return _copilot_model(model_id)
 
 
 @pytest.fixture()
@@ -145,7 +159,7 @@ def metadata_copilot_adapter() -> GitHubCopilotAdapter:
     return GitHubCopilotAdapter(
         COPILOT_CONFIG,
         API_KEY,
-        model_metadata_lookup=_copilot_metadata_lookup,
+        model_lookup=_copilot_metadata_lookup,
     )
 
 
@@ -633,7 +647,7 @@ async def test_static_fallback_applies_only_when_metadata_missing() -> None:
     metadata_adapter = GitHubCopilotAdapter(
         COPILOT_CONFIG,
         API_KEY,
-        model_metadata_lookup=lambda model_id: _copilot_metadata(model_id),
+        model_lookup=lambda model_id: _copilot_model(model_id),
     )
     chat_route = respx.post(COPILOT_URL).mock(
         return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
@@ -666,7 +680,7 @@ async def test_headers_include_auth_and_extra_headers_for_all_endpoint_families(
     adapter = GitHubCopilotAdapter(
         custom_config,
         API_KEY,
-        model_metadata_lookup=_copilot_metadata_lookup,
+        model_lookup=_copilot_metadata_lookup,
     )
     chat_route = respx.post(COPILOT_URL).mock(
         return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
@@ -1484,19 +1498,22 @@ async def test_send_routes_haiku_visible_thinking_without_reasoning_effort_suppo
     adapter = GitHubCopilotAdapter(
         COPILOT_CONFIG,
         API_KEY,
-        model_metadata_lookup=lambda model: (
-            {
-                "github_copilot": {
-                    "vendor": "Anthropic",
-                    "family": "claude-haiku-4.5",
-                    "version": "claude-haiku-4.5",
-                    "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, "/v1/messages"],
-                    "reasoning_efforts": [],
-                    "adaptive_thinking": True,
-                    "streaming": True,
-                    "tool_calls": True,
-                }
-            }
+        model_lookup=lambda model: (
+            _copilot_model_with_metadata(
+                model,
+                {
+                    "github_copilot": {
+                        "vendor": "Anthropic",
+                        "family": "claude-haiku-4.5",
+                        "version": "claude-haiku-4.5",
+                        "supported_endpoints": [CHAT_COMPLETIONS_ENDPOINT, "/v1/messages"],
+                        "reasoning_efforts": [],
+                        "adaptive_thinking": True,
+                        "streaming": True,
+                        "tool_calls": True,
+                    }
+                },
+            )
             if model == "claude-haiku-4.5"
             else _copilot_metadata_lookup(model)
         ),
