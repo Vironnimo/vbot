@@ -49,6 +49,22 @@ def mistral_adapter(mistral_config: ProviderConfig) -> MistralAdapter:
     return MistralAdapter(mistral_config, API_KEY)
 
 
+@pytest.fixture()
+def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> MistralAdapter:
+    def _model_reasoning_supported(model_id: str) -> bool | None:
+        if model_id == "mistral-medium-latest":
+            return False
+        if model_id.startswith("magistral-medium"):
+            return True
+        return None
+
+    return MistralAdapter(
+        mistral_config,
+        API_KEY,
+        model_reasoning_supported_lookup=_model_reasoning_supported,
+    )
+
+
 def raw_mistral_model(
     *,
     model_id: str = "mistral-large-latest",
@@ -301,6 +317,42 @@ async def test_build_payload_mistral_small_uses_reasoning_effort(
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning_effort"] == "high"
     assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_mistral_medium_suppresses_reasoning_when_lookup_disables_it(
+    mistral_adapter_with_reasoning_lookup: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter_with_reasoning_lookup.send(
+        SAMPLE_MESSAGES,
+        model_id="mistral-medium-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning_effort" not in request_body
+    assert "prompt_mode" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_build_payload_magistral_medium_lookup_keeps_prompt_mode_reasoning(
+    mistral_adapter_with_reasoning_lookup: MistralAdapter,
+) -> None:
+    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await mistral_adapter_with_reasoning_lookup.send(
+        SAMPLE_MESSAGES,
+        model_id="magistral-medium-latest",
+        thinking_effort="high",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["prompt_mode"] == "reasoning"
+    assert "reasoning_effort" not in request_body
 
 
 @respx.mock
