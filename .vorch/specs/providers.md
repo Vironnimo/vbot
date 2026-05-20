@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
+Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. OpenAI-compatible adapters may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -207,6 +207,7 @@ this adapter.
 - Caller `**kwargs` merged in last (highest priority)
 - `extra_headers` added to request headers
 - Auth: `Authorization: Bearer <api_key>` (configurable via `AuthConfig`)
+- Construction contract: `OpenAICompatibleAdapter` may receive an optional `model_lookup(model_id) -> Model | None`, a provider-scoped, read-only lookup over the normalized catalog. Runtime wires this for the OpenAI-compatible adapter family so subclasses can consume catalog facts without direct registry access or file I/O.
 
 **Streaming:** `stream: true` in payload. SSE lines prefixed with `data: `. Stream ends on `data: [DONE]`. The base adapter always merges `stream_options: {"include_usage": true}` into streaming payloads so OpenAI-compatible usage chunks can be captured without provider-name checks. Each provider chunk is normalized before leaving the adapter: text becomes `content_delta`, supported reasoning text becomes `reasoning_delta`, recognized opaque reasoning fields become internal-only `reasoning_meta`, tool-call fragments become `tool_call_delta` keyed by stable tool-call IDs, and finish reasons become `finish` with `reason: "stop" | "tool_calls"`.
 
@@ -241,6 +242,7 @@ OpenCode Go is OpenAI-compatible for chat completions but requires one provider-
 
 - Runtime reasoning round-trip: when an internal assistant message carries non-empty `reasoning`, `OpenCodeGoAdapter` echoes it back on the wire as `reasoning_content`.
 - `minimax-m2.7` is the current exception to the normal OpenAI-compatible transport: `OpenCodeGoAdapter` routes that model through an internal `AnthropicAdapter` instance to `POST /messages` using the provider's configured base URL and `x-api-key` auth metadata. All other OpenCode Go models continue to use `POST /chat/completions`.
+- Constructor contract: `OpenCodeGoAdapter` keeps the shared optional `model_lookup` parameter from `OpenAICompatibleAdapter` even though it does not currently use catalog facts at runtime.
 - This behavior is intentionally subclass-local; the generic `OpenAICompatibleAdapter` does not infer provider-specific `reasoning_content` replay rules.
 
 ### OpenRouterAdapter
@@ -265,6 +267,7 @@ needs provider-specific reasoning and catalog handling.
   `MistralAdapter` maps vBot `thinking_effort` values `medium`, `high`, `xhigh`,
   and `max` to `"high"`; `none` maps to `"none"`; `low`, `minimal`, and unset
   values omit the parameter.
+- Runtime catalog access: `MistralAdapter` uses the shared `model_lookup` to suppress reasoning controls when the normalized catalog marks `Model.capabilities.reasoning.supported` as false. Pinned connection suffixes such as `::<connection-local-id>` are stripped in the adapter before catalog lookup.
 - Auth: bundled config uses `Authorization: Bearer <MISTRAL_API_KEY>` via an
   `api_key` connection.
 - Catalog normalization: `GET /models` returns Mistral-specific entries with
@@ -308,9 +311,10 @@ feature gating live in `core/providers/github_copilot_policy.py`.
 Responses frames are not implemented.
 
 **Dynamic-first runtime policy:** Runtime adapter creation passes
-`GitHubCopilotAdapter` a narrow model metadata lookup backed by `ModelRegistry`.
-The adapter calls the policy once per `send()`/`stream()` request. When
-`metadata.github_copilot` exists for the exact model, it is the primary source
+`GitHubCopilotAdapter` the shared provider-scoped `model_lookup` backed by
+`ModelRegistry`. The adapter calls the policy once per `send()`/`stream()`
+request. When the looked-up model carries `metadata.github_copilot` for the
+exact model, it is the primary source
 for vendor, family, supported endpoints, allowed reasoning efforts, thinking
 budget bounds, adaptive thinking support, tool support, streaming support, and
 structured-output support. Static policy entries are fallback facts for missing
