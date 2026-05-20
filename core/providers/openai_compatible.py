@@ -74,7 +74,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
         )
         self._auth_config = auth_config or config.connections[0].auth
-        self._model_lookup = model_lookup
+        super().__init__(model_lookup=model_lookup)
         self._client = httpx.AsyncClient(
             base_url=base_url or config.base_url,
             timeout=60.0,
