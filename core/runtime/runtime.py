@@ -73,12 +73,7 @@ _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
 
 _ADAPTER_MAP: dict[
     str,
-    type[OpenAICompatibleAdapter]
-    | type[OpenRouterAdapter]
-    | type[OpenCodeGoAdapter]
-    | type[GitHubCopilotAdapter]
-    | type[MistralAdapter]
-    | type[AnthropicAdapter],
+    type[ProviderAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openrouter": OpenRouterAdapter,
@@ -679,16 +674,14 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
-        if issubclass(adapter_class, OpenAICompatibleAdapter):
-            return adapter_class(
-                provider_config,
-                token_getter,
-                connection.base_url,
-                connection.auth,
-                model_lookup=self._model_lookup_for(provider_id),
-            )
-
-        return adapter_class(provider_config, token_getter, connection.base_url, connection.auth)
+        adapter = cast(Any, adapter_class)(
+            provider_config,
+            token_getter,
+            connection.base_url,
+            connection.auth,
+            model_lookup=self._model_lookup_for(provider_id),
+        )
+        return cast(ProviderAdapter, adapter)
 
     def _model_lookup_for(self, provider_id: str) -> ModelLookup:
         def _lookup(model_id: str) -> Model | None:
