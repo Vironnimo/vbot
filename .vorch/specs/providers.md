@@ -270,15 +270,17 @@ needs provider-specific reasoning and catalog handling.
 - Catalog normalization: `GET /models` returns Mistral-specific entries with
   `capabilities` and `max_context_length`. Discovery keeps only active chat
   models (`capabilities.completion_chat == true` and not `archived`) and skips
-  other model families by raising `ValueError` for the discovery loop to ignore.
+  other model families by raising `CatalogEntrySkipped` for the discovery loop
+  to ignore.
 - Capability mapping: `capabilities.vision` comes from `capabilities.vision`,
   `capabilities.tools` from `capabilities.function_calling`, and `json_mode`
   defaults to `true` for chat models.
 - Context and output limits: `context_window` comes from `max_context_length`.
   `/models` does not provide a per-model max output limit, so
   `max_output_tokens` falls back to the provider default.
-- Reasoning capability in the initial normalizer is currently inferred from
-  `magistral-` model ID prefixes.
+- Reasoning capability comes directly from `capabilities.reasoning` in the raw
+  Mistral model entry, because reasoning-enabled aliases are not reliably
+  identifiable by model ID prefix alone.
 
 ### GitHubCopilotAdapter
 
