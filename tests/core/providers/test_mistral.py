@@ -55,6 +55,7 @@ def raw_mistral_model(
     name: str = "Mistral Large",
     completion_chat: bool = True,
     function_calling: bool = True,
+    reasoning: bool = False,
     vision: bool = True,
     archived: bool = False,
     max_context_length: int | None = 128000,
@@ -65,6 +66,7 @@ def raw_mistral_model(
         "capabilities": {
             "completion_chat": completion_chat,
             "function_calling": function_calling,
+            "reasoning": reasoning,
             "vision": vision,
         },
         "archived": archived,
@@ -93,7 +95,26 @@ def test_normalize_catalog_entry_maps_chat_model_capabilities() -> None:
 
 def test_normalize_catalog_entry_marks_magistral_models_as_reasoning_capable() -> None:
     model = MistralAdapter.normalize_catalog_entry(
-        raw_mistral_model(model_id="magistral-medium-latest", name="Magistral Medium"),
+        raw_mistral_model(
+            model_id="magistral-medium-latest",
+            name="Magistral Medium",
+            reasoning=True,
+        ),
+        {"max_tokens": 8192},
+    )
+
+    assert model.capabilities.reasoning.supported is True
+
+
+def test_normalize_catalog_entry_marks_non_magistral_reasoning_models_as_reasoning_capable() -> (
+    None
+):
+    model = MistralAdapter.normalize_catalog_entry(
+        raw_mistral_model(
+            model_id="mistral-small-2603",
+            name="mistral-small-2603",
+            reasoning=True,
+        ),
         {"max_tokens": 8192},
     )
 
