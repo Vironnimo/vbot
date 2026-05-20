@@ -51,17 +51,31 @@ def mistral_adapter(mistral_config: ProviderConfig) -> MistralAdapter:
 
 @pytest.fixture()
 def mistral_adapter_with_reasoning_lookup(mistral_config: ProviderConfig) -> MistralAdapter:
-    def _model_reasoning_supported(model_id: str) -> bool | None:
+    def _model_lookup(model_id: str) -> Model | None:
         if model_id == "mistral-medium-latest":
-            return False
-        if model_id.startswith("magistral-medium"):
-            return True
-        return None
+            reasoning_supported = False
+        elif model_id.startswith("magistral-medium"):
+            reasoning_supported = True
+        else:
+            return None
+
+        return Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=reasoning_supported),
+            ),
+            context_window=128000,
+            max_output_tokens=8192,
+        )
 
     return MistralAdapter(
         mistral_config,
         API_KEY,
-        model_reasoning_supported_lookup=_model_reasoning_supported,
+        model_lookup=_model_lookup,
     )
 
 

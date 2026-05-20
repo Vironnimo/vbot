@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+from core.providers.adapter import ModelLookup
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
@@ -27,8 +28,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         token_getter: TokenGetter | str,
         base_url: str | None = None,
         auth_config: AuthConfig | None = None,
+        model_lookup: ModelLookup | None = None,
     ) -> None:
-        super().__init__(config, token_getter, base_url, auth_config)
+        super().__init__(
+            config,
+            token_getter,
+            base_url,
+            auth_config,
+            model_lookup=model_lookup,
+        )
         selected_auth_config = auth_config or config.connections[0].auth
         self._anthropic = AnthropicAdapter(
             config,
