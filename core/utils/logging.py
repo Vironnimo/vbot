@@ -16,6 +16,7 @@ from pathlib import Path
 
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
+DAILY_LOG_FILE_SUFFIX = ".log"
 APP_WEBSOCKET_PATH = "/ws"
 LOGS_WEBSOCKET_PATH = "/ws/logs"
 ROUTINE_WEBSOCKET_PATHS = frozenset({APP_WEBSOCKET_PATH, LOGS_WEBSOCKET_PATH})
@@ -124,7 +125,13 @@ def resolve_daily_log_path(
 
     resolved_data_dir = Path(data_dir).expanduser()
     active_date = (current_date_provider or date.today)()
-    return resolved_data_dir / "logs" / active_date.isoformat()
+    return resolved_data_dir / "logs" / _daily_log_file_name(active_date)
+
+
+def _daily_log_file_name(target_date: date) -> str:
+    """Return the canonical file name for one day's managed log file."""
+
+    return f"{target_date.isoformat()}{DAILY_LOG_FILE_SUFFIX}"
 
 
 def normalize_logger_name(name: str) -> str:
@@ -211,7 +218,7 @@ def build_uvicorn_log_config(
 class DailyFileHandler(logging.FileHandler):
     """File handler that writes to one log file per day.
 
-    The active output path is ``<logs_dir>/<YYYY-MM-DD>``. If the date
+    The active output path is ``<logs_dir>/<YYYY-MM-DD>.log``. If the date
     changes while the process is running, the handler transparently reopens
     itself against the new daily file before emitting the next record.
     """
@@ -259,7 +266,7 @@ class DailyFileHandler(logging.FileHandler):
             self.release()
 
     def _build_path(self, target_date: date) -> Path:
-        return self._logs_dir / target_date.isoformat()
+        return self._logs_dir / _daily_log_file_name(target_date)
 
 
 class _VBotFormatter(logging.Formatter):
