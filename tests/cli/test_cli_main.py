@@ -114,6 +114,164 @@ def test_run_dispatches_command_to_service_layer(
     assert f"command: server {command}" in capsys.readouterr().out
 
 
+def test_run_provider_list_dispatches_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path, port=8765)
+    result = CommandResult(
+        ok=True,
+        message=(
+            "connections:\n"
+            "- id: openai:default  provider_id: openai"
+            "  type: api_key  label: OpenAI  usable: yes"
+        ),
+        instance=instance,
+    )
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_list_providers(resolved_instance: ServerInstance) -> CommandResult:
+        calls.append(("provider.list", resolved_instance))
+        return result
+
+    exit_code = cli_main.run(
+        ["provider", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
+        resolve=fake_resolve,
+        list_providers=fake_list_providers,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        ("provider.list", instance),
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "connections:",
+        "- id: openai:default  provider_id: openai  type: api_key  label: OpenAI  usable: yes",
+    ]
+
+
+def test_run_model_list_dispatches_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path, port=8765)
+    result = CommandResult(
+        ok=True,
+        message="models:\n- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
+        instance=instance,
+    )
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_list_models(resolved_instance: ServerInstance) -> CommandResult:
+        calls.append(("model.list", resolved_instance))
+        return result
+
+    exit_code = cli_main.run(
+        ["model", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
+        resolve=fake_resolve,
+        list_models_fn=fake_list_models,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        ("model.list", instance),
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "models:",
+        "- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
+    ]
+
+
+def test_run_model_refresh_dispatches_provider_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path, port=8765)
+    result = CommandResult(ok=True, message="refreshed openai", instance=instance)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_refresh_models(
+        resolved_instance: ServerInstance, provider_id: str | None
+    ) -> CommandResult:
+        calls.append(("model.refresh_db", (resolved_instance, provider_id)))
+        return result
+
+    exit_code = cli_main.run(
+        [
+            "model",
+            "refresh",
+            "--provider",
+            "openai",
+            "--host",
+            "localhost",
+            "--port",
+            "8765",
+            "--data-dir",
+            "data",
+        ],
+        resolve=fake_resolve,
+        refresh_models_fn=fake_refresh_models,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        ("model.refresh_db", (instance, "openai")),
+    ]
+    assert capsys.readouterr().out.splitlines() == ["refreshed openai"]
+
+
+def test_run_skill_list_dispatches_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path, port=8765)
+    result = CommandResult(
+        ok=True,
+        message="skills:\n- summarize  Summarize long text",
+        instance=instance,
+    )
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_list_skills(resolved_instance: ServerInstance) -> CommandResult:
+        calls.append(("skill.list", resolved_instance))
+        return result
+
+    exit_code = cli_main.run(
+        ["skill", "list", "--host", "localhost", "--port", "8765", "--data-dir", "data"],
+        resolve=fake_resolve,
+        list_skills_fn=fake_list_skills,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        ("skill.list", instance),
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "skills:",
+        "- summarize  Summarize long text",
+    ]
+
+
 def test_restart_stops_then_re_resolves_and_starts(tmp_path: Path) -> None:
     calls: list[str] = []
     first_instance = make_instance(tmp_path, port=8001)
