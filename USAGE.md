@@ -195,6 +195,11 @@ Restart the managed server:
 python cli/main.py server restart
 ```
 
+All other CLI areas are RPC-backed accessors. Commands such as `channel`,
+`provider`, `model`, `skill`, and `config` require the target vBot server to be
+running already; only `server start`, `server stop`, `server restart`, and
+`server status` work without an already-running server.
+
 Start on a custom port:
 
 ```bash
@@ -420,14 +425,22 @@ Attachment endpoints:
 - `POST /api/upload`
 - `GET /api/attachments/{attachment_id}`
 
-## 10. CLI Channel Management
+## 10. CLI RPC Management
 
-The CLI also exposes channel-management commands through the running server.
+The CLI also exposes RPC-backed management commands through the running server.
+This applies to channel, provider, model, skill, and config areas.
 
 Examples:
 
 ```bash
 python cli/main.py channel list
+python cli/main.py provider list
+python cli/main.py model list
+python cli/main.py model refresh --provider openai
+python cli/main.py skill list
+python cli/main.py config
+python cli/main.py config get server_port
+python cli/main.py config set server_port 9000
 python cli/main.py channel status --id my-channel
 python cli/main.py channel enable --id my-channel
 python cli/main.py channel disable --id my-channel
@@ -440,7 +453,7 @@ Adding a channel follows this shape:
 python cli/main.py channel add --id my-channel --platform telegram --agent coder --token-env TELEGRAM_BOT_TOKEN
 ```
 
-Channel commands require a reachable vBot server because they are RPC-backed.
+These commands require a reachable vBot server because they are RPC-backed accessors.
 
 ## 11. Frontend Build and Preview
 

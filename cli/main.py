@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cli.channel_management import (
     channel_add,
@@ -16,6 +17,9 @@ from cli.channel_management import (
     channel_remove,
     channel_status,
 )
+from cli.config_management import coerce_config_value, config_get, config_set, config_show
+from cli.model_management import model_list, model_refresh
+from cli.provider_management import provider_list
 from cli.server_management import (
     CommandResult,
     ServerInstance,
@@ -24,10 +28,15 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
+from cli.skill_management import skill_list
 from server.main import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
 CHANNEL_COMMANDS = ("add", "list", "remove", "enable", "disable", "status")
+PROVIDER_COMMANDS = ("list",)
+MODEL_COMMANDS = ("list", "refresh")
+SKILL_COMMANDS = ("list",)
+CONFIG_COMMANDS = ("get", "set")
 CHANNEL_PLATFORMS = ("telegram",)
 CHANNEL_DM_SCOPES = (
     "per_conversation",
@@ -96,6 +105,39 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_target_arguments(status_parser)
     status_parser.add_argument("--id", required=True)
 
+    provider_parser = subparsers.add_parser("provider", description="Manage vBot providers")
+    provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
+    for command in PROVIDER_COMMANDS:
+        command_parser = provider_subparsers.add_parser(command)
+        _add_target_arguments(command_parser)
+
+    model_parser = subparsers.add_parser("model", description="Manage vBot models")
+    model_subparsers = model_parser.add_subparsers(dest="command", required=True)
+    model_list_parser = model_subparsers.add_parser(MODEL_COMMANDS[0])
+    _add_target_arguments(model_list_parser)
+    model_refresh_parser = model_subparsers.add_parser(MODEL_COMMANDS[1])
+    _add_target_arguments(model_refresh_parser)
+    model_refresh_parser.add_argument("--provider")
+
+    skill_parser = subparsers.add_parser("skill", description="Manage vBot skills")
+    skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
+    for command in SKILL_COMMANDS:
+        command_parser = skill_subparsers.add_parser(command)
+        _add_target_arguments(command_parser)
+
+    config_parser = subparsers.add_parser("config", description="Manage vBot configuration")
+    config_subparsers = config_parser.add_subparsers(dest="command")
+    _add_target_arguments(config_parser)
+
+    config_get_parser = config_subparsers.add_parser(CONFIG_COMMANDS[0])
+    _add_target_arguments(config_get_parser)
+    config_get_parser.add_argument("key")
+
+    config_set_parser = config_subparsers.add_parser(CONFIG_COMMANDS[1])
+    _add_target_arguments(config_set_parser)
+    config_set_parser.add_argument("key")
+    config_set_parser.add_argument("value")
+
     return parser.parse_args(argv)
 
 
@@ -120,6 +162,13 @@ def run(
     enable_channel: Callable[[ServerInstance, str], CommandResult] = channel_enable,
     disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
     channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
+    list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
+    list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
+    refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
+    list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
+    show_config_fn: Callable[[ServerInstance], CommandResult] = config_show,
+    get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
+    set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -152,6 +201,41 @@ def run(
             channel_status_fn=channel_status_fn,
         )
         print_channel_command_result(args.command, result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "provider":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_provider_command(args, instance, list_providers=list_providers)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "model":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_model_command(
+            args,
+            instance,
+            list_models_fn=list_models_fn,
+            refresh_models_fn=refresh_models_fn,
+        )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "skill":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_skill_command(args, instance, list_skills_fn=list_skills_fn)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "config":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_config_command(
+            args,
+            instance,
+            show_config_fn=show_config_fn,
+            get_config_fn=get_config_fn,
+            set_config_fn=set_config_fn,
+        )
+        print_config_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     raise ValueError(f"Unsupported command area: {args.area}")
@@ -191,6 +275,68 @@ def dispatch_channel_command(
     if args.command == "status":
         return channel_status_fn(instance, args.id)
     raise ValueError(f"Unsupported channel command: {args.command}")
+
+
+def dispatch_provider_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_providers: Callable[[ServerInstance], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed provider command against the server RPC client."""
+
+    if args.command == "list":
+        return list_providers(instance)
+    raise ValueError(f"Unsupported provider command: {args.command}")
+
+
+def dispatch_model_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_models_fn: Callable[[ServerInstance], CommandResult],
+    refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed model command against the server RPC client."""
+
+    if args.command == "list":
+        return list_models_fn(instance)
+    if args.command == "refresh":
+        return refresh_models_fn(instance, args.provider)
+    raise ValueError(f"Unsupported model command: {args.command}")
+
+
+def dispatch_skill_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_skills_fn: Callable[[ServerInstance], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed skill command against the server RPC client."""
+
+    if args.command == "list":
+        return list_skills_fn(instance)
+    raise ValueError(f"Unsupported skill command: {args.command}")
+
+
+def dispatch_config_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    show_config_fn: Callable[[ServerInstance], CommandResult],
+    get_config_fn: Callable[[ServerInstance, str], CommandResult],
+    set_config_fn: Callable[[ServerInstance, str, Any], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed config command against the server RPC client."""
+
+    if args.command is None:
+        return show_config_fn(instance)
+    if args.command == "get":
+        return get_config_fn(instance, args.key)
+    if args.command == "set":
+        coerced = coerce_config_value(args.value)
+        return set_config_fn(instance, args.key, coerced)
+    raise ValueError(f"Unsupported config command: {args.command}")
 
 
 def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
@@ -242,6 +388,18 @@ def print_channel_command_result(command: str, result: CommandResult) -> None:
         f"data_dir: {result.instance.data_dir}",
     ]
     print("\n".join(lines))
+
+
+def print_management_command_result(result: CommandResult) -> None:
+    """Print plain-text output for non-channel RPC management command areas."""
+
+    print(result.message)
+
+
+def print_config_command_result(result: CommandResult) -> None:
+    """Print deterministic plain-text config command output."""
+
+    print(result.message)
 
 
 def exit_code_for(command: str, result: CommandResult) -> int:

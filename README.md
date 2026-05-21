@@ -11,12 +11,14 @@ The project currently includes:
 - an agentic chat loop with tool support, streaming, slash commands, and model fallback
 - a FastAPI server with RPC, Server-Sent Events (SSE), WebSocket events, log streaming, and attachment endpoints
 - a Svelte WebUI with Chat, Agents, Cron, System Prompt, Settings, and Logs views
-- a CLI for local server lifecycle management and channel management
+- a CLI for local server lifecycle management and RPC-backed management commands
 - a pywebview desktop shell that loads the normal server-served WebUI
 - local extensions, skills, cron jobs, and channel integrations
 
 vBot is designed as a local, single-user system. The server is the shared core;
 the WebUI, CLI, desktop shell, and channel adapters are accessors around it.
+Except for `server start`, `server stop`, `server restart`, and `server status`,
+CLI commands require a running vBot server and go through its RPC surface.
 
 ## Requirements
 
