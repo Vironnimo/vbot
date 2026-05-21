@@ -832,6 +832,76 @@ async def test_settings_get_rejects_params(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_settings_get_raw_returns_raw_settings_payload(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings(
+        {
+            "server_port": 9001,
+            "feature_flags": {"logs": True},
+        }
+    )
+
+    response = await dispatch_rpc(state, {"method": "settings.get_raw", "params": {}})
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "settings": {
+                "server_port": 9001,
+                "feature_flags": {"logs": True},
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_set_key_updates_settings_and_returns_raw_payload(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings({"server_host": "127.0.0.1"})
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.set_key", "params": {"key": "server_port", "value": 9000}},
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "settings": {
+                "server_host": "127.0.0.1",
+                "server_port": 9000,
+            }
+        },
+    }
+    assert state.runtime.storage.load_settings() == {
+        "server_host": "127.0.0.1",
+        "server_port": 9000,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"key": "server_port"},
+        {"value": 9000},
+    ],
+)
+async def test_settings_set_key_rejects_missing_key_or_value(
+    tmp_path: Path,
+    params: JsonObject,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "settings.set_key", "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert response["error"]["message"] == "settings.set_key requires 'key' and 'value'"
+
+
+@pytest.mark.asyncio
 async def test_log_list_returns_sorted_files_with_default_selection(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     logs_dir = tmp_path / "logs"

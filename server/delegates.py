@@ -231,6 +231,10 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _cron_enable(state, params)
         case "cron.disable":
             return _cron_disable(state, params)
+        case "settings.get_raw":
+            return _get_settings_raw(state, params)
+        case "settings.set_key":
+            return _set_settings_key(state, params)
         case "settings.get":
             return _get_settings(state, params)
         case "settings.update":
@@ -1278,6 +1282,34 @@ def _resolve_cron_timezone(timezone_name: str | None) -> tzinfo:
     if local_timezone is not None:
         return local_timezone
     return UTC
+
+
+def _get_settings_raw(state: Any, params: JsonObject) -> JsonObject:
+    try:
+        settings = state.runtime.storage.load_settings()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"settings": dict(settings)}
+
+
+def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
+    if "key" not in params or "value" not in params:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "settings.set_key requires 'key' and 'value'",
+        )
+
+    key = _required_string(params, "key")
+    value = params["value"]
+
+    try:
+        settings = dict(state.runtime.storage.load_settings())
+        settings[key] = value
+        state.runtime.storage.save_settings(settings)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {"settings": settings}
 
 
 def _get_settings(state: Any, params: JsonObject) -> JsonObject:
