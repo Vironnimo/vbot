@@ -85,7 +85,7 @@ Model discovery may write up to three file types beside each other under
 |---|---|---|---|
 | `<provider>.json` | `refresh_models()` | `ModelRegistry.load()` | App catalog (sanitized) |
 | `<provider>.raw.json` | `refresh_models()` | nobody | Inspection / debugging |
-| `<provider>.overrides.json` | human | `apply_overrides()` | Durable corrections |
+| `<provider>.overrides.json` | human | `apply_overrides()` | Research-only non-discoverable corrections |
 
 ### Sanitized file
 
@@ -181,6 +181,20 @@ the generated output and must provide the full `Model` shape.
 `ModelRegistry.load()` skips `*.overrides.json` files so overrides are never
 parsed as model catalogs.
 
+Overrides are intentionally narrow:
+
+- Use them only for durable facts the provider APIs do not expose and that were
+  verified through external research.
+- Do not use them to patch fields that can be derived from `/models`, other
+  provider catalog endpoints, or probe inference requests. Those facts belong in
+  adapter `normalize_catalog_entry()` implementations or in adapter runtime
+  request/response behavior.
+- Do not hand-edit `resources/models/<provider>.json` for lasting fixes.
+  `refresh_models()` can rewrite generated catalogs at any time.
+- Override-only models are exceptional and only make sense when the provider
+  cannot disclose that model through discovery and the full model shape was
+  verified externally.
+
 Current provider files include `openai.json`, `openrouter.json`,
 `anthropic.json`, and `github-copilot.json`. Generated catalogs may be marked
 with top-level `"source": "discovery"`; bundled/static catalogs may use other
@@ -256,6 +270,10 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   normalization lives in `OpenRouterAdapter`; GitHub Copilot catalog
   normalization lives in `GitHubCopilotAdapter`. Discovery should not branch on
   provider IDs or contain provider-specific normalizer functions.
+- **Overrides are not a second discovery layer.** If a value can be obtained by
+  inspecting provider catalog responses or by sending a probe request to the
+  real inference endpoint, put that knowledge in the adapter family rather than
+  in `*.overrides.json`.
 - **GitHub Copilot `/models` entries store capability facts under
   `capabilities`.** Context and output limits come from
   `capabilities.limits.max_context_window_tokens` and
