@@ -22,7 +22,7 @@ Clients call the vBot server contract; provider wire details stay behind
   `chat.commands`,
   `chat.stream`, `chat.cancel`, `channel.list`, `channel.create`,
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
-  `channel.status`, `cron.create`, `cron.list`, `cron.update`,
+  `channel.status`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
   `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
@@ -46,6 +46,8 @@ Clients call the vBot server contract; provider wire details stay behind
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
 - `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, plus `subagents` settings for depth, per-turn count, and timeout limits, and `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`.
+- `settings.get_raw` returns `{ settings }`, where `settings` is the raw top-level `settings.json` dict currently persisted for the target data directory.
+- `settings.set_key` accepts `{ key, value }`, where `value` may be any JSON type including `null`, updates one raw top-level `settings.json` key, persists it, and returns `{ settings }` with the updated raw dict.
 - `log.list` returns available daily log filenames from `<data_dir>/logs/` as
   `{ files, default_file }`, sorted newest-first with `default_file` set to the
   newest item or `null` when none exist.
