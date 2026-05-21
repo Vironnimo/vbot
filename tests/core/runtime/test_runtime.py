@@ -88,7 +88,7 @@ def test_runtime_start_creates_date_named_log_file(config: Config) -> None:
 
     log_files = list((config.data_dir / "logs").iterdir())
     assert len(log_files) == 1
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", log_files[0].name)
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}\.log", log_files[0].name)
 
 
 def test_runtime_start_logs_startup_and_shutdown_with_required_format(config: Config) -> None:
