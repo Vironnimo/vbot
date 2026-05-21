@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-20 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. All adapter families may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping.
+Last updated: 2026-05-21 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. All adapter families may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping. New-provider work starts from real catalog and probe-response inspection, and catalog overrides are reserved for non-discoverable externally researched facts.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -56,7 +56,7 @@ class ProviderConfig:
     connections: list[ConnectionConfig]  # Authentication connections in display/preference order
     defaults: dict[str, Any] | None      # Default request params (max_tokens, temperature)
     extra_headers: dict[str, str] | None # Provider-specific HTTP headers
-    models_endpoint: str | None          # Path to models listing endpoint (future use)
+  models_endpoint: str | None          # Path to models listing endpoint used by refresh/discovery
 
     def get_connection(local_id: str) -> ConnectionConfig: ...
 ```
@@ -157,6 +157,58 @@ ProviderAdapter (ABC)          — core/providers/adapter.py
   │   └── GitHubCopilotAdapter — core/providers/github_copilot.py
   └── AnthropicAdapter         — core/providers/anthropic.py
 ```
+
+## Adding a New Provider
+
+New provider work starts from the real provider API surface, not from hand-made
+catalog edits or guesses from marketing docs.
+
+### Required discovery steps for every provider
+
+1. Add `resources/providers/<name>.json` with the intended adapter family and a
+   `models_endpoint` when the provider exposes a refreshable catalog.
+2. Inspect the real models-endpoint response first. Use that concrete response
+   shape to design `normalize_catalog_entry(raw, defaults)`; do not infer model
+   fields by hand-editing generated catalog files.
+3. Send at least one probe inference request against the actual endpoint you
+   plan to support (`/chat/completions`, `/messages`, `/responses`, etc.) and
+   inspect both the accepted request parameters and the returned response shape.
+4. Verify from real responses how the provider exposes or rejects
+   thinking/reasoning controls, tool calling, streaming, output-token limits,
+   and other runtime-relevant fields that affect request shaping or
+   normalization.
+5. Put every fact discoverable from provider APIs or probe requests into
+   adapter catalog normalization or adapter runtime logic. Use
+   `resources/models/<provider>.overrides.json` only for durable facts the
+   provider APIs do not expose and that had to be verified through external
+   research.
+
+### OpenAI-compatible providers
+
+- Start with `OpenAICompatibleAdapter` when the provider actually speaks the
+  OpenAI `/chat/completions` wire protocol.
+- Reuse the base adapter unchanged when both runtime behavior and catalog fields
+  are standard.
+- Subclass it only when the provider deviates in request/response shape,
+  reasoning controls, streaming semantics, or `/models` schema.
+- Probe requests must confirm which reasoning controls the provider really
+  accepts (`reasoning_effort`, provider-specific alternatives, or none), how
+  tool calls are encoded, and which response fields need normalization beyond
+  the base adapter.
+
+### Anthropic-compatible providers
+
+- Use `AnthropicAdapter` when the provider speaks the Anthropic Messages
+  protocol (`POST /messages`) with Anthropic-style headers and content blocks.
+- Validate the real request contract for top-level `system`, `max_tokens`, tool
+  definitions/results, and thinking controls such as `thinking.type`,
+  `thinking.budget_tokens`, `output_config.effort`, and `thinking.display`.
+- Probe requests must confirm how visible thinking and opaque thinking metadata
+  are returned, how tool-use blocks are encoded, and whether streaming follows
+  Anthropic event semantics or requires a provider-specific subclass.
+- If a mostly-Anthropic provider deviates in runtime or catalog behavior, keep
+  those deviations in an `AnthropicAdapter` subclass rather than encoding them
+  as catalog overrides.
 
 ### ProviderAdapter (ABC)
 
