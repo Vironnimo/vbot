@@ -11,6 +11,7 @@ from core.utils.logging import (
     QuietLogsWebSocketLifecycleFilter,
     is_logs_websocket_lifecycle_record,
     is_routine_websocket_lifecycle_message,
+    resolve_daily_log_path,
 )
 
 
@@ -63,7 +64,7 @@ def test_log_manager_writes_exact_format_to_daily_log_file(tmp_path: Path) -> No
     finally:
         manager.close()
 
-    log_path = tmp_path / "logs" / date.today().isoformat()
+    log_path = tmp_path / "logs" / f"{date.today().isoformat()}.log"
     assert log_path.exists()
     line = log_path.read_text(encoding="utf-8").strip()
     assert line.endswith("[WARN] vbot.core - Structured warning")
@@ -83,9 +84,18 @@ def test_log_manager_configures_vbot_namespace_for_direct_loggers(tmp_path: Path
     finally:
         manager.close()
 
-    log_path = tmp_path / "logs" / date.today().isoformat()
+    log_path = tmp_path / "logs" / f"{date.today().isoformat()}.log"
     contents = log_path.read_text(encoding="utf-8")
     assert "[INFO] vbot.runtime.direct - Inherited handler path" in contents
+
+
+def test_resolve_daily_log_path_uses_log_suffix(tmp_path: Path) -> None:
+    """Daily log paths keep the date-based contract and now end with `.log`."""
+
+    assert resolve_daily_log_path(
+        tmp_path,
+        current_date_provider=lambda: date(2026, 5, 10),
+    ) == (tmp_path / "logs" / "2026-05-10.log")
 
 
 def test_log_manager_resolves_daily_log_path_from_current_date(tmp_path: Path) -> None:
@@ -99,13 +109,13 @@ def test_log_manager_resolves_daily_log_path_from_current_date(tmp_path: Path) -
     )
 
     try:
-        assert manager.log_file_path == tmp_path / "logs" / "2026-05-10"
+        assert manager.log_file_path == tmp_path / "logs" / "2026-05-10.log"
         logger = manager.get_logger("core")
         logger.info("Daily file resolved")
     finally:
         manager.close()
 
-    assert (tmp_path / "logs" / "2026-05-10").exists()
+    assert (tmp_path / "logs" / "2026-05-10.log").exists()
 
 
 def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
@@ -126,8 +136,10 @@ def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
         logger.removeHandler(handler)
         handler.close()
 
-    assert (tmp_path / "logs" / "2026-05-10").read_text(encoding="utf-8").strip() == "first day"
-    assert (tmp_path / "logs" / "2026-05-11").read_text(encoding="utf-8").strip() == "second day"
+    assert (tmp_path / "logs" / "2026-05-10.log").read_text(encoding="utf-8").strip() == "first day"
+    assert (tmp_path / "logs" / "2026-05-11.log").read_text(
+        encoding="utf-8"
+    ).strip() == "second day"
 
 
 def test_logs_websocket_lifecycle_filter_suppresses_info_records_for_log_stream() -> None:

@@ -227,6 +227,29 @@ def test_output_contains_deterministic_status_fields(
     ]
 
 
+def test_start_output_omits_unknown_webui_field(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = make_result(
+        tmp_path,
+        ok=False,
+        message="server readiness timed out",
+        health=HealthProbeResult(reachable=False, is_vbot=False, error="ConnectError"),
+    )
+
+    cli_main.print_command_result("start", result)
+
+    assert capsys.readouterr().out.splitlines() == [
+        "command: server start",
+        "result: server readiness timed out",
+        "running: no",
+        "url: http://127.0.0.1:8420",
+        f"data_dir: {tmp_path / 'data'}",
+        f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
+    ]
+
+
 def test_output_reports_process_id_forced_and_conflict(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -243,11 +266,15 @@ def test_output_reports_process_id_forced_and_conflict(
 
     cli_main.print_command_result("stop", result)
 
-    output = capsys.readouterr().out
-    assert "running: no" in output
-    assert "process_id: 123" in output
-    assert "forced: true" in output
-    assert "conflict: port occupied by non-vBot process" in output
+    assert capsys.readouterr().out.splitlines() == [
+        "command: server stop",
+        "result: port occupied by non-vBot process",
+        "url: http://127.0.0.1:8420",
+        f"data_dir: {tmp_path / 'data'}",
+        "process_id: 123",
+        "forced: true",
+        "conflict: port occupied by non-vBot process",
+    ]
 
 
 def test_status_conflict_output_reports_not_running_with_note(
