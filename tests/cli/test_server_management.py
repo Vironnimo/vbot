@@ -215,6 +215,7 @@ def test_resolve_instance_uses_daily_log_file_contract(tmp_path: Path) -> None:
     instance = resolve_instance(data_dir=data_dir)
 
     assert instance.log_path == resolve_daily_log_path(data_dir.resolve())
+    assert instance.log_path.suffix == ".log"
 
 
 def test_start_server_does_not_spawn_when_non_vbot_occupies_port(

@@ -219,23 +219,15 @@ def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
 def print_command_result(command: str, result: CommandResult) -> None:
     """Print deterministic plain-text server command output."""
 
-    lines = [
-        f"command: server {command}",
-        f"result: {result.message}",
-        f"running: {_running_text(result)}",
-        f"url: {result.instance.url}",
-        f"webui: {_webui_text(result)}",
-        f"data_dir: {result.instance.data_dir}",
-    ]
-    log_path = result.log_path or result.instance.log_path
-    if _should_print_log_path(command, result, log_path):
-        lines.append(f"log_path: {log_path}")
-    if result.process_id is not None:
-        lines.append(f"process_id: {result.process_id}")
-    if result.forced:
-        lines.append("forced: true")
-    if _is_non_vbot_conflict(result):
-        lines.append("conflict: port occupied by non-vBot process")
+    lines = [f"command: server {command}", f"result: {result.message}"]
+    if command in {"start", "restart"}:
+        lines.extend(_start_like_output_lines(result))
+    elif command == "stop":
+        lines.extend(_stop_output_lines(result))
+    elif command == "status":
+        lines.extend(_status_output_lines(result))
+    else:
+        raise ValueError(f"Unsupported server command: {command}")
 
     print("\n".join(lines))
 
@@ -278,8 +270,51 @@ def _webui_text(result: CommandResult) -> str:
     return "unavailable"
 
 
-def _should_print_log_path(command: str, result: CommandResult, log_path: Path) -> bool:
-    return command in {"start", "restart", "status"} or result.log_path == log_path
+def _start_like_output_lines(result: CommandResult) -> list[str]:
+    lines = [
+        f"running: {_running_text(result)}",
+        f"url: {result.instance.url}",
+    ]
+    if result.webui is not None:
+        lines.append(f"webui: {_webui_text(result)}")
+    lines.append(f"data_dir: {result.instance.data_dir}")
+    lines.append(f"log_path: {_log_path_text(result)}")
+    if result.process_id is not None:
+        lines.append(f"process_id: {result.process_id}")
+    if _is_non_vbot_conflict(result):
+        lines.append("conflict: port occupied by non-vBot process")
+    return lines
+
+
+def _stop_output_lines(result: CommandResult) -> list[str]:
+    lines = [
+        f"url: {result.instance.url}",
+        f"data_dir: {result.instance.data_dir}",
+    ]
+    if result.process_id is not None:
+        lines.append(f"process_id: {result.process_id}")
+    if result.forced:
+        lines.append("forced: true")
+    if _is_non_vbot_conflict(result):
+        lines.append("conflict: port occupied by non-vBot process")
+    return lines
+
+
+def _status_output_lines(result: CommandResult) -> list[str]:
+    lines = [
+        f"running: {_running_text(result)}",
+        f"url: {result.instance.url}",
+        f"webui: {_webui_text(result)}",
+        f"data_dir: {result.instance.data_dir}",
+        f"log_path: {_log_path_text(result)}",
+    ]
+    if _is_non_vbot_conflict(result):
+        lines.append("conflict: port occupied by non-vBot process")
+    return lines
+
+
+def _log_path_text(result: CommandResult) -> Path:
+    return result.log_path or result.instance.log_path
 
 
 def _is_non_vbot_conflict(result: CommandResult) -> bool:
