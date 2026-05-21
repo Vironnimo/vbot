@@ -1,19 +1,20 @@
 # CLI
 
-Local command-line accessor for managing the vBot server process. It owns user-
-visible server lifecycle commands and their targeting/status contract, but it
-does not own server business logic.
+Local command-line accessor for server lifecycle and RPC-backed management
+areas. It owns user-visible server lifecycle commands and their
+targeting/status contract, but it does not own server business logic.
 
 ## Overview
 
 `cli/` is the local process-management and management-command entrypoint used by
 both human users and agents. It owns `server start`, `server stop`, `server
-restart`, `server status`, and channel-management commands. The CLI is
-non-interactive and automation-safe: it never opens the browser and instead
-prints the resolved server URL and status information. It manages local vBot
-server reachability around the existing `server/main.py` foreground entrypoint
-and calls the running server's RPC contract for non-process domains such as
-channels.
+restart`, `server status`, and RPC-backed management commands for channels,
+providers, models, skills, and config. The CLI is non-interactive and
+automation-safe: it never opens the browser and instead prints the resolved
+server URL and status information. It manages local vBot server reachability
+around the existing `server/main.py` foreground entrypoint, and every CLI
+command outside the `server` lifecycle area calls the running server's RPC
+contract rather than reading or mutating files directly.
 
 ## Interfaces
 
@@ -41,12 +42,27 @@ channels.
   - calls `channel.disable` over server RPC
 - `python cli/main.py channel status --id`
   - calls `channel.status` over server RPC
+- `python cli/main.py provider list`
+  - calls `connection.list` over server RPC and prints configured connections
+- `python cli/main.py model list`
+  - calls `model.list` over server RPC and prints available models
+- `python cli/main.py model refresh [--provider <id>]`
+  - calls `model.refresh_db` over server RPC and refreshes provider model catalogs
+- `python cli/main.py skill list`
+  - calls `skill.list` over server RPC and prints valid plus invalid skill diagnostics
+- `python cli/main.py config`
+  - calls `settings.get_raw` over server RPC and prints raw `settings.json`
+- `python cli/main.py config get <key>`
+  - calls `settings.get_raw` over server RPC and prints one raw top-level settings key
+- `python cli/main.py config set <key> <value>`
+  - coerces the CLI value to JSON-native data, then calls `settings.set_key` over server RPC
 
 ## Conventions
 
 - `server start` is data-dir-scoped for instance selection.
-- Channel commands require a reachable vBot server because they are RPC-backed,
-  not local file mutations.
+- Every CLI command except `server start`, `server stop`, `server restart`, and
+  `server status` requires a reachable vBot server because the CLI is an
+  accessor and those areas are RPC-backed, not local file mutations.
 - Port resolution follows `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`.
 - Ambient `PORT` and `SERVER_PORT` process environment variables are ignored for
   port resolution; only `VBOT_SERVER_PORT` can override `settings.json` from the

@@ -19,7 +19,7 @@ only where native libraries force them.
 core/          ← Kernel (async). No HTTP, no UI.
 server/        ← FastAPI + WS + SSE. Imports core/. RPC delegates per domain.
 webui/         ← Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
-cli/           ← Server management. Imports core/. Used by both users and agents.
+cli/           ← CLI accessor. Server lifecycle locally; all other domains via RPC.
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
@@ -176,6 +176,11 @@ browser strategy, which features need API credentials, shutdown — live in
 
 Use this section only for important strategic decisions, unusual global
 constraints, or things an agent would otherwise likely assume incorrectly.
+
+- **CLI is an accessor, not a second control plane.** Only `server start`,
+  `server stop`, `server restart`, and `server status` act locally. Every other
+  CLI area must require a reachable vBot server and go through the server RPC
+  contract rather than reading or mutating files directly.
 
 - **Raw model catalog files are kept alongside sanitized files.** After a
   model-db refresh, `resources/models/<provider>.raw.json` stores the full
