@@ -146,6 +146,92 @@ def test_load_settings_rejects_invalid_json(tmp_path: Path) -> None:
         storage.load_settings()
 
 
+def test_load_defaults_returns_empty_when_missing(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_defaults() == {}
+
+
+def test_load_defaults_reads_and_normalizes_all_agent_fields(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "defaults": {
+                "agent": {
+                    "model": "openrouter/anthropic/claude-sonnet-4",
+                    "fallback_model": "openai/gpt-4.1-mini",
+                    "temperature": 1,
+                    "thinking_effort": "medium",
+                }
+            }
+        }
+    )
+
+    defaults = storage.load_defaults()
+
+    assert defaults == {
+        "agent": {
+            "model": "openrouter/anthropic/claude-sonnet-4",
+            "fallback_model": "openai/gpt-4.1-mini",
+            "temperature": 1.0,
+            "thinking_effort": "medium",
+        }
+    }
+
+
+def test_update_defaults_none_value_removes_existing_key(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings(
+        {
+            "defaults": {
+                "agent": {
+                    "model": "openrouter/anthropic/claude-sonnet-4",
+                    "temperature": 0.7,
+                    "thinking_effort": "high",
+                }
+            },
+            "server_port": 8500,
+        }
+    )
+
+    updated = storage.update_defaults("agent", {"temperature": None})
+
+    assert updated == {
+        "agent": {
+            "model": "openrouter/anthropic/claude-sonnet-4",
+            "thinking_effort": "high",
+        }
+    }
+    assert storage.load_settings() == {
+        "defaults": {
+            "agent": {
+                "model": "openrouter/anthropic/claude-sonnet-4",
+                "thinking_effort": "high",
+            }
+        },
+        "server_port": 8500,
+    }
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"temperature": 2.5}, "Agent default temperature must be between 0 and 2"),
+        ({"thinking_effort": "ultra"}, "Agent default thinking_effort must be one of"),
+        ({"model": 123}, "Agent default model must be a string"),
+    ],
+)
+def test_update_defaults_rejects_invalid_agent_values(
+    tmp_path: Path,
+    values: dict[str, Any],
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match=message):
+        storage.update_defaults("agent", values)
+
+
 def test_save_settings_rejects_unserializable_values(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
