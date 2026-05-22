@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Sub-Agents, Compaction, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -137,6 +137,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
   displayed from Agent data but omitted from public create/update payloads in
   Phase 4.
+  - In edit mode it builds sparse update payloads: unchanged fields are omitted
+    so inherited resolved defaults are not written back as explicit overrides.
+    Clearing `temperature` or `thinking_effort` sends `null`; clearing model
+    fields sends `""`.
 - `webui/src/components/AgentsView.svelte`
   - Loads `agent.list` plus the backend catalogs from `model.list`,
     `connection.list`, `tool.list`, and `skill.list` on mount.
@@ -165,9 +169,18 @@ does not talk to providers directly. The product presents an Agent-first chat su
     shows one global model database refresh control. It calls `model.refresh_db`
     without `provider_id` and then re-requests `model.list` after success.
   - Normalizes skill directory settings from `settings.skills.directories` and builds update payloads for `settings.update`.
+  - Normalizes `settings.defaults.agent` for the Defaults panel and builds
+    payloads that preserve backend semantics: `null` removes a default,
+    `thinking_effort: ""` means explicit provider default, and `null` means no
+    global default.
   - Normalizes Sub-Agent settings from `settings.subagents` and builds update payloads for `settings.update`.
   - Normalizes Compaction settings from `settings.compaction` and builds the corresponding `settings.update` payload.
 - `webui/src/components/SettingsView.svelte`
+  - Includes a Defaults panel. It lets users edit project-wide Agent fallback
+    values for `model`, `fallback_model`, `temperature`, and
+    `thinking_effort` through `settings.update({ defaults: { agent: ... } })`.
+    `temperature` supports explicit clear-to-null; `thinking_effort`
+    distinguishes between no default and provider default.
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`.
@@ -290,6 +303,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
 - `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search
