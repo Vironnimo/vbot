@@ -5,6 +5,7 @@
 .venv/
 .tmp/
 .worktrees/
+.vbot-worktree
 .playwright-cli/
 
 # Python
