@@ -39,12 +39,25 @@ def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
     return Path(raw_data_dir).expanduser()
 
 
+def _find_worktree_file_from_cwd() -> Path | None:
+    """Return the current-directory worktree marker when present."""
+
+    marker = Path.cwd() / ".vbot-worktree"
+    if marker.is_file():
+        return marker
+    return None
+
+
 def _resolve_default_data_dir() -> Path:
     """Resolve the default data directory from env, worktree marker, or home."""
 
     val = os.environ.get("VBOT_DATA_DIR")
     if isinstance(val, str) and val:
         return Path(val).expanduser()
+
+    result = _read_worktree_data_dir(_find_worktree_file_from_cwd())
+    if result is not None:
+        return result
 
     result = _read_worktree_data_dir()
     if result is not None:
