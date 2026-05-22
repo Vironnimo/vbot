@@ -1,7 +1,7 @@
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
-export const DEFAULT_AGENT_TEMPERATURE = '0.1';
+export const DEFAULT_AGENT_TEMPERATURE = '';
 export const DEFAULT_AGENT_ALLOWED_LIST = '*';
 export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
@@ -48,9 +48,12 @@ export function normalizeAgentForm(values, options = {}) {
     errors.name = 'required';
   }
 
-  const temperature = Number(normalized.temperature);
-  if (!normalized.temperature || !Number.isFinite(temperature)) {
-    errors.temperature = 'invalid_number';
+  let temperature = null;
+  if (normalized.temperature) {
+    temperature = Number(normalized.temperature);
+    if (!Number.isFinite(temperature)) {
+      errors.temperature = 'invalid_number';
+    }
   }
 
   const payload = {
@@ -58,7 +61,7 @@ export function normalizeAgentForm(values, options = {}) {
     model: normalized.model,
     fallback_model: normalized.fallback_model,
     temperature,
-    thinking_effort: normalized.thinking_effort,
+    thinking_effort: normalized.thinking_effort || null,
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
   };

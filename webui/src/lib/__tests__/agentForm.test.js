@@ -16,7 +16,7 @@ describe('agent form helpers', () => {
       model: '',
       fallback_model: '',
       workspace: '',
-      temperature: '0.1',
+      temperature: '',
       thinking_effort: '',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
@@ -66,6 +66,23 @@ describe('agent form helpers', () => {
       allowed_skills: ['debugging'],
     });
     expect(result.payload).not.toHaveProperty('workspace');
+  });
+
+  it('normalizes cleared temperature and thinking effort to null', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      model: '',
+      fallback_model: '',
+      temperature: '',
+      thinking_effort: '',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.temperature).toBeNull();
+    expect(result.payload.thinking_effort).toBeNull();
   });
 
   it('round-trips all-tools access with the wildcard array', () => {

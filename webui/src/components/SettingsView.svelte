@@ -20,6 +20,7 @@
     createChannelPanelState,
     createLanguageUpdatePayload,
     createSkillDirectoriesUpdatePayload,
+    buildAgentDefaultsPayload,
     buildSubAgentSettingsPayload,
     describeProvider,
     formatAllowedChatIds,
@@ -29,6 +30,7 @@
     getAgentItems,
     getSkillDirectories,
     mergeChannelStatuses,
+    normalizeAgentDefaultsSettings,
     normalizeSubAgentSettings,
     providerStatusClass,
     providerStatusLabel,
@@ -48,6 +50,15 @@
   });
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]);
 
   function normalizeCompactionSettingsFallback(rawSettings) {
     const compaction = rawSettings?.compaction ?? {};
@@ -96,6 +107,18 @@
   const getCompactionSettings =
     settingsViewHelpers.getCompactionSettings ?? getCompactionSettingsFallback;
 
+  function normalizeAgentDefaultsFormValues(rawSettings) {
+    const normalized = normalizeAgentDefaultsSettings(rawSettings);
+
+    return {
+      model: normalized.model,
+      fallback_model: normalized.fallback_model,
+      temperature:
+        normalized.temperature === null ? '' : String(normalized.temperature),
+      thinking_effort: normalized.thinking_effort ?? '',
+    };
+  }
+
   let {
     providerAuthEvent = null,
     connectProvider = null,
@@ -116,6 +139,17 @@
         t(
           'settings.general.subtitle',
           'Bind address and application data directory.',
+        ),
+    },
+    {
+      id: 'defaults',
+      labelKey: 'settings.defaults.title',
+      labelFallback: 'Defaults',
+      label: () => t('settings.defaults.title', 'Defaults'),
+      subtitle: () =>
+        t(
+          'settings.defaults.subtitle',
+          'Fallback values for agent fields that are not explicitly set.',
         ),
     },
     {
@@ -191,6 +225,7 @@
   let saving = $state(false);
   let selectedLanguageId = $state('en');
   let skillDirectories = $state([]);
+  let agentDefaults = $state(normalizeAgentDefaultsFormValues(null));
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let newSkillDirectory = $state('');
@@ -268,6 +303,9 @@
     loading ||
       saving ||
       directoriesMatch(skillDirectories, getSkillDirectories(settings)),
+  );
+  let agentDefaultsSaveDisabled = $derived(
+    loading || saving || agentDefaultsMatch(agentDefaults, settings),
   );
   let subAgentSettingsSaveDisabled = $derived(
     loading ||
@@ -400,6 +438,7 @@
     const language = nextSettings?.appearance?.language ?? 'en';
     selectedLanguageId = language;
     skillDirectories = getSkillDirectories(nextSettings);
+    agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
     subAgentSettings = normalizeSubAgentSettings(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
     newSkillDirectory = '';
@@ -468,6 +507,33 @@
       saveNotice = t(
         'settings.skills.saveSuccess',
         'Skill directories updated.',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveAgentDefaults() {
+    if (agentDefaultsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+    saveNotice = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        buildAgentDefaultsPayload(agentDefaults),
+      );
+      commitSettings(nextSettings);
+      agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
+      saveNotice = t(
+        'settings.defaults.saveSuccess',
+        'Agent defaults updated.',
       );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
@@ -585,6 +651,19 @@
     void saveSkillDirectories();
   }
 
+  function handleManualAgentDefaultsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (agentDefaultsSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    void saveAgentDefaults();
+  }
+
   function handleManualSubAgentSettingsSave() {
     if (saving) {
       return;
@@ -658,6 +737,19 @@
     saveNotice = '';
   }
 
+  function handleAgentDefaultsChange(key, value) {
+    agentDefaults = {
+      ...agentDefaults,
+      [key]: value,
+    };
+    saveError = '';
+    saveNotice = '';
+  }
+
+  function clearAgentDefaultsTemperature() {
+    handleAgentDefaultsChange('temperature', '');
+  }
+
   function handleCompactionSettingChange(key, value) {
     compactionSettings = {
       ...compactionSettings,
@@ -703,6 +795,18 @@
     }
 
     return left.every((item, index) => item === right[index]);
+  }
+
+  function agentDefaultsMatch(left, right) {
+    const normalizedLeft = normalizeAgentDefaultsSettings(left);
+    const normalizedRight = normalizeAgentDefaultsSettings(right);
+
+    return (
+      normalizedLeft.model === normalizedRight.model &&
+      normalizedLeft.fallback_model === normalizedRight.fallback_model &&
+      normalizedLeft.temperature === normalizedRight.temperature &&
+      normalizedLeft.thinking_effort === normalizedRight.thinking_effort
+    );
   }
 
   function providerAppearsRefreshEligible(provider) {
@@ -1364,6 +1468,155 @@
             <div class="s-row-control s-row-control--input">
               <div class="s-value-box">{dataDirectoryValue}</div>
             </div>
+          </div>
+        {:else if activePanelId === 'defaults'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.defaults.model', 'Model')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.defaults.modelDescription',
+                  'Used when an agent model is empty.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <input
+                id="settings-defaults-model"
+                class="s-input"
+                type="text"
+                value={agentDefaults.model}
+                aria-label={t('settings.defaults.model', 'Model')}
+                oninput={(event) =>
+                  handleAgentDefaultsChange('model', event.currentTarget.value)}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.defaults.fallbackModel', 'Fallback model')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.defaults.fallbackModelDescription',
+                  'Used when an agent fallback model is empty.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <input
+                id="settings-defaults-fallback-model"
+                class="s-input"
+                type="text"
+                value={agentDefaults.fallback_model}
+                aria-label={t(
+                  'settings.defaults.fallbackModel',
+                  'Fallback model',
+                )}
+                oninput={(event) =>
+                  handleAgentDefaultsChange(
+                    'fallback_model',
+                    event.currentTarget.value,
+                  )}
+              />
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.defaults.temperature', 'Temperature')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.defaults.temperatureDescription',
+                  'Used when an agent temperature is unset.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input-actions">
+              <input
+                id="settings-defaults-temperature"
+                class="s-input"
+                type="number"
+                min="0"
+                max="2"
+                step="0.1"
+                value={agentDefaults.temperature}
+                aria-label={t('settings.defaults.temperature', 'Temperature')}
+                oninput={(event) =>
+                  handleAgentDefaultsChange(
+                    'temperature',
+                    event.currentTarget.value,
+                  )}
+              />
+              <button
+                class="btn-outline s-inline-clear"
+                type="button"
+                aria-label={t(
+                  'settings.defaults.clearTemperature',
+                  'Clear default temperature',
+                )}
+                onclick={clearAgentDefaultsTemperature}
+              >
+                {t('common.clear', 'Clear')}
+              </button>
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.defaults.thinkingEffort', 'Thinking effort')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.defaults.thinkingEffortDescription',
+                  'Used when an agent thinking effort is unset.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--input">
+              <select
+                id="settings-defaults-thinking-effort"
+                class="s-select"
+                value={agentDefaults.thinking_effort}
+                aria-label={t(
+                  'settings.defaults.thinkingEffort',
+                  'Thinking effort',
+                )}
+                onchange={(event) =>
+                  handleAgentDefaultsChange(
+                    'thinking_effort',
+                    event.currentTarget.value,
+                  )}
+              >
+                <option value="">
+                  {t('settings.defaults.noThinkingEffort', '— (no default)')}
+                </option>
+                {#each AGENT_THINKING_EFFORT_OPTIONS as option (option)}
+                  <option value={option}>
+                    {t(`agents.form.thinkingEffortOption.${option}`, option)}
+                  </option>
+                {/each}
+              </select>
+            </div>
+          </div>
+
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualAgentDefaultsSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('common.save', 'Save')}
+            </button>
           </div>
         {:else if activePanelId === 'skills'}
           <div class="s-row">
@@ -2565,6 +2818,16 @@
     min-width: 180px;
   }
 
+  .s-row-control--input-actions {
+    gap: 10px;
+    width: min(360px, 100%);
+    min-width: 220px;
+  }
+
+  .s-row-control--input-actions .s-input {
+    flex: 1;
+  }
+
   .s-row-control--number {
     width: 132px;
     min-width: 132px;
@@ -2807,6 +3070,11 @@
     flex-shrink: 0;
   }
 
+  .s-inline-clear {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
   .s-refresh-button {
     white-space: nowrap;
   }
@@ -2955,6 +3223,7 @@
 
     .s-row-control,
     .s-row-control--input,
+    .s-row-control--input-actions,
     .s-row-control--number {
       width: 100%;
       min-width: 0;
@@ -2981,6 +3250,7 @@
 
     .s-skill-directory-add,
     .s-skill-directory-item,
+    .s-row-control--input-actions,
     .device-flow-code-row {
       align-items: stretch;
       flex-direction: column;
