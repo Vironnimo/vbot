@@ -24,6 +24,8 @@ def test_filter_pytest_failure_output_removes_pass_noise():
             "cachedir: .pytest_cache",
             "rootdir: C:/Development/projects/vBot",
             "plugins: xdist",
+            "tests/example/test_demo.py::test_ok",
+            "[gw0] [ 50%] tests/example/test_demo.py::test_ok",
             "tests/example/test_demo.py::test_ok PASSED                                 [ 50%]",
             "tests/example/test_demo.py::test_bad FAILED                                [100%]",
             "",
@@ -43,7 +45,38 @@ def test_filter_pytest_failure_output_removes_pass_noise():
 
     assert "test session starts" not in filtered
     assert "platform win32" not in filtered
+    assert "tests/example/test_demo.py::test_ok\n" not in filtered
+    assert "[gw0] [ 50%] tests/example/test_demo.py::test_ok" not in filtered
     assert "PASSED" not in filtered
+    assert "tests/example/test_demo.py::test_bad FAILED" in filtered
+    assert "FAILED tests/example/test_demo.py::test_bad - assert 1 == 2" in filtered
+    assert "1 failed, 1 passed in 0.12s" in filtered
+
+
+def test_filter_pytest_failure_output_removes_bare_nodeid_progress_lines():
+    module = _load_quality_module()
+    output = "\n".join(
+        [
+            "tests/example/test_demo.py::test_ok",
+            "[gw1] [ 50%] tests/example/test_demo.py::test_ok",
+            "tests/example/test_demo.py::test_bad FAILED                                [100%]",
+            "",
+            "================================== FAILURES ===================================",
+            "_________________________________ test_bad __________________________________",
+            "tests/example/test_demo.py:10: in test_bad",
+            "    assert 1 == 2",
+            "E   assert 1 == 2",
+            "",
+            "=========================== short test summary info ===========================",
+            "FAILED tests/example/test_demo.py::test_bad - assert 1 == 2",
+            "========================= 1 failed, 1 passed in 0.12s =========================",
+        ]
+    )
+
+    filtered = module.filter_pytest_failure_output(output)
+
+    assert "tests/example/test_demo.py::test_ok\n" not in filtered
+    assert "[gw1] [ 50%] tests/example/test_demo.py::test_ok" not in filtered
     assert "tests/example/test_demo.py::test_bad FAILED" in filtered
     assert "FAILED tests/example/test_demo.py::test_bad - assert 1 == 2" in filtered
     assert "1 failed, 1 passed in 0.12s" in filtered
@@ -78,6 +111,8 @@ def test_main_filters_pytest_failure_output(monkeypatch, capsys):
         [
             "============================= test session starts =============================",
             "platform win32 -- Python 3.14.4, pytest-9.0.3",
+            "tests/example/test_demo.py::test_ok",
+            "[gw0] [ 50%] tests/example/test_demo.py::test_ok",
             "tests/example/test_demo.py::test_ok PASSED                                 [ 50%]",
             "tests/example/test_demo.py::test_bad FAILED                                [100%]",
             "",
@@ -106,5 +141,7 @@ def test_main_filters_pytest_failure_output(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "--- pytest ---" in captured.out
+    assert "[gw0] [ 50%] tests/example/test_demo.py::test_ok" not in captured.out
+    assert "tests/example/test_demo.py::test_ok\n" not in captured.out
     assert "tests/example/test_demo.py::test_ok PASSED" not in captured.out
     assert "FAILED tests/example/test_demo.py::test_bad - assert 1 == 2" in captured.out
