@@ -13,14 +13,17 @@ import {
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   createRpcEnvelope,
+  listQueue,
   listLogs,
   normalizeRpcError,
   readLogFile,
+  removeFromQueue,
   rpc,
   uploadAttachment,
   subscribeLogEvents,
   subscribeRunEvents,
   subscribeServerEvents,
+  updateQueueItem,
 } from '../api.js';
 
 afterEach(() => {
@@ -196,6 +199,83 @@ describe('rpc()', () => {
         method: 'log.read',
       }),
     );
+  });
+
+  it('lists queued messages through chat.queue_list', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: {
+          items: [
+            {
+              id: 'queue-1',
+              content: 'Queued message',
+              created_at: '2026-05-22T01:00:00+00:00',
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(
+      listQueue('agent-1', 'session-1', { fetch: fetchFunction }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: 'queue-1',
+          content: 'Queued message',
+          created_at: '2026-05-22T01:00:00+00:00',
+        },
+      ],
+    });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.queue_list',
+      params: { agent_id: 'agent-1', session_id: 'session-1' },
+    });
+  });
+
+  it('removes queued messages through chat.queue_remove', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await expect(
+      removeFromQueue('agent-1', 'session-1', 'queue-1', {
+        fetch: fetchFunction,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.queue_remove',
+      params: {
+        agent_id: 'agent-1',
+        session_id: 'session-1',
+        item_id: 'queue-1',
+      },
+    });
+  });
+
+  it('updates queued messages through chat.queue_update', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await expect(
+      updateQueueItem('agent-1', 'session-1', 'queue-1', 'Updated content', {
+        fetch: fetchFunction,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.queue_update',
+      params: {
+        agent_id: 'agent-1',
+        session_id: 'session-1',
+        item_id: 'queue-1',
+        content: 'Updated content',
+      },
+    });
   });
 });
 

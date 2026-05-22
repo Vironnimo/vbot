@@ -1,28 +1,35 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
 
-  import { rpc, subscribeRunEvents } from '$lib/api.js';
+  import {
+    listQueue,
+    removeFromQueue,
+    rpc,
+    subscribeRunEvents,
+    updateQueueItem,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
   import {
+    TERMINAL_RUN_EVENTS,
+    addServerQueuedMessage,
     appendCompactionCheckpoint,
     appendRunEvent,
     canCreateNewSession,
     createChatState,
     currentSessionState,
-    dequeueMessage,
-    enqueueMessage,
     ensureSessionState,
     highestRunEventSequence,
     isRunActive,
     loadHistory,
     markSessionError,
     removeQueuedMessage,
-    restoreDequeuedMessage,
     selectAgent,
     selectedAgent,
     setAgents,
     startRun,
+    syncQueueFromServer,
+    updateQueuedMessageContent,
   } from '../lib/chatState.js';
   import ChatComposer from './ChatComposer.svelte';
   import SessionListDrawer from './SessionListDrawer.svelte';
@@ -47,7 +54,6 @@
   let actionError = $state('');
   let actionInfo = $state('');
   let availableSkills = $state([]);
-  let builtInCommandNames = $state([]);
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
   let viewingSessionReadOnly = $state(false);
@@ -68,11 +74,6 @@
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
-  const LOCAL_BUILT_IN_COMMAND_FALLBACKS = new Set([
-    'compact',
-    'status',
-    'stop',
-  ]);
 
   const usageTotalTokens = (usage) => {
     const inputTokens = Number.isFinite(usage?.input_tokens)
@@ -211,29 +212,6 @@
     return value.trim().replace(/^\/+/, '').toLowerCase();
   };
 
-  const isRecognizedBuiltInCommand = (content) => {
-    if (typeof content !== 'string') {
-      return false;
-    }
-
-    const trimmed = content.trimStart();
-    if (!trimmed.startsWith('/')) {
-      return false;
-    }
-
-    const normalizedMessage = trimmed.trim().toLowerCase();
-    const commandName = normalizedBuiltInCommandName(normalizedMessage);
-    if (!commandName) {
-      return false;
-    }
-
-    if (LOCAL_BUILT_IN_COMMAND_FALLBACKS.has(commandName)) {
-      return true;
-    }
-
-    return builtInCommandNames.includes(commandName);
-  };
-
   const isCompactCommand = (content) => {
     if (typeof content !== 'string') {
       return false;
@@ -251,15 +229,6 @@
     try {
       const result = await rpc('chat.commands');
       const items = Array.isArray(result?.items) ? result.items : [];
-      builtInCommandNames = items
-        .filter(
-          (item) =>
-            item?.type === 'command' &&
-            typeof item?.name === 'string' &&
-            item.name.length > 0,
-        )
-        .map((item) => normalizedBuiltInCommandName(item.name))
-        .filter((name) => name.length > 0);
       availableSkills = items
         .filter(
           (item) => typeof item?.name === 'string' && item.name.length > 0,
@@ -276,7 +245,6 @@
     } catch (error) {
       actionError = `${t('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${error.message}`;
       availableSkills = [];
-      builtInCommandNames = [];
     }
   };
 
@@ -313,6 +281,21 @@
     await loadHistoryForSession(agent.id, agent.current_session_id);
   };
 
+  const syncSessionQueue = async (sessionState) => {
+    if (!sessionState?.agentId || !sessionState?.sessionId) {
+      return;
+    }
+    try {
+      const result = await listQueue(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      syncQueueFromServer(sessionState, result?.items ?? []);
+    } catch (error) {
+      actionError = `${t('queue.syncError', 'Queued messages could not be synced.')} ${error.message}`;
+    }
+  };
+
   const loadHistoryForSession = async (agentId, sessionId) => {
     loadingHistory = true;
     historyError = '';
@@ -323,6 +306,7 @@
         session_id: sessionId,
       });
       loadHistory(sessionState, history.messages ?? []);
+      await syncSessionQueue(sessionState);
     } catch (error) {
       historyError = error.message;
       markSessionError(sessionState, error);
@@ -430,10 +414,6 @@
     if (!agent || !sessionState) {
       return;
     }
-    if (isRunActive(sessionState) && !isRecognizedBuiltInCommand(content)) {
-      enqueueMessage(sessionState, content);
-      return;
-    }
     await sendStream(agent, sessionState, content);
   };
 
@@ -453,6 +433,12 @@
         }
         return true;
       }
+
+      if (run?.queued === true) {
+        addServerQueuedMessage(sessionState, run.item);
+        return true;
+      }
+
       startRun(sessionState, run);
       subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
       return true;
@@ -479,8 +465,8 @@
           ) {
             appendCompactionCheckpoint(sessionState, event.payload.message);
           }
-          if (event && event.type.startsWith('run_')) {
-            sendNextQueuedMessage(sessionState);
+          if (event && TERMINAL_RUN_EVENTS.has(event.type)) {
+            void syncSessionQueue(sessionState);
           }
         },
         onError: (error) => {
@@ -500,31 +486,6 @@
     }
     for (const key of Object.keys(activeSubscriptions)) {
       delete activeSubscriptions[key];
-    }
-  };
-
-  const sendNextQueuedMessage = async (sessionState) => {
-    if (isRunActive(sessionState)) {
-      return;
-    }
-    const queuedMessage = dequeueMessage(sessionState);
-    if (!queuedMessage) {
-      return;
-    }
-    const agent = chatState.agents.find(
-      (candidate) => candidate.id === sessionState.agentId,
-    );
-    if (agent) {
-      const streamStarted = await sendStream(
-        agent,
-        sessionState,
-        queuedMessage.content,
-      );
-      if (!streamStarted) {
-        restoreDequeuedMessage(sessionState, queuedMessage);
-      }
-    } else {
-      restoreDequeuedMessage(sessionState, queuedMessage);
     }
   };
 
@@ -573,9 +534,40 @@
     await handleRetry();
   }
 
-  const handleRemoveQueuedMessage = (queuedMessageId) => {
-    if (activeSessionState) {
-      removeQueuedMessage(activeSessionState, queuedMessageId);
+  const handleRemoveQueuedMessage = async (queuedMessageId) => {
+    const sessionState = activeSessionState;
+    const agent = selectedAgent(chatState);
+    if (!sessionState || !agent) {
+      return;
+    }
+
+    actionError = '';
+    try {
+      await removeFromQueue(agent.id, sessionState.sessionId, queuedMessageId);
+      removeQueuedMessage(sessionState, queuedMessageId);
+    } catch (error) {
+      actionError = `${t('queue.removeError', 'Queued message could not be removed.')} ${error.message}`;
+    }
+  };
+
+  const handleEditQueuedMessage = async (queuedMessageId, newContent) => {
+    const sessionState = activeSessionState;
+    const agent = selectedAgent(chatState);
+    if (!sessionState || !agent) {
+      return;
+    }
+
+    actionError = '';
+    try {
+      await updateQueueItem(
+        agent.id,
+        sessionState.sessionId,
+        queuedMessageId,
+        newContent,
+      );
+      updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
+    } catch (error) {
+      actionError = `${t('queue.editError', 'Queued message could not be edited.')} ${error.message}`;
     }
   };
 </script>
@@ -755,6 +747,7 @@
           <QueuedMessages
             queuedMessages={activeSessionState?.queue ?? []}
             onRemoveQueuedMessage={handleRemoveQueuedMessage}
+            onEditQueuedMessage={handleEditQueuedMessage}
           />
           <ChatComposer
             disabled={composerDisabled}
