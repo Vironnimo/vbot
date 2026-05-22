@@ -137,10 +137,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
 keys), `settings.json`, `attachments/` blobs plus per-blob sidecar JSON,
 `logs/`, OAuth tokens under `oauth/`, scheduled cron jobs under `cron/jobs.json`,
-and all runtime data. When the repo root contains a `.vbot-worktree` marker,
-`Config` resolves the default data dir from that file before falling back to
-`~/.vbot`; `VBOT_DATA_DIR` still has higher precedence and an explicit
-constructor argument still overrides both.
+and all runtime data.
 
 ## Testing
 

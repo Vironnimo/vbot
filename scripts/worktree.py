@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import shutil
 import socket
@@ -58,6 +57,62 @@ def print_error(reason: str) -> None:
     print(f"error: {reason}")
 
 
+def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
+    """Read a worktree marker JSON object."""
+    try:
+        data = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    return data
+
+
+def _expected_data_dir(name: str) -> Path:
+    """Return the managed data-dir path for a worktree name."""
+    return Path.home() / f".vbot-{name}"
+
+
+def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -> Path:
+    """Resolve the data dir to remove with strict safety checks."""
+    expected = _expected_data_dir(name)
+    if marker_data is None:
+        return expected
+
+    raw_data_dir = marker_data.get("data_dir")
+    if not isinstance(raw_data_dir, str) or not raw_data_dir:
+        return expected
+
+    candidate = Path(raw_data_dir).expanduser()
+    if candidate == expected:
+        return candidate
+
+    return expected
+
+
+def _read_worktree_branch_name(worktree_path: Path) -> str | None:
+    """Read the currently checked-out branch in a worktree."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree_path), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    branch = result.stdout.strip()
+    if not branch or branch == "HEAD":
+        return None
+    return branch
+
+
 def scan_used_ports(worktrees_dir: Path) -> set[int]:
     """Collect ports declared in per-worktree settings.json files."""
     ports: set[int] = set()
@@ -72,8 +127,11 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
         if not marker.exists():
             continue
 
+        data = _read_worktree_marker(marker)
+        if data is None:
+            continue
+
         try:
-            data = json.loads(marker.read_text(encoding="utf-8"))
             raw_data_dir = data.get("data_dir", "")
             if not isinstance(raw_data_dir, str) or not raw_data_dir:
                 continue
@@ -81,10 +139,12 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             if not settings_path.exists():
                 continue
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            if not isinstance(settings, dict):
+                continue
             port = settings.get("server_port")
             if isinstance(port, int):
                 ports.add(port)
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError):
             continue
 
     return ports
@@ -193,9 +253,13 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     marker = worktree_path / WORKTREE_FILE_NAME
+    marker_data = {
+        "data_dir": data_dir_tilde,
+        "managed_branch": args.from_branch is None,
+    }
     try:
         marker.write_text(
-            json.dumps({"data_dir": data_dir_tilde}, indent=2) + "\n",
+            json.dumps(marker_data, indent=2) + "\n",
             encoding="utf-8",
         )
     except OSError as exc:
@@ -235,13 +299,17 @@ def cmd_remove(args: argparse.Namespace) -> int:
         print_error(f"worktree '{name}' does not exist")
         return 1
 
-    data_dir = Path.home() / f".vbot-{name}"
+    worktree_branch = _read_worktree_branch_name(worktree_path)
+
     marker = worktree_path / WORKTREE_FILE_NAME
-    with contextlib.suppress(OSError, json.JSONDecodeError):
-        data = json.loads(marker.read_text(encoding="utf-8"))
-        raw = data.get("data_dir", "")
-        if isinstance(raw, str) and raw:
-            data_dir = Path(raw).expanduser()
+    marker_data = _read_worktree_marker(marker)
+    data_dir = _resolve_remove_data_dir(name, marker_data)
+
+    delete_branch = worktree_branch == name
+    if marker_data is not None:
+        managed_branch = marker_data.get("managed_branch")
+        if isinstance(managed_branch, bool):
+            delete_branch = managed_branch and worktree_branch == name
 
     if args.force:
         git_command = ["git", "worktree", "remove", "--force", str(worktree_path)]
@@ -260,11 +328,14 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     shutil.rmtree(data_dir, ignore_errors=True)
 
-    branch_delete_flag = "-D" if args.force else "-d"
-    branch_return_code, branch_stderr = _run_command(["git", "branch", branch_delete_flag, name])
-    if branch_return_code != 0:
-        reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
-        print_error(reason)
+    if delete_branch:
+        branch_delete_flag = "-D" if args.force else "-d"
+        branch_return_code, branch_stderr = _run_command(
+            ["git", "branch", branch_delete_flag, name]
+        )
+        if branch_return_code != 0:
+            reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
+            print_error(reason)
 
     print_ok(name=name, path=worktree_path, **{"data-dir": data_dir}, status="removed")
     return 0
