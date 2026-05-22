@@ -79,8 +79,8 @@ def test_start_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
         calls.append(("resolve", kwargs))
         return instance
 
-    def fake_start_server(resolved_instance):
-        calls.append(("start", resolved_instance))
+    def fake_start_server(resolved_instance, **kwargs):
+        calls.append(("start", resolved_instance, kwargs))
         return CommandResult(
             ok=True,
             message="started",
@@ -101,12 +101,14 @@ def test_start_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
     assert module.start_server("0.0.0.0", 9000, "C:/tmp/vbot") == 0
 
     captured = capsys.readouterr()
+    assert "target..... http://127.0.0.1:8420" in captured.out
     assert "server..... yes" in captured.out
     assert "url........ http://127.0.0.1:8420" in captured.out
     assert "webui...... available" in captured.out
+    assert f"log........ {instance.log_path}" in captured.out
     assert calls == [
         ("resolve", {"host": "0.0.0.0", "port": 9000, "data_dir": "C:/tmp/vbot"}),
-        ("start", instance),
+        ("start", instance, {"startup_timeout_seconds": module.STARTUP_TIMEOUT_SECONDS}),
     ]
 
 
@@ -151,3 +153,29 @@ def test_stop_server_uses_direct_cli_lifecycle(monkeypatch, tmp_path, capsys):
         ("resolve", {"host": "127.0.0.1", "port": None, "data_dir": None}),
         ("stop", instance),
     ]
+
+
+def test_start_server_reports_structured_keyboard_interrupt(monkeypatch, tmp_path, capsys):
+    module = _load_test_env_module()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8420,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8420",
+        log_path=tmp_path / "vbot.log",
+    )
+
+    monkeypatch.setattr(module, "resolve_instance", lambda **kwargs: instance)
+
+    def raise_interrupt(resolved_instance, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(module, "start_server_command", raise_interrupt)
+
+    assert module.start_server("127.0.0.1", None, None) == 130
+
+    captured = capsys.readouterr()
+    assert "server..... FAILED" in captured.out
+    assert "result: interrupted while waiting for local server readiness" in captured.out
+    assert f"url: {instance.url}" in captured.out
+    assert f"log: {instance.log_path}" in captured.out

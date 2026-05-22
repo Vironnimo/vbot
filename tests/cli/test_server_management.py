@@ -108,6 +108,37 @@ def test_probe_health_classifies_exact_health_contract(
     assert result == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
 
 
+def test_probe_health_uses_direct_loopback_without_proxy_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = ServerInstance(
+        host="0.0.0.0",
+        port=8420,
+        data_dir=tmp_path / "data",
+        url="http://0.0.0.0:8420",
+        log_path=resolve_daily_log_path((tmp_path / "data").resolve()),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_get(url, *, timeout, trust_env):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        captured["trust_env"] = trust_env
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(server_management.httpx, "get", fake_get)
+
+    result = probe_health(instance)
+
+    assert result == HealthProbeResult(reachable=True, is_vbot=True, status_code=200)
+    assert captured == {
+        "url": "http://127.0.0.1:8420/health",
+        "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
+        "trust_env": False,
+    }
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -170,6 +201,31 @@ def test_probe_webui_classifies_root_status(
     result = probe_webui(instance)
 
     assert result == WebUIProbeResult(available=available, status_code=status_code)
+
+
+def test_probe_webui_uses_direct_request_without_proxy_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_get(url, *, timeout, trust_env):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        captured["trust_env"] = trust_env
+        return httpx.Response(200)
+
+    monkeypatch.setattr(server_management.httpx, "get", fake_get)
+
+    result = probe_webui(instance)
+
+    assert result == WebUIProbeResult(available=True, status_code=200)
+    assert captured == {
+        "url": "http://127.0.0.1:8420/",
+        "timeout": server_management.DEFAULT_PROBE_TIMEOUT_SECONDS,
+        "trust_env": False,
+    }
 
 
 def test_start_server_process_uses_expected_args_and_log_location(
