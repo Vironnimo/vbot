@@ -732,6 +732,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                 content,
                 session_id=session_id,
             )
+            _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         return _queued_response(queued_item)
@@ -780,6 +781,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                 content,
                 session_id=session_id,
             )
+            _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         return _queued_response(queued_item)
@@ -935,7 +937,11 @@ def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
     try:
-        items = _state_chat_runs(state).list_queued(agent_id, session_id)
+        items = [
+            item
+            for item in _state_chat_runs(state).list_queued(agent_id, session_id)
+            if not item.internal
+        ]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"items": [item.to_dict() for item in items]}
@@ -953,7 +959,10 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     item_id = _required_string(params, "item_id")
     try:
-        removed = _state_chat_runs(state).remove_queued(agent_id, session_id, item_id)
+        chat_runs = _state_chat_runs(state)
+        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+            raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        removed = chat_runs.remove_queued(agent_id, session_id, item_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -976,12 +985,16 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     content = _parse_chat_content(params, "content")
 
     try:
+        chat_runs = _state_chat_runs(state)
+        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+            raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+
         (
             resolved_session_id,
             updated_executor,
             updated_display_content,
         ) = _build_streaming_queue_update(state, agent_id, session_id, content)
-        updated = _state_chat_runs(state).update_queued(
+        updated = chat_runs.update_queued(
             agent_id,
             resolved_session_id,
             item_id,
@@ -2277,6 +2290,33 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     if event_bus is None:
         return
     asyncio.create_task(_publish_run_events(event_bus, run))
+
+
+def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:
+    """Bridge the eventual run start for one queued item into server lifecycle events."""
+
+    def _on_run_started(future: asyncio.Future[Run]) -> None:
+        if future.cancelled():
+            return
+        try:
+            run = future.result()
+        except BaseException:
+            return
+        _bridge_run_to_event_bus(state, run)
+
+    item.future.add_done_callback(_on_run_started)
+
+
+def _queue_item_is_public(
+    chat_runs: ChatRunManager,
+    agent_id: str,
+    session_id: str,
+    item_id: str,
+) -> bool:
+    for item in chat_runs.list_queued(agent_id, session_id):
+        if item.item_id == item_id:
+            return not item.internal
+    return False
 
 
 def _streaming_chat_loop(state: Any) -> Any:
