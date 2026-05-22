@@ -20,7 +20,8 @@ Clients call the vBot server contract; provider wire details stay behind
   `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `session.list`, `session.link_channel`, `chat.history`, `chat.send`,
   `chat.commands`,
-  `chat.stream`, `chat.cancel`, `channel.list`, `channel.create`,
+  `chat.stream`, `chat.cancel`, `chat.queue_list`, `chat.queue_remove`,
+  `chat.queue_update`, `channel.list`, `channel.create`,
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
   `channel.status`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
   `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
@@ -104,7 +105,10 @@ Clients call the vBot server contract; provider wire details stay behind
 - `channel.status` accepts `{ id }` and returns `{ id, enabled, running }`.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model. `content` may be a
-  string or a JSON array of canonical content-block dicts.
+  string or a JSON array of canonical content-block dicts. When the target
+  Session already has an active Run, these methods enqueue through the shared
+  `ChatRunManager` queue and return `{ queued: true, item }` instead of an
+  `active_run` RPC error.
 - Recognized built-in slash commands are intercepted before Run start only when
   `content` resolves to pure text. In that case `chat.send` and `chat.stream`
   return `{ command_handled: true, reply }` instead of starting a Run. Current built-ins include `/stop` and `/compact`. Unknown
@@ -115,6 +119,15 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.cancel` targets a Run ID, not a Session.
+- `chat.queue_list` accepts `{ agent_id, session_id }` and returns
+  `{ items }`, where each item is a server-safe queued-message dict with
+  `{ id, content, internal, created_at }`.
+- `chat.queue_remove` accepts `{ agent_id, session_id, item_id }`, removes one
+  queued item from the shared session queue, and returns `{ ok: true }` or the
+  stable RPC error code `queue_item_not_found`.
+- `chat.queue_update` accepts `{ agent_id, session_id, item_id, content }`,
+  rebuilds the queued executor/display preview through the streaming chat path,
+  and returns `{ ok: true }` or `queue_item_not_found`.
 - Server event bus events contain lifecycle summaries for WebSocket clients:
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
@@ -175,6 +188,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.commands` is the command/skill autocomplete RPC. It must stay flat and
   type-tagged so accessors can merge built-in commands with skills without
   changing the underlying skill-trigger behavior.
+- Queue state is server-owned and in-memory only. Accessors must use the
+  `chat.queue_*` RPCs as the source of truth instead of maintaining an
+  independent send queue.
 - Only one active Run is allowed per Session; parallel Runs in different
   Sessions are allowed.
 - WebSocket is the persistent signalling channel for app-wide events (connection

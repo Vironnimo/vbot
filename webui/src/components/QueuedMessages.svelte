@@ -1,7 +1,43 @@
 <script>
   import { t } from '$lib/i18n.js';
 
-  let { queuedMessages = [], onRemoveQueuedMessage } = $props();
+  let {
+    queuedMessages = [],
+    onRemoveQueuedMessage,
+    onEditQueuedMessage,
+  } = $props();
+
+  let editingId = $state('');
+  let editedContent = $state('');
+  let editError = $state('');
+
+  const beginEdit = (message) => {
+    editingId = message.id;
+    editedContent = message.content ?? '';
+    editError = '';
+  };
+
+  const cancelEdit = () => {
+    editingId = '';
+    editedContent = '';
+    editError = '';
+  };
+
+  const saveEdit = async () => {
+    const currentEditingId = editingId;
+    const nextContent = editedContent.trim();
+    if (!currentEditingId) {
+      return;
+    }
+
+    if (!nextContent) {
+      editError = t('queue.editError', 'Queued message could not be edited.');
+      return;
+    }
+
+    await onEditQueuedMessage?.(currentEditingId, nextContent);
+    cancelEdit();
+  };
 </script>
 
 {#if queuedMessages.length > 0}
@@ -21,15 +57,68 @@
     <ol>
       {#each queuedMessages as message (message.id)}
         <li>
-          <span class="queued-messages__content">{message.content}</span>
-          <button
-            type="button"
-            class="tl-btn"
-            aria-label={t('queue.removeMessage', 'Remove queued message')}
-            onclick={() => onRemoveQueuedMessage?.(message.id)}
-          >
-            {t('common.remove', 'Remove')}
-          </button>
+          {#if editingId === message.id}
+            <textarea
+              class="queued-messages__editor"
+              value={editedContent}
+              oninput={(event) => {
+                editedContent = event.currentTarget.value;
+                editError = '';
+              }}
+            ></textarea>
+            <div class="queued-messages__actions">
+              <button
+                type="button"
+                class="tl-btn"
+                aria-label={t('queue.saveEdit', 'Save edit')}
+                onclick={saveEdit}
+              >
+                {t('queue.saveEdit', 'Save')}
+              </button>
+              <button
+                type="button"
+                class="tl-btn"
+                aria-label={t('queue.cancelEdit', 'Cancel edit')}
+                onclick={cancelEdit}
+              >
+                {t('queue.cancelEdit', 'Cancel')}
+              </button>
+              <button
+                type="button"
+                class="tl-btn"
+                aria-label={t('queue.removeMessage', 'Remove queued message')}
+                onclick={() => {
+                  onRemoveQueuedMessage?.(message.id);
+                  cancelEdit();
+                }}
+              >
+                {t('common.remove', 'Remove')}
+              </button>
+            </div>
+            {#if editError}
+              <p class="queued-messages__error">{editError}</p>
+            {/if}
+          {:else}
+            <span class="queued-messages__content">{message.content}</span>
+            <div class="queued-messages__actions">
+              <button
+                type="button"
+                class="tl-btn"
+                aria-label={t('queue.editMessage', 'Edit queued message')}
+                onclick={() => beginEdit(message)}
+              >
+                {t('queue.editMessage', 'Edit')}
+              </button>
+              <button
+                type="button"
+                class="tl-btn"
+                aria-label={t('queue.removeMessage', 'Remove queued message')}
+                onclick={() => onRemoveQueuedMessage?.(message.id)}
+              >
+                {t('common.remove', 'Remove')}
+              </button>
+            </div>
+          {/if}
         </li>
       {/each}
     </ol>
@@ -89,6 +178,9 @@
     border: 1px solid var(--border);
     border-radius: var(--r-md);
     background: var(--bg);
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .queued-messages__content {
@@ -98,6 +190,40 @@
     font-size: 12.5px;
     text-overflow: ellipsis;
     white-space: nowrap;
+    width: 100%;
+  }
+
+  .queued-messages__actions {
+    display: flex;
+    width: 100%;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .queued-messages__editor {
+    width: 100%;
+    min-height: 68px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    line-height: 1.4;
+    padding: 8px 10px;
+    resize: vertical;
+  }
+
+  .queued-messages__editor:focus {
+    border-color: rgba(232, 135, 10, 0.4);
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+  }
+
+  .queued-messages__error {
+    margin: 0;
+    color: var(--red);
+    font-size: 12px;
   }
 
   .tl-btn {
@@ -115,8 +241,8 @@
       flex-direction: column;
     }
 
-    .queued-messages li {
-      gap: 10px;
+    .queued-messages__actions {
+      justify-content: flex-start;
     }
 
     .queued-messages__content {

@@ -2667,7 +2667,7 @@ async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(
 
 
 @pytest.mark.asyncio
-async def test_second_run_in_same_session_is_rejected_while_active(
+async def test_second_run_in_same_session_is_queued_while_active(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2694,11 +2694,20 @@ async def test_second_run_in_same_session_is_rejected_while_active(
     )
 
     assert first_response["ok"] is True
-    assert second_response["ok"] is False
-    assert second_response["error"]["code"] == "active_run"
+    assert second_response["ok"] is True
+    assert second_response["result"]["queued"] is True
+    queued_item = second_response["result"]["item"]
+    assert queued_item["content"] == "Second"
+    assert isinstance(queued_item["id"], str)
+    assert queued_item["id"]
+    assert len(adapter.stream_requests) == 1
 
+    removed = state.chat_runs.remove_queued("coder", "session-one", queued_item["id"])
+    assert removed is True
+
+    run = state.chat_runs.get(first_response["result"]["run_id"])
     adapter.release.set()
-    await state.chat_runs.cancel(first_response["result"]["run_id"])
+    await run.wait()
 
 
 @pytest.mark.asyncio

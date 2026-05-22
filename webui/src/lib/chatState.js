@@ -217,6 +217,54 @@ export function markSessionError(sessionState, error) {
   return sessionState;
 }
 
+function normalizeServerQueuedItem(item) {
+  return {
+    id: item.id,
+    content: typeof item?.content === 'string' ? item.content : '',
+    created_at: typeof item?.created_at === 'string' ? item.created_at : null,
+  };
+}
+
+export function syncQueueFromServer(sessionState, serverItems) {
+  const normalizedItems = Array.isArray(serverItems)
+    ? serverItems
+        .filter((item) => typeof item?.id === 'string' && item.id.length > 0)
+        .map((item) => normalizeServerQueuedItem(item))
+    : [];
+  sessionState.queue = normalizedItems;
+  return sessionState.queue;
+}
+
+export function addServerQueuedMessage(sessionState, item) {
+  if (!item || typeof item.id !== 'string' || item.id.length === 0) {
+    return null;
+  }
+
+  const normalizedItem = normalizeServerQueuedItem(item);
+  const existingIndex = sessionState.queue.findIndex(
+    (queuedItem) => queuedItem.id === normalizedItem.id,
+  );
+  if (existingIndex >= 0) {
+    sessionState.queue = sessionState.queue.map((queuedItem, index) =>
+      index === existingIndex ? normalizedItem : queuedItem,
+    );
+    return normalizedItem;
+  }
+
+  sessionState.queue = [...sessionState.queue, normalizedItem];
+  return normalizedItem;
+}
+
+export function updateQueuedMessageContent(sessionState, itemId, newContent) {
+  const queuedItem = sessionState.queue.find((item) => item.id === itemId);
+  if (!queuedItem) {
+    return false;
+  }
+  queuedItem.content = newContent;
+  return true;
+}
+
+// Deprecated local queue helpers are kept temporarily for compatibility.
 export function enqueueMessage(sessionState, content) {
   const trimmedContent = content.trim();
   if (!trimmedContent) {

@@ -35,6 +35,7 @@ from core.chat.runs import (
     TOOL_CALL_STARTED_EVENT,
     USER_MESSAGE_EVENT,
     ChatRunManager,
+    QueuedRunItem,
     Run,
 )
 from core.chat.streaming import (
@@ -869,6 +870,28 @@ class ChatLoop:
             internal=internal,
         )
 
+    async def queue_run(
+        self,
+        agent_id: str,
+        content: str | list[ContentBlock],
+        *,
+        session_id: str,
+        internal: bool = False,
+    ) -> QueuedRunItem:
+        """Queue one chat run for a busy session or start it immediately when idle."""
+        agent = self._runtime.agents.get(agent_id)
+        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
+        _ensure_provider_exists(self._runtime.providers, provider_id)
+        session = self._get_session(agent_id, session_id, create_missing=False)
+        manager = _runtime_run_manager(self._runtime)
+        return await manager.enqueue(
+            agent_id=agent_id,
+            session_id=session.id,
+            executor=lambda run: self._execute_run(run, content, internal=internal),
+            display_content=_display_content_preview(content),
+            internal=internal,
+        )
+
     async def retry_run(self, agent_id: str, session_id: str) -> Run:
         """Retry the last user turn without adding a new user message.
 
@@ -1673,6 +1696,16 @@ def _runtime_app_root(runtime: Any) -> Path:
         return Path(app_root)
 
     return Path.cwd()
+
+
+def _display_content_preview(content: str | list[ContentBlock]) -> str:
+    if isinstance(content, str):
+        return content[:500]
+
+    text_blocks = [block.text for block in content if isinstance(block, TextBlock) and block.text]
+    if not text_blocks:
+        return "[attachment]"
+    return " ".join(text_blocks)[:500]
 
 
 def _agent_workspace(agent: Any, data_root: Path) -> Path:

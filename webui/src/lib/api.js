@@ -333,6 +333,131 @@ export function listSessions(agentId, options = {}) {
   return rpc('session.list', { agent_id: agentId }, options);
 }
 
+export function listQueue(agentId, sessionId, options = {}) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'chat.queue_list',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'chat.queue_list',
+      },
+    );
+  }
+
+  return rpc(
+    'chat.queue_list',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
+export function removeFromQueue(agentId, sessionId, itemId, options = {}) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'chat.queue_remove',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'chat.queue_remove',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(itemId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Queue item id must be a non-empty string',
+      {
+        method: 'chat.queue_remove',
+      },
+    );
+  }
+
+  return rpc(
+    'chat.queue_remove',
+    { agent_id: agentId, session_id: sessionId, item_id: itemId },
+    options,
+  );
+}
+
+export function updateQueueItem(
+  agentId,
+  sessionId,
+  itemId,
+  content,
+  options = {},
+) {
+  if (!isNonEmptyString(agentId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent id must be a non-empty string',
+      {
+        method: 'chat.queue_update',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(sessionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Session id must be a non-empty string',
+      {
+        method: 'chat.queue_update',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(itemId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Queue item id must be a non-empty string',
+      {
+        method: 'chat.queue_update',
+      },
+    );
+  }
+
+  if (!(isNonEmptyString(content) || Array.isArray(content))) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Queue item content must be a non-empty string or content block list',
+      {
+        method: 'chat.queue_update',
+      },
+    );
+  }
+
+  return rpc(
+    'chat.queue_update',
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      item_id: itemId,
+      content,
+    },
+    options,
+  );
+}
+
 export function linkSessionToChannel(
   agentId,
   sessionId,

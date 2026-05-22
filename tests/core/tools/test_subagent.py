@@ -98,6 +98,9 @@ class FakeRunManager:
             session_id="parent-session",
         )
         self.started: list[tuple[str, str, Any, Run]] = []
+        self.enqueued: list[dict[str, Any]] = []
+        self.hold_enqueued_starts = False
+        self._pending_enqueued_starts: list[tuple[SimpleNamespace, Run]] = []
         self.runs: dict[str, Run] = {self.parent_run.id: self.parent_run}
         self.busy_sessions: dict[tuple[str, str], Run] = {}
         self.start_error: BaseException | None = None
@@ -107,6 +110,8 @@ class FakeRunManager:
     async def start(self, *, agent_id: str, session_id: str, executor: Any) -> Run:
         if self.start_error is not None:
             raise self.start_error
+        if (agent_id, session_id) in self.busy_sessions:
+            raise ActiveRunError(f"session already has an active run: {session_id}")
         run = Run(
             run_id=f"sub-run-{len(self.started) + 1}",
             agent_id=agent_id,
@@ -114,10 +119,48 @@ class FakeRunManager:
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
-        if self.next_error is not None:
-            asyncio.create_task(self._fail_next(run, self.next_error))
-        elif self.next_result is not None:
-            asyncio.create_task(self._complete_next(run, self.next_result))
+        self._schedule_terminal_state(run)
+        return run
+
+    async def enqueue(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        executor: Any,
+        display_content: str = "",
+        internal: bool = False,
+    ) -> Any:
+        future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
+        item = SimpleNamespace(future=future)
+        run = Run(
+            run_id=f"queued-sub-run-{len(self.enqueued) + 1}",
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        self.enqueued.append(
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "executor": executor,
+                "display_content": display_content,
+                "internal": internal,
+                "item": item,
+                "run": run,
+            }
+        )
+        self.runs[run.id] = run
+        if self.hold_enqueued_starts:
+            self._pending_enqueued_starts.append((item, run))
+        else:
+            future.set_result(run)
+            self._schedule_terminal_state(run)
+        return item
+
+    def release_next_enqueued_start(self) -> Run:
+        item, run = self._pending_enqueued_starts.pop(0)
+        item.future.set_result(run)
+        self._schedule_terminal_state(run)
         return run
 
     def get(self, run_id: str) -> Run:
@@ -128,6 +171,12 @@ class FakeRunManager:
 
     def active_run(self, *, agent_id: str, session_id: str) -> Run | None:
         return self.busy_sessions.get((agent_id, session_id))
+
+    def _schedule_terminal_state(self, run: Run) -> None:
+        if self.next_error is not None:
+            asyncio.create_task(self._fail_next(run, self.next_error))
+        elif self.next_result is not None:
+            asyncio.create_task(self._complete_next(run, self.next_result))
 
     async def _complete_next(self, run: Run, result: Any) -> None:
         await asyncio.sleep(0)
@@ -401,7 +450,7 @@ async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> N
     assert manager.started == []
 
 
-async def test_subagent_tool_rejects_busy_session(tmp_path: Path) -> None:
+async def test_subagent_tool_queues_busy_session_and_returns_running(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -423,12 +472,17 @@ async def test_subagent_tool_rejects_busy_session(tmp_path: Path) -> None:
     )
 
     # Assert
-    assert result["ok"] is False
-    assert result["error"]["code"] == "session_busy"
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert result["data"]["session_id"] == "busy-sub-session"
+    assert result["data"]["run_id"] == manager.enqueued[0]["run"].id
     assert manager.started == []
+    assert len(manager.enqueued) == 1
+    assert manager.enqueued[0]["display_content"] == "spawn"
+    assert manager.enqueued[0]["internal"] is False
 
 
-async def test_subagent_tool_returns_session_busy_when_start_races_active_run(
+async def test_subagent_tool_queues_when_start_races_active_run(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -448,10 +502,95 @@ async def test_subagent_tool_returns_session_busy_when_start_races_active_run(
     )
 
     # Assert
-    assert result["ok"] is False
-    assert result["error"]["code"] == "session_busy"
-    assert result["error"]["message"] == "session already has an active run: raced-sub-session"
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert result["data"]["session_id"] == "raced-sub-session"
+    assert result["data"]["run_id"] == manager.enqueued[0]["run"].id
     assert manager.started == []
+    assert len(manager.enqueued) == 1
+
+
+async def test_subagent_tool_queues_and_waits_for_run_start_when_session_is_busy(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="waiting-sub-session")
+    manager.busy_sessions[(context.agent_id, "waiting-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="waiting-sub-session",
+    )
+
+    # Act
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "session_id": "waiting-sub-session"},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    assert len(manager.enqueued) == 1
+    assert task.done() is False
+
+    # Act
+    queued_run = manager.release_next_enqueued_start()
+    result = await task
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    assert result["data"]["run_id"] == queued_run.id
+
+
+async def test_subagent_tool_blocking_waits_for_queued_run_to_complete(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    assistant = ChatMessage.assistant(
+        model="openai/gpt-5.2",
+        content="queued finished",
+        usage={"input_tokens": 2, "output_tokens": 3},
+    )
+    manager = FakeRunManager()
+    manager.next_result = assistant
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="queued-blocking-sub-session")
+    manager.busy_sessions[(context.agent_id, "queued-blocking-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="queued-blocking-sub-session",
+    )
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {
+            "content": "spawn",
+            "session_id": "queued-blocking-sub-session",
+            "blocking": True,
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["result"] == "queued finished"
+    assert result["data"]["usage"] == {"input_tokens": 2, "output_tokens": 3}
+    assert manager.started == []
+    assert len(manager.enqueued) == 1
 
 
 async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> None:

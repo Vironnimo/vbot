@@ -9,6 +9,9 @@ const rpcMock = vi.fn();
 const subscribeRunEventsMock = vi.fn(() => ({ close: vi.fn(), source: null }));
 const listSessionsMock = vi.fn(async () => ({ sessions: [] }));
 const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
+const listQueueMock = vi.fn(async () => ({ items: [] }));
+const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
+const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -19,6 +22,9 @@ vi.mock('$lib/api.js', () => ({
   subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
   listSessions: (...args) => listSessionsMock(...args),
   linkSessionToChannel: (...args) => linkSessionToChannelMock(...args),
+  listQueue: (...args) => listQueueMock(...args),
+  removeFromQueue: (...args) => removeFromQueueMock(...args),
+  updateQueueItem: (...args) => updateQueueItemMock(...args),
 }));
 
 const { default: ChatView } = await import('../ChatView.svelte');
@@ -35,6 +41,12 @@ describe('ChatView', () => {
     listSessionsMock.mockResolvedValue({ sessions: [] });
     linkSessionToChannelMock.mockReset();
     linkSessionToChannelMock.mockResolvedValue({ ok: true });
+    listQueueMock.mockReset();
+    listQueueMock.mockResolvedValue({ items: [] });
+    removeFromQueueMock.mockReset();
+    removeFromQueueMock.mockResolvedValue({ ok: true });
+    updateQueueItemMock.mockReset();
+    updateQueueItemMock.mockResolvedValue({ ok: true });
     mountedComponent = null;
   });
 
@@ -226,6 +238,16 @@ describe('ChatView', () => {
               events: [],
             };
           }
+          if (content === '/debugging investigate this run') {
+            return {
+              queued: true,
+              item: {
+                id: 'queued-skill-1',
+                content: '/debugging investigate this run',
+                created_at: '2026-05-22T10:00:00+00:00',
+              },
+            };
+          }
           if (content === '/stop') {
             return {
               command_handled: true,
@@ -268,7 +290,11 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(streamCalls).toEqual(['Start a long run', '/stop']);
+    expect(streamCalls).toEqual([
+      'Start a long run',
+      '/debugging investigate this run',
+      '/stop',
+    ]);
     expect(
       document.body
         .querySelector('.queued-messages__content')
@@ -292,6 +318,16 @@ describe('ChatView', () => {
               events: [],
             };
           }
+          if (content === '/debugging investigate this run') {
+            return {
+              queued: true,
+              item: {
+                id: 'queued-skill-fallback-1',
+                content: '/debugging investigate this run',
+                created_at: '2026-05-22T10:01:00+00:00',
+              },
+            };
+          }
           if (content === '/stop') {
             return {
               command_handled: true,
@@ -334,7 +370,11 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(streamCalls).toEqual(['Start a long run', '/stop']);
+    expect(streamCalls).toEqual([
+      'Start a long run',
+      '/debugging investigate this run',
+      '/stop',
+    ]);
     expect(
       document.body
         .querySelector('.queued-messages__content')
@@ -423,6 +463,16 @@ describe('ChatView', () => {
               events: [],
             };
           }
+          if (content === 'Queue this while running') {
+            return {
+              queued: true,
+              item: {
+                id: 'queued-message-1',
+                content: 'Queue this while running',
+                created_at: '2026-05-22T10:02:00+00:00',
+              },
+            };
+          }
           throw new Error(`Unexpected stream content: ${content}`);
         },
       }),
@@ -450,7 +500,10 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(streamCalls).toEqual(['Start a long run']);
+    expect(streamCalls).toEqual([
+      'Start a long run',
+      'Queue this while running',
+    ]);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 

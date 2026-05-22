@@ -177,6 +177,12 @@ export const englishCatalog = Object.freeze({
   'queue.removeMessage': 'Remove queued message',
   'queue.nextMessage': 'Next queued message',
   'queue.count': '{count} queued',
+  'queue.editMessage': 'Edit queued message',
+  'queue.saveEdit': 'Save',
+  'queue.cancelEdit': 'Cancel',
+  'queue.editError': 'Queued message could not be edited.',
+  'queue.removeError': 'Queued message could not be removed.',
+  'queue.syncError': 'Queued messages could not be synced.',
 
   'cancel.title': 'Cancel active run?',
   'cancel.description':
