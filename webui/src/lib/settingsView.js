@@ -28,6 +28,8 @@ export const AGENT_DEFAULTS_FIELDS = Object.freeze([
   'temperature',
   'thinking_effort',
 ]);
+export const AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT =
+  '__thinking_effort_no_default__';
 
 const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'none',
@@ -140,9 +142,20 @@ export function normalizeAgentDefaultsSettings(rawSettings) {
 }
 
 export function buildAgentDefaultsPayload(formValues) {
+  const values = formValues && typeof formValues === 'object' ? formValues : {};
+
   return {
     defaults: {
-      agent: normalizeAgentDefaultsSettings(formValues),
+      agent: {
+        model: normalizeAgentDefaultsTextForPayload(values.model),
+        fallback_model: normalizeAgentDefaultsTextForPayload(
+          values.fallback_model,
+        ),
+        temperature: normalizeAgentDefaultsTemperature(values.temperature),
+        thinking_effort: normalizeAgentDefaultsThinkingEffortForPayload(
+          values.thinking_effort,
+        ),
+      },
     },
   };
 }
@@ -578,14 +591,42 @@ function normalizeAgentDefaultsTemperature(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
-function normalizeAgentDefaultsThinkingEffort(value) {
+function normalizeAgentDefaultsTextForPayload(value) {
+  const normalized = textOrEmpty(value);
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeAgentDefaultsThinkingEffortForPayload(value) {
+  if (value === AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT) {
+    return null;
+  }
+
   if (value === null || value === undefined) {
     return null;
   }
 
   const normalized = String(value).trim();
   if (normalized.length === 0) {
+    return '';
+  }
+
+  return AGENT_DEFAULT_THINKING_EFFORT_OPTIONS.includes(normalized)
+    ? normalized
+    : null;
+}
+
+function normalizeAgentDefaultsThinkingEffort(value) {
+  if (value === AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT) {
     return null;
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  if (normalized.length === 0) {
+    return '';
   }
 
   return AGENT_DEFAULT_THINKING_EFFORT_OPTIONS.includes(normalized)

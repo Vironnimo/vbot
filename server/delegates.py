@@ -569,9 +569,10 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     name = _required_string(params, "name")
     try:
-        agent = state.runtime.agents.create(
+        state.runtime.agents.create(
             agent_id, name, **_agent_changes(params, blocked={"id", "name"}, for_create=True)
         )
+        agent = state.runtime.agents.get(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)

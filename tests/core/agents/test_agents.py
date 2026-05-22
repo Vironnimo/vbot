@@ -375,6 +375,46 @@ def test_get_reflects_updated_defaults_without_reloading_agent_file(
     assert persisted["thinking_effort"] is None
 
 
+def test_create_returns_resolved_defaults_but_persists_raw_values(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: {
+            "model": "openai/gpt-5.2",
+            "fallback_model": "openai/gpt-5.2-mini",
+            "temperature": 0.6,
+            "thinking_effort": "high",
+        },
+    )
+
+    created = store.create(
+        "coder_create_defaults",
+        "Coder Agent",
+        model="",
+        fallback_model="",
+        temperature=None,
+        thinking_effort=None,
+    )
+
+    assert created.model == "openai/gpt-5.2"
+    assert created.fallback_model == "openai/gpt-5.2-mini"
+    assert created.temperature == 0.6
+    assert created.thinking_effort == "high"
+
+    persisted = json.loads(
+        (store.data_dir / "agents" / "coder_create_defaults" / "agent.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["model"] == ""
+    assert persisted["fallback_model"] == ""
+    assert persisted["temperature"] is None
+    assert persisted["thinking_effort"] is None
+
+
 def test_update_with_explicit_temperature_does_not_write_default_to_disk(
     tmp_path: Path,
     template_dir: Path,

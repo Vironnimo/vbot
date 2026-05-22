@@ -9,6 +9,7 @@
     CHANNEL_FORM_MODE_CREATE,
     CHANNEL_FORM_MODE_EDIT,
     CHANNEL_PLATFORMS,
+    AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
     SETTINGS_LAYOUT_CLASS,
     applyChannelPanelList,
     buildLanguageOptions,
@@ -115,7 +116,10 @@
       fallback_model: normalized.fallback_model,
       temperature:
         normalized.temperature === null ? '' : String(normalized.temperature),
-      thinking_effort: normalized.thinking_effort ?? '',
+      thinking_effort:
+        normalized.thinking_effort === null
+          ? AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT
+          : normalized.thinking_effort,
     };
   }
 
@@ -1595,8 +1599,11 @@
                     event.currentTarget.value,
                   )}
               >
-                <option value="">
+                <option value={AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT}>
                   {t('settings.defaults.noThinkingEffort', '— (no default)')}
+                </option>
+                <option value="">
+                  {t('agents.form.thinkingEffortDefault', '—')}
                 </option>
                 {#each AGENT_THINKING_EFFORT_OPTIONS as option (option)}
                   <option value={option}>

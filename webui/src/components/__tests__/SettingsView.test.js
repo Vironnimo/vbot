@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT } from '../../lib/settingsView.js';
 
 const rpcMock = vi.fn();
 
@@ -212,8 +213,13 @@ describe('SettingsView', () => {
       },
     });
 
+    setInputValue('#settings-defaults-model', '');
+    setInputValue('#settings-defaults-fallback-model', '');
     getButton('Clear').click();
-    setSelectValue('#settings-defaults-thinking-effort', '');
+    setSelectValue(
+      '#settings-defaults-thinking-effort',
+      AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+    );
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
@@ -221,10 +227,26 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()[1][1]).toEqual({
       defaults: {
         agent: {
-          model: 'openai/gpt-5.2',
-          fallback_model: 'openai/gpt-5.2-mini',
+          model: null,
+          fallback_model: null,
           temperature: null,
           thinking_effort: null,
+        },
+      },
+    });
+
+    setSelectValue('#settings-defaults-thinking-effort', '');
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 3);
+
+    expect(getSettingsUpdateCalls()[2][1]).toEqual({
+      defaults: {
+        agent: {
+          model: null,
+          fallback_model: null,
+          temperature: null,
+          thinking_effort: '',
         },
       },
     });
@@ -868,10 +890,20 @@ function mergeSettingsPayload(currentSettings, patch) {
     };
 
     if (patch.defaults.agent && typeof patch.defaults.agent === 'object') {
-      nextSettings.defaults.agent = {
+      const nextAgentDefaults = {
         ...(nextSettings.defaults.agent ?? {}),
-        ...patch.defaults.agent,
       };
+
+      for (const [field, value] of Object.entries(patch.defaults.agent)) {
+        if (value === null) {
+          delete nextAgentDefaults[field];
+          continue;
+        }
+
+        nextAgentDefaults[field] = value;
+      }
+
+      nextSettings.defaults.agent = nextAgentDefaults;
     }
   }
 

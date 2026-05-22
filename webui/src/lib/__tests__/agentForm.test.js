@@ -204,6 +204,37 @@ describe('agent form helpers', () => {
     expect(result.payload).not.toHaveProperty('workspace');
   });
 
+  it('sends only changed fields when editing with baseline values', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      model: 'openai/gpt-5.2',
+      fallback_model: 'openai/gpt-5.2-mini',
+      workspace: 'C:/workspace-coder',
+      temperature: 0.2,
+      thinking_effort: 'high',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    const result = normalizeAgentForm(
+      {
+        ...initialValues,
+        name: 'Coder Prime',
+      },
+      {
+        mode: AGENT_FORM_MODE_EDIT,
+        initialValues,
+      },
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).toEqual({
+      id: 'coder',
+      name: 'Coder Prime',
+    });
+  });
+
   it('reports required create fields and invalid temperature', () => {
     const result = normalizeAgentForm({
       id: '',
