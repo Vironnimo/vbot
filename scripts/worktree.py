@@ -12,7 +12,32 @@ import subprocess
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+def _resolve_project_root() -> Path:
+    """Resolve the canonical repository root across linked git worktrees."""
+    script_root = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            cwd=script_root,
+            check=False,
+        )
+    except OSError:
+        return script_root
+
+    if result.returncode != 0:
+        return script_root
+
+    git_common_dir = result.stdout.strip()
+    if not git_common_dir:
+        return script_root
+
+    return Path(git_common_dir).resolve().parent
+
+
+PROJECT_ROOT = _resolve_project_root()
 
 MAIN_PORT = 8420
 FIRST_WORKTREE_PORT = 8421
