@@ -273,6 +273,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
         return 1
 
+    return_code, stderr = _run_command([npm_command, "run", "build"], cwd=worktree_path / "webui")
+    if return_code != 0:
+        print_error(f"npm run build failed: {stderr}" if stderr else "npm run build failed")
+        return 1
+
     doc_path = worktree_path / WORKTREE_DOC_PATH
     try:
         doc_path.parent.mkdir(parents=True, exist_ok=True)
