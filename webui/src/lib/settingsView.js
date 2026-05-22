@@ -22,6 +22,23 @@ export const SUBAGENT_SETTINGS_DEFAULTS = Object.freeze({
   subagent_timeout_minutes: 60,
 });
 
+export const AGENT_DEFAULTS_FIELDS = Object.freeze([
+  'model',
+  'fallback_model',
+  'temperature',
+  'thinking_effort',
+]);
+
+const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
+
 const COMPACTION_SETTING_DEFAULTS = Object.freeze({
   auto: true,
   threshold: 0.8,
@@ -105,6 +122,27 @@ export function createSkillDirectoriesUpdatePayload(directories) {
   return {
     skills: {
       directories: normalizeSkillDirectories(directories),
+    },
+  };
+}
+
+export function normalizeAgentDefaultsSettings(rawSettings) {
+  const agentDefaults = resolveAgentDefaultsSource(rawSettings);
+
+  return {
+    model: textOrEmpty(agentDefaults.model),
+    fallback_model: textOrEmpty(agentDefaults.fallback_model),
+    temperature: normalizeAgentDefaultsTemperature(agentDefaults.temperature),
+    thinking_effort: normalizeAgentDefaultsThinkingEffort(
+      agentDefaults.thinking_effort,
+    ),
+  };
+}
+
+export function buildAgentDefaultsPayload(formValues) {
+  return {
+    defaults: {
+      agent: normalizeAgentDefaultsSettings(formValues),
     },
   };
 }
@@ -493,4 +531,64 @@ function textOrFallback(value, fallback) {
   const normalized = textOrEmpty(value);
 
   return normalized.length > 0 ? normalized : fallback;
+}
+
+function resolveAgentDefaultsSource(rawSettings) {
+  const defaults = rawSettings?.defaults;
+
+  if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+    const agentDefaults = defaults.agent;
+
+    if (
+      agentDefaults &&
+      typeof agentDefaults === 'object' &&
+      !Array.isArray(agentDefaults)
+    ) {
+      return agentDefaults;
+    }
+
+    return {};
+  }
+
+  if (
+    rawSettings &&
+    typeof rawSettings === 'object' &&
+    !Array.isArray(rawSettings) &&
+    AGENT_DEFAULTS_FIELDS.some((field) =>
+      Object.prototype.hasOwnProperty.call(rawSettings, field),
+    )
+  ) {
+    return rawSettings;
+  }
+
+  return {};
+}
+
+function normalizeAgentDefaultsTemperature(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const numberValue = Number(normalized);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeAgentDefaultsThinkingEffort(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return AGENT_DEFAULT_THINKING_EFFORT_OPTIONS.includes(normalized)
+    ? normalized
+    : null;
 }

@@ -611,7 +611,7 @@
 
   function thinkingEffortLabel(option) {
     if (option === '') {
-      return t('agents.form.thinkingEffortDefault', 'Default');
+      return t('agents.form.thinkingEffortDefault', EMPTY_VALUE);
     }
 
     return t(`agents.form.thinkingEffortOption.${option}`, option);

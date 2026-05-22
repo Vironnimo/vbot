@@ -335,7 +335,7 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => thinkingTriggerLabel() === 'Default', 100);
+    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
 
     openSimpleDropdown('agent-thinking-effort');
     expect(simpleOptionLabels('agent-thinking-effort')).toContain('high');
@@ -343,6 +343,43 @@ describe('AgentsView', () => {
     selectSimpleOption('agent-thinking-effort', 'high');
     await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
     expect(document.body.textContent).toContain('high');
+  });
+
+  it('sends null for cleared temperature and thinking effort', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
+
+    const temperatureInput = document.body.querySelector(
+      'input.s-input[type="number"]',
+    );
+    expect(temperatureInput).toBeTruthy();
+    temperatureInput.value = '';
+    temperatureInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    openSimpleDropdown('agent-thinking-effort');
+    selectSimpleOption('agent-thinking-effort', '—');
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1]).toMatchObject({
+      id: 'alpha',
+      temperature: null,
+      thinking_effort: null,
+    });
   });
 
   it('allows clearing model and fallback selections back to empty values', async () => {
@@ -667,7 +704,7 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => thinkingTriggerLabel() === 'Default', 100);
+    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
 
     const modelCard = Array.from(
       document.body.querySelectorAll('.detail-group.agents-view__model-group'),

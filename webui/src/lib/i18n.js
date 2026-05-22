@@ -20,6 +20,7 @@ export const englishCatalog = Object.freeze({
   'common.archive': 'Archive',
   'common.alreadySaved': 'Already saved',
   'common.cancel': 'Cancel',
+  'common.clear': 'Clear',
   'common.close': 'Close',
   'common.confirm': 'Confirm',
   'common.copy': 'Copy',
@@ -228,7 +229,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.modelUnavailableOption': 'Unavailable / custom: {model}',
   'agents.form.modelUnavailableConnectionOption':
     'Unavailable / custom: {model} ({connection})',
-  'agents.form.thinkingEffortDefault': 'Default',
+  'agents.form.thinkingEffortDefault': '—',
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',
   'agents.form.thinkingEffortOption.low': 'low',
@@ -356,6 +357,23 @@ export const englishCatalog = Object.freeze({
     'Root path for agents, sessions, and workspace files.',
   'settings.general.dataDirectoryPlaceholder':
     'Data directory placeholder, not a detected runtime value',
+  'settings.defaults.title': 'Defaults',
+  'settings.defaults.subtitle':
+    'Fallback values for agent fields that are not explicitly set.',
+  'settings.defaults.model': 'Model',
+  'settings.defaults.modelDescription': 'Used when an agent model is empty.',
+  'settings.defaults.fallbackModel': 'Fallback model',
+  'settings.defaults.fallbackModelDescription':
+    'Used when an agent fallback model is empty.',
+  'settings.defaults.temperature': 'Temperature',
+  'settings.defaults.temperatureDescription':
+    'Used when an agent temperature is unset.',
+  'settings.defaults.clearTemperature': 'Clear default temperature',
+  'settings.defaults.thinkingEffort': 'Thinking effort',
+  'settings.defaults.thinkingEffortDescription':
+    'Used when an agent thinking effort is unset.',
+  'settings.defaults.noThinkingEffort': '— (no default)',
+  'settings.defaults.saveSuccess': 'Agent defaults updated.',
   'settings.skills.title': 'Skills',
   'settings.skills.subtitle':
     'Additional directories scanned for local skills.',

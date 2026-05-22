@@ -181,6 +181,55 @@ describe('SettingsView', () => {
     );
   });
 
+  it('renders and saves the Defaults section', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openDefaultsPanel();
+
+    expect(document.body.textContent).toContain('Model');
+    expect(document.body.textContent).toContain('Fallback model');
+    expect(document.body.textContent).toContain('Temperature');
+    expect(document.body.textContent).toContain('Thinking effort');
+
+    setInputValue('#settings-defaults-model', 'openai/gpt-5.2');
+    setInputValue('#settings-defaults-fallback-model', 'openai/gpt-5.2-mini');
+    setInputValue('#settings-defaults-temperature', '0.7');
+    setSelectValue('#settings-defaults-thinking-effort', 'high');
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      defaults: {
+        agent: {
+          model: 'openai/gpt-5.2',
+          fallback_model: 'openai/gpt-5.2-mini',
+          temperature: 0.7,
+          thinking_effort: 'high',
+        },
+      },
+    });
+
+    getButton('Clear').click();
+    setSelectValue('#settings-defaults-thinking-effort', '');
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
+
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      defaults: {
+        agent: {
+          model: 'openai/gpt-5.2',
+          fallback_model: 'openai/gpt-5.2-mini',
+          temperature: null,
+          thinking_effort: null,
+        },
+      },
+    });
+  });
+
   it('loads channels panel and resolves running status for each channel', async () => {
     rpcMock.mockImplementation(
       createSettingsRpcMock({
@@ -518,6 +567,15 @@ async function openSubAgentsPanel() {
   );
 }
 
+async function openDefaultsPanel() {
+  await waitForCondition(() => buttonByText('Defaults'));
+  buttonByText('Defaults').click();
+  flushSync();
+  await waitForCondition(() =>
+    document.body.textContent.includes('Fallback model'),
+  );
+}
+
 function providerRow(providerName) {
   const rows = Array.from(document.body.querySelectorAll('.s-row'));
   const row = rows.find((item) => item.textContent.includes(providerName));
@@ -803,6 +861,20 @@ function mergeSettingsPayload(currentSettings, patch) {
     };
   }
 
+  if (patch?.defaults && typeof patch.defaults === 'object') {
+    nextSettings.defaults = {
+      ...(nextSettings.defaults ?? {}),
+      ...patch.defaults,
+    };
+
+    if (patch.defaults.agent && typeof patch.defaults.agent === 'object') {
+      nextSettings.defaults.agent = {
+        ...(nextSettings.defaults.agent ?? {}),
+        ...patch.defaults.agent,
+      };
+    }
+  }
+
   return nextSettings;
 }
 
@@ -873,6 +945,9 @@ function settingsPayload(options = {}) {
       threshold: 0.8,
       tail_tokens: 15000,
       summary_model: null,
+    },
+    defaults: {
+      agent: {},
     },
     appearance: {
       language: 'en',
