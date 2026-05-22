@@ -16,7 +16,7 @@ from core.chat import (
     RunCancelledError,
     RunNotFoundError,
 )
-from core.chat.runs import RunStatus
+from core.chat.runs import RunExecutor, RunStatus
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
 from core.utils.logging import get_logger
 
@@ -297,23 +297,29 @@ async def _handle_subagent(
         except ChatSessionError:
             return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
-        active_run = _chat_run_manager(runtime).active_run(
-            agent_id=target_agent_id,
-            session_id=session_id,
-        )
-        if active_run is not None:
-            return tool_failure(
-                "session_busy",
-                f"session already has an active run: {session_id}",
-            )
-
     try:
         sub_run = await _start_subagent_run(runtime, target_agent_id, session.id, content, context)
     except ActiveRunError:
-        return tool_failure(
-            "session_busy",
-            f"session already has an active run: {session.id}",
+        if session_id is None:
+            return tool_failure(
+                "session_busy",
+                f"session already has an active run: {session.id}",
+            )
+
+        _, executor = _make_subagent_executor(
+            runtime,
+            target_agent_id,
+            session.id,
+            content,
+            context,
         )
+        item = await _chat_run_manager(runtime).enqueue(
+            agent_id=target_agent_id,
+            session_id=session.id,
+            executor=executor,
+            display_content=content,
+        )
+        sub_run = await item.future
 
     batch_tracker.register(parent_key, target_agent_id, session.id, sub_run.id)
     _attach_parent_cancellation(runtime, context.run_id, sub_run)
@@ -402,15 +408,32 @@ async def _start_subagent_run(
     content: str,
     context: ToolContext,
 ) -> Run:
+    _, executor = _make_subagent_executor(
+        runtime,
+        agent_id,
+        session_id,
+        content,
+        context,
+    )
+    return await _chat_run_manager(runtime).start(
+        agent_id=agent_id,
+        session_id=session_id,
+        executor=executor,
+    )
+
+
+def _make_subagent_executor(
+    runtime: Any,
+    agent_id: str,
+    session_id: str,
+    content: str,
+    context: ToolContext,
+) -> tuple[Any, RunExecutor]:
     from core.chat import ChatLoop
 
     sub_loop = ChatLoop(runtime, streaming=False)
     sub_loop._nesting_depth = context.nesting_depth + 1  # noqa: SLF001 - planned depth handoff.
-    return await _chat_run_manager(runtime).start(
-        agent_id=agent_id,
-        session_id=session_id,
-        executor=lambda run: sub_loop._execute_run(run, content),  # noqa: SLF001
-    )
+    return sub_loop, lambda run: sub_loop._execute_run(run, content)  # noqa: SLF001
 
 
 def _track_subagent_completion(

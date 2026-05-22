@@ -19,6 +19,13 @@ def make_run(run_id: str, agent_id: str = "coder", session_id: str = "session-on
     return Run(run_id=run_id, agent_id=agent_id, session_id=session_id)
 
 
+def make_queued_item(run: Run | None = None) -> SimpleNamespace:
+    future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
+    if run is not None:
+        future.set_result(run)
+    return SimpleNamespace(future=future)
+
+
 async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> None:
     # Arrange
     session = SimpleNamespace(id="new-session")
@@ -48,7 +55,8 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
     # Arrange
     runtime = Mock()
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(return_value=make_run("run-one", "coder", "existing"))
+        start_run=AsyncMock(return_value=make_run("run-one", "coder", "existing")),
+        queue_run=AsyncMock(),
     )
     chat_run_manager = Mock()
     trigger_service = TriggerService(
@@ -60,6 +68,7 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
 
     # Assert
     chat_loop.start_run.assert_awaited_once_with("coder", "Continue", session_id="existing")
+    chat_loop.queue_run.assert_not_awaited()
     chat_run_manager.active_run.assert_not_called()
     assert run.id == "run-one"
 
@@ -68,7 +77,8 @@ async def test_trigger_run_can_start_internal_run_without_visible_user_turn() ->
     # Arrange
     runtime = Mock()
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(return_value=make_run("run-one", "coder", "existing"))
+        start_run=AsyncMock(return_value=make_run("run-one", "coder", "existing")),
+        queue_run=AsyncMock(),
     )
     chat_run_manager = Mock()
     trigger_service = TriggerService(
@@ -90,17 +100,19 @@ async def test_trigger_run_can_start_internal_run_without_visible_user_turn() ->
         session_id="existing",
         internal=True,
     )
+    chat_loop.queue_run.assert_not_awaited()
     assert run.id == "run-one"
 
 
 async def test_trigger_run_queues_busy_session_until_active_run_terminal_event() -> None:
     # Arrange
-    active_run = make_run("active-run")
     queued_run = make_run("queued-run")
+    queued_item = make_queued_item()
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(side_effect=[ActiveRunError("active run"), queued_run])
+        start_run=AsyncMock(side_effect=ActiveRunError("active run")),
+        queue_run=AsyncMock(return_value=queued_item),
     )
-    chat_run_manager = SimpleNamespace(active_run=Mock(return_value=active_run))
+    chat_run_manager = Mock()
     runtime = Mock()
     trigger_service = TriggerService(
         cast(Any, chat_loop), cast(Any, chat_run_manager), cast(Any, runtime)
@@ -111,157 +123,92 @@ async def test_trigger_run_queues_busy_session_until_active_run_terminal_event()
         trigger_service.trigger_run("coder", "Queued message", session_id="session-one")
     )
     await asyncio.sleep(0)
-    active_run.mark_completed("done")
+
+    assert queued_task.done() is False
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "Queued message",
+        session_id="session-one",
+    )
+    chat_loop.queue_run.assert_awaited_once_with(
+        "coder",
+        "Queued message",
+        session_id="session-one",
+    )
+
+    queued_item.future.set_result(queued_run)
     run = await queued_task
 
     # Assert
     assert run is queued_run
-    assert chat_loop.start_run.await_args_list[0].args == ("coder", "Queued message")
-    assert chat_loop.start_run.await_args_list[0].kwargs == {"session_id": "session-one"}
-    assert chat_loop.start_run.await_args_list[1].args == ("coder", "Queued message")
-    assert chat_loop.start_run.await_args_list[1].kwargs == {"session_id": "session-one"}
-    chat_run_manager.active_run.assert_called_once_with(
-        agent_id="coder",
-        session_id="session-one",
-    )
+    chat_run_manager.active_run.assert_not_called()
 
 
 async def test_trigger_run_preserves_internal_flag_when_queued() -> None:
     # Arrange
-    active_run = make_run("active-run")
     queued_run = make_run("queued-run")
+    queued_item = make_queued_item(queued_run)
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(side_effect=[ActiveRunError("active run"), queued_run])
+        start_run=AsyncMock(side_effect=ActiveRunError("active run")),
+        queue_run=AsyncMock(return_value=queued_item),
     )
-    chat_run_manager = SimpleNamespace(active_run=Mock(return_value=active_run))
+    chat_run_manager = Mock()
     runtime = Mock()
     trigger_service = TriggerService(
         cast(Any, chat_loop), cast(Any, chat_run_manager), cast(Any, runtime)
     )
 
     # Act
-    queued_task = asyncio.create_task(
-        trigger_service.trigger_run(
-            "coder",
-            "Sub-agent batch completed.",
-            session_id="session-one",
-            internal=True,
-        )
+    run = await trigger_service.trigger_run(
+        "coder",
+        "Sub-agent batch completed.",
+        session_id="session-one",
+        internal=True,
     )
-    await asyncio.sleep(0)
-    active_run.mark_completed("done")
-    run = await queued_task
 
     # Assert
     assert run is queued_run
-    assert chat_loop.start_run.await_args_list[0].kwargs == {
-        "session_id": "session-one",
-        "internal": True,
-    }
-    assert chat_loop.start_run.await_args_list[1].kwargs == {
-        "session_id": "session-one",
-        "internal": True,
-    }
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "Sub-agent batch completed.",
+        session_id="session-one",
+        internal=True,
+    )
+    chat_loop.queue_run.assert_awaited_once_with(
+        "coder",
+        "Sub-agent batch completed.",
+        session_id="session-one",
+        internal=True,
+    )
 
 
-async def test_trigger_run_drains_multiple_queued_triggers_fifo() -> None:
+async def test_trigger_run_queues_via_chat_run_manager_when_session_is_busy() -> None:
     # Arrange
-    active_run = make_run("active-run")
-    first_queued_run = make_run("queued-run-one")
-    second_queued_run = make_run("queued-run-two")
-    chat_loop = SimpleNamespace(
-        start_run=AsyncMock(
-            side_effect=[
-                ActiveRunError("active run"),
-                ActiveRunError("active run"),
-                first_queued_run,
-                second_queued_run,
-            ]
-        )
-    )
-    chat_run_manager = SimpleNamespace(active_run=Mock(return_value=active_run))
-    runtime = Mock()
-    trigger_service = TriggerService(
-        cast(Any, chat_loop), cast(Any, chat_run_manager), cast(Any, runtime)
-    )
-
-    # Act
-    first_task = asyncio.create_task(
-        trigger_service.trigger_run("coder", "First queued", session_id="session-one")
-    )
-    await asyncio.sleep(0)
-    second_task = asyncio.create_task(
-        trigger_service.trigger_run("coder", "Second queued", session_id="session-one")
-    )
-    await asyncio.sleep(0)
-    active_run.mark_completed("done")
-    first_result = await first_task
-    first_queued_run.mark_completed("done")
-    second_result = await second_task
-
-    # Assert
-    assert first_result is first_queued_run
-    assert second_result is second_queued_run
-    drained_messages = [call.args[1] for call in chat_loop.start_run.await_args_list[2:]]
-    assert drained_messages == ["First queued", "Second queued"]
-
-
-async def test_trigger_run_preserves_queue_when_active_run_race_happens_during_drain() -> None:
-    # Arrange
-    active_run = make_run("active-run")
-    competing_run = make_run("competing-run")
     queued_run = make_run("queued-run")
+    queued_item = make_queued_item(queued_run)
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(
-            side_effect=[
-                ActiveRunError("active run"),
-                ActiveRunError("competing run became active"),
-                queued_run,
-            ]
-        )
+        start_run=AsyncMock(side_effect=ActiveRunError("active run")),
+        queue_run=AsyncMock(return_value=queued_item),
     )
-    chat_run_manager = SimpleNamespace(active_run=Mock(side_effect=[active_run, competing_run]))
+    chat_run_manager = Mock()
     runtime = Mock()
     trigger_service = TriggerService(
         cast(Any, chat_loop), cast(Any, chat_run_manager), cast(Any, runtime)
     )
 
     # Act
-    queued_task = asyncio.create_task(
-        trigger_service.trigger_run("coder", "Queued message", session_id="session-one")
-    )
-    await asyncio.sleep(0)
-    active_run.mark_completed("done")
-    await asyncio.sleep(0)
-    competing_run.mark_completed("done")
-    run = await queued_task
+    run = await trigger_service.trigger_run("coder", "Queued message", session_id="session-one")
 
     # Assert
     assert run is queued_run
-    drained_messages = [call.args[1] for call in chat_loop.start_run.await_args_list[1:]]
-    assert drained_messages == ["Queued message", "Queued message"]
-    chat_run_manager.active_run.assert_any_call(agent_id="coder", session_id="session-one")
-
-
-async def test_subscriber_cancellation_releases_queued_trigger_waiters() -> None:
-    # Arrange
-    active_run = make_run("active-run")
-    chat_loop = SimpleNamespace(start_run=AsyncMock(side_effect=[ActiveRunError("active run")]))
-    chat_run_manager = SimpleNamespace(active_run=Mock(return_value=active_run))
-    runtime = Mock()
-    trigger_service = TriggerService(
-        cast(Any, chat_loop), cast(Any, chat_run_manager), cast(Any, runtime)
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "Queued message",
+        session_id="session-one",
     )
-
-    # Act
-    queued_task = asyncio.create_task(
-        trigger_service.trigger_run("coder", "Queued message", session_id="session-one")
+    chat_loop.queue_run.assert_awaited_once_with(
+        "coder",
+        "Queued message",
+        session_id="session-one",
     )
-    await asyncio.sleep(0)
-    subscriber_task = next(iter(trigger_service._subscriber_tasks.values()))
-    subscriber_task.cancel()
-    await asyncio.sleep(0)
-
-    # Assert
-    with pytest.raises(asyncio.CancelledError):
-        await queued_task
+    chat_run_manager.active_run.assert_not_called()
