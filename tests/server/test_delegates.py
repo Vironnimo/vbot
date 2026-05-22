@@ -97,7 +97,7 @@ class QueueManagerStub:
         return self._update_result
 
 
-def _make_queued_item(*, item_id: str, content: str) -> QueuedRunItem:
+def _make_queued_item(*, item_id: str, content: str, internal: bool = False) -> QueuedRunItem:
     async def _executor(_run: Run) -> None:
         return None
 
@@ -105,7 +105,7 @@ def _make_queued_item(*, item_id: str, content: str) -> QueuedRunItem:
         item_id=item_id,
         display_content=content,
         executor=_executor,
-        internal=False,
+        internal=internal,
         future=asyncio.get_running_loop().create_future(),
         created_at="2026-05-22T00:00:00+00:00",
     )
@@ -302,6 +302,90 @@ async def test_chat_stream_returns_queued_response_when_session_is_busy() -> Non
 
 
 @pytest.mark.asyncio
+async def test_chat_send_busy_queue_bridges_started_run_to_event_bus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queued_item = _make_queued_item(item_id="queue-1", content="Queued message")
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("session already has an active run")),
+        queue_run=AsyncMock(return_value=queued_item),
+    )
+    bridged_runs: list[Run] = []
+    monkeypatch.setattr(
+        delegates,
+        "_bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+    state = SimpleNamespace(chat_loop=chat_loop)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.send",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "content": "Queued message",
+            },
+        },
+    )
+
+    dequeued_run = Run(
+        run_id="run-queued-send",
+        agent_id="agent-1",
+        session_id="session-1",
+    )
+    queued_item.future.set_result(dequeued_run)
+    await asyncio.sleep(0)
+
+    assert response["ok"] is True
+    assert response["result"]["queued"] is True
+    assert bridged_runs == [dequeued_run]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_busy_queue_bridges_started_run_to_event_bus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queued_item = _make_queued_item(item_id="queue-1", content="Queued message")
+    streaming_chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("session already has an active run")),
+        queue_run=AsyncMock(return_value=queued_item),
+    )
+    bridged_runs: list[Run] = []
+    monkeypatch.setattr(
+        delegates,
+        "_bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+    state = SimpleNamespace(streaming_chat_loop=streaming_chat_loop)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "content": "Queued message",
+            },
+        },
+    )
+
+    dequeued_run = Run(
+        run_id="run-queued-stream",
+        agent_id="agent-1",
+        session_id="session-1",
+    )
+    queued_item.future.set_result(dequeued_run)
+    await asyncio.sleep(0)
+
+    assert response["ok"] is True
+    assert response["result"]["queued"] is True
+    assert bridged_runs == [dequeued_run]
+
+
+@pytest.mark.asyncio
 async def test_chat_queue_list_returns_queued_items(monkeypatch: pytest.MonkeyPatch) -> None:
     queued_item = _make_queued_item(item_id="queue-1", content="Queued message")
     queue_manager = QueueManagerStub(items=[queued_item])
@@ -328,8 +412,38 @@ async def test_chat_queue_list_returns_queued_items(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_chat_queue_list_hides_internal_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    public_item = _make_queued_item(item_id="queue-public", content="Visible")
+    internal_item = _make_queued_item(item_id="queue-internal", content="Hidden", internal=True)
+    queue_manager = QueueManagerStub(items=[public_item, internal_item])
+    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+
+    response = await dispatch_rpc(
+        SimpleNamespace(),
+        {
+            "method": "chat.queue_list",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "items": [public_item.to_dict()],
+        },
+    }
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
+
+
+@pytest.mark.asyncio
 async def test_chat_queue_remove_returns_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    queue_manager = QueueManagerStub(remove_result=True)
+    queue_manager = QueueManagerStub(
+        items=[_make_queued_item(item_id="queue-1", content="Queued message")],
+        remove_result=True,
+    )
     monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
@@ -350,6 +464,7 @@ async def test_chat_queue_remove_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
             "ok": True,
         },
     }
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
     assert queue_manager.remove_calls == [("agent-1", "session-1", "queue-1")]
 
 
@@ -357,7 +472,10 @@ async def test_chat_queue_remove_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_chat_queue_remove_returns_error_for_unknown_item(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    queue_manager = QueueManagerStub(remove_result=False)
+    queue_manager = QueueManagerStub(
+        items=[_make_queued_item(item_id="queue-1", content="Queued message")],
+        remove_result=False,
+    )
     monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
 
     response = await dispatch_rpc(
@@ -374,12 +492,44 @@ async def test_chat_queue_remove_returns_error_for_unknown_item(
 
     assert response["ok"] is False
     assert response["error"]["code"] == "queue_item_not_found"
-    assert queue_manager.remove_calls == [("agent-1", "session-1", "queue-404")]
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.remove_calls == []
+
+
+@pytest.mark.asyncio
+async def test_chat_queue_remove_returns_not_found_for_internal_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_manager = QueueManagerStub(
+        items=[_make_queued_item(item_id="queue-internal", content="Hidden", internal=True)],
+        remove_result=True,
+    )
+    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+
+    response = await dispatch_rpc(
+        SimpleNamespace(),
+        {
+            "method": "chat.queue_remove",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "item_id": "queue-internal",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "queue_item_not_found"
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert queue_manager.remove_calls == []
 
 
 @pytest.mark.asyncio
 async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    queue_manager = QueueManagerStub(update_result=True)
+    queue_manager = QueueManagerStub(
+        items=[_make_queued_item(item_id="queue-1", content="Queued message")],
+        update_result=True,
+    )
     monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
 
     captured: dict[str, Any] = {}
@@ -421,6 +571,7 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
             "ok": True,
         },
     }
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
     assert captured == {
         "agent_id": "agent-1",
         "session_id": "session-1",
@@ -429,3 +580,42 @@ async def test_chat_queue_update_returns_ok(monkeypatch: pytest.MonkeyPatch) -> 
     assert queue_manager.update_calls == [
         ("agent-1", "session-1", "queue-1", fake_executor, "Updated queued message")
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_queue_update_returns_not_found_for_internal_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_manager = QueueManagerStub(
+        items=[_make_queued_item(item_id="queue-internal", content="Hidden", internal=True)],
+        update_result=True,
+    )
+    monkeypatch.setattr(delegates, "_state_chat_runs", lambda _state: queue_manager)
+
+    build_called = False
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> tuple[str, Any, str]:
+        nonlocal build_called
+        build_called = True
+        return "session-1", object(), "should-not-build"
+
+    monkeypatch.setattr(delegates, "_build_streaming_queue_update", fail_if_called)
+
+    response = await dispatch_rpc(
+        SimpleNamespace(),
+        {
+            "method": "chat.queue_update",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "item_id": "queue-internal",
+                "content": "Edited queued text",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "queue_item_not_found"
+    assert queue_manager.list_calls == [("agent-1", "session-1")]
+    assert build_called is False
+    assert queue_manager.update_calls == []
