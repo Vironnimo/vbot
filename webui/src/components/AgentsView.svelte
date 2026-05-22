@@ -727,9 +727,6 @@
           </div>
 
           <div class="detail-btns">
-            <button class="btn-outline" type="submit" disabled={isSaving}>
-              {isSaving ? t('common.saving', 'Saving…') : submitLabel}
-            </button>
             {#if formMode === AGENT_FORM_MODE_EDIT}
               <button
                 class="btn-outline btn-dang"
@@ -1209,6 +1206,12 @@
             )}
           </p>
         {/if}
+
+        <div class="agent-sticky-footer">
+          <button class="btn-outline" type="submit" disabled={isSaving}>
+            {isSaving ? t('common.saving', 'Saving…') : submitLabel}
+          </button>
+        </div>
       </div>
     </form>
   </div>
@@ -1379,6 +1382,15 @@
     display: flex;
     flex-shrink: 0;
     gap: 8px;
+  }
+
+  .agent-sticky-footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 0 4px;
+    background: var(--surface);
   }
 
   .detail-group {
