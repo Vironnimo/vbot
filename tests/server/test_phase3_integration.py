@@ -600,7 +600,7 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_same_session_rejected_while_different_sessions_run_in_parallel(
+async def test_same_session_queued_while_different_sessions_run_in_parallel(
     tmp_path: Path,
 ) -> None:
     first_adapter = SequencedAdapter(block=True)
@@ -634,13 +634,21 @@ async def test_same_session_rejected_while_different_sessions_run_in_parallel(
     )
 
     assert first_response["ok"] is True
-    assert same_session_response["ok"] is False
-    assert same_session_response["error"]["code"] == "active_run"
+    assert same_session_response["ok"] is True
+    assert same_session_response["result"]["queued"] is True
+    queued_item = same_session_response["result"]["item"]
+    assert queued_item["content"] == "Again"
+    assert isinstance(queued_item["id"], str)
+    assert queued_item["id"]
     assert parallel_response["ok"] is True
     assert parallel_response["result"]["message"]["content"] == "Second done"
 
-    await state.chat_runs.cancel(first_response["result"]["run_id"])
+    removed = state.chat_runs.remove_queued("coder", "session-one", queued_item["id"])
+    assert removed is True
+
+    run = state.chat_runs.get(first_response["result"]["run_id"])
     first_adapter.release.set()
+    await run.wait()
 
 
 def _make_state(runtime: IntegrationRuntime) -> Any:
