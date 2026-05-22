@@ -115,7 +115,7 @@ class StubAgents:
     def create(self, agent_id: str, name: str, **changes: Any) -> StubAgent:
         agent = StubAgent(id=agent_id, name=name, **changes)
         self._agents[agent_id] = agent
-        return self.get(agent_id)
+        return self._get_raw(agent_id)
 
     def update(self, agent_id: str, **changes: Any) -> StubAgent:
         agent = self._get_raw(agent_id)
@@ -2258,6 +2258,53 @@ async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> No
     assert response["ok"] is True
     assert response["result"]["id"] == "coder"
     assert response["result"]["model"] == "openai/gpt-4.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_defaults(
+        "agent",
+        {
+            "model": "openai/gpt-5.2",
+            "temperature": 0.6,
+            "thinking_effort": "high",
+        },
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {
+                "id": "writer",
+                "name": "Writer",
+                "model": "",
+                "temperature": None,
+                "thinking_effort": None,
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["model"] == "openai/gpt-5.2"
+    assert response["result"]["temperature"] == 0.6
+    assert response["result"]["thinking_effort"] == "high"
+    assert response["result"]["context_window"] == 256000
+
+    raw_agent = state.runtime.agents._get_raw("writer")
+    assert raw_agent.model == ""
+    assert raw_agent.temperature is None
+    assert raw_agent.thinking_effort is None
+
+    assert len(state.event_bus.events) == 1
+    event = state.event_bus.events[0]
+    assert event["type"] == "agent.created"
+    assert event["payload"]["id"] == "writer"
+    assert event["payload"]["model"] == "openai/gpt-5.2"
+    assert event["payload"]["temperature"] == 0.6
+    assert event["payload"]["thinking_effort"] == "high"
+    assert event["payload"]["context_window"] == 256000
 
 
 @pytest.mark.asyncio

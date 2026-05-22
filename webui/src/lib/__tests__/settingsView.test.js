@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../i18n.js';
 import {
   AGENT_DEFAULTS_FIELDS,
+  AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   buildAgentDefaultsPayload,
   buildLanguageOptions,
   buildSubAgentSettingsPayload,
@@ -369,6 +370,20 @@ describe('settingsView helpers', () => {
       thinking_effort: 'high',
     });
     expect(
+      normalizeAgentDefaultsSettings({
+        defaults: {
+          agent: {
+            thinking_effort: '',
+          },
+        },
+      }),
+    ).toEqual({
+      model: '',
+      fallback_model: '',
+      temperature: null,
+      thinking_effort: '',
+    });
+    expect(
       buildAgentDefaultsPayload({
         model: ' openai/gpt-5.2 ',
         fallback_model: '',
@@ -379,7 +394,24 @@ describe('settingsView helpers', () => {
       defaults: {
         agent: {
           model: 'openai/gpt-5.2',
-          fallback_model: '',
+          fallback_model: null,
+          temperature: null,
+          thinking_effort: '',
+        },
+      },
+    });
+    expect(
+      buildAgentDefaultsPayload({
+        model: '',
+        fallback_model: ' ',
+        temperature: '',
+        thinking_effort: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+      }),
+    ).toEqual({
+      defaults: {
+        agent: {
+          model: null,
+          fallback_model: null,
           temperature: null,
           thinking_effort: null,
         },

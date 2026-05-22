@@ -198,7 +198,7 @@ describe('AgentsView', () => {
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
   });
 
-  it('keeps a saved unsuffixed model available and preserves it on save', async () => {
+  it('keeps a saved unsuffixed model available while omitting unchanged fields on save', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [{ ...baseAgent(), model: 'openai/gpt-5.2' }],
@@ -223,6 +223,8 @@ describe('AgentsView', () => {
       'Unavailable / custom: openai/gpt-5.2',
     );
 
+    setTextInputValue(1, 'Alpha Prime');
+
     document.body
       .querySelector('form')
       .dispatchEvent(new Event('submit', { bubbles: true }));
@@ -234,9 +236,48 @@ describe('AgentsView', () => {
     const updateCall = rpcMock.mock.calls.find(
       (call) => call[0] === 'agent.update',
     );
-    expect(updateCall[1]).toMatchObject({
+    expect(updateCall[1]).toEqual({
       id: 'alpha',
-      model: 'openai/gpt-5.2',
+      name: 'Alpha Prime',
+    });
+  });
+
+  it('does not send unchanged resolved defaults when editing only the name', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            model: 'openai/gpt-5.2',
+            fallback_model: 'openai/gpt-5.2-mini',
+            temperature: '0.6',
+            thinking_effort: 'high',
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+
+    setTextInputValue(1, 'Alpha Renamed');
+
+    document.body
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true }));
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'agent.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'agent.update',
+    );
+    expect(updateCall[1]).toEqual({
+      id: 'alpha',
+      name: 'Alpha Renamed',
     });
   });
 
@@ -346,12 +387,16 @@ describe('AgentsView', () => {
   });
 
   it('sends null for cleared temperature and thinking effort', async () => {
-    rpcMock.mockImplementation(createAgentsRpcMock());
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), thinking_effort: 'high' }],
+      }),
+    );
 
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => thinkingTriggerLabel() === '—', 100);
+    await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
 
     const temperatureInput = document.body.querySelector(
       'input.s-input[type="number"]',

@@ -196,7 +196,7 @@ class AgentStore:
 
         self._seed_workspace(Path(agent.workspace))
         self._write_agent(agent)
-        return agent
+        return self._apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk."""
