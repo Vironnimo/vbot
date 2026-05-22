@@ -161,6 +161,9 @@ class Runtime:
         resources_path = self._resolve_resources_path()
 
         self._storage = StorageManager(config=self._config, resources_dir=resources_path)
+        storage = self._storage
+        if storage is None:
+            raise RuntimeError("Storage service not available")
         self._storage.ensure_directories()
         settings = self._storage.load_settings()
         attachment_max_size_bytes = self._attachment_max_size_bytes(settings)
@@ -183,6 +186,7 @@ class Runtime:
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
+            defaults_provider=lambda: storage.load_defaults().get("agent", {}),
         )
         self._process_manager = ProcessManager()
         self._start_process_manager()
