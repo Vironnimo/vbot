@@ -109,7 +109,7 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
         assert messages[1].content == "Phase 2 works"
         assert adapter.requests[0].model_id == "fake-model-v1"
         assert adapter.requests[0].kwargs["thinking_effort"] == "high"
-        assert adapter.requests[0].kwargs["temperature"] == 0.1
+        assert adapter.requests[0].kwargs["temperature"] is None
         assert [message["role"] for message in adapter.requests[0].messages] == ["system", "user"]
     finally:
         runtime.stop()

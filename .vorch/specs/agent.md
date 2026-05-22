@@ -16,6 +16,7 @@ Persisted agent configuration and workspace lifecycle management.
 - `id` is immutable and used as the filesystem directory name.
 - `model` is user-facing `<provider>/<model-id>` and may optionally carry a pinned local connection suffix as `<provider>/<model-id>::<connection-local-id>`. It may be empty until chat time.
 - `fallback_model` is an optional secondary `<provider>/<model-id>` with the same optional `::<connection-local-id>` suffix support. It is used when a retryable provider error escapes the primary adapter's built-in retries during a Run. Once activated, it stays active only for the rest of that Run; the next turn starts from `model` again.
+- Persisted `temperature` and `thinking_effort` may be `null` in `agent.json` to mean "no explicit per-agent override". `AgentStore` applies `settings.json` `defaults.agent` values at read time for `get()`, `list()`, and returned create/update results; raw disk state remains unresolved.
 - `workspace` defaults to `<data_dir>/workspace-<id>/` and is stored as an absolute path.
   Public WebUI/RPC create/update does not accept workspace mutation in Phase 4;
   this avoids archiving arbitrary user paths if an Agent is later deleted.
@@ -27,13 +28,16 @@ Persisted agent configuration and workspace lifecycle management.
 ## Interfaces
 
 - `core/agents/__init__.py` exports `Agent`, store/error types, `SystemPromptManager`, and prompt protocol types.
-- `AgentStore(data_dir, template_dir=None)` — CRUD store rooted at a data directory.
+- `AgentStore(data_dir, template_dir=None, defaults_provider=None)` — CRUD store rooted at a data directory, with optional read-time agent-default injection.
 - `create(agent_id, name, **fields) -> Agent` — persists `agent.json`, creates
   `sessions/`, creates the first Session, sets `current_session_id`, and seeds
-  workspace files.
-- `get(agent_id) -> Agent`
-- `list() -> list[Agent]`
-- `update(agent_id, **changes) -> Agent` — updates mutable fields only; `id` is immutable.
+  workspace files. Returned value is the effective resolved Agent; persisted
+  raw unset fields stay unset on disk.
+- `get(agent_id) -> Agent` — returns the effective Agent with `defaults.agent`
+  applied.
+- `list() -> list[Agent]` — returns effective Agents with `defaults.agent`
+  applied.
+- `update(agent_id, **changes) -> Agent` — updates mutable fields only; `id` is immutable. Raw values are written unchanged and the returned Agent is resolved after write.
 - `delete(agent_id) -> Path` — moves active data under `<data_dir>/archive/<agent-id>/`.
 - `SystemPromptManager(storage, tool_registry, skill_registry, app_version, app_dir, data_root, ...)`
   - `build_system_prompt(agent) -> str` — expands `{app_version}`, `{runtime}`, `{tools}`, `{skills}`, and `{include:<filename>}`.
@@ -55,7 +59,9 @@ Persisted agent configuration and workspace lifecycle management.
   remains a filesystem archive operation and does not enforce product-level
   minimum-one-Agent behavior itself.
 - Agent mutable fields are validated server/core-side. `thinking_effort` is one
-  of `""`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`;
+  of `null`, `""`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
+  `max`; `temperature` may also be `null`. `null` means "inherit
+  defaults.agent" while `""` for `thinking_effort` means "provider default".
   `allowed_tools` and `allowed_skills` must be lists of strings.
 - Automatic fallback is run-local only. It does not mutate persisted `model` or `fallback_model`.
 - The optional `::<connection-local-id>` suffix stores only the provider-local connection slug. Runtime reconstructs the full connection ID as `<provider>:<connection-local-id>` from the model prefix.

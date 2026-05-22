@@ -16,7 +16,7 @@ describe('agent form helpers', () => {
       model: '',
       fallback_model: '',
       workspace: '',
-      temperature: '0.1',
+      temperature: '',
       thinking_effort: '',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
@@ -66,6 +66,23 @@ describe('agent form helpers', () => {
       allowed_skills: ['debugging'],
     });
     expect(result.payload).not.toHaveProperty('workspace');
+  });
+
+  it('normalizes cleared temperature and thinking effort to null', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      model: '',
+      fallback_model: '',
+      temperature: '',
+      thinking_effort: '',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.temperature).toBeNull();
+    expect(result.payload.thinking_effort).toBeNull();
   });
 
   it('round-trips all-tools access with the wildcard array', () => {
@@ -185,6 +202,37 @@ describe('agent form helpers', () => {
     expect(result.payload.id).toBe('coder');
     expect(result.payload.name).toBe('Coder Prime');
     expect(result.payload).not.toHaveProperty('workspace');
+  });
+
+  it('sends only changed fields when editing with baseline values', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      model: 'openai/gpt-5.2',
+      fallback_model: 'openai/gpt-5.2-mini',
+      workspace: 'C:/workspace-coder',
+      temperature: 0.2,
+      thinking_effort: 'high',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    const result = normalizeAgentForm(
+      {
+        ...initialValues,
+        name: 'Coder Prime',
+      },
+      {
+        mode: AGENT_FORM_MODE_EDIT,
+        initialValues,
+      },
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).toEqual({
+      id: 'coder',
+      name: 'Coder Prime',
+    });
   });
 
   it('reports required create fields and invalid temperature', () => {

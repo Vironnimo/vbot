@@ -1,13 +1,23 @@
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
 
-export const DEFAULT_AGENT_TEMPERATURE = '0.1';
+export const DEFAULT_AGENT_TEMPERATURE = '';
 export const DEFAULT_AGENT_ALLOWED_LIST = '*';
 export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
 export const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
+]);
+
+const EDITABLE_AGENT_FIELDS = Object.freeze([
+  'name',
+  'model',
+  'fallback_model',
+  'temperature',
+  'thinking_effort',
+  'allowed_tools',
+  'allowed_skills',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -48,20 +58,25 @@ export function normalizeAgentForm(values, options = {}) {
     errors.name = 'required';
   }
 
-  const temperature = Number(normalized.temperature);
-  if (!normalized.temperature || !Number.isFinite(temperature)) {
+  const temperature = normalizeTemperature(normalized.temperature);
+  if (normalized.temperature && temperature === null) {
     errors.temperature = 'invalid_number';
   }
 
-  const payload = {
-    name: normalized.name,
-    model: normalized.model,
-    fallback_model: normalized.fallback_model,
-    temperature,
-    thinking_effort: normalized.thinking_effort,
-    allowed_tools: normalized.allowed_tools,
-    allowed_skills: normalized.allowed_skills,
-  };
+  let payload = buildAgentPayload(normalized, temperature);
+
+  if (
+    mode === AGENT_FORM_MODE_EDIT &&
+    options.initialValues &&
+    typeof options.initialValues === 'object'
+  ) {
+    const initialNormalized = normalizeValues(options.initialValues);
+    const initialPayload = buildAgentPayload(
+      initialNormalized,
+      normalizeTemperature(initialNormalized.temperature),
+    );
+    payload = filterChangedFields(payload, initialPayload);
+  }
 
   if (mode === AGENT_FORM_MODE_CREATE) {
     payload.id = normalized.id;
@@ -132,6 +147,61 @@ function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {
   return items
     .map((item) => asText(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function normalizeTemperature(value) {
+  if (!value) {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function buildAgentPayload(normalized, temperature) {
+  return {
+    name: normalized.name,
+    model: normalized.model,
+    fallback_model: normalized.fallback_model,
+    temperature,
+    thinking_effort: normalized.thinking_effort || null,
+    allowed_tools: normalized.allowed_tools,
+    allowed_skills: normalized.allowed_skills,
+  };
+}
+
+function filterChangedFields(payload, baselinePayload) {
+  const changedPayload = {};
+
+  for (const fieldName of EDITABLE_AGENT_FIELDS) {
+    if (valuesEqual(payload[fieldName], baselinePayload[fieldName])) {
+      continue;
+    }
+
+    changedPayload[fieldName] = payload[fieldName];
+  }
+
+  return changedPayload;
+}
+
+function valuesEqual(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return arrayValuesEqual(left, right);
+  }
+
+  return left === right;
+}
+
+function arrayValuesEqual(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return false;
+  }
+
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((item, index) => item === right[index]);
 }
 
 function validateAgentId(agentId, errors) {
