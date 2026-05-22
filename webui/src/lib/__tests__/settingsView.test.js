@@ -206,7 +206,7 @@ describe('SettingsView', () => {
     expect(document.body.textContent).not.toContain('server offline');
   });
 
-  it('saves appearance language through the narrow settings.update flow', async () => {
+  it('keeps appearance save enabled and persists language through settings.update', async () => {
     rpcMock
       .mockResolvedValueOnce(createSettingsPayload())
       .mockResolvedValueOnce(
@@ -229,15 +229,18 @@ describe('SettingsView', () => {
     const languageSelect = document.body.querySelector('select');
 
     expect(languageSelect).not.toBeNull();
-    expect(saveButton.disabled).toBe(true);
+    expect(saveButton.disabled).toBe(false);
+
+    saveButton.click();
+    flushSync();
+
+    expect(rpcMock).toHaveBeenCalledTimes(1);
 
     languageSelect.value = 'fr';
     languageSelect.dispatchEvent(new Event('change', { bubbles: true }));
     flushSync();
 
-    expect(saveButton.disabled).toBe(false);
-
-    saveButton.click();
+    getButton('Save').click();
     flushSync();
 
     expect(rpcMock).toHaveBeenNthCalledWith(1, 'settings.get');
@@ -251,7 +254,7 @@ describe('SettingsView', () => {
 
     expect(document.body.textContent).toContain('Language preference updated.');
     expect(document.body.querySelector('select')?.value).toBe('fr');
-    expect(getButton('Save').disabled).toBe(true);
+    expect(getButton('Save').disabled).toBe(false);
   });
 });
 
