@@ -31,6 +31,18 @@ SNAPSHOT_IGNORED_DIRS = {
     "node_modules",
     "venv",
 }
+PYTEST_NOISE_LINE_PATTERNS = [
+    re.compile(r"^=+ test session starts =+$"),
+    re.compile(r"^platform "),
+    re.compile(r"^cachedir:"),
+    re.compile(r"^rootdir:"),
+    re.compile(r"^configfile:"),
+    re.compile(r"^plugins:"),
+    re.compile(r"^asyncio:"),
+    re.compile(r"^timeout"),
+    re.compile(r"^\d+ workers\b"),
+    re.compile(r"^scheduling tests via "),
+]
 
 
 def deduplicate_paths(paths: list[str]) -> list[str]:
@@ -162,6 +174,40 @@ def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str
     return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
 
 
+def _collapse_blank_lines(lines: list[str]) -> list[str]:
+    """Collapse repeated blank lines while preserving section breaks."""
+
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = line.strip() == ""
+        if is_blank and previous_blank:
+            continue
+        collapsed.append(line)
+        previous_blank = is_blank
+    return collapsed
+
+
+def filter_pytest_failure_output(output: str) -> str:
+    """Remove pytest success noise while keeping all failure details."""
+
+    filtered_lines: list[str] = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            filtered_lines.append("")
+            continue
+        if any(pattern.match(stripped) for pattern in PYTEST_NOISE_LINE_PATTERNS):
+            continue
+        if " PASSED" in stripped and "FAILED" not in stripped and "ERROR" not in stripped:
+            continue
+        filtered_lines.append(line.rstrip())
+
+    collapsed = _collapse_blank_lines(filtered_lines)
+    filtered_output = "\n".join(collapsed).strip()
+    return filtered_output or output.strip()
+
+
 def main() -> int:
     raw_paths: list[str] = sys.argv[1:]
 
@@ -252,7 +298,7 @@ def main() -> int:
             else:
                 status = f"FAIL ({elapsed:.1f}s, {passed}/{total})"
                 validation_passed = False
-                failures.append((label, output))
+                failures.append((label, filter_pytest_failure_output(output)))
         else:
             # ruff check / mypy
             if result.returncode == 0:

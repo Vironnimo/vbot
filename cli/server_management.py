@@ -99,7 +99,11 @@ def probe_health(
     """Probe `/health` and classify only the exact vBot health response as vBot."""
 
     try:
-        response = httpx.get(f"{instance.url}{HEALTH_PATH}", timeout=timeout_seconds)
+        response = httpx.get(
+            _probe_url(instance, HEALTH_PATH),
+            timeout=timeout_seconds,
+            trust_env=False,
+        )
     except httpx.RequestError as exc:
         return HealthProbeResult(reachable=False, is_vbot=False, error=exc.__class__.__name__)
 
@@ -126,7 +130,11 @@ def probe_webui(
     """Probe `/` separately from API health to classify WebUI availability."""
 
     try:
-        response = httpx.get(f"{instance.url}{WEBUI_PATH}", timeout=timeout_seconds)
+        response = httpx.get(
+            _probe_url(instance, WEBUI_PATH),
+            timeout=timeout_seconds,
+            trust_env=False,
+        )
     except httpx.RequestError as exc:
         return WebUIProbeResult(available=False, error=exc.__class__.__name__)
 
@@ -134,6 +142,21 @@ def probe_webui(
         available=200 <= response.status_code < 400,
         status_code=response.status_code,
     )
+
+
+def _probe_url(instance: ServerInstance, path: str) -> str:
+    """Return a direct local probe URL for health and WebUI checks."""
+
+    probe_host = instance.host
+    if probe_host in {"", "*", "0.0.0.0"}:
+        probe_host = "127.0.0.1"
+    elif probe_host == "::":
+        probe_host = "::1"
+
+    if ":" in probe_host and not probe_host.startswith("["):
+        probe_host = f"[{probe_host}]"
+
+    return f"http://{probe_host}:{instance.port}{path}"
 
 
 def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:

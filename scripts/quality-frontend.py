@@ -6,8 +6,9 @@ Usage:
 
 Paths can be files or directories, relative to the project root
 (e.g. ``webui/src/components/Foo.svelte`` or just ``src/``).
-If no paths are given, the full frontend is checked.  File paths are
-translated to their parent directory for vitest.  All npm commands
+If no paths are given, the full frontend is checked. Explicit test-file paths
+are passed directly to vitest; other file paths are translated to their parent
+directory. All npm commands
 run with ``cwd="webui"``.
 """
 
@@ -77,15 +78,28 @@ def strip_webui_prefix(path: str) -> str:
     return path
 
 
-def translate_to_parent_dir(paths: list[str]) -> list[str]:
-    """Translate file paths to their parent directory for vitest.
+def _is_explicit_test_file(path: str) -> bool:
+    """Return whether *path* is an explicit test file path for Vitest."""
 
-    vitest auto-discovers ``__tests__/`` subdirectories, so passing the
-    parent directory of a specific file is the right scope.
+    if not _has_extension(path):
+        return False
+    if "/__tests__/" in path:
+        return True
+    filename = path.rsplit("/", 1)[-1]
+    return ".test." in filename or ".spec." in filename
+
+
+def translate_to_vitest_targets(paths: list[str]) -> list[str]:
+    """Translate input paths to the narrowest useful Vitest targets.
+
+    Explicit test files stay file-scoped. Other file paths expand to their
+    parent directory so Vitest can auto-discover nearby tests.
     """
     result: list[str] = []
     for p in paths:
-        if "/" in p and _has_extension(p):
+        if _is_explicit_test_file(p):
+            result.append(p)
+        elif "/" in p and _has_extension(p):
             result.append(p.rsplit("/", 1)[0])
         else:
             result.append(p)
@@ -189,6 +203,42 @@ def describe_fix_result(returncode: int, elapsed: float, changed_files: list[str
     return f"UNCHANGED ({elapsed:.1f}s, no automatic fixes applied)"
 
 
+def _collapse_blank_lines(lines: list[str]) -> list[str]:
+    """Collapse repeated blank lines while preserving section breaks."""
+
+    collapsed: list[str] = []
+    previous_blank = False
+    for line in lines:
+        is_blank = line.strip() == ""
+        if is_blank and previous_blank:
+            continue
+        collapsed.append(line)
+        previous_blank = is_blank
+    return collapsed
+
+
+def filter_vitest_failure_output(output: str) -> str:
+    """Remove passing-test noise from Vitest output while keeping failure detail."""
+
+    cleaned_output = _ANSI_ESCAPE_RE.sub("", output)
+    filtered_lines: list[str] = []
+
+    for line in cleaned_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            filtered_lines.append("")
+            continue
+        if stripped.startswith("RUN ") or stripped.startswith("DEV "):
+            continue
+        if stripped.startswith("✓"):
+            continue
+        filtered_lines.append(line.rstrip())
+
+    collapsed = _collapse_blank_lines(filtered_lines)
+    filtered_output = "\n".join(collapsed).strip()
+    return filtered_output or cleaned_output.strip()
+
+
 # ---------- main ----------
 
 
@@ -217,7 +267,7 @@ def main() -> int:
         prettier_paths = stripped
         eslint_fix_paths = stripped
         eslint_check_paths = stripped
-        vitest_paths = translate_to_parent_dir(stripped)
+        vitest_paths = translate_to_vitest_targets(stripped)
     else:
         prettier_paths = ["src/"]
         eslint_fix_paths = ["src/"]
@@ -269,7 +319,14 @@ def main() -> int:
         start = time.monotonic()
         # Use errors="replace" and text=True to avoid UnicodeDecodeError on Windows.
         # Capture stdout and stderr properly.
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="webui", errors="replace")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd="webui",
+            encoding="utf-8",
+            errors="replace",
+        )
         elapsed = time.monotonic() - start
         total_elapsed += elapsed
         output = ""
@@ -302,7 +359,7 @@ def main() -> int:
             else:
                 status = f"FAIL ({elapsed:.1f}s, {passed}/{total})"
                 validation_passed = False
-                failures.append((label, output))
+                failures.append((label, filter_vitest_failure_output(output)))
         else:
             # eslint / build
             if result.returncode == 0:

@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = PROJECT_ROOT / "webui"
 WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
 WEBUI_NODE_MODULES = WEBUI_DIR / "node_modules"
-HEALTH_TIMEOUT_SECONDS = 15
+STARTUP_TIMEOUT_SECONDS = 15
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -43,21 +43,67 @@ def build_frontend() -> int:
     print("frontend.... building", end="", flush=True)
     npm = "npm.cmd" if sys.platform == "win32" else "npm"
 
-    if not WEBUI_NODE_MODULES.exists():
-        install_result = _run([npm, "install"], cwd=WEBUI_DIR)
-        if install_result.returncode != 0:
-            print(" FAILED")
-            print(install_result.stderr)
-            return 1
+    try:
+        if not WEBUI_NODE_MODULES.exists():
+            install_result = _run([npm, "install"], cwd=WEBUI_DIR)
+            if install_result.returncode != 0:
+                print(" FAILED")
+                print(install_result.stderr)
+                return 1
 
-    build_result = _run([npm, "run", "build"], cwd=WEBUI_DIR)
-    if build_result.returncode != 0:
+        build_result = _run([npm, "run", "build"], cwd=WEBUI_DIR)
+        if build_result.returncode != 0:
+            print(" FAILED")
+            print(build_result.stderr)
+            return 1
+    except KeyboardInterrupt:
+        print(" INTERRUPTED")
+        print("  result: interrupted during frontend build")
+        return 130
+    except OSError as exc:
         print(" FAILED")
-        print(build_result.stderr)
+        print(f"  result: {exc.__class__.__name__}: {exc}")
         return 1
 
     print(" DONE")
     return 0
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """Return a concise lifecycle error for automation-friendly output."""
+
+    if isinstance(exc, KeyboardInterrupt):
+        return "interrupted while waiting for local server readiness"
+
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__
+
+
+def _result_log_path(result: CommandResult) -> Path:
+    """Return the log path for a lifecycle result."""
+
+    return result.log_path or result.instance.log_path
+
+
+def _print_failure(
+    label: str,
+    *,
+    result_text: str,
+    running_text: str,
+    url: str,
+    webui_text: str,
+    log_path: Path,
+) -> None:
+    """Print a structured command failure summary."""
+
+    print(f"{label}..... FAILED")
+    print(f"  result: {result_text}")
+    print(f"  running: {running_text}")
+    print(f"  url: {url}")
+    print(f"  webui: {webui_text}")
+    print(f"  log: {log_path}")
 
 
 def _running_text(result: CommandResult) -> str:
@@ -79,19 +125,46 @@ def _webui_text(result: CommandResult) -> str:
 def start_server(host: str, port: int | None, data_dir: str | None) -> int:
     """Start the vBot server and wait for health check. Returns 0 on success."""
     instance = resolve_instance(host=host, port=port, data_dir=data_dir)
-    result = start_server_command(instance)
+    print(f"target..... {instance.url}")
+
+    try:
+        result = start_server_command(instance, startup_timeout_seconds=STARTUP_TIMEOUT_SECONDS)
+    except KeyboardInterrupt as exc:
+        _print_failure(
+            "server",
+            result_text=_describe_exception(exc),
+            running_text="no",
+            url=instance.url,
+            webui_text="unknown",
+            log_path=instance.log_path,
+        )
+        return 130
+    except Exception as exc:
+        _print_failure(
+            "server",
+            result_text=_describe_exception(exc),
+            running_text="no",
+            url=instance.url,
+            webui_text="unknown",
+            log_path=instance.log_path,
+        )
+        return 1
 
     if not result.ok:
-        print("server..... FAILED")
-        print(f"  result: {result.message}")
-        print(f"  running: {_running_text(result)}")
-        print(f"  url: {result.instance.url}")
-        print(f"  webui: {_webui_text(result)}")
+        _print_failure(
+            "server",
+            result_text=result.message,
+            running_text=_running_text(result),
+            url=result.instance.url,
+            webui_text=_webui_text(result),
+            log_path=_result_log_path(result),
+        )
         return 1
 
     print(f"server..... {_running_text(result)}")
     print(f"url........ {result.instance.url}")
     print(f"webui...... {_webui_text(result)}")
+    print(f"log........ {_result_log_path(result)}")
 
     return 0
 
@@ -99,14 +172,38 @@ def start_server(host: str, port: int | None, data_dir: str | None) -> int:
 def stop_server(host: str, port: int | None, data_dir: str | None) -> int:
     """Stop the vBot server. Returns 0 on success."""
     instance = resolve_instance(host=host, port=port, data_dir=data_dir)
-    result = stop_server_command(instance)
+    try:
+        result = stop_server_command(instance)
+    except KeyboardInterrupt as exc:
+        _print_failure(
+            "stop",
+            result_text=_describe_exception(exc),
+            running_text="unknown",
+            url=instance.url,
+            webui_text="unknown",
+            log_path=instance.log_path,
+        )
+        return 130
+    except Exception as exc:
+        _print_failure(
+            "stop",
+            result_text=_describe_exception(exc),
+            running_text="unknown",
+            url=instance.url,
+            webui_text="unknown",
+            log_path=instance.log_path,
+        )
+        return 1
 
     if not result.ok:
-        print("stop....... FAILED")
-        print(f"  result: {result.message}")
-        print(f"  running: {_running_text(result)}")
-        print(f"  url: {result.instance.url}")
-        print(f"  webui: {_webui_text(result)}")
+        _print_failure(
+            "stop",
+            result_text=result.message,
+            running_text=_running_text(result),
+            url=result.instance.url,
+            webui_text=_webui_text(result),
+            log_path=_result_log_path(result),
+        )
         return 1
 
     print(f"stop....... {_running_text(result) or 'confirmed'}")
