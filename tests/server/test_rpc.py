@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass
@@ -36,8 +38,8 @@ class StubAgent:
     model: str = "openai/gpt-5.2"
     fallback_model: str = ""
     workspace: str = "C:/workspace"
-    temperature: float = 0.1
-    thinking_effort: str = ""
+    temperature: float | None = 0.1
+    thinking_effort: str | None = ""
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
     current_session_id: str = ""
@@ -52,30 +54,77 @@ class StubAgent:
 
 
 class StubAgents:
-    def __init__(self, agent: StubAgent) -> None:
+    def __init__(
+        self,
+        agent: StubAgent,
+        *,
+        defaults_provider: Callable[[], JsonObject] | None = None,
+    ) -> None:
         self._agents: dict[str, StubAgent] = {agent.id: agent}
+        self._defaults_provider = defaults_provider
 
-    def get(self, agent_id: str) -> StubAgent:
+    def _get_raw(self, agent_id: str) -> StubAgent:
         if agent_id not in self._agents:
             raise KeyError(agent_id)
         return self._agents[agent_id]
 
+    def _apply_defaults(self, agent: StubAgent) -> StubAgent:
+        defaults = self._defaults_provider() if self._defaults_provider is not None else {}
+
+        model = agent.model
+        fallback_model = agent.fallback_model
+        temperature = agent.temperature
+        thinking_effort = agent.thinking_effort
+
+        default_model = defaults.get("model")
+        if model == "" and isinstance(default_model, str):
+            model = default_model
+
+        default_fallback_model = defaults.get("fallback_model")
+        if fallback_model == "" and isinstance(default_fallback_model, str):
+            fallback_model = default_fallback_model
+
+        default_temperature = defaults.get("temperature")
+        if (
+            temperature is None
+            and isinstance(default_temperature, int | float)
+            and not isinstance(default_temperature, bool)
+        ):
+            temperature = float(default_temperature)
+
+        default_thinking_effort = defaults.get("thinking_effort")
+        if thinking_effort is None and isinstance(default_thinking_effort, str):
+            thinking_effort = default_thinking_effort
+
+        return StubAgent(
+            **{
+                **agent.__dict__,
+                "model": model,
+                "fallback_model": fallback_model,
+                "temperature": temperature,
+                "thinking_effort": thinking_effort,
+            }
+        )
+
+    def get(self, agent_id: str) -> StubAgent:
+        return self._apply_defaults(self._get_raw(agent_id))
+
     def list(self) -> list[StubAgent]:
-        return [self._agents[agent_id] for agent_id in sorted(self._agents)]
+        return [self._apply_defaults(self._agents[agent_id]) for agent_id in sorted(self._agents)]
 
     def create(self, agent_id: str, name: str, **changes: Any) -> StubAgent:
         agent = StubAgent(id=agent_id, name=name, **changes)
         self._agents[agent_id] = agent
-        return agent
+        return self.get(agent_id)
 
     def update(self, agent_id: str, **changes: Any) -> StubAgent:
-        agent = self.get(agent_id)
+        agent = self._get_raw(agent_id)
         updated = StubAgent(**{**agent.__dict__, **changes})
         self._agents[agent_id] = updated
-        return updated
+        return self.get(agent_id)
 
     def delete(self, agent_id: str) -> Path:
-        self.get(agent_id)
+        self._get_raw(agent_id)
         del self._agents[agent_id]
         return Path("archive") / agent_id
 
@@ -428,6 +477,105 @@ class StubStorage:
         }
         return dict(current)
 
+    def load_defaults(self) -> JsonObject:
+        defaults = self._settings.get("defaults")
+        if not isinstance(defaults, dict):
+            return {}
+
+        raw_agent_defaults = defaults.get("agent")
+        if not isinstance(raw_agent_defaults, dict):
+            return {}
+
+        unsupported_fields = sorted(set(raw_agent_defaults) - delegates.AGENT_DEFAULT_FIELDS)
+        if unsupported_fields:
+            raise StorageError(
+                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
+            )
+
+        normalized_agent_defaults: JsonObject = {}
+        for field, value in raw_agent_defaults.items():
+            normalized_value = self._normalize_agent_default_value(field, value)
+            if normalized_value is None:
+                continue
+            normalized_agent_defaults[field] = normalized_value
+
+        if not normalized_agent_defaults:
+            return {}
+        return {"agent": normalized_agent_defaults}
+
+    def update_defaults(self, section: str, values: object) -> JsonObject:
+        if section != "agent":
+            raise StorageError(f"Unsupported defaults section: {section}")
+        if not isinstance(values, dict):
+            raise StorageError("Defaults values must be a mapping")
+
+        unsupported_fields = sorted(set(values) - delegates.AGENT_DEFAULT_FIELDS)
+        if unsupported_fields:
+            raise StorageError(
+                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
+            )
+
+        current_agent_defaults = dict(self.load_defaults().get("agent", {}))
+        for field, value in values.items():
+            normalized_value = self._normalize_agent_default_value(field, value)
+            if normalized_value is None:
+                current_agent_defaults.pop(field, None)
+                continue
+            current_agent_defaults[field] = normalized_value
+
+        merged_settings = dict(self._settings)
+        merged_defaults = merged_settings.get("defaults")
+        if not isinstance(merged_defaults, dict):
+            merged_defaults = {}
+
+        if current_agent_defaults:
+            merged_defaults["agent"] = current_agent_defaults
+        else:
+            merged_defaults.pop("agent", None)
+
+        if merged_defaults:
+            merged_settings["defaults"] = merged_defaults
+        else:
+            merged_settings.pop("defaults", None)
+
+        self._settings = merged_settings
+        return self.load_defaults()
+
+    @staticmethod
+    def _normalize_agent_default_value(field: str, value: Any) -> str | float | None:
+        if value is None:
+            return None
+
+        if field in {"model", "fallback_model"}:
+            if not isinstance(value, str):
+                raise StorageError(f"Agent default {field} must be a string")
+            return value
+
+        if field == "temperature":
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise StorageError("Agent default temperature must be a number or null")
+            temperature = float(value)
+            if not math.isfinite(temperature):
+                raise StorageError("Agent default temperature must be finite")
+            if temperature < delegates.MIN_TEMPERATURE or temperature > delegates.MAX_TEMPERATURE:
+                raise StorageError(
+                    "Agent default temperature must be between "
+                    f"{delegates.MIN_TEMPERATURE:g} and {delegates.MAX_TEMPERATURE:g}"
+                )
+            return temperature
+
+        if field == "thinking_effort":
+            if not isinstance(value, str):
+                raise StorageError("Agent default thinking_effort must be a string or null")
+            if value not in delegates.ALLOWED_THINKING_EFFORTS:
+                allowed = ", ".join(
+                    repr(item) for item in sorted(delegates.ALLOWED_THINKING_EFFORTS)
+                )
+                raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
+            return value
+
+        raise StorageError(f"Unsupported defaults.agent setting: {field}")
+
     def load_settings(self) -> JsonObject:
         return dict(self._settings)
 
@@ -575,10 +723,13 @@ class RecordingCompactionService:
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self.resources_dir = tmp_path / "resources"
-        self.agents = StubAgents(StubAgent(id="coder", allowed_tools=["*"]))
+        self.storage = StubStorage(tmp_path)
+        self.agents = StubAgents(
+            StubAgent(id="coder", allowed_tools=["*"]),
+            defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
+        )
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.system_prompts = StubPrompts()
-        self.storage = StubStorage(tmp_path)
         self.tools = ToolRegistry()
         self.skills: Any = StubSkills()
         self._models = StubModels()
@@ -786,6 +937,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "directories": [],
         },
         "appearance": {"language": "en", "available_languages": ["en"]},
+        "defaults": {},
         "subagents": {
             "max_subagent_depth": 4,
             "max_subagents_per_turn": 8,
@@ -819,6 +971,17 @@ async def test_settings_get_exposes_provider_models_endpoint_for_refresh_button(
     openai = next(provider for provider in providers if provider["id"] == "openai")
     assert openrouter["models_endpoint"] == "/models"
     assert openai["models_endpoint"] is None
+
+
+@pytest.mark.asyncio
+async def test_settings_get_includes_defaults_key_when_unconfigured(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+
+    assert response["ok"] is True
+    assert "defaults" in response["result"]
+    assert response["result"]["defaults"] == {}
 
 
 @pytest.mark.asyncio
@@ -1709,6 +1872,84 @@ async def test_settings_update_persists_compaction_settings_and_returns_full_pay
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_agent_default_model_and_returns_defaults(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "defaults": {
+                    "agent": {
+                        "model": "openai/gpt-4.1-mini",
+                    }
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_defaults() == {"agent": {"model": "openai/gpt-4.1-mini"}}
+    assert response["result"]["defaults"] == {"agent": {"model": "openai/gpt-4.1-mini"}}
+
+
+@pytest.mark.asyncio
+async def test_settings_update_removes_agent_default_temperature_on_null(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_defaults(
+        "agent",
+        {
+            "model": "openai/gpt-4.1-mini",
+            "temperature": 0.6,
+        },
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "defaults": {
+                    "agent": {
+                        "temperature": None,
+                    }
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_defaults() == {"agent": {"model": "openai/gpt-4.1-mini"}}
+    assert response["result"]["defaults"] == {"agent": {"model": "openai/gpt-4.1-mini"}}
+
+
+@pytest.mark.asyncio
+async def test_settings_update_rejects_unknown_defaults_agent_field(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "defaults": {
+                    "agent": {
+                        "unknown_field": True,
+                    }
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "unsupported defaults.agent settings" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
     tmp_path: Path,
 ) -> None:
@@ -1986,6 +2227,37 @@ async def test_agent_list_includes_null_context_window_for_model_without_provide
     agent = response["result"]["agents"][0]
     assert agent["model"] == "bare-model-id"
     assert agent["context_window"] is None
+
+
+@pytest.mark.asyncio
+async def test_agent_update_accepts_null_temperature_to_clear_override(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", temperature=0.9)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "coder", "temperature": None}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["temperature"] is None
+    assert state.runtime.agents.get("coder").temperature is None
+
+
+@pytest.mark.asyncio
+async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.update_defaults("agent", {"model": "openai/gpt-4.1-mini"})
+    state.runtime.agents.update("coder", model="")
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.get", "params": {"id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["id"] == "coder"
+    assert response["result"]["model"] == "openai/gpt-4.1-mini"
 
 
 @pytest.mark.asyncio
