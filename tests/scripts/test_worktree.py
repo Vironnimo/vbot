@@ -93,6 +93,7 @@ def test_cmd_remove_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
     assert result == 0
     assert removed_paths == [(Path.home() / f".vbot-{name}", True)]
     assert commands == [
+        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
         ["git", "worktree", "remove", str(worktree_path)],
         ["git", "branch", "-d", name],
     ]
@@ -124,7 +125,39 @@ def test_cmd_remove_tolerates_non_object_marker_and_skips_branch_delete(tmp_path
     result = module.cmd_remove(argparse.Namespace(name=name, force=False))
 
     assert result == 0
-    assert commands == [["git", "worktree", "remove", str(worktree_path)]]
+    assert commands == [
+        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
+        ["git", "worktree", "remove", str(worktree_path)],
+    ]
+
+
+def test_cmd_remove_force_skips_marker_cleanup(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "force-remove"
+    worktree_path = module.WORKTREES_DIR / name
+    worktree_path.mkdir(parents=True)
+
+    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": False}),
+        encoding="utf-8",
+    )
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: "main")
+    monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
+
+    result = module.cmd_remove(argparse.Namespace(name=name, force=True))
+
+    assert result == 0
+    assert commands == [["git", "worktree", "remove", "--force", str(worktree_path)]]
 
 
 def test_cmd_remove_skips_branch_delete_when_marker_declares_unmanaged_branch(
@@ -155,7 +188,10 @@ def test_cmd_remove_skips_branch_delete_when_marker_declares_unmanaged_branch(
     result = module.cmd_remove(argparse.Namespace(name=name, force=False))
 
     assert result == 0
-    assert commands == [["git", "worktree", "remove", str(worktree_path)]]
+    assert commands == [
+        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
+        ["git", "worktree", "remove", str(worktree_path)],
+    ]
 
 
 def test_cmd_remove_deletes_branch_when_marker_declares_managed_branch(tmp_path, monkeypatch):
@@ -185,6 +221,7 @@ def test_cmd_remove_deletes_branch_when_marker_declares_managed_branch(tmp_path,
 
     assert result == 0
     assert commands == [
+        ["git", "-C", str(worktree_path), "clean", "-f", "--", module.WORKTREE_FILE_NAME],
         ["git", "worktree", "remove", str(worktree_path)],
         ["git", "branch", "-d", name],
     ]
