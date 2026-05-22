@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -305,16 +306,21 @@ def cmd_remove(args: argparse.Namespace) -> int:
     marker_data = _read_worktree_marker(marker)
     data_dir = _resolve_remove_data_dir(name, marker_data)
 
+    marker_text: str | None = None
     if marker.exists() and not args.force:
+        try:
+            marker_text = marker.read_text(encoding="utf-8")
+        except OSError:
+            marker_text = None
         # Remove only the script-managed marker so legacy branches without the
         # ignore rule do not fail the non-force dirty-worktree guard.
         _run_command(["git", "-C", str(worktree_path), "clean", "-f", "--", WORKTREE_FILE_NAME])
 
-    delete_branch = worktree_branch == name
+    delete_branch = False
     if marker_data is not None:
         managed_branch = marker_data.get("managed_branch")
-        if isinstance(managed_branch, bool):
-            delete_branch = managed_branch and worktree_branch == name
+        if isinstance(managed_branch, bool) and managed_branch:
+            delete_branch = worktree_branch == name
 
     if args.force:
         git_command = ["git", "worktree", "remove", "--force", str(worktree_path)]
@@ -323,6 +329,10 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     return_code, stderr = _run_command(git_command)
     if return_code != 0:
+        if marker_text is not None and not marker.exists():
+            with suppress(OSError):
+                marker.write_text(marker_text, encoding="utf-8")
+
         reason = stderr or "git worktree remove failed"
         if not args.force:
             lowered = reason.lower()
