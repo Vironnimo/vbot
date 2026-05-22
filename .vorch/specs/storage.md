@@ -22,6 +22,7 @@ as a read-only fallback credential source.
 - `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` — integer limits for sub-agent tool execution.
 - `compaction` — automatic history-compaction settings `{ auto, threshold, tail_tokens, summary_model }`.
 - `attachment_max_size_bytes` — integer attachment upload limit for the runtime-owned `AttachmentStore`, default `20971520`.
+- `defaults.agent` — project-wide fallback Agent values `{ model?, fallback_model?, temperature?, thinking_effort? }`. Missing keys mean no global default for that field; `thinking_effort: ""` is a valid explicit "provider default" value.
 
 ## Interfaces
 
@@ -40,6 +41,7 @@ as a read-only fallback credential source.
 - `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
 - `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
 - `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
+- `load_defaults() -> dict[str, Any]` / `update_defaults(section, values) -> dict[str, Any]` — read/write validated `settings.json` defaults blocks. Currently only `section="agent"` is supported.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 
@@ -56,6 +58,7 @@ as a read-only fallback credential source.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
 - Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 - `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.
+- `update_defaults("agent", ...)` validates only the supported four Agent-default fields, removes individual keys when a value is `null`, bounds `temperature` to `[0, 2]`, and allows `thinking_effort` to be either `null`, `""`, or one of the normal effort tokens.
 
 ## Constraints & Gotchas
 

@@ -36,6 +36,7 @@
   let lastSharedSelectedAgentId = $state('');
   let formMode = $state(AGENT_FORM_MODE_CREATE);
   let formValues = $state(createAgentFormValues());
+  let editBaselineValues = $state(createAgentFormValues());
   let formErrors = $state({});
   let isLoading = $state(false);
   let isSaving = $state(false);
@@ -179,6 +180,7 @@
     if (agent) {
       formMode = AGENT_FORM_MODE_EDIT;
       formValues = createAgentFormValues(agent);
+      editBaselineValues = createAgentFormValues(agent);
       onAgentSelected?.(agent);
     } else {
       startCreate();
@@ -191,13 +193,18 @@
     selectedAgentId = '';
     formMode = AGENT_FORM_MODE_CREATE;
     formValues = createAgentFormValues();
+    editBaselineValues = createAgentFormValues();
     formErrors = {};
     statusMessage = '';
   }
 
   async function saveAgent(event) {
     event.preventDefault();
-    const result = normalizeAgentForm(formValues, { mode: formMode });
+    const result = normalizeAgentForm(formValues, {
+      mode: formMode,
+      initialValues:
+        formMode === AGENT_FORM_MODE_EDIT ? editBaselineValues : null,
+    });
     formErrors = result.errors;
     statusMessage = '';
     errorMessage = '';
@@ -611,7 +618,7 @@
 
   function thinkingEffortLabel(option) {
     if (option === '') {
-      return t('agents.form.thinkingEffortDefault', 'Default');
+      return t('agents.form.thinkingEffortDefault', EMPTY_VALUE);
     }
 
     return t(`agents.form.thinkingEffortOption.${option}`, option);

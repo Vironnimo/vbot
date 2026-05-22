@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Mapping
 from contextlib import suppress
@@ -37,6 +38,13 @@ COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "tail_tokens": 15_000,
     "summary_model": None,
 }
+SUPPORTED_DEFAULTS_SECTIONS = frozenset({"agent"})
+AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
+ALLOWED_THINKING_EFFORTS = frozenset(
+    {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
@@ -202,6 +210,47 @@ class StorageManager:
 
         settings = self.load_settings()
         return self._normalize_compaction_settings(settings.get("compaction"))
+
+    def load_defaults(self) -> dict[str, Any]:
+        """Return normalized persisted defaults settings."""
+
+        settings = self.load_settings()
+        return self._normalize_defaults_settings(settings.get("defaults"))
+
+    def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist normalized defaults for a single section and return persisted values."""
+
+        if section not in SUPPORTED_DEFAULTS_SECTIONS:
+            raise StorageError(f"Unsupported defaults section: {section}")
+        if not isinstance(values, Mapping):
+            raise StorageError("Defaults values must be a mapping")
+
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        merged_defaults = self._coerce_defaults_section(merged_settings.get("defaults"))
+
+        if section == "agent":
+            current_agent_defaults = self._normalize_agent_defaults(merged_defaults.get("agent"))
+            self._validate_supported_agent_default_fields(values)
+            for field, value in values.items():
+                normalized_value = self._normalize_agent_default_value(field, value)
+                if normalized_value is None:
+                    current_agent_defaults.pop(field, None)
+                    continue
+                current_agent_defaults[field] = normalized_value
+
+            if current_agent_defaults:
+                merged_defaults["agent"] = current_agent_defaults
+            else:
+                merged_defaults.pop("agent", None)
+
+        if merged_defaults:
+            merged_settings["defaults"] = merged_defaults
+        else:
+            merged_settings.pop("defaults", None)
+
+        self.save_settings(merged_settings)
+        return self._normalize_defaults_settings(merged_defaults)
 
     def update_compaction_settings(self, compaction: Mapping[str, Any]) -> dict[str, Any]:
         """Persist compaction settings and return normalized values."""
@@ -464,6 +513,84 @@ class StorageManager:
         if not isinstance(value, str):
             raise StorageError("Compaction setting summary_model must be a string or null")
         return value
+
+    @classmethod
+    def _normalize_defaults_settings(cls, defaults: Any) -> dict[str, Any]:
+        section = cls._coerce_defaults_section(defaults)
+        normalized_agent_defaults = cls._normalize_agent_defaults(section.get("agent"))
+        if not normalized_agent_defaults:
+            return {}
+        return {"agent": normalized_agent_defaults}
+
+    @staticmethod
+    def _coerce_defaults_section(defaults: Any) -> dict[str, Any]:
+        if defaults is None:
+            return {}
+        if not isinstance(defaults, Mapping):
+            raise StorageError("Expected settings.defaults to be an object")
+        return dict(defaults)
+
+    @classmethod
+    def _normalize_agent_defaults(cls, defaults: Any) -> dict[str, Any]:
+        section = cls._coerce_agent_defaults_section(defaults)
+        cls._validate_supported_agent_default_fields(section)
+
+        normalized_agent_defaults: dict[str, Any] = {}
+        for field, value in section.items():
+            normalized_value = cls._normalize_agent_default_value(field, value)
+            if normalized_value is None:
+                continue
+            normalized_agent_defaults[field] = normalized_value
+        return normalized_agent_defaults
+
+    @staticmethod
+    def _coerce_agent_defaults_section(defaults: Any) -> dict[str, Any]:
+        if defaults is None:
+            return {}
+        if not isinstance(defaults, Mapping):
+            raise StorageError("Expected settings.defaults.agent to be an object")
+        return dict(defaults)
+
+    @staticmethod
+    def _validate_supported_agent_default_fields(values: Mapping[str, Any]) -> None:
+        unsupported_fields = sorted(set(values) - AGENT_DEFAULT_FIELDS)
+        if unsupported_fields:
+            raise StorageError(
+                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
+            )
+
+    @staticmethod
+    def _normalize_agent_default_value(field: str, value: Any) -> str | float | None:
+        if value is None:
+            return None
+
+        if field in {"model", "fallback_model"}:
+            if not isinstance(value, str):
+                raise StorageError(f"Agent default {field} must be a string")
+            return value
+
+        if field == "temperature":
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise StorageError("Agent default temperature must be a number or null")
+            temperature = float(value)
+            if not math.isfinite(temperature):
+                raise StorageError("Agent default temperature must be finite")
+            if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
+                raise StorageError(
+                    "Agent default temperature must be between "
+                    f"{MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
+                )
+            return temperature
+
+        if field == "thinking_effort":
+            if not isinstance(value, str):
+                raise StorageError("Agent default thinking_effort must be a string or null")
+            if value not in ALLOWED_THINKING_EFFORTS:
+                allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
+                raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
+            return value
+
+        raise StorageError(f"Unsupported defaults.agent setting: {field}")
 
     @staticmethod
     def _validate_prompt_fragment_name(fragment_name: str) -> str:

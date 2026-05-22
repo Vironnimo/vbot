@@ -15,6 +15,7 @@ from core.agents import (
     AgentStore,
     InvalidAgentIdError,
 )
+from core.agents import agents as agents_module
 
 TEMPLATE_FILES = ("SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md")
 
@@ -64,8 +65,8 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["model"] == ""
     assert data["fallback_model"] == ""
     assert data["workspace"] == str((store.data_dir / "workspace-coder").resolve())
-    assert data["temperature"] == 0.1
-    assert data["thinking_effort"] == ""
+    assert data["temperature"] is None
+    assert data["thinking_effort"] is None
     assert data["allowed_tools"] == ["*"]
     assert data["allowed_skills"] == ["*"]
     assert isinstance(data["current_session_id"], str)
@@ -145,6 +146,18 @@ def test_create_accepts_supported_thinking_efforts(
     )
 
     assert agent.thinking_effort == thinking_effort
+
+
+def test_create_accepts_none_temperature_and_thinking_effort(store: AgentStore) -> None:
+    agent = store.create(
+        "coder_none",
+        "Coder",
+        temperature=None,
+        thinking_effort=None,
+    )
+
+    assert agent.temperature is None
+    assert agent.thinking_effort is None
 
 
 def test_create_rejects_duplicate_agent(store: AgentStore) -> None:
@@ -252,6 +265,177 @@ def test_update_rejects_missing_current_session_id(store: AgentStore) -> None:
 
     with pytest.raises(AgentError, match="current session does not exist"):
         store.update("coder", current_session_id="missing")
+
+
+def test_temperature_and_thinking_effort_none_round_trip_as_json_null(
+    store: AgentStore,
+) -> None:
+    store.create(
+        "coder_nulls",
+        "Coder Agent",
+        temperature=None,
+        thinking_effort=None,
+    )
+    agent_path = store.data_dir / "agents" / "coder_nulls" / "agent.json"
+
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    restored = agents_module._agent_from_dict(data)
+
+    assert data["temperature"] is None
+    assert data["thinking_effort"] is None
+    assert restored.temperature is None
+    assert restored.thinking_effort is None
+
+
+def test_apply_defaults_fills_empty_model(store: AgentStore) -> None:
+    agent = store.create("coder_model", "Coder Agent", model="")
+
+    resolved = store._apply_defaults(agent, {"model": "openai/gpt-5.2"})
+
+    assert resolved.model == "openai/gpt-5.2"
+
+
+def test_apply_defaults_fills_none_temperature(store: AgentStore) -> None:
+    agent = store.create("coder_temperature", "Coder Agent", temperature=None)
+
+    resolved = store._apply_defaults(agent, {"temperature": 0.7})
+
+    assert resolved.temperature == 0.7
+
+
+def test_apply_defaults_leaves_explicit_values_unchanged(store: AgentStore) -> None:
+    agent = store.create(
+        "coder_explicit",
+        "Coder Agent",
+        model="openai/gpt-5.2",
+        fallback_model="openrouter/anthropic/claude-sonnet-4",
+        temperature=0.3,
+        thinking_effort="high",
+    )
+
+    resolved = store._apply_defaults(
+        agent,
+        {
+            "model": "openrouter/openai/gpt-4.1",
+            "fallback_model": "openai/gpt-5.2-mini",
+            "temperature": 0.9,
+            "thinking_effort": "low",
+        },
+    )
+
+    assert resolved.model == "openai/gpt-5.2"
+    assert resolved.fallback_model == "openrouter/anthropic/claude-sonnet-4"
+    assert resolved.temperature == 0.3
+    assert resolved.thinking_effort == "high"
+
+
+def test_get_reflects_updated_defaults_without_reloading_agent_file(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    defaults: dict[str, Any] = {
+        "model": "openai/gpt-5.2",
+        "temperature": 0.2,
+        "thinking_effort": "low",
+    }
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: defaults,
+    )
+    store.create(
+        "coder_dynamic_defaults",
+        "Coder Agent",
+        model="",
+        temperature=None,
+        thinking_effort=None,
+    )
+
+    first = store.get("coder_dynamic_defaults")
+    assert first.model == "openai/gpt-5.2"
+    assert first.temperature == 0.2
+    assert first.thinking_effort == "low"
+
+    defaults["model"] = "openrouter/anthropic/claude-sonnet-4"
+    defaults["temperature"] = 0.6
+    defaults["thinking_effort"] = "high"
+
+    second = store.get("coder_dynamic_defaults")
+    assert second.model == "openrouter/anthropic/claude-sonnet-4"
+    assert second.temperature == 0.6
+    assert second.thinking_effort == "high"
+
+    persisted = json.loads(
+        (store.data_dir / "agents" / "coder_dynamic_defaults" / "agent.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["model"] == ""
+    assert persisted["temperature"] is None
+    assert persisted["thinking_effort"] is None
+
+
+def test_create_returns_resolved_defaults_but_persists_raw_values(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: {
+            "model": "openai/gpt-5.2",
+            "fallback_model": "openai/gpt-5.2-mini",
+            "temperature": 0.6,
+            "thinking_effort": "high",
+        },
+    )
+
+    created = store.create(
+        "coder_create_defaults",
+        "Coder Agent",
+        model="",
+        fallback_model="",
+        temperature=None,
+        thinking_effort=None,
+    )
+
+    assert created.model == "openai/gpt-5.2"
+    assert created.fallback_model == "openai/gpt-5.2-mini"
+    assert created.temperature == 0.6
+    assert created.thinking_effort == "high"
+
+    persisted = json.loads(
+        (store.data_dir / "agents" / "coder_create_defaults" / "agent.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["model"] == ""
+    assert persisted["fallback_model"] == ""
+    assert persisted["temperature"] is None
+    assert persisted["thinking_effort"] is None
+
+
+def test_update_with_explicit_temperature_does_not_write_default_to_disk(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    store = AgentStore(
+        tmp_path / "data",
+        template_dir=template_dir,
+        defaults_provider=lambda: {"temperature": 0.9},
+    )
+    store.create("coder_update_default", "Coder Agent", temperature=None)
+
+    updated = store.update("coder_update_default", temperature=0.4)
+
+    assert updated.temperature == 0.4
+    persisted = json.loads(
+        (store.data_dir / "agents" / "coder_update_default" / "agent.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert persisted["temperature"] == 0.4
+    assert store.get("coder_update_default").temperature == 0.4
 
 
 def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore) -> None:

@@ -27,8 +27,8 @@ def _make_agent(
     *,
     model: str = "openai/gpt-5.2",
     fallback_model: str = "openai/gpt-5.1",
-    temperature: float = 0.3,
-    thinking_effort: str = "none",
+    temperature: float | None = 0.3,
+    thinking_effort: str | None = "none",
 ) -> Agent:
     return Agent(
         id="coder",
@@ -388,3 +388,15 @@ def test_build_status_text_with_full_data() -> None:
     assert "Turn count: 1" in text
     assert "App uptime:" in text
     assert "Current time:" in text
+
+
+def test_build_status_text_handles_unresolved_nullable_defaults() -> None:
+    text = build_status_text(
+        _make_agent(temperature=None, thinking_effort=None),
+        messages=[],
+        context_window=None,
+        started_at=None,
+    )
+
+    assert "Thinking effort: default" in text
+    assert "Temperature: default" in text

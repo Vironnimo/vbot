@@ -170,6 +170,9 @@ class IntegrationStorage:
             "summary_model": None,
         }
 
+    def load_defaults(self) -> JsonObject:
+        return {}
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -391,6 +394,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "tail_tokens": 15000,
                 "summary_model": None,
             },
+            "defaults": {},
         },
     }
     assert "env_key" not in json.dumps(settings_response.json())

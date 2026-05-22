@@ -21,8 +21,8 @@ from core.chat.chat import ChatSession, ChatSessionError, ChatSessionManager
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
-DEFAULT_TEMPERATURE = 0.1
-DEFAULT_THINKING_EFFORT = ""
+DEFAULT_TEMPERATURE: float | None = None
+DEFAULT_THINKING_EFFORT: str | None = None
 DEFAULT_ALLOWED_ITEMS = ("*",)
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md")
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -113,8 +113,8 @@ class Agent:
     model: str
     fallback_model: str
     workspace: str
-    temperature: float
-    thinking_effort: str
+    temperature: float | None
+    thinking_effort: str | None
     allowed_tools: list[str]
     allowed_skills: list[str]
     created_at: str
@@ -129,11 +129,13 @@ class AgentStore:
         self,
         data_dir: str | Path,
         template_dir: str | Path | None = None,
+        defaults_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._template_dir = (
             Path(template_dir) if template_dir is not None else _DEFAULT_TEMPLATE_DIR
         )
+        self._defaults_provider = defaults_provider
 
     @property
     def data_dir(self) -> Path:
@@ -148,8 +150,8 @@ class AgentStore:
         model: str = DEFAULT_MODEL,
         fallback_model: str = DEFAULT_FALLBACK_MODEL,
         workspace: str | Path | None = None,
-        temperature: float = DEFAULT_TEMPERATURE,
-        thinking_effort: str = DEFAULT_THINKING_EFFORT,
+        temperature: float | None = DEFAULT_TEMPERATURE,
+        thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
     ) -> Agent:
@@ -194,7 +196,7 @@ class AgentStore:
 
         self._seed_workspace(Path(agent.workspace))
         self._write_agent(agent)
-        return agent
+        return self._apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk."""
@@ -203,7 +205,8 @@ class AgentStore:
         if not agent_path.exists():
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
 
-        return self._load_agent(agent_path)
+        raw_agent = self._load_raw_agent(agent_path)
+        return self._apply_defaults(raw_agent, self._agent_defaults())
 
     def list(self) -> list[Agent]:
         """Return all persisted agents sorted by ID."""
@@ -211,20 +214,27 @@ class AgentStore:
         if not agents_dir.exists():
             return []
 
+        defaults = self._agent_defaults()
         agents: list[Agent] = []
         for agent_path in sorted(agents_dir.glob("*/agent.json")):
-            agents.append(self._load_agent(agent_path))
+            raw_agent = self._load_raw_agent(agent_path)
+            agents.append(self._apply_defaults(raw_agent, defaults))
         return agents
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
         """Update mutable fields for an existing agent."""
+        self._validate_agent_id(agent_id)
         if "id" in changes and changes["id"] != agent_id:
             raise AgentError("Agent id is immutable")
 
         changes.pop("id", None)
-        agent = self.get(agent_id)
+        agent_path = self._agent_path(agent_id)
+        if not agent_path.exists():
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+
+        agent = self._load_raw_agent(agent_path)
         if not changes:
-            return agent
+            return self._apply_defaults(agent, self._agent_defaults())
 
         allowed_fields = set(Agent.__dataclass_fields__) - {
             "id",
@@ -265,7 +275,7 @@ class AgentStore:
 
         updated_agent = replace(agent, **changes, updated_at=_utc_now())
         self._write_agent(updated_agent)
-        return updated_agent
+        return self._apply_defaults(updated_agent, self._agent_defaults())
 
     def delete(self, agent_id: str) -> Path:
         """Archive an agent directory and workspace, then remove active copies."""
@@ -308,10 +318,39 @@ class AgentStore:
         )
         os.replace(temp_path, agent_path)
 
-    def _load_agent(self, agent_path: Path) -> Agent:
+    def _agent_defaults(self) -> dict[str, Any]:
+        if self._defaults_provider is None:
+            return {}
+
+        defaults = self._defaults_provider()
+        if not isinstance(defaults, dict):
+            raise AgentError("defaults provider must return a dictionary")
+        return defaults
+
+    def _load_raw_agent(self, agent_path: Path) -> Agent:
         data = json.loads(agent_path.read_text(encoding="utf-8"))
         agent = _agent_from_dict(data)
         return self._ensure_current_session(agent)
+
+    def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
+        changes: dict[str, Any] = {}
+
+        if agent.model == "" and "model" in defaults:
+            changes["model"] = _validate_string_field("model", defaults["model"], allow_empty=True)
+        if agent.fallback_model == "" and "fallback_model" in defaults:
+            changes["fallback_model"] = _validate_string_field(
+                "fallback_model",
+                defaults["fallback_model"],
+                allow_empty=True,
+            )
+        if agent.temperature is None and "temperature" in defaults:
+            changes["temperature"] = _validate_temperature(defaults["temperature"])
+        if agent.thinking_effort is None and "thinking_effort" in defaults:
+            changes["thinking_effort"] = _validate_thinking_effort(defaults["thinking_effort"])
+
+        if not changes:
+            return agent
+        return replace(agent, **changes)
 
     def _ensure_current_session(self, agent: Agent) -> Agent:
         if agent.current_session_id and self._session_exists(agent.id, agent.current_session_id):
@@ -413,6 +452,7 @@ class SystemPromptManager:
 
     def _build_runtime_block(self, agent: Agent) -> str:
         runtime = self._storage.read_prompt_fragment("runtime.md")
+        thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
         replacements = {
             "{host}": self._host or socket.gethostname(),
             "{os}": self._os_name or platform.platform(),
@@ -420,7 +460,7 @@ class SystemPromptManager:
             "{agent_workspace}": agent.workspace,
             "{app_dir}": str(self._app_dir.resolve()),
             "{data_root}": str(self._data_root.resolve()),
-            "{thinking_effort}": agent.thinking_effort,
+            "{thinking_effort}": thinking_effort,
             "{current_date}": self._current_date(),
         }
         return _replace_placeholders(runtime, replacements)
@@ -483,7 +523,9 @@ def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
     return value
 
 
-def _validate_temperature(value: Any) -> float:
+def _validate_temperature(value: Any) -> float | None:
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise AgentError("temperature must be a number")
     temperature = float(value)
@@ -494,7 +536,9 @@ def _validate_temperature(value: Any) -> float:
     return temperature
 
 
-def _validate_thinking_effort(value: Any) -> str:
+def _validate_thinking_effort(value: Any) -> str | None:
+    if value is None:
+        return None
     if not isinstance(value, str):
         raise AgentError("thinking_effort must be a string")
     if value not in ALLOWED_THINKING_EFFORTS:
@@ -585,8 +629,8 @@ def _agent_from_dict(data: dict[str, Any]) -> Agent:
             "fallback_model", data["fallback_model"], allow_empty=True
         ),
         workspace=str(_validate_workspace(data["workspace"])),
-        temperature=_validate_temperature(data["temperature"]),
-        thinking_effort=_validate_thinking_effort(data["thinking_effort"]),
+        temperature=_validate_temperature(data.get("temperature")),
+        thinking_effort=_validate_thinking_effort(data.get("thinking_effort")),
         allowed_tools=_validate_allowed_items("allowed_tools", data["allowed_tools"]),
         allowed_skills=_validate_allowed_items("allowed_skills", data["allowed_skills"]),
         current_session_id=_validate_string_field(

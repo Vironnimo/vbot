@@ -5,6 +5,9 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../i18n.js';
 import {
+  AGENT_DEFAULTS_FIELDS,
+  AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+  buildAgentDefaultsPayload,
   buildLanguageOptions,
   buildSubAgentSettingsPayload,
   createLanguageUpdatePayload,
@@ -13,6 +16,7 @@ import {
   formatServerHost,
   getDefaultSkillDirectoryValue,
   getSkillDirectories,
+  normalizeAgentDefaultsSettings,
   normalizeSubAgentSettings,
   providerStatusClass,
   providerStatusLabel,
@@ -336,6 +340,83 @@ describe('settingsView helpers', () => {
     );
     expect(providerStatusClass(provider)).toBe('chip-green');
     expect(providerStatusLabel(provider, translate)).toBe('Configured');
+    expect(AGENT_DEFAULTS_FIELDS).toEqual([
+      'model',
+      'fallback_model',
+      'temperature',
+      'thinking_effort',
+    ]);
+    expect(normalizeAgentDefaultsSettings({})).toEqual({
+      model: '',
+      fallback_model: '',
+      temperature: null,
+      thinking_effort: null,
+    });
+    expect(
+      normalizeAgentDefaultsSettings({
+        defaults: {
+          agent: {
+            model: ' openai/gpt-5.2 ',
+            fallback_model: ' ',
+            temperature: '0.6',
+            thinking_effort: ' high ',
+          },
+        },
+      }),
+    ).toEqual({
+      model: 'openai/gpt-5.2',
+      fallback_model: '',
+      temperature: 0.6,
+      thinking_effort: 'high',
+    });
+    expect(
+      normalizeAgentDefaultsSettings({
+        defaults: {
+          agent: {
+            thinking_effort: '',
+          },
+        },
+      }),
+    ).toEqual({
+      model: '',
+      fallback_model: '',
+      temperature: null,
+      thinking_effort: '',
+    });
+    expect(
+      buildAgentDefaultsPayload({
+        model: ' openai/gpt-5.2 ',
+        fallback_model: '',
+        temperature: '',
+        thinking_effort: '',
+      }),
+    ).toEqual({
+      defaults: {
+        agent: {
+          model: 'openai/gpt-5.2',
+          fallback_model: null,
+          temperature: null,
+          thinking_effort: '',
+        },
+      },
+    });
+    expect(
+      buildAgentDefaultsPayload({
+        model: '',
+        fallback_model: ' ',
+        temperature: '',
+        thinking_effort: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+      }),
+    ).toEqual({
+      defaults: {
+        agent: {
+          model: null,
+          fallback_model: null,
+          temperature: null,
+          thinking_effort: null,
+        },
+      },
+    });
   });
 });
 

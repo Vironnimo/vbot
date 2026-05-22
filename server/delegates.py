@@ -85,6 +85,7 @@ JsonObject = dict[str, Any]
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
+AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -187,6 +188,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _list_commands(state, params)
         case "agent.list":
             return _list_agents(state)
+        case "agent.get":
+            return _get_agent(state, params)
         case "agent.create":
             return _create_agent(state, params)
         case "agent.update":
@@ -271,6 +274,22 @@ def _list_agents(state: Any) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"agents": [_agent_response(state, agent) for agent in agents]}
+
+
+def _get_agent(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported agent.get fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "id")
+    try:
+        agent = state.runtime.agents.get(agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _agent_response(state, agent)
 
 
 def _list_models(state: Any, params: JsonObject) -> JsonObject:
@@ -550,9 +569,10 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     name = _required_string(params, "name")
     try:
-        agent = state.runtime.agents.create(
+        state.runtime.agents.create(
             agent_id, name, **_agent_changes(params, blocked={"id", "name"}, for_create=True)
         )
+        agent = state.runtime.agents.get(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
@@ -1460,6 +1480,10 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             _update_subagent_settings(state.runtime.storage, settings_update["subagents"])
         if "compaction" in settings_update:
             state.runtime.storage.update_compaction_settings(settings_update["compaction"])
+        if "defaults" in settings_update:
+            defaults_update = cast(JsonObject, settings_update["defaults"])
+            if "agent" in defaults_update:
+                state.runtime.storage.update_defaults("agent", defaults_update["agent"])
         return _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -1564,7 +1588,7 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
 
 
 def _parse_settings_update(params: JsonObject) -> JsonObject:
-    supported_sections = {"appearance", "skills", "subagents", "compaction"}
+    supported_sections = {"appearance", "skills", "subagents", "compaction", "defaults"}
     unsupported_sections = sorted(set(params) - supported_sections)
     if unsupported_sections:
         raise RpcError(
@@ -1589,7 +1613,71 @@ def _parse_settings_update(params: JsonObject) -> JsonObject:
     if "compaction" in params:
         parsed_update["compaction"] = _parse_compaction_update(params["compaction"])
 
+    if "defaults" in params:
+        parsed_update["defaults"] = _parse_defaults_update(params["defaults"])
+
     return parsed_update
+
+
+def _parse_defaults_update(defaults: Any) -> JsonObject:
+    if not isinstance(defaults, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.defaults must be an object")
+
+    unsupported_sections = sorted(set(defaults) - {"agent"})
+    if unsupported_sections:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported defaults settings: {', '.join(unsupported_sections)}",
+        )
+
+    if "agent" not in defaults:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.defaults must include an agent object",
+        )
+
+    raw_agent_defaults = defaults["agent"]
+    if not isinstance(raw_agent_defaults, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.defaults.agent must be an object")
+
+    unsupported_agent_fields = sorted(set(raw_agent_defaults) - AGENT_DEFAULT_FIELDS)
+    if unsupported_agent_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported defaults.agent settings: {', '.join(unsupported_agent_fields)}",
+        )
+
+    agent_defaults: JsonObject = {}
+    for field, value in raw_agent_defaults.items():
+        if value is None:
+            agent_defaults[field] = None
+            continue
+
+        if field in {"model", "fallback_model"}:
+            if not isinstance(value, str):
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    f"params.defaults.agent.{field} must be a string or null",
+                )
+            agent_defaults[field] = value
+            continue
+
+        if field == "temperature":
+            agent_defaults[field] = _validate_temperature(
+                value,
+                label="params.defaults.agent.temperature",
+                allow_none=True,
+            )
+            continue
+
+        if field == "thinking_effort":
+            agent_defaults[field] = _validate_thinking_effort(
+                value,
+                label="params.defaults.agent.thinking_effort",
+                allow_none=True,
+            )
+
+    return {"agent": agent_defaults}
 
 
 def _parse_appearance_update(appearance: Any) -> JsonObject:
@@ -1845,6 +1933,7 @@ def _settings_response(state: Any) -> JsonObject:
     appearance = runtime.storage.load_appearance_settings()
     subagents = runtime.storage.load_subagent_settings()
     compaction = runtime.storage.load_compaction_settings()
+    defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
 
     response = {
@@ -1866,6 +1955,7 @@ def _settings_response(state: Any) -> JsonObject:
             "language": appearance["language"],
             "available_languages": runtime.storage.supported_appearance_languages(),
         },
+        "defaults": defaults,
         "subagents": {field: subagents[field] for field in SUBAGENT_SETTING_FIELDS},
         "compaction": dict(compaction),
     }
@@ -2106,36 +2196,56 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a string")
         return value
     if key == "temperature":
-        return _validate_temperature(value)
+        return _validate_temperature(value, allow_none=True)
     if key == "thinking_effort":
-        return _validate_thinking_effort(value)
+        return _validate_thinking_effort(value, allow_none=True)
     if key in {"allowed_tools", "allowed_skills"}:
         return _validate_string_list(key, value)
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
 
 
-def _validate_temperature(value: Any) -> float:
+def _validate_temperature(
+    value: Any,
+    *,
+    label: str = "params.temperature",
+    allow_none: bool = False,
+) -> float | None:
+    if value is None:
+        if allow_none:
+            return None
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a number")
+
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.temperature must be a number")
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a number")
     temperature = float(value)
     if not math.isfinite(temperature):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.temperature must be finite")
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be finite")
     if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.temperature must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}",
+            f"{label} must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}",
         )
     return temperature
 
 
-def _validate_thinking_effort(value: Any) -> str:
+def _validate_thinking_effort(
+    value: Any,
+    *,
+    label: str = "params.thinking_effort",
+    allow_none: bool = False,
+) -> str | None:
+    if value is None:
+        if allow_none:
+            return None
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a string")
+
     if not isinstance(value, str):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.thinking_effort must be a string")
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a string")
     if value not in ALLOWED_THINKING_EFFORTS:
         allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
-            f"params.thinking_effort must be one of: {allowed}",
+            f"{label} must be one of: {allowed}",
         )
     return value
 
