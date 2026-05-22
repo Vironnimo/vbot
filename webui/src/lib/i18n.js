@@ -18,6 +18,7 @@ export const englishCatalog = Object.freeze({
   'navigation.logs': 'Logs',
 
   'common.archive': 'Archive',
+  'common.alreadySaved': 'Already saved',
   'common.cancel': 'Cancel',
   'common.close': 'Close',
   'common.confirm': 'Confirm',

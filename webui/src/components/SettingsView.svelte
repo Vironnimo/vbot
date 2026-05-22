@@ -47,6 +47,8 @@
     summary_model: null,
   });
 
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
+
   function normalizeCompactionSettingsFallback(rawSettings) {
     const compaction = rawSettings?.compaction ?? {};
     const threshold = Number(compaction.threshold);
@@ -211,6 +213,10 @@
   let channelNotice = $state('');
   let channelError = $state('');
   let channelsLoaded = $state(false);
+  let languageAutoSaveTimer = null;
+  let skillDirectoriesAutoSaveTimer = null;
+  let subAgentSettingsAutoSaveTimer = null;
+  let compactionSettingsAutoSaveTimer = null;
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -287,6 +293,11 @@
       if (toastTimer) {
         clearTimeout(toastTimer);
       }
+
+      clearLanguageAutoSaveTimer();
+      clearSkillDirectoriesAutoSaveTimer();
+      clearSubAgentSettingsAutoSaveTimer();
+      clearCompactionSettingsAutoSaveTimer();
     };
   });
 
@@ -295,6 +306,82 @@
       handledProviderAuthEvent = providerAuthEvent;
       handleProviderAuthEvent(providerAuthEvent);
     }
+  });
+
+  $effect(() => {
+    if (activePanelId !== 'appearance') {
+      return;
+    }
+
+    if (saveDisabled) {
+      return;
+    }
+
+    languageAutoSaveTimer = setTimeout(() => {
+      languageAutoSaveTimer = null;
+      void saveLanguage();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearLanguageAutoSaveTimer();
+    };
+  });
+
+  $effect(() => {
+    if (activePanelId !== 'skills') {
+      return;
+    }
+
+    if (skillDirectoriesSaveDisabled) {
+      return;
+    }
+
+    skillDirectoriesAutoSaveTimer = setTimeout(() => {
+      skillDirectoriesAutoSaveTimer = null;
+      void saveSkillDirectories();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearSkillDirectoriesAutoSaveTimer();
+    };
+  });
+
+  $effect(() => {
+    if (activePanelId !== 'subagents') {
+      return;
+    }
+
+    if (subAgentSettingsSaveDisabled) {
+      return;
+    }
+
+    subAgentSettingsAutoSaveTimer = setTimeout(() => {
+      subAgentSettingsAutoSaveTimer = null;
+      void saveSubAgentSettings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearSubAgentSettingsAutoSaveTimer();
+    };
+  });
+
+  $effect(() => {
+    if (activePanelId !== 'compaction') {
+      return;
+    }
+
+    if (compactionSettingsSaveDisabled) {
+      return;
+    }
+
+    compactionSettingsAutoSaveTimer = setTimeout(() => {
+      compactionSettingsAutoSaveTimer = null;
+      void saveCompactionSettings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearCompactionSettingsAutoSaveTimer();
+    };
   });
 
   function selectPanel(panelId) {
@@ -317,6 +404,10 @@
     compactionSettings = getCompactionSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
+  }
+
+  function commitSettings(nextSettings) {
+    settings = nextSettings;
   }
 
   async function loadSettings() {
@@ -346,7 +437,8 @@
       const nextSettings = await rpc('settings.update', {
         ...createLanguageUpdatePayload(selectedLanguageId),
       });
-      applySettings(nextSettings);
+      commitSettings(nextSettings);
+      init(selectedLanguageId);
       saveNotice = t(
         'settings.appearance.saveSuccess',
         'Language preference updated.',
@@ -372,7 +464,7 @@
         'settings.update',
         createSkillDirectoriesUpdatePayload(skillDirectories),
       );
-      applySettings(nextSettings);
+      commitSettings(nextSettings);
       saveNotice = t(
         'settings.skills.saveSuccess',
         'Skill directories updated.',
@@ -398,7 +490,7 @@
         'settings.update',
         buildSubAgentSettingsPayload(subAgentSettings),
       );
-      applySettings(nextSettings);
+      commitSettings(nextSettings);
       saveNotice = t(
         'settings.subagents.saveSuccess',
         'Sub-agent settings updated.',
@@ -424,13 +516,101 @@
         'settings.update',
         buildCompactionSettingsPayload(compactionSettings),
       );
-      applySettings(nextSettings);
+      commitSettings(nextSettings);
       saveNotice = t('settings.compaction.saved', 'Compaction settings saved.');
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
     } finally {
       saving = false;
     }
+  }
+
+  function clearLanguageAutoSaveTimer() {
+    if (languageAutoSaveTimer !== null) {
+      clearTimeout(languageAutoSaveTimer);
+      languageAutoSaveTimer = null;
+    }
+  }
+
+  function clearSkillDirectoriesAutoSaveTimer() {
+    if (skillDirectoriesAutoSaveTimer !== null) {
+      clearTimeout(skillDirectoriesAutoSaveTimer);
+      skillDirectoriesAutoSaveTimer = null;
+    }
+  }
+
+  function clearSubAgentSettingsAutoSaveTimer() {
+    if (subAgentSettingsAutoSaveTimer !== null) {
+      clearTimeout(subAgentSettingsAutoSaveTimer);
+      subAgentSettingsAutoSaveTimer = null;
+    }
+  }
+
+  function clearCompactionSettingsAutoSaveTimer() {
+    if (compactionSettingsAutoSaveTimer !== null) {
+      clearTimeout(compactionSettingsAutoSaveTimer);
+      compactionSettingsAutoSaveTimer = null;
+    }
+  }
+
+  function showAlreadySavedToast() {
+    showLocalToast(t('common.alreadySaved', 'Already saved'), 'success');
+  }
+
+  function handleManualLanguageSave() {
+    if (saving) {
+      return;
+    }
+
+    if (saveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearLanguageAutoSaveTimer();
+    void saveLanguage();
+  }
+
+  function handleManualSkillDirectoriesSave() {
+    if (saving) {
+      return;
+    }
+
+    if (skillDirectoriesSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearSkillDirectoriesAutoSaveTimer();
+    void saveSkillDirectories();
+  }
+
+  function handleManualSubAgentSettingsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (subAgentSettingsSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearSubAgentSettingsAutoSaveTimer();
+    void saveSubAgentSettings();
+  }
+
+  function handleManualCompactionSettingsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (compactionSettingsSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearCompactionSettingsAutoSaveTimer();
+    void saveCompactionSettings();
   }
 
   function addSkillDirectory() {
@@ -1103,45 +1283,7 @@
           <p class="s-panel-sub">{activePanel.subtitle()}</p>
         </div>
 
-        {#if activePanelId === 'appearance' && !loading && !loadError}
-          <button
-            class="btn-primary s-save-button"
-            type="button"
-            disabled={saveDisabled}
-            onclick={saveLanguage}
-          >
-            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-          </button>
-        {:else if activePanelId === 'skills' && !loading && !loadError}
-          <button
-            class="btn-primary s-save-button"
-            type="button"
-            disabled={skillDirectoriesSaveDisabled}
-            onclick={saveSkillDirectories}
-          >
-            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-          </button>
-        {:else if activePanelId === 'subagents' && !loading && !loadError}
-          <button
-            class="btn-primary s-save-button"
-            type="button"
-            disabled={subAgentSettingsSaveDisabled}
-            onclick={saveSubAgentSettings}
-          >
-            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-          </button>
-        {:else if activePanelId === 'compaction' && !loading && !loadError}
-          <button
-            class="btn-primary s-save-button"
-            type="button"
-            disabled={compactionSettingsSaveDisabled}
-            onclick={saveCompactionSettings}
-          >
-            {saving
-              ? t('common.saving', 'Saving…')
-              : t('settings.compaction.save', 'Save')}
-          </button>
-        {:else if activePanelId === 'providers' && !loading && !loadError && hasRefreshEligibleProvider}
+        {#if activePanelId === 'providers' && !loading && !loadError && hasRefreshEligibleProvider}
           <button
             class="btn-primary s-refresh-button"
             type="button"
@@ -1310,16 +1452,17 @@
               </button>
             </div>
 
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              disabled={skillDirectoriesSaveDisabled}
-              onclick={saveSkillDirectories}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </button>
+            <div class="s-sticky-footer">
+              <button
+                class="btn-primary s-save-button s-save-button--inline"
+                type="button"
+                onclick={handleManualSkillDirectoriesSave}
+              >
+                {saving
+                  ? t('common.saving', 'Saving…')
+                  : t('common.save', 'Save')}
+              </button>
+            </div>
           </div>
         {:else if activePanelId === 'subagents'}
           <div class="s-row">
@@ -1412,14 +1555,17 @@
             </div>
           </div>
 
-          <button
-            class="btn-primary s-save-button s-save-button--inline"
-            type="button"
-            disabled={subAgentSettingsSaveDisabled}
-            onclick={saveSubAgentSettings}
-          >
-            {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
-          </button>
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualSubAgentSettingsSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('common.save', 'Save')}
+            </button>
+          </div>
         {:else if activePanelId === 'compaction'}
           <div class="s-row">
             <div class="s-row-info">
@@ -1539,16 +1685,17 @@
             </div>
           </div>
 
-          <button
-            class="btn-primary s-save-button s-save-button--inline"
-            type="button"
-            disabled={compactionSettingsSaveDisabled}
-            onclick={saveCompactionSettings}
-          >
-            {saving
-              ? t('common.saving', 'Saving…')
-              : t('settings.compaction.save', 'Save')}
-          </button>
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualCompactionSettingsSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('settings.compaction.save', 'Save')}
+            </button>
+          </div>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
             <div class="s-feedback s-feedback--neutral">
@@ -2161,18 +2308,19 @@
                   </option>
                 {/each}
               </select>
-
-              <button
-                class="btn-primary s-save-button s-save-button--inline"
-                type="button"
-                disabled={saveDisabled}
-                onclick={saveLanguage}
-              >
-                {saving
-                  ? t('common.saving', 'Saving…')
-                  : t('common.save', 'Save')}
-              </button>
             </div>
+          </div>
+
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualLanguageSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('common.save', 'Save')}
+            </button>
           </div>
         {/if}
       {/if}
@@ -2663,12 +2811,17 @@
     white-space: nowrap;
   }
 
-  .s-save-button {
-    min-width: 84px;
+  .s-sticky-footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 12px 0 0;
+    background: var(--surface);
   }
 
-  .s-save-button--inline {
-    display: none;
+  .s-save-button {
+    min-width: 84px;
   }
 
   .s-row--channels-header {
@@ -2833,12 +2986,11 @@
       flex-direction: column;
     }
 
-    .s-save-button {
-      display: none;
+    .s-sticky-footer {
+      justify-content: stretch;
     }
 
     .s-save-button--inline {
-      display: inline-flex;
       width: 100%;
     }
 
