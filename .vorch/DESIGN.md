@@ -287,6 +287,10 @@ Within views, two-pane splits (Agents: 240px list + fluid detail; Settings:
 168px nav + fluid panel) use a thin `border` divider with no gap. Padding
 inside panels is 20–32px depending on context.
 
+In scrollable edit surfaces, the primary save action belongs at the bottom of
+the scroll region in a sticky footer, not in the panel header. This keeps the
+action visually near the edited fields and available after long scrolls.
+
 Chat messages use 28px horizontal padding with 75% max-width for user message
 bubbles (right-aligned). Assistant prose flows full-width without a bounding box.
 
@@ -340,6 +344,10 @@ Three visual levels:
 2. **Secondary (`btn-outline`, modal confirm)** — Neutral ghost: no fill, `border-2`
    border, `text-med` color. Hover shifts to accent border and tint. Used for
    supporting actions.
+
+Primary save buttons inside long editor panels stay enabled even when the form
+is already clean. When nothing changed, the interaction should confirm trust via
+lightweight success feedback instead of disabling the control.
 
 3. **Tertiary (`pane-action`, `tl-btn`)** — Smallest footprint. `border` border,
    `text-lo` / `text-med` color, 3px radius. Hover becomes accent.
