@@ -8,6 +8,7 @@ import pytest
 
 from core.utils.config import (
     Config,
+    _find_worktree_file_from_cwd,
     _read_worktree_data_dir,
     _resolve_default_data_dir,
     parse_env_lines,
@@ -36,6 +37,7 @@ def test_default_data_dir_is_home_vbot(tmp_path: Path, monkeypatch: pytest.Monke
     """No env var, no worktree file -> ~/.vbot."""
     monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
     monkeypatch.setattr("core.utils.config._WORKTREE_FILE", tmp_path / ".vbot-worktree")
+    monkeypatch.chdir(tmp_path)
     # file does not exist -> falls to default
     assert os.environ.get("VBOT_DATA_DIR") is None
     assert _resolve_default_data_dir() == Path.home() / ".vbot"
@@ -57,7 +59,28 @@ def test_worktree_file_sets_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyP
     worktree_file = tmp_path / ".vbot-worktree"
     worktree_file.write_text(json.dumps({"data_dir": str(tmp_path / "wt-data")}), encoding="utf-8")
     monkeypatch.setattr("core.utils.config._WORKTREE_FILE", worktree_file)
+    neutral_cwd = tmp_path / "no-cwd-worktree"
+    neutral_cwd.mkdir()
+    monkeypatch.chdir(neutral_cwd)
     assert Config().data_dir == tmp_path / "wt-data"
+
+
+def test_cwd_worktree_file_used_when_module_file_path_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When module marker is missing, CWD worktree marker should be used."""
+    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
+    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", tmp_path / "missing/.vbot-worktree")
+
+    wt_root = tmp_path / "worktree-root"
+    wt_root.mkdir()
+    marker = wt_root / ".vbot-worktree"
+    marker.write_text(json.dumps({"data_dir": str(tmp_path / "wt-data")}), encoding="utf-8")
+
+    monkeypatch.chdir(wt_root)
+
+    assert _resolve_default_data_dir() == tmp_path / "wt-data"
+    assert _find_worktree_file_from_cwd() == marker
 
 
 def test_explicit_data_dir_arg_wins_over_worktree_file(
