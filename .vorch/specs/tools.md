@@ -71,12 +71,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
   `content`, optional `agent_id`, optional `blocking`, and optional
   `session_id`. When `session_id` is provided the tool routes into that
   existing Session instead of creating a new one; it fails with
-  `session_not_found` if the session file does not exist, `session_busy` if
-  that Session already has an active Run, or `invalid_arguments` if the caller
-  targets its own active Session. It otherwise creates a new persisted Session
-  for the target Agent, starts a sub-agent Run, enforces configured
-  depth/per-turn limits, and returns either a running descriptor or a completed
-  result envelope.
+  `session_not_found` if the session file does not exist or `invalid_arguments`
+  if the caller targets its own active Session. If the targeted existing
+  Session is busy, the tool enqueues a follow-up Run in that Session through
+  `ChatRunManager` and waits for the queued Run to start before returning its
+  normal running descriptor (or completion payload in blocking mode). It
+  otherwise creates a new persisted Session for the target Agent, starts a
+  sub-agent Run, enforces configured depth/per-turn limits, and returns either
+  a running descriptor or a completed result envelope.
 - Built-in `subagent_result` tool: flat name `subagent_result`; schema includes
   required `session_id` plus optional `agent_id` and `run_id`. It fetches a
   live Run result when available or falls back to the last non-empty assistant

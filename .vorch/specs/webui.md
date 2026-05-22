@@ -30,6 +30,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `<img>` or download links.
   - `listSessions(agentId, options?)` calls `session.list` and returns
     `{ sessions }` for one Agent.
+  - `listQueue(agentId, sessionId, options?)`, `removeFromQueue(agentId,
+    sessionId, itemId, options?)`, and `updateQueueItem(agentId, sessionId,
+    itemId, content, options?)` wrap `chat.queue_list`, `chat.queue_remove`,
+    and `chat.queue_update`.
   - `linkSessionToChannel(agentId, sessionId, channelId, platformConvId, options?)`
     calls `session.link_channel`.
   - `listChannels(options?)`, `createChannel(payload, options?)`,
@@ -110,9 +114,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
   - When a manual `/compact` command is handled without starting a Run, ChatView reloads the active session history so the new compaction separator appears immediately.
   - When the backend rejects `/compact` because the target Session already has an active Run, ChatView surfaces the handled reply inline and does not start a second Run.
+  - Sends message submits to the server even while the Session has an active Run. When `chat.stream` returns `{ queued: true, item }`, ChatView adds that server queue item locally and does not open an SSE subscription for it.
+  - Refreshes queued-message state from `chat.queue_list` after history load and after terminal Run events so the accessor reflects the server-owned queue after reloads, reconnects, and drain transitions.
   - Owns the session drawer toggle plus local `viewingSessionId` override state.
     Selecting a session from the drawer loads its history without mutating the
     Agent's persisted `current_session_id`.
+- `webui/src/components/QueuedMessages.svelte`
+  - Renders queued server-backed messages with remove and inline edit controls. Edit mode is local UI state; save persists through `chat.queue_update` and cancel only exits the local editor.
 - `webui/src/components/SessionListDrawer.svelte`
   - Renders the per-Agent session list with platform badges, last-active
     metadata, selection callbacks, and inline retroactive channel-linking flows
@@ -223,8 +231,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   `current_session_id`. The read-only banner provides an explicit “Return to
   current session” action, and normal new-session/agent-selection actions also
   clear the override.
-- Queue state is accessor-local/in-memory and scoped by Agent plus current
-  Session. Queued messages are visible and removable before send.
+- Queue state shown in the accessor is a server-backed projection scoped by
+  Agent plus current Session. The accessor may apply optimistic local
+  add/remove/update helpers, but `chat.queue_*` is the source of truth and
+  queued items survive tab close until the server drains them or restarts.
 - Attachments are uploaded over the dedicated HTTP endpoints, not through RPC.
   The outgoing chat payload still uses the canonical `content` field, switching
   from plain string to `list[ContentBlock]` only when attachments are present.

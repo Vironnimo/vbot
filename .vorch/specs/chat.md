@@ -45,7 +45,7 @@ container; a Run is one active execution inside that session.
 - `compaction_completed` is a visible Run event carrying `{ message }` after auto-compaction appends a `compaction_checkpoint` during a Run.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
 - `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
-- `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, and allows parallel Runs in different Sessions.
+- `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, allows parallel Runs in different Sessions, and owns the in-memory FIFO queue of pending `QueuedRunItem`s per Session with enqueue/list/remove/update plus automatic drain when the active Run finishes.
 - `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins return a handled result with optional reply text; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins include `/stop` and `/compact`.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
@@ -53,6 +53,7 @@ container; a Run is one active execution inside that session.
 - `ChatLoop(runtime, max_tool_iterations=1000, streaming=False, attachment_resolver=None, compaction_service=None)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=..., internal=False) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager. Internal runs persist `content` as a `role: "note"` system reminder rather than a visible `role: "user"` message.
+  - `queue_run(agent_id, content, *, session_id, internal=False) -> QueuedRunItem` — validates the same agent/provider/session prerequisites as `start_run(...)`, derives a display preview for the queued message, and delegates busy-session enqueue/start behavior to `ChatRunManager`.
 - `core/chat/content_blocks.py` owns `TextBlock`, `MediaBlock`, `FileBlock`, plus dict round-trip helpers for persisted JSONL content lists.
 - `core/chat/block_resolver.py` owns last-mile attachment resolution from persisted content blocks to provider-ready dicts just before adapter calls.
 
@@ -66,6 +67,7 @@ container; a Run is one active execution inside that session.
   `stream` and `cancel`.
 - At most one Run may be active per Session at a time.
 - Multiple Sessions may execute in parallel.
+- Busy-session follow-up work may be enqueued through `ChatRunManager`; queued items are in-memory FIFO per Session and start automatically when the active Run clears.
 - `send`, `stream`, and `cancel` should remain different access modes over the
   same underlying run execution model.
 - In streaming mode, provider adapters yield normalized deltas that the chat
@@ -117,6 +119,7 @@ container; a Run is one active execution inside that session.
   from the old provider must never be sent to the new provider.
 - `agent.model` must be in `<provider>/<model-id>` form and may optionally carry `::<connection-local-id>` at the end. An empty model or missing provider raises `ChatError` before an adapter request.
 - Runtime target resolution parses `agent.model` with `rpartition("::")`. When a suffix is present, the chat loop reconstructs the full connection ID as `<provider>:<connection-local-id>`. Without a suffix, the chat loop falls back to the first usable connection for the model provider in provider-config order.
+- Queued display previews are derived from plain-string content or the concatenated text of `TextBlock` items and fall back to `[attachment]` when a queued payload has no text blocks.
 - If a retryable `ProviderError` escapes adapter retries and the Agent has a resolvable `fallback_model`, the chat loop may switch to that fallback for the rest of the current Run. The switch emits `model_fallback_activated` and persists a note so the next provider request sees the change as a `<system-reminder>`. The Agent config itself is not mutated, so the next turn starts from the primary model again.
 - `fallback_model` follows the same optional `::<connection-local-id>` convention as `model`; fallback resolution uses that suffix when present and otherwise auto-resolves the first usable connection for the fallback provider.
 - Run-local model fallback is part of the shared ChatLoop execution path and therefore applies equally to direct and internal Runs that execute through that path.
