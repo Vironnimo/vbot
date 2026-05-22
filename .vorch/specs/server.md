@@ -46,7 +46,7 @@ Clients call the vBot server contract; provider wire details stay behind
   configured `models_endpoint` and a usable connection credential, skips
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
-- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, plus `subagents` settings for depth, per-turn count, and timeout limits, and `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, `defaults.agent` for project-wide Agent fallback values, plus `subagents` settings for depth, per-turn count, and timeout limits, and `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`.
 - `settings.get_raw` returns `{ settings }`, where `settings` is the raw top-level `settings.json` dict currently persisted for the target data directory.
 - `settings.set_key` accepts `{ key, value }`, where `value` may be any JSON type including `null`, updates one raw top-level `settings.json` key, persists it, and returns `{ settings }` with the updated raw dict.
 - `log.list` returns available daily log filenames from `<data_dir>/logs/` as
@@ -77,11 +77,12 @@ Clients call the vBot server contract; provider wire details stay behind
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
-- `settings.update` accepts supported `appearance`, `skills`, `subagents`, and `compaction` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage.
+- `settings.update` accepts supported `appearance`, `skills`, `defaults`, `subagents`, and `compaction` sections. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. The `defaults` section currently supports only `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual persisted default key, while `thinking_effort: ""` remains a valid explicit provider-default setting. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
-  fields. `workspace` is intentionally not accepted through public RPC in Phase 4.
+  fields. `temperature` and `thinking_effort` accept `null` to clear an explicit
+  override back to inherited defaults. `workspace` is intentionally not accepted through public RPC in Phase 4.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each
@@ -131,7 +132,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - Server event bus events contain lifecycle summaries for WebSocket clients:
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,
-  `agent.deleted` (full agent payload via `_agent_response`). Run output
+  `agent.deleted` (full agent payload via `_agent_response`). Agent create and
+  update responses/events use effective resolved Agent values even when raw
+  persisted fields remain unset. Run output
   includes persisted error-message events bridged as `run_output`, plus
   `model_fallback_activated` with payload `{ from_model, to_model }` when a Run
   switches to an Agent fallback model. App-level background failures use

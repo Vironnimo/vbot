@@ -52,9 +52,13 @@ runtime skill registry immediately. `settings.json` may also include
 `extension_directories`, an array of absolute or home-relative additional
 extension scan roots loaded alongside `<data_dir>/extensions/` during runtime
 startup, plus `attachment_max_size_bytes`, an integer attachment upload limit
-used by the runtime-owned `AttachmentStore` (default 20 MiB). Optional built-in
-tool credentials such as `BRAVE_API_KEY` for `web_search` use that same process
-env → data-dir `.env` fallback resolution.
+used by the runtime-owned `AttachmentStore` (default 20 MiB). `settings.json`
+also supports `defaults.agent` for project-wide fallback agent values
+(`model`, `fallback_model`, `temperature`, `thinking_effort`); agents with
+unset values inherit these defaults at load time without rewriting their
+`agent.json` on disk. Optional built-in tool credentials such as
+`BRAVE_API_KEY` for `web_search` use that same process env → data-dir `.env`
+fallback resolution.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
@@ -218,6 +222,12 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 - **Built-in slash commands are a pre-run command layer, not skill triggers.** Recognized pure-text commands such as `/stop` are intercepted by a shared `CommandDispatcher` in server and channel entry points before any Run starts. Unknown slash text still goes through the normal chat path, so existing `/skill-name` activation behavior remains unchanged.
 - **Busy-session queueing is owned by `ChatRunManager`.** Browser sends, `TriggerService`, and subagent routing all enqueue into the same in-memory FIFO per `(agent_id, session_id)` inside `core/chat/runs.py`. WebUI queue state is only a server-backed projection and must not become a second source of truth.
 - **Agent model strings may carry pinned connection suffixes.** Persisted `Agent.model` and `Agent.fallback_model` may end with `::<connection-local-id>` to pin a provider-local connection without separate `connection` fields. Runtime reconstructs `<provider>:<connection-local-id>` from the model prefix, and code that needs the plain catalog key must strip the suffix first.
+- **Agent defaults resolve at read time, not write time.** `settings.json`
+  owns `defaults.agent`, while persisted `agent.json` keeps only explicit
+  per-agent overrides. Empty model strings and `null` temperature or
+  `thinking_effort` values mean "inherit the current default"; `AgentStore`
+  applies defaults fresh on each `get()` and `list()` so changing settings
+  immediately affects unresolved agents without baking values back to disk.
 - **Adapters get provider-scoped catalog lookup from runtime.** If adapter runtime behavior depends on normalized model facts, use the injected read-only `model_lookup(model_id) -> Model | None` inside the adapter layer. Do not add provider-specific runtime helper methods for catalog access, and do not load model files directly from adapters.
 - **Extensions are in-process Python hook modules.** Runtime loads them from
   `<data_dir>/extensions/` plus optional `extension_directories`, exposes them
