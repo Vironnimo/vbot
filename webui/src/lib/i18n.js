@@ -34,6 +34,7 @@ export const englishCatalog = Object.freeze({
   'common.remove': 'Remove',
   'common.retry': 'Retry',
   'common.save': 'Save',
+  'common.saved': 'Saved',
   'common.saving': 'Saving…',
   'common.send': 'Send',
   'common.unknown': 'Unknown',

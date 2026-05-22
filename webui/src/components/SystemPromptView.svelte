@@ -1,6 +1,5 @@
 <script>
   import { onMount } from 'svelte';
-  import { SvelteMap } from 'svelte/reactivity';
 
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -17,7 +16,7 @@
   let toastMessage = $state('');
   let toastVariant = $state('error');
   let toastTimer = null;
-  let autoSaveTimers = new SvelteMap();
+  let autoSaveTimers = [];
 
   onMount(() => {
     loadData();
@@ -31,17 +30,11 @@
   });
 
   $effect(() => {
-    const staleTimerIndexes = [];
-
-    for (const index of autoSaveTimers.keys()) {
-      if (!fragments[index]) {
-        staleTimerIndexes.push(index);
+    autoSaveTimers.forEach((timer, index) => {
+      if (timer && !fragments[index]) {
+        clearAutoSaveTimer(index);
       }
-    }
-
-    for (const index of staleTimerIndexes) {
-      clearAutoSaveTimer(index);
-    }
+    });
 
     fragments.forEach((fragment, index) => {
       const shouldAutoSave =
@@ -52,27 +45,12 @@
         return;
       }
 
-      if (autoSaveTimers.has(index)) {
+      if (autoSaveTimers[index]) {
         return;
       }
 
       scheduleAutoSaveTimer(index);
     });
-
-    return () => {
-      for (const index of autoSaveTimers.keys()) {
-        const fragment = fragments[index];
-        const shouldAutoSave =
-          fragment &&
-          fragment.isDirty &&
-          !fragment.isSaving &&
-          !fragment.isResetting;
-
-        if (!shouldAutoSave) {
-          clearAutoSaveTimer(index);
-        }
-      }
-    };
   });
 
   async function loadData() {
@@ -137,22 +115,40 @@
       return;
     }
 
+    const draftContent = fragment.editedContent;
+
     fragments[index].isSaving = true;
 
     try {
       const result = await rpc('prompt.update', {
         name: fragment.name,
-        content: fragment.editedContent,
+        content: draftContent,
       });
-      fragments[index].content = result.content ?? fragment.editedContent;
-      fragments[index].editedContent = fragments[index].content;
-      fragments[index].isDirty = false;
+
+      const nextSavedContent = result.content ?? draftContent;
+
+      if (!fragments[index]) {
+        return;
+      }
+
+      fragments[index].content = nextSavedContent;
+
+      if (fragments[index].editedContent === draftContent) {
+        fragments[index].editedContent = nextSavedContent;
+        fragments[index].isDirty = false;
+      } else {
+        fragments[index].isDirty =
+          fragments[index].editedContent !== fragments[index].content;
+      }
+
       fragments[index].isModified = result.is_modified ?? true;
       showToast(t('common.saved', 'Saved'), 'success');
     } catch {
       showToast(t('systemPrompt.error.saveFailed', 'Failed to save'), 'error');
     } finally {
-      fragments[index].isSaving = false;
+      if (fragments[index]) {
+        fragments[index].isSaving = false;
+      }
     }
   }
 
@@ -163,35 +159,37 @@
       !fragment.isDirty ||
       fragment.isSaving ||
       fragment.isResetting ||
-      autoSaveTimers.has(index)
+      autoSaveTimers[index]
     ) {
       return;
     }
 
     const timer = setTimeout(() => {
-      autoSaveTimers.delete(index);
+      delete autoSaveTimers[index];
       void saveFragment(index);
     }, AUTO_SAVE_DEBOUNCE_MS);
 
-    autoSaveTimers.set(index, timer);
+    autoSaveTimers[index] = timer;
   }
 
   function clearAutoSaveTimer(index) {
-    const timer = autoSaveTimers.get(index);
-    if (timer === undefined) {
+    const timer = autoSaveTimers[index];
+    if (!timer) {
       return;
     }
 
     clearTimeout(timer);
-    autoSaveTimers.delete(index);
+    delete autoSaveTimers[index];
   }
 
   function clearAutoSaveTimers() {
-    for (const timer of autoSaveTimers.values()) {
-      clearTimeout(timer);
+    for (const timer of autoSaveTimers) {
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
 
-    autoSaveTimers.clear();
+    autoSaveTimers = [];
   }
 
   function handleManualSave(index) {
@@ -475,11 +473,20 @@
     right: 20px;
     z-index: 100;
     padding: 10px 16px;
+    border: 1px solid var(--border-2);
     border-radius: var(--r-md);
+    color: var(--text-hi);
+    background: var(--surface-2);
     font-size: 12.5px;
     line-height: 1.4;
     pointer-events: none;
     animation: sp-toast-in 180ms ease;
+  }
+
+  .sp-toast--success {
+    color: var(--green);
+    background: rgba(74, 222, 128, 0.08);
+    border-color: rgba(74, 222, 128, 0.2);
   }
 
   .sp-toast--error {
@@ -557,7 +564,9 @@
     flex-direction: column;
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
-    overflow: hidden;
+    overflow: visible;
+    position: relative;
+    background: var(--bg);
   }
 
   .sp-fragment-header {
@@ -668,6 +677,7 @@
   .sp-sticky-footer {
     position: sticky;
     bottom: 0;
+    z-index: 1;
     padding: 8px 14px 10px;
     background: var(--bg);
     border-top: 1px solid var(--border);

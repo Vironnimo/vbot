@@ -225,6 +225,54 @@ describe('SystemPromptView', () => {
     expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
   });
 
+  it('auto-save clears dirty state and clean save click stays clean', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      100,
+    );
+
+    vi.useFakeTimers();
+
+    const textarea = document.body.querySelectorAll('textarea.sp-textarea')[0];
+    textarea.value = 'autosave then clean click';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    await vi.advanceTimersByTimeAsync(800);
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    const updateCallsAfterAutoSave = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'prompt.update',
+    );
+    expect(updateCallsAfterAutoSave).toHaveLength(1);
+    expect(document.body.textContent.includes('unsaved')).toBe(false);
+
+    const saveButtons = Array.from(
+      document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
+    ).filter((button) => button.textContent.trim() === 'Save');
+
+    expect(saveButtons.length).toBeGreaterThan(0);
+
+    saveButtons[0].click();
+    flushSync();
+
+    const updateCallsAfterCleanClick = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'prompt.update',
+    );
+    expect(updateCallsAfterCleanClick).toHaveLength(1);
+
+    expect(document.body.textContent).toContain('Already saved');
+
+    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
+  });
+
   it('manual save click on clean fragment shows already saved success toast', async () => {
     rpcMock.mockImplementation(createRpcMock());
 
