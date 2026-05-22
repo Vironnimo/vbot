@@ -226,8 +226,8 @@ def build_status_text(
         agent_summary = f"{agent.name} ({model_string})"
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
         fallback_model = agent.fallback_model.strip() or STATUS_PLACEHOLDER
-        thinking_effort = agent.thinking_effort.strip() or "default"
-        temperature = f"{agent.temperature:g}"
+        thinking_effort = _thinking_effort_text(agent.thinking_effort)
+        temperature = _temperature_text(agent.temperature)
 
     context_usage = _context_usage_text(messages, context_window)
     session_started = _session_started_text(messages, now_utc)
@@ -254,6 +254,18 @@ def _model_display_name(model_string: str) -> str:
     if model_id is None:
         return STATUS_PLACEHOLDER
     return model_id
+
+
+def _thinking_effort_text(value: str | None) -> str:
+    if value is None:
+        return "default"
+    return value.strip() or "default"
+
+
+def _temperature_text(value: float | None) -> str:
+    if value is None:
+        return "default"
+    return f"{value:g}"
 
 
 def _parse_registry_model_key(model_string: str) -> tuple[str | None, str | None]:

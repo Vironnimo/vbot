@@ -39,9 +39,9 @@ def test_parse_vitest_counts_returns_zero_without_summary_line():
 def test_translate_to_vitest_targets_keeps_explicit_test_file():
     module = _load_quality_frontend_module()
 
-    assert module.translate_to_vitest_targets(["src/components/__tests__/SettingsView.test.js"]) == [
-        "src/components/__tests__/SettingsView.test.js"
-    ]
+    assert module.translate_to_vitest_targets(
+        ["src/components/__tests__/SettingsView.test.js"]
+    ) == ["src/components/__tests__/SettingsView.test.js"]
 
 
 def test_translate_to_vitest_targets_uses_parent_dir_for_non_test_file():
@@ -62,7 +62,8 @@ def test_filter_vitest_failure_output_removes_pass_noise():
         "     \x1b[32m✓\x1b[39m saves automatically\n"
         "     \x1b[31m×\x1b[39m keeps dirty state on error 15ms\n"
         "\n"
-        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > SettingsView > keeps dirty state on error\n"
+        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > "
+        "SettingsView > keeps dirty state on error\n"
         "AssertionError: expected false to be true\n"
         "\n"
         " Test Files  1 failed | 1 passed (2)\n"
@@ -74,7 +75,10 @@ def test_filter_vitest_failure_output_removes_pass_noise():
 
     assert "RUN  v4.1.5" not in filtered
     assert "saves automatically" not in filtered
-    assert "FAIL src/components/__tests__/SettingsView.test.js > SettingsView > keeps dirty state on error" in filtered
+    assert (
+        "FAIL src/components/__tests__/SettingsView.test.js > "
+        "SettingsView > keeps dirty state on error" in filtered
+    )
     assert "AssertionError: expected false to be true" in filtered
     assert "Tests  1 failed | 3 passed (4)" in filtered
 
@@ -93,7 +97,9 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
         commands.append(cmd)
         if cmd[1] == "vitest":
-            return module.subprocess.CompletedProcess(cmd, 0, stdout="Tests  1 passed (1)\n", stderr="")
+            return module.subprocess.CompletedProcess(
+                cmd, 0, stdout="Tests  1 passed (1)\n", stderr=""
+            )
         return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(module.subprocess, "run", fake_run)
@@ -115,7 +121,8 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
         "     \x1b[32m✓\x1b[39m saves automatically\n"
         "     \x1b[31m×\x1b[39m keeps dirty state on error 15ms\n"
         "\n"
-        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > SettingsView > keeps dirty state on error\n"
+        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > "
+        "SettingsView > keeps dirty state on error\n"
         "AssertionError: expected false to be true\n"
         "\n"
         " Test Files  1 failed | 1 passed (2)\n"
@@ -123,7 +130,9 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
     )
 
     monkeypatch.setattr(module.shutil, "which", lambda name: name)
-    monkeypatch.setattr(module.sys, "argv", ["quality-frontend.py", "webui/src/components/Foo.svelte"])
+    monkeypatch.setattr(
+        module.sys, "argv", ["quality-frontend.py", "webui/src/components/Foo.svelte"]
+    )
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
         if cmd[1] == "vitest":
@@ -137,5 +146,7 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "--- vitest ---" in captured.out
     assert "saves automatically" not in captured.out
-    assert "FAIL src/components/__tests__/SettingsView.test.js > SettingsView > keeps dirty state on error" in captured.out
-
+    assert (
+        "FAIL src/components/__tests__/SettingsView.test.js > "
+        "SettingsView > keeps dirty state on error" in captured.out
+    )
