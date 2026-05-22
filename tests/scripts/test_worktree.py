@@ -60,6 +60,38 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
     assert ports == {8455}
 
 
+def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+
+    name = "fresh-worktree"
+    worktrees_dir = tmp_path / ".worktrees"
+    worktree_path = worktrees_dir / name
+    webui_path = worktree_path / "webui"
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    commands: list[tuple[list[str], Path | None]] = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append((command, cwd))
+        if command[:3] == ["git", "worktree", "add"]:
+            webui_path.mkdir(parents=True, exist_ok=True)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
+
+    assert result == 0
+    assert commands[-2:] == [
+        (["npm", "install"], webui_path),
+        (["npm", "run", "build"], webui_path),
+    ]
+
+
 def test_cmd_remove_uses_expected_data_dir_when_marker_is_tampered(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
