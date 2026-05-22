@@ -4,20 +4,20 @@ import {
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_FAILED,
   CHAT_STATUS_RUNNING,
+  addServerQueuedMessage,
   appendRunEvent,
   canCreateNewSession,
   createChatState,
   currentSessionState,
-  dequeueMessage,
-  enqueueMessage,
   ensureSessionState,
   highestRunEventSequence,
   loadHistory,
   removeQueuedMessage,
-  restoreDequeuedMessage,
   selectedAgent,
   setAgents,
+  syncQueueFromServer,
   startRun,
+  updateQueuedMessageContent,
   updateSessionUsage,
   visibleTimelineItems,
 } from '../chatState.js';
@@ -60,7 +60,11 @@ describe('chat state helpers', () => {
   it('loads history without losing the visible queue', () => {
     const state = createChatState();
     const sessionState = ensureSessionState(state, 'alpha', 'session-one');
-    enqueueMessage(sessionState, 'queued work');
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-one',
+      content: 'queued work',
+      created_at: '2026-05-22T00:00:00+00:00',
+    });
 
     loadHistory(sessionState, [
       { id: 'message-one', role: 'user', content: 'Hi' },
@@ -715,36 +719,122 @@ describe('chat state helpers', () => {
     expect(sessionState.runEvents).toEqual([]);
   });
 
-  it('keeps queued messages visible, FIFO, and removable before send', () => {
+  it('test_syncQueueFromServer_replaces_entire_queue', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
       'session-one',
     );
 
-    const firstMessage = enqueueMessage(sessionState, 'first');
-    const secondMessage = enqueueMessage(sessionState, 'second');
-    const removed = removeQueuedMessage(sessionState, firstMessage.id);
-    const nextMessage = dequeueMessage(sessionState);
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-old',
+      content: 'Old message',
+      created_at: '2026-05-21T00:00:00+00:00',
+    });
+    syncQueueFromServer(sessionState, [
+      {
+        id: 'queue-1',
+        content: 'First message',
+        created_at: '2026-05-22T01:00:00+00:00',
+      },
+      {
+        id: 'queue-2',
+        content: 'Second message',
+        created_at: '2026-05-22T01:01:00+00:00',
+      },
+    ]);
 
-    expect(removed).toBe(true);
-    expect(nextMessage).toEqual(secondMessage);
-    expect(sessionState.queue).toEqual([]);
+    expect(sessionState.queue).toEqual([
+      {
+        id: 'queue-1',
+        content: 'First message',
+        created_at: '2026-05-22T01:00:00+00:00',
+      },
+      {
+        id: 'queue-2',
+        content: 'Second message',
+        created_at: '2026-05-22T01:01:00+00:00',
+      },
+    ]);
   });
 
-  it('restores a dequeued message to the front when queued send fails', () => {
+  it('test_addServerQueuedMessage_appends_to_queue', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
       'session-one',
     );
-    const firstMessage = enqueueMessage(sessionState, 'first');
-    const secondMessage = enqueueMessage(sessionState, 'second');
 
-    const nextMessage = dequeueMessage(sessionState);
-    restoreDequeuedMessage(sessionState, nextMessage);
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-1',
+      content: 'First message',
+      created_at: '2026-05-22T01:00:00+00:00',
+    });
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-2',
+      content: 'Second message',
+      created_at: '2026-05-22T01:01:00+00:00',
+    });
 
-    expect(sessionState.queue).toEqual([firstMessage, secondMessage]);
+    expect(sessionState.queue.map((item) => item.id)).toEqual([
+      'queue-1',
+      'queue-2',
+    ]);
+  });
+
+  it('test_updateQueuedMessageContent_mutates_matching_item', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-1',
+      content: 'Original content',
+      created_at: '2026-05-22T01:00:00+00:00',
+    });
+
+    const updated = updateQueuedMessageContent(
+      sessionState,
+      'queue-1',
+      'Updated content',
+    );
+
+    expect(updated).toBe(true);
+    expect(sessionState.queue[0].content).toBe('Updated content');
+    expect(
+      updateQueuedMessageContent(sessionState, 'queue-missing', 'Anything'),
+    ).toBe(false);
+  });
+
+  it('removeQueuedMessage removes the matching queued item', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-1',
+      content: 'First message',
+      created_at: '2026-05-22T01:00:00+00:00',
+    });
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-2',
+      content: 'Second message',
+      created_at: '2026-05-22T01:01:00+00:00',
+    });
+
+    expect(removeQueuedMessage(sessionState, 'queue-1')).toBe(true);
+    expect(sessionState.queue).toEqual([
+      {
+        id: 'queue-2',
+        content: 'Second message',
+        created_at: '2026-05-22T01:01:00+00:00',
+      },
+    ]);
+    expect(removeQueuedMessage(sessionState, 'queue-missing')).toBe(false);
   });
 
   it('blocks new session creation only while the current session has a run', () => {
