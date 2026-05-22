@@ -13,6 +13,42 @@ from typing import Any
 
 from core.utils.errors import ConfigError
 
+_WORKTREE_FILE = Path(__file__).resolve().parent.parent.parent / ".vbot-worktree"
+
+
+def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
+    """Read ``data_dir`` from a worktree marker file when available."""
+
+    candidate = _WORKTREE_FILE if worktree_file is None else worktree_file
+    path = Path(candidate)
+    if not path.exists():
+        return None
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    raw_data_dir = data.get("data_dir") if isinstance(data, dict) else None
+    if not isinstance(raw_data_dir, str) or not raw_data_dir:
+        return None
+
+    return Path(raw_data_dir).expanduser()
+
+
+def _resolve_default_data_dir() -> Path:
+    """Resolve the default data directory from env, worktree marker, or home."""
+
+    val = os.environ.get("VBOT_DATA_DIR")
+    if isinstance(val, str) and val:
+        return Path(val).expanduser()
+
+    result = _read_worktree_data_dir()
+    if result is not None:
+        return result
+
+    return Path.home() / ".vbot"
+
 
 def parse_env_lines(lines: Iterable[str]) -> dict[str, str]:
     """Parse conservative ``KEY=VALUE`` pairs from dotenv-style lines.
@@ -114,7 +150,7 @@ class Config:
                            to ``<data_dir>/settings.json``.
         """
         self._data: dict[str, Any] = {}
-        self._data_dir = Path(data_dir) if data_dir else Path.home() / ".vbot"
+        self._data_dir = Path(data_dir) if data_dir is not None else _resolve_default_data_dir()
         self._env_path = Path(env_path) if env_path else self._data_dir / ".env"
         self._settings_path = (
             Path(settings_path) if settings_path else self._data_dir / "settings.json"

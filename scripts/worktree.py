@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MAIN_PORT = 8420
 FIRST_WORKTREE_PORT = 8421
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
-DATA_DIR_BASE = PROJECT_ROOT / ".data-dir-base"
+WORKTREE_FILE_NAME = ".vbot-worktree"
 WORKTREE_DOC_PATH = Path(".vorch") / "WORKTREE.md"
 
 
@@ -34,7 +34,7 @@ def print_error(reason: str) -> None:
 
 
 def scan_used_ports(worktrees_dir: Path) -> set[int]:
-    """Collect ports declared in per-worktree WORKTREE.md files."""
+    """Collect ports declared in per-worktree settings.json files."""
     ports: set[int] = set()
     if not worktrees_dir.exists():
         return ports
@@ -43,22 +43,24 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
         if not candidate.is_dir():
             continue
 
-        doc_path = candidate / WORKTREE_DOC_PATH
-        if not doc_path.exists():
+        marker = candidate / WORKTREE_FILE_NAME
+        if not marker.exists():
             continue
 
         try:
-            lines = doc_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-
-        for line in lines:
-            if not line.startswith("port: "):
+            data = json.loads(marker.read_text(encoding="utf-8"))
+            raw_data_dir = data.get("data_dir", "")
+            if not isinstance(raw_data_dir, str) or not raw_data_dir:
                 continue
-            raw_port = line.removeprefix("port: ").strip()
-            with contextlib.suppress(ValueError):
-                ports.add(int(raw_port))
-            break
+            settings_path = Path(raw_data_dir).expanduser() / "settings.json"
+            if not settings_path.exists():
+                continue
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            port = settings.get("server_port")
+            if isinstance(port, int):
+                ports.add(port)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
 
     return ports
 
@@ -96,18 +98,19 @@ def merge_settings(settings_path: Path, updates: dict[str, object]) -> None:
     settings_path.write_text(f"{json.dumps(settings, indent=2)}\n", encoding="utf-8")
 
 
-def worktree_doc_content(name: str, port: int, data_dir: Path) -> str:
-    """Render the per-worktree command guide with baked-in values."""
+def worktree_doc_content(name: str, port: int, data_dir_tilde: str) -> str:
+    """Render the per-worktree WORKTREE.md with no flags in commands."""
     return (
         f"# Worktree: {name}\n\n"
         f"port: {port}\n"
-        f"data-dir: {data_dir}\n\n"
-        "## Commands\n\n"
-        f"Start server:  python scripts/test-env.py start --port {port} --data-dir {data_dir}\n"
-        f"Stop server:   python scripts/test-env.py stop --port {port} --data-dir {data_dir}\n"
-        "Backend quality: python scripts/quality.py\n"
-        "Frontend quality: python scripts/quality-frontend.py\n"
-        f"CLI: python cli/main.py --port {port} --data-dir {data_dir} server <command>\n"
+        f"data-dir: {data_dir_tilde}\n\n"
+        f"You are in the '{name}' worktree. All vBot commands recognise this context\n"
+        "automatically - no --port or --data-dir flags needed.\n\n"
+        "Start server: python scripts/test-env.py start\n"
+        "Stop server:  python scripts/test-env.py stop\n"
+        "CLI:          python cli/main.py server <command>\n"
+        f"URL:          http://localhost:{port}\n\n"
+        "When finished: tell the Orchestrator to merge and clean up.\n"
     )
 
 
@@ -133,19 +136,13 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(f"worktree '{name}' already exists")
         return 1
 
-    port = find_free_port(WORKTREES_DIR)
-
-    if not args.branch:
+    if args.from_branch:
+        git_command = ["git", "worktree", "add", str(worktree_path), args.from_branch]
+    else:
         branch_check_code, _ = _run_command(["git", "rev-parse", "--verify", f"refs/heads/{name}"])
         if branch_check_code == 0:
-            print_error(
-                f"branch '{name}' already exists; use --branch to specify a different branch name"
-            )
+            print_error(f"branch '{name}' already exists; use --from to specify an existing branch")
             return 1
-
-    if args.branch:
-        git_command = ["git", "worktree", "add", str(worktree_path), args.branch]
-    else:
         git_command = ["git", "worktree", "add", "-b", name, str(worktree_path)]
 
     return_code, stderr = _run_command(git_command)
@@ -153,13 +150,13 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(stderr or "git worktree add failed")
         return 1
 
+    port = find_free_port(WORKTREES_DIR)
+
+    data_dir_tilde = f"~/.vbot-{name}"
     data_dir = Path.home() / f".vbot-{name}"
 
     try:
-        if DATA_DIR_BASE.exists() and DATA_DIR_BASE.is_dir() and any(DATA_DIR_BASE.iterdir()):
-            shutil.copytree(DATA_DIR_BASE, data_dir)
-        else:
-            data_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         print_error(str(exc))
         return 1
@@ -167,6 +164,16 @@ def cmd_create(args: argparse.Namespace) -> int:
     try:
         merge_settings(data_dir / "settings.json", {"server_port": port})
     except (OSError, json.JSONDecodeError) as exc:
+        print_error(str(exc))
+        return 1
+
+    marker = worktree_path / WORKTREE_FILE_NAME
+    try:
+        marker.write_text(
+            json.dumps({"data_dir": data_dir_tilde}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
         print_error(str(exc))
         return 1
 
@@ -179,7 +186,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     doc_path = worktree_path / WORKTREE_DOC_PATH
     try:
         doc_path.parent.mkdir(parents=True, exist_ok=True)
-        doc_path.write_text(worktree_doc_content(name, port, data_dir), encoding="utf-8")
+        doc_path.write_text(worktree_doc_content(name, port, data_dir_tilde), encoding="utf-8")
     except OSError as exc:
         print_error(str(exc))
         return 1
@@ -187,7 +194,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     print_ok(
         name=name,
         port=port,
-        **{"data-dir": data_dir},
+        **{"data-dir": data_dir_tilde},
         path=worktree_path,
         url=f"http://localhost:{port}",
     )
@@ -198,11 +205,18 @@ def cmd_remove(args: argparse.Namespace) -> int:
     """Remove a worktree and its dedicated data directory."""
     name: str = args.name
     worktree_path = WORKTREES_DIR / name
-    data_dir = Path.home() / f".vbot-{name}"
 
     if not worktree_path.exists():
         print_error(f"worktree '{name}' does not exist")
         return 1
+
+    data_dir = Path.home() / f".vbot-{name}"
+    marker = worktree_path / WORKTREE_FILE_NAME
+    with contextlib.suppress(OSError, json.JSONDecodeError):
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        raw = data.get("data_dir", "")
+        if isinstance(raw, str) and raw:
+            data_dir = Path(raw).expanduser()
 
     if args.force:
         git_command = ["git", "worktree", "remove", "--force", str(worktree_path)]
@@ -238,7 +252,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     create_parser = subparsers.add_parser("create", help="Create a worktree")
     create_parser.add_argument("name")
-    create_parser.add_argument("--branch")
+    create_parser.add_argument("--from", dest="from_branch", metavar="BRANCH")
 
     remove_parser = subparsers.add_parser("remove", help="Remove a worktree")
     remove_parser.add_argument("name")
