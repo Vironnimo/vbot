@@ -305,6 +305,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
     marker_data = _read_worktree_marker(marker)
     data_dir = _resolve_remove_data_dir(name, marker_data)
 
+    if marker.exists() and not args.force:
+        # Remove only the script-managed marker so legacy branches without the
+        # ignore rule do not fail the non-force dirty-worktree guard.
+        _run_command(["git", "-C", str(worktree_path), "clean", "-f", "--", WORKTREE_FILE_NAME])
+
     delete_branch = worktree_branch == name
     if marker_data is not None:
         managed_branch = marker_data.get("managed_branch")
