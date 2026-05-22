@@ -5,7 +5,7 @@ These rules apply to every agent, every task, unconditionally.
 
 ## Session Start
 
-Every session begins by reading these files — immediately, before anything else:
+Every session begins by reading these files — READ THE WHOLE FILE, EVERY SINGLE LINE (DO NOT LIMIT THE READ TOOL WITH LINES, REQUEST THE WHOLE FILE!) immediately, before anything else:
 
 1. `.vorch/PROJECT.md`
 2. `.vorch/GLOSSARY.md`
