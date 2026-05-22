@@ -143,6 +143,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
   - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.
+  - In edit mode, the primary save action lives in a sticky footer at the bottom
+    of the detail scroll area; the destructive delete action stays in the top
+    detail action cluster.
   - Model and fallback-model selects store both the canonical public model ID and
     selected connection. If a provider has one usable connection, the label stays
     as the model ID (for example `openrouter/anthropic/claude-sonnet-4`). If a
@@ -168,6 +171,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`.
+  - The Appearance, Skills, Sub-Agents, and Compaction panels auto-save about
+    800 ms after the last dirty edit. Their manual save buttons remain visible
+    in sticky footers inside the panel scroll area, stay enabled for trust, save
+    immediately when dirty, and show an "Already saved" success toast when the
+    panel is already clean.
   - Includes a Channels panel. It lists configured channels, hydrates per-row
     running state via `channel.status`, and supports create, edit, delete,
     enable, and disable actions through the `channel.*` RPC methods.
@@ -198,6 +206,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
   and refreshes the job list after every mutation.
   - Edit flows preserve server-provided `session_id` values unless the user
     explicitly changes them.
+- `webui/src/components/SystemPromptView.svelte`
+  - Renders the editable prompt fragments with reset controls near the fragment
+    header, while the primary save button lives in a sticky footer below each
+    textarea.
+  - Dirty fragments auto-save about 800 ms after the last edit using per-fragment
+    debounce timers. Manual save stays enabled, saves immediately when dirty,
+    and shows an "Already saved" success toast when the fragment is already clean.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.

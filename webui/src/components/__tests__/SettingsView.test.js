@@ -28,6 +28,8 @@ describe('SettingsView', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+
     if (mountedComponent) {
       await unmount(mountedComponent);
       mountedComponent = null;
@@ -329,6 +331,165 @@ describe('SettingsView', () => {
 
     confirmSpy.mockRestore();
   });
+
+  it('auto-saves sub-agent settings 800 ms after the last change', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+
+    vi.useFakeTimers();
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+
+    vi.advanceTimersByTime(799);
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      subagents: {
+        max_subagent_depth: 6,
+        max_subagents_per_turn: 8,
+        subagent_timeout_minutes: 60,
+      },
+    });
+  });
+
+  it('manual save cancels a pending debounce timer', async () => {
+    let resolveFirstUpdate;
+    let settingsUpdateCallCount = 0;
+
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settingsUpdate: async () => {
+          settingsUpdateCallCount += 1;
+
+          if (settingsUpdateCallCount === 1) {
+            await new Promise((resolve) => {
+              resolveFirstUpdate = resolve;
+            });
+          }
+
+          return null;
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+
+    vi.useFakeTimers();
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+
+    getButton('Save').click();
+    flushSync();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '7');
+
+    vi.advanceTimersByTime(799);
+    await flushAsyncUpdates();
+
+    resolveFirstUpdate();
+    await flushAsyncUpdates();
+
+    vi.advanceTimersByTime(1);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+
+    vi.advanceTimersByTime(799);
+    await flushAsyncUpdates();
+    expect(getSettingsUpdateCalls()).toHaveLength(2);
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      subagents: {
+        max_subagent_depth: 7,
+        max_subagents_per_turn: 8,
+        subagent_timeout_minutes: 60,
+      },
+    });
+  });
+
+  it('shows Already saved when manual save is clicked with no changes', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+
+    getButton('Save').click();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Already saved');
+    expect(getSettingsUpdateCalls()).toHaveLength(0);
+  });
+
+  it('keeps in-progress values while an auto-save request is in flight', async () => {
+    let resolveFirstUpdate;
+    let settingsUpdateCallCount = 0;
+
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settingsUpdate: async () => {
+          settingsUpdateCallCount += 1;
+
+          if (settingsUpdateCallCount === 1) {
+            await new Promise((resolve) => {
+              resolveFirstUpdate = resolve;
+            });
+          }
+
+          return null;
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openSubAgentsPanel();
+
+    vi.useFakeTimers();
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '6');
+
+    vi.advanceTimersByTime(800);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(1);
+
+    setInputValue('input[aria-label="Max sub-agent depth"]', '7');
+
+    resolveFirstUpdate();
+    await flushAsyncUpdates();
+
+    const depthInput = document.body.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    expect(depthInput).toBeTruthy();
+    expect(depthInput.value).toBe('7');
+
+    vi.advanceTimersByTime(800);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()).toHaveLength(2);
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      subagents: {
+        max_subagent_depth: 7,
+        max_subagents_per_turn: 8,
+        subagent_timeout_minutes: 60,
+      },
+    });
+  });
 });
 
 async function openProvidersPanel() {
@@ -346,6 +507,15 @@ async function openChannelsPanel() {
   flushSync();
   await waitForCondition(() => buttonByText('Add channel'));
   await waitForCondition(() => buttonByText('Add channel')?.disabled === false);
+}
+
+async function openSubAgentsPanel() {
+  await waitForCondition(() => buttonByText('Sub-Agents'));
+  buttonByText('Sub-Agents').click();
+  flushSync();
+  await waitForCondition(() =>
+    document.body.textContent.includes('Max sub-agent depth'),
+  );
 }
 
 function providerRow(providerName) {
@@ -367,10 +537,20 @@ function buttonByAriaLabel(label) {
   );
 }
 
+function getButton(label) {
+  const button = buttonByText(label);
+  expect(button).toBeTruthy();
+  return button;
+}
+
 function buttonsByText(label) {
   return Array.from(document.body.querySelectorAll('button')).filter(
     (button) => button.textContent.trim() === label,
   );
+}
+
+function getSettingsUpdateCalls() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'settings.update');
 }
 
 function setInputValue(selector, value) {
@@ -396,7 +576,15 @@ function submitChannelForm() {
   flushSync();
 }
 
+async function flushAsyncUpdates(iterations = 4) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
+}
+
 function createSettingsRpcMock(options = {}) {
+  let currentSettings = deepClone(options.settings ?? settingsPayload());
   const channels = Array.isArray(options.channels)
     ? options.channels.map((item) => ({
         ...item,
@@ -436,7 +624,28 @@ function createSettingsRpcMock(options = {}) {
 
   return async (method, params = {}) => {
     if (method === 'settings.get') {
-      return options.settings ?? settingsPayload();
+      return deepClone(currentSettings);
+    }
+
+    if (method === 'settings.update') {
+      if (options.settingsUpdateError) {
+        throw options.settingsUpdateError;
+      }
+
+      if (typeof options.settingsUpdate === 'function') {
+        const nextSettings = await options.settingsUpdate(
+          params,
+          deepClone(currentSettings),
+        );
+
+        if (nextSettings && typeof nextSettings === 'object') {
+          currentSettings = deepClone(nextSettings);
+          return deepClone(currentSettings);
+        }
+      }
+
+      currentSettings = mergeSettingsPayload(currentSettings, params);
+      return deepClone(currentSettings);
     }
 
     if (method === 'model.refresh_db') {
@@ -555,6 +764,48 @@ function createSettingsRpcMock(options = {}) {
   };
 }
 
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function mergeSettingsPayload(currentSettings, patch) {
+  const nextSettings = deepClone(currentSettings);
+
+  if (patch?.appearance && typeof patch.appearance === 'object') {
+    nextSettings.appearance = {
+      ...(nextSettings.appearance ?? {}),
+      ...patch.appearance,
+    };
+  }
+
+  if (patch?.skills && typeof patch.skills === 'object') {
+    nextSettings.skills = {
+      ...(nextSettings.skills ?? {}),
+      ...patch.skills,
+    };
+
+    if (Array.isArray(patch.skills.directories)) {
+      nextSettings.skills.directories = [...patch.skills.directories];
+    }
+  }
+
+  if (patch?.subagents && typeof patch.subagents === 'object') {
+    nextSettings.subagents = {
+      ...(nextSettings.subagents ?? {}),
+      ...patch.subagents,
+    };
+  }
+
+  if (patch?.compaction && typeof patch.compaction === 'object') {
+    nextSettings.compaction = {
+      ...(nextSettings.compaction ?? {}),
+      ...patch.compaction,
+    };
+  }
+
+  return nextSettings;
+}
+
 function channelConfig(id, overrides = {}) {
   return {
     id,
@@ -611,6 +862,17 @@ function settingsPayload(options = {}) {
     skills: {
       default_directory: 'C:/data/skills',
       directories: [],
+    },
+    subagents: {
+      max_subagent_depth: 4,
+      max_subagents_per_turn: 8,
+      subagent_timeout_minutes: 60,
+    },
+    compaction: {
+      auto: true,
+      threshold: 0.8,
+      tail_tokens: 15000,
+      summary_model: null,
     },
     appearance: {
       language: 'en',
