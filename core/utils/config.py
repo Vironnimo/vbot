@@ -29,7 +29,10 @@ def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
     except (OSError, json.JSONDecodeError):
         return None
 
-    raw_data_dir = data.get("data_dir") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+
+    raw_data_dir = data.get("data_dir")
     if not isinstance(raw_data_dir, str) or not raw_data_dir:
         return None
 

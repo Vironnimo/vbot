@@ -93,6 +93,16 @@ def test_malformed_json_in_worktree_file_falls_to_default(
     assert result is None
 
 
+def test_non_object_json_in_worktree_file_falls_to_default(tmp_path: Path) -> None:
+    """Valid non-object JSON in .vbot-worktree -> treated as absent marker data."""
+    worktree_file = tmp_path / ".vbot-worktree"
+    worktree_file.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+
+    result = _read_worktree_data_dir(worktree_file)
+
+    assert result is None
+
+
 def test_missing_data_dir_key_in_worktree_file_falls_to_default(tmp_path: Path) -> None:
     """Missing data_dir key -> _read_worktree_data_dir returns None."""
     worktree_file = tmp_path / ".vbot-worktree"
