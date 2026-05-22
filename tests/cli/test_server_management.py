@@ -100,7 +100,7 @@ def test_probe_health_classifies_exact_health_contract(
     monkeypatch.setattr(
         server_management.httpx,
         "get",
-        lambda url, *, timeout: httpx.Response(200, json={"status": "ok"}),
+        lambda url, *, timeout, trust_env: httpx.Response(200, json={"status": "ok"}),
     )
 
     result = probe_health(instance)
@@ -154,7 +154,11 @@ def test_probe_health_rejects_non_vbot_responses(
     response: httpx.Response,
 ) -> None:
     instance = make_instance(tmp_path)
-    monkeypatch.setattr(server_management.httpx, "get", lambda url, *, timeout: response)
+    monkeypatch.setattr(
+        server_management.httpx,
+        "get",
+        lambda url, *, timeout, trust_env: response,
+    )
 
     result = probe_health(instance)
 
@@ -168,7 +172,7 @@ def test_probe_health_reports_unreachable(
 ) -> None:
     instance = make_instance(tmp_path)
 
-    def raise_connect_error(url, *, timeout):
+    def raise_connect_error(url, *, timeout, trust_env):
         request = httpx.Request("GET", url)
         raise httpx.ConnectError("offline", request=request)
 
@@ -195,7 +199,7 @@ def test_probe_webui_classifies_root_status(
     monkeypatch.setattr(
         server_management.httpx,
         "get",
-        lambda url, *, timeout: httpx.Response(status_code),
+        lambda url, *, timeout, trust_env: httpx.Response(status_code),
     )
 
     result = probe_webui(instance)
