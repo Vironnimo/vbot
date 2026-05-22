@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -60,6 +61,27 @@ class RunNotFoundError(RunError):
 
 class RunCancelledError(RunError):
     """Raised when awaiting a cancelled run."""
+
+
+@dataclass
+class QueuedRunItem:
+    """One queued run request waiting for a session turn slot."""
+
+    item_id: str
+    display_content: str
+    executor: RunExecutor
+    internal: bool
+    future: asyncio.Future[Run]
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def to_dict(self) -> JsonObject:
+        """Return a server-safe queued item dictionary."""
+        return {
+            "id": self.item_id,
+            "content": self.display_content,
+            "internal": self.internal,
+            "created_at": self.created_at,
+        }
 
 
 @dataclass(frozen=True)
@@ -234,6 +256,7 @@ class ChatRunManager:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._active_by_session: dict[tuple[str, str], Run] = {}
+        self._queues: dict[tuple[str, str], deque[QueuedRunItem]] = {}
         self._runs: dict[str, Run] = {}
 
     async def start(self, *, agent_id: str, session_id: str, executor: RunExecutor) -> Run:
@@ -243,13 +266,90 @@ class ChatRunManager:
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
                 raise ActiveRunError(f"session already has an active run: {session_id}")
-            run = Run(run_id=str(uuid.uuid4()), agent_id=agent_id, session_id=session_id)
-            self._active_by_session[session_key] = run
-            self._runs[run.id] = run
+            return self._start_run_locked(
+                session_key=session_key,
+                agent_id=agent_id,
+                session_id=session_id,
+                executor=executor,
+            )
 
-        task = asyncio.create_task(self._execute(run, session_key, executor))
-        run.set_task(task)
-        return run
+    async def enqueue(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        executor: RunExecutor,
+        display_content: str = "",
+        internal: bool = False,
+    ) -> QueuedRunItem:
+        """Start immediately when idle or append one item to the session queue."""
+        session_key = (agent_id, session_id)
+        future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
+        item = QueuedRunItem(
+            item_id=str(uuid.uuid4()),
+            display_content=display_content,
+            executor=executor,
+            internal=internal,
+            future=future,
+        )
+
+        async with self._lock:
+            active_run = self._active_by_session.get(session_key)
+            if active_run is None or active_run.status != RunStatus.RUNNING:
+                run = self._start_run_locked(
+                    session_key=session_key,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    executor=item.executor,
+                )
+                item.future.set_result(run)
+                return item
+
+            self._queues.setdefault(session_key, deque()).append(item)
+            return item
+
+    def list_queued(self, agent_id: str, session_id: str) -> list[QueuedRunItem]:
+        """Return queued items for one session in FIFO order."""
+        return list(self._queues.get((agent_id, session_id), ()))
+
+    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
+        """Remove one queued item if present."""
+        session_key = (agent_id, session_id)
+        queue = self._queues.get(session_key)
+        if queue is None:
+            return False
+
+        for item in queue:
+            if item.item_id != item_id:
+                continue
+            queue.remove(item)
+            if not item.future.done():
+                item.future.cancel()
+            if not queue:
+                self._queues.pop(session_key, None)
+            return True
+        return False
+
+    def update_queued(
+        self,
+        agent_id: str,
+        session_id: str,
+        item_id: str,
+        new_executor: RunExecutor,
+        new_display_content: str,
+    ) -> bool:
+        """Replace the queued executor and display text for one item."""
+        queue = self._queues.get((agent_id, session_id))
+        if queue is None:
+            return False
+
+        for item in queue:
+            if item.item_id != item_id:
+                continue
+            item.executor = new_executor
+            item.display_content = new_display_content
+            return True
+        return False
 
     def get(self, run_id: str) -> Run:
         """Return a run by id."""
@@ -306,6 +406,47 @@ class ChatRunManager:
             async with self._lock:
                 if self._active_by_session.get(session_key) is run:
                     self._active_by_session.pop(session_key, None)
+            await self._drain_next(session_key)
+
+    async def _drain_next(self, session_key: tuple[str, str]) -> None:
+        async with self._lock:
+            active_run = self._active_by_session.get(session_key)
+            if active_run is not None and active_run.status == RunStatus.RUNNING:
+                return
+
+            queue = self._queues.get(session_key)
+            if not queue:
+                self._queues.pop(session_key, None)
+                return
+
+            item = queue.popleft()
+            if not queue:
+                self._queues.pop(session_key, None)
+
+            agent_id, session_id = session_key
+            run = self._start_run_locked(
+                session_key=session_key,
+                agent_id=agent_id,
+                session_id=session_id,
+                executor=item.executor,
+            )
+            if not item.future.done():
+                item.future.set_result(run)
+
+    def _start_run_locked(
+        self,
+        *,
+        session_key: tuple[str, str],
+        agent_id: str,
+        session_id: str,
+        executor: RunExecutor,
+    ) -> Run:
+        run = Run(run_id=str(uuid.uuid4()), agent_id=agent_id, session_id=session_id)
+        self._active_by_session[session_key] = run
+        self._runs[run.id] = run
+        task = asyncio.create_task(self._execute(run, session_key, executor))
+        run.set_task(task)
+        return run
 
 
 def _schedule_callback(callback: CancelCallback) -> None:
