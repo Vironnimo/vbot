@@ -5,11 +5,13 @@ These rules apply to every agent, every task, unconditionally.
 
 ## Session Start
 
-Every session begins by reading these files — READ THE WHOLE FILE, EVERY SINGLE LINE (DO NOT LIMIT THE READ TOOL WITH LINES, REQUEST THE WHOLE FILE!) immediately, before anything else:
+Every session begins by reading these files — immediately, before anything else:
 
 1. `.vorch/PROJECT.md`
 2. `.vorch/GLOSSARY.md`
 3. `.vorch/WORKTREE.md`
+
+**Read each file completely — from the first line to the last line. Do NOT stop after 100–200 lines and assume you have enough context. Do NOT skim. The full content of every file is required. If the file is long, keep reading until you reach the end.**
 
 Your agent file lists any additional files to read on top of these.
 

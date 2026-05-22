@@ -43,6 +43,10 @@ PYTEST_NOISE_LINE_PATTERNS = [
     re.compile(r"^\d+ workers\b"),
     re.compile(r"^scheduling tests via "),
 ]
+PYTEST_RESULT_TOKENS = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS")
+PYTEST_PROGRESS_NODEID_PATTERN = re.compile(
+    r"^(?:\[[^\]]+\]\s+)*(?:\[\s*\d+%\]\s+)?[^:\s][^\s]*::[^\s]+$"
+)
 
 
 def deduplicate_paths(paths: list[str]) -> list[str]:
@@ -188,6 +192,18 @@ def _collapse_blank_lines(lines: list[str]) -> list[str]:
     return collapsed
 
 
+def _is_pytest_progress_nodeid_line(stripped_line: str) -> bool:
+    """Return whether *stripped_line* is a verbose-progress node id entry."""
+
+    if "::" not in stripped_line:
+        return False
+    if stripped_line.startswith(PYTEST_RESULT_TOKENS):
+        return False
+    if any(f" {token}" in stripped_line for token in PYTEST_RESULT_TOKENS):
+        return False
+    return bool(PYTEST_PROGRESS_NODEID_PATTERN.match(stripped_line))
+
+
 def filter_pytest_failure_output(output: str) -> str:
     """Remove pytest success noise while keeping all failure details."""
 
@@ -198,6 +214,8 @@ def filter_pytest_failure_output(output: str) -> str:
             filtered_lines.append("")
             continue
         if any(pattern.match(stripped) for pattern in PYTEST_NOISE_LINE_PATTERNS):
+            continue
+        if _is_pytest_progress_nodeid_line(stripped):
             continue
         if " PASSED" in stripped and "FAILED" not in stripped and "ERROR" not in stripped:
             continue
