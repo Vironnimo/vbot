@@ -1,8 +1,11 @@
 <script>
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
 
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
 
   let fragments = $state([]);
   let agents = $state([]);
@@ -14,12 +17,60 @@
   let toastMessage = $state('');
   let toastVariant = $state('error');
   let toastTimer = null;
+  let autoSaveTimers = new SvelteMap();
 
   onMount(() => {
     loadData();
     return () => {
       if (toastTimer) {
         clearTimeout(toastTimer);
+      }
+
+      clearAutoSaveTimers();
+    };
+  });
+
+  $effect(() => {
+    const staleTimerIndexes = [];
+
+    for (const index of autoSaveTimers.keys()) {
+      if (!fragments[index]) {
+        staleTimerIndexes.push(index);
+      }
+    }
+
+    for (const index of staleTimerIndexes) {
+      clearAutoSaveTimer(index);
+    }
+
+    fragments.forEach((fragment, index) => {
+      const shouldAutoSave =
+        fragment.isDirty && !fragment.isSaving && !fragment.isResetting;
+
+      if (!shouldAutoSave) {
+        clearAutoSaveTimer(index);
+        return;
+      }
+
+      if (autoSaveTimers.has(index)) {
+        return;
+      }
+
+      scheduleAutoSaveTimer(index);
+    });
+
+    return () => {
+      for (const index of autoSaveTimers.keys()) {
+        const fragment = fragments[index];
+        const shouldAutoSave =
+          fragment &&
+          fragment.isDirty &&
+          !fragment.isSaving &&
+          !fragment.isResetting;
+
+        if (!shouldAutoSave) {
+          clearAutoSaveTimer(index);
+        }
       }
     };
   });
@@ -64,10 +115,28 @@
     const nextContent = event.currentTarget.value;
     fragments[index].editedContent = nextContent;
     fragments[index].isDirty = nextContent !== fragments[index].content;
+
+    if (fragments[index].isDirty) {
+      clearAutoSaveTimer(index);
+      scheduleAutoSaveTimer(index);
+      return;
+    }
+
+    clearAutoSaveTimer(index);
   }
 
   async function saveFragment(index) {
     const fragment = fragments[index];
+
+    if (
+      !fragment ||
+      !fragment.isDirty ||
+      fragment.isSaving ||
+      fragment.isResetting
+    ) {
+      return;
+    }
+
     fragments[index].isSaving = true;
 
     try {
@@ -79,11 +148,66 @@
       fragments[index].editedContent = fragments[index].content;
       fragments[index].isDirty = false;
       fragments[index].isModified = result.is_modified ?? true;
+      showToast(t('common.saved', 'Saved'), 'success');
     } catch {
       showToast(t('systemPrompt.error.saveFailed', 'Failed to save'), 'error');
     } finally {
       fragments[index].isSaving = false;
     }
+  }
+
+  function scheduleAutoSaveTimer(index) {
+    const fragment = fragments[index];
+    if (
+      !fragment ||
+      !fragment.isDirty ||
+      fragment.isSaving ||
+      fragment.isResetting ||
+      autoSaveTimers.has(index)
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      autoSaveTimers.delete(index);
+      void saveFragment(index);
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    autoSaveTimers.set(index, timer);
+  }
+
+  function clearAutoSaveTimer(index) {
+    const timer = autoSaveTimers.get(index);
+    if (timer === undefined) {
+      return;
+    }
+
+    clearTimeout(timer);
+    autoSaveTimers.delete(index);
+  }
+
+  function clearAutoSaveTimers() {
+    for (const timer of autoSaveTimers.values()) {
+      clearTimeout(timer);
+    }
+
+    autoSaveTimers.clear();
+  }
+
+  function handleManualSave(index) {
+    const fragment = fragments[index];
+
+    if (!fragment || fragment.isSaving || fragment.isResetting) {
+      return;
+    }
+
+    if (!fragment.isDirty) {
+      showToast(t('common.alreadySaved', 'Already saved'), 'success');
+      return;
+    }
+
+    clearAutoSaveTimer(index);
+    void saveFragment(index);
   }
 
   async function resetFragment(index) {
@@ -232,18 +356,6 @@
                       ? t('common.loading', 'Loading…')
                       : t('systemPrompt.fragmentEditor.reset', 'Reset')}
                   </button>
-                  <button
-                    class="btn-primary sp-btn-sm"
-                    type="button"
-                    disabled={!fragment.isDirty ||
-                      fragment.isSaving ||
-                      fragment.isResetting}
-                    onclick={() => saveFragment(index)}
-                  >
-                    {fragment.isSaving
-                      ? t('common.saving', 'Saving…')
-                      : t('systemPrompt.fragmentEditor.save', 'Save')}
-                  </button>
                 </div>
               </div>
 
@@ -263,6 +375,18 @@
                 value={fragment.editedContent}
                 oninput={(event) => handleTextareaInput(index, event)}
               ></textarea>
+
+              <div class="sp-sticky-footer">
+                <button
+                  class="btn-primary sp-btn-sm"
+                  type="button"
+                  onclick={() => handleManualSave(index)}
+                >
+                  {fragment.isSaving
+                    ? t('common.saving', 'Saving…')
+                    : t('systemPrompt.fragmentEditor.save', 'Save')}
+                </button>
+              </div>
             </div>
           {/each}
         </div>
@@ -539,6 +663,16 @@
   .sp-textarea:focus {
     outline: none;
     box-shadow: inset 0 0 0 1px rgba(232, 135, 10, 0.3);
+  }
+
+  .sp-sticky-footer {
+    position: sticky;
+    bottom: 0;
+    padding: 8px 14px 10px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
   }
 
   .sp-preview-section {

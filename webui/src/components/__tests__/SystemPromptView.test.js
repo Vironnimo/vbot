@@ -42,6 +42,8 @@ describe('SystemPromptView', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+
     if (mountedComponent) {
       await unmount(mountedComponent);
       mountedComponent = null;
@@ -164,6 +166,97 @@ describe('SystemPromptView', () => {
       () => !document.body.textContent.includes('unsaved'),
       50,
     );
+  });
+
+  it('auto-saves a dirty fragment after 800ms debounce', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      100,
+    );
+
+    vi.useFakeTimers();
+
+    const textarea = document.body.querySelectorAll('textarea.sp-textarea')[0];
+    textarea.value = 'auto-save draft';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    await vi.advanceTimersByTimeAsync(450);
+    flushSync();
+
+    textarea.value = 'auto-saved content';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    await vi.advanceTimersByTimeAsync(450);
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(rpcMock.mock.calls.some((call) => call[0] === 'prompt.update')).toBe(
+      false,
+    );
+
+    await vi.advanceTimersByTimeAsync(350);
+    await Promise.resolve();
+    await Promise.resolve();
+    flushSync();
+
+    expect(rpcMock.mock.calls.some((call) => call[0] === 'prompt.update')).toBe(
+      true,
+    );
+
+    const updateCalls = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'prompt.update',
+    );
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0][1]).toMatchObject({
+      name: 'system.md',
+      content: 'auto-saved content',
+    });
+
+    expect(document.body.textContent).toContain('Saved');
+
+    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
+  });
+
+  it('manual save click on clean fragment shows already saved success toast', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      100,
+    );
+
+    const saveButtons = Array.from(
+      document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
+    ).filter((button) => button.textContent.trim() === 'Save');
+
+    expect(saveButtons.length).toBeGreaterThan(0);
+    expect(saveButtons[0].closest('.sp-sticky-footer')).toBeTruthy();
+    expect(saveButtons[0].disabled).toBe(false);
+
+    saveButtons[0].click();
+    flushSync();
+
+    expect(
+      rpcMock.mock.calls.every((call) => call[0] !== 'prompt.update'),
+    ).toBe(true);
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Already saved'),
+      50,
+    );
+
+    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
   });
 
   it('reset calls prompt.reset after confirm and updates content', async () => {
@@ -313,6 +406,8 @@ describe('SystemPromptView', () => {
     const source = componentSource();
 
     const requiredKeys = [
+      'common.saved',
+      'common.alreadySaved',
       'systemPrompt.title',
       'systemPrompt.fragmentEditor.save',
       'systemPrompt.fragmentEditor.reset',
