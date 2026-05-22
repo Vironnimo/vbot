@@ -37,6 +37,7 @@ from core.chat import (
     CommandDispatcher,
     CommandHandled,
     CompactionSettings,
+    QueuedRunItem,
     Run,
     RunCancelledError,
     RunError,
@@ -45,6 +46,8 @@ from core.chat import (
 )
 from core.chat.chat import (
     _close_adapter,
+    _display_content_preview,
+    _ensure_provider_exists,
     _resolve_agent_connection,
     _split_agent_model,
     parse_bare_model,
@@ -103,6 +106,7 @@ RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
 RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
 RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
 RPC_ERROR_CHANNEL_CONFIG = "channel_config_error"
+RPC_ERROR_QUEUE_ITEM_NOT_FOUND = "queue_item_not_found"
 
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
@@ -205,6 +209,12 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return await _retry_chat(state, params)
         case "chat.cancel":
             return await _cancel_chat(state, params)
+        case "chat.queue_list":
+            return _chat_queue_list(state, params)
+        case "chat.queue_remove":
+            return _chat_queue_remove(state, params)
+        case "chat.queue_update":
+            return _chat_queue_update(state, params)
         case "channel.list":
             return _list_channels(state, params)
         case "channel.create":
@@ -715,6 +725,21 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+    except ActiveRunError:
+        try:
+            queued_item = await state.chat_loop.queue_run(
+                agent_id,
+                content,
+                session_id=session_id,
+            )
+            _bridge_queued_item_to_event_bus(state, queued_item)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return _queued_response(queued_item)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    try:
         _bridge_run_to_event_bus(state, run)
         assistant_message = await run.wait()
     except Exception as exc:
@@ -746,9 +771,24 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
         if isinstance(command_result, CommandHandled):
             return _command_handled_response(command_result.reply)
 
+    streaming_chat_loop = _streaming_chat_loop(state)
     try:
-        streaming_chat_loop = _streaming_chat_loop(state)
         run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
+    except ActiveRunError:
+        try:
+            queued_item = await streaming_chat_loop.queue_run(
+                agent_id,
+                content,
+                session_id=session_id,
+            )
+            _bridge_queued_item_to_event_bus(state, queued_item)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return _queued_response(queued_item)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    try:
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -884,6 +924,89 @@ async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run)
+
+
+def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"agent_id", "session_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.queue_list fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        items = [
+            item
+            for item in _state_chat_runs(state).list_queued(agent_id, session_id)
+            if not item.internal
+        ]
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"items": [item.to_dict() for item in items]}
+
+
+def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"agent_id", "session_id", "item_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.queue_remove fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    item_id = _required_string(params, "item_id")
+    try:
+        chat_runs = _state_chat_runs(state)
+        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+            raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+        removed = chat_runs.remove_queued(agent_id, session_id, item_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if not removed:
+        raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+    return {"ok": True}
+
+
+def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"agent_id", "session_id", "item_id", "content"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.queue_update fields: {', '.join(unsupported_fields)}",
+        )
+
+    agent_id = _required_string(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    item_id = _required_string(params, "item_id")
+    content = _parse_chat_content(params, "content")
+
+    try:
+        chat_runs = _state_chat_runs(state)
+        if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
+            raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+
+        (
+            resolved_session_id,
+            updated_executor,
+            updated_display_content,
+        ) = _build_streaming_queue_update(state, agent_id, session_id, content)
+        updated = chat_runs.update_queued(
+            agent_id,
+            resolved_session_id,
+            item_id,
+            updated_executor,
+            updated_display_content,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if not updated:
+        raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
+    return {"ok": True}
 
 
 def _list_channels(state: Any, params: JsonObject) -> JsonObject:
@@ -2066,6 +2189,13 @@ def _run_response(
     return response
 
 
+def _queued_response(item: QueuedRunItem) -> JsonObject:
+    return {
+        "queued": True,
+        "item": item.to_dict(),
+    }
+
+
 def _visible_message(message: ChatMessage) -> JsonObject:
     return cast(JsonObject, _remove_opaque_provider_metadata(message.to_dict()))
 
@@ -2162,6 +2292,33 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     asyncio.create_task(_publish_run_events(event_bus, run))
 
 
+def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:
+    """Bridge the eventual run start for one queued item into server lifecycle events."""
+
+    def _on_run_started(future: asyncio.Future[Run]) -> None:
+        if future.cancelled():
+            return
+        try:
+            run = future.result()
+        except BaseException:
+            return
+        _bridge_run_to_event_bus(state, run)
+
+    item.future.add_done_callback(_on_run_started)
+
+
+def _queue_item_is_public(
+    chat_runs: ChatRunManager,
+    agent_id: str,
+    session_id: str,
+    item_id: str,
+) -> bool:
+    for item in chat_runs.list_queued(agent_id, session_id):
+        if item.item_id == item_id:
+            return not item.internal
+    return False
+
+
 def _streaming_chat_loop(state: Any) -> Any:
     chat_loop = getattr(state, "streaming_chat_loop", None)
     if chat_loop is not None:
@@ -2184,6 +2341,67 @@ def _streaming_chat_loop(state: Any) -> Any:
     chat_loop = ChatLoop(state.runtime, streaming=True)
     state.streaming_chat_loop = chat_loop
     return chat_loop
+
+
+def _build_streaming_queue_update(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    content: str | list[ContentBlock],
+) -> tuple[str, Any, str]:
+    streaming_chat_loop = _streaming_chat_loop(state)
+    runtime = getattr(streaming_chat_loop, "_runtime", state.runtime)
+
+    agent = runtime.agents.get(agent_id)
+    provider_id, _connection_id = _resolve_agent_connection(runtime, agent)
+    _ensure_provider_exists(runtime.providers, provider_id)
+
+    get_session = getattr(streaming_chat_loop, "_get_session", None)
+    if callable(get_session):
+        session = get_session(agent_id, session_id, create_missing=False)
+    else:
+        session = runtime.chat_sessions.get(agent_id, session_id)
+
+    return (
+        session.id,
+        lambda run: streaming_chat_loop._execute_run(run, content),
+        _display_content_preview(content),
+    )
+
+
+def _state_chat_runs(state: Any) -> ChatRunManager:
+    chat_runs = getattr(state, "chat_runs", None)
+    if isinstance(chat_runs, ChatRunManager):
+        return chat_runs
+
+    runtime = getattr(state, "runtime", None)
+    if runtime is not None:
+        runtime_chat_runs = getattr(runtime, "chat_runs", None)
+        if isinstance(runtime_chat_runs, ChatRunManager):
+            state.chat_runs = runtime_chat_runs
+            return runtime_chat_runs
+
+        try:
+            runtime_chat_runs = runtime.chat_run_manager
+        except AttributeError:
+            runtime_chat_runs = getattr(runtime, "_chat_run_manager", None)
+        except RuntimeError:
+            if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
+                "core.runtime"
+            ):
+                raise
+            runtime_chat_runs = getattr(runtime, "_chat_run_manager", None)
+
+        if isinstance(runtime_chat_runs, ChatRunManager):
+            runtime.chat_runs = runtime_chat_runs
+            state.chat_runs = runtime_chat_runs
+            return runtime_chat_runs
+
+    fallback_chat_runs = ChatRunManager()
+    state.chat_runs = fallback_chat_runs
+    if runtime is not None:
+        runtime.chat_runs = fallback_chat_runs
+    return fallback_chat_runs
 
 
 def _state_command_dispatcher(state: Any) -> CommandDispatcher:
