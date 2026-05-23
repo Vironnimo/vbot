@@ -14,6 +14,7 @@ from core.channels import ChannelService
 from core.chat.chat import ChatLoop, ChatSessionManager
 from core.chat.runs import ChatRunManager, RunCancelledError
 from core.providers.credentials import ProviderCredentialResolver
+from core.providers.providers import ProviderRegistry
 from core.runtime.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
@@ -38,6 +39,53 @@ CANONICAL_BUILTIN_TOOLS = [
     "write",
 ]
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
+
+
+def _clear_provider_credential_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    resources_path = Path(__file__).resolve().parents[3] / "resources"
+    provider_registry = ProviderRegistry.load(resources_path)
+    seeded_credential_key: str | None = None
+
+    for provider_id in provider_registry.list_ids():
+        for connection in provider_registry.get(provider_id).connections:
+            credential_key = connection.auth.credential_key
+            if not credential_key:
+                continue
+            monkeypatch.delenv(credential_key, raising=False)
+            if seeded_credential_key is None and connection.type == "api_key":
+                seeded_credential_key = credential_key
+
+    if seeded_credential_key is not None:
+        monkeypatch.setenv(seeded_credential_key, "test-startup-credential")
+
+
+def _expected_startup_inventory_message(runtime: Runtime) -> str:
+    provider_ids = runtime.providers.list_ids()
+    usable_provider_count = 0
+    total_connection_count = 0
+    usable_connection_count = 0
+
+    for provider_id in provider_ids:
+        provider_config = runtime.providers.get(provider_id)
+        provider_is_usable = False
+
+        for connection in provider_config.connections:
+            total_connection_count += 1
+            connection_id = f"{provider_id}:{connection.id}"
+            if runtime.provider_credentials.has_credentials(provider_id, connection_id):
+                usable_connection_count += 1
+                provider_is_usable = True
+
+        if provider_is_usable:
+            usable_provider_count += 1
+
+    return (
+        "Runtime inventory: "
+        f"{len(runtime.tools.list_tools())} tools, "
+        f"{len(runtime.skills.list_all())} skills, "
+        f"{usable_provider_count}/{len(provider_ids)} usable providers, "
+        f"{usable_connection_count}/{total_connection_count} usable connections"
+    )
 
 
 @pytest.fixture
@@ -104,6 +152,24 @@ def test_runtime_start_logs_startup_and_shutdown_with_required_format(config: Co
     assert any(line.endswith("[INFO] vbot.core - Runtime startup initiated") for line in lines)
     assert any(line.endswith("[INFO] vbot.core - Runtime started") for line in lines)
     assert any(line.endswith("[INFO] vbot.core - Runtime stopped") for line in lines)
+
+
+def test_runtime_start_logs_inventory_counts(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime startup logs loaded tool, skill, and provider inventory counts."""
+    _clear_provider_credential_environment(monkeypatch)
+    runtime = Runtime(config)
+
+    runtime.start()
+    expected_message = _expected_startup_inventory_message(runtime)
+    runtime.stop()
+
+    log_file = next((config.data_dir / "logs").iterdir())
+    contents = log_file.read_text(encoding="utf-8")
+
+    assert f"[INFO] vbot.core - {expected_message}" in contents
 
 
 def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
