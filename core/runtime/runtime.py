@@ -274,6 +274,7 @@ class Runtime:
             data_root=self._storage.data_dir,
         )
 
+        self._log_startup_inventory()
         self._started = True
         self.logger.info("Runtime started")
 
@@ -335,6 +336,46 @@ class Runtime:
             raise RuntimeError("Agent service not available")
         if not self._agents.list():
             self._agents.create("main", "Main")
+
+    def _log_startup_inventory(self) -> None:
+        if (
+            self.logger is None
+            or self._providers is None
+            or self._provider_credentials is None
+            or self._tools is None
+            or self._skills is None
+        ):
+            return
+
+        provider_ids = self._providers.list_ids()
+        usable_provider_count = 0
+        total_connection_count = 0
+        usable_connection_count = 0
+
+        for provider_id in provider_ids:
+            provider_config = self._providers.get(provider_id)
+            provider_is_usable = False
+
+            for connection in provider_config.connections:
+                total_connection_count += 1
+                connection_id = f"{provider_id}:{connection.id}"
+                if self._provider_credentials.has_credentials(provider_id, connection_id):
+                    usable_connection_count += 1
+                    provider_is_usable = True
+
+            if provider_is_usable:
+                usable_provider_count += 1
+
+        self.logger.info(
+            "Runtime inventory: %s tools, %s skills, %s/%s usable providers, "
+            "%s/%s usable connections",
+            len(self._tools.list_tools()),
+            len(self._skills.list_all()),
+            usable_provider_count,
+            len(provider_ids),
+            usable_connection_count,
+            total_connection_count,
+        )
 
     def _attachment_max_size_bytes(self, settings: dict[str, object]) -> int:
         raw_limit = settings.get("attachment_max_size_bytes", _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES)
