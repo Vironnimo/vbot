@@ -60,6 +60,60 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
     assert ports == {8455}
 
 
+def test_run_command_defaults_to_project_root(monkeypatch):
+    module = _load_worktree_module()
+    calls = []
+
+    class FakeResult:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(command, *, capture_output, text, cwd, check):
+        calls.append(
+            {
+                "command": command,
+                "capture_output": capture_output,
+                "text": text,
+                "cwd": cwd,
+                "check": check,
+            }
+        )
+        return FakeResult()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    result = module._run_command(["git", "status"])
+
+    assert result == (0, "")
+    assert calls == [
+        {
+            "command": ["git", "status"],
+            "capture_output": True,
+            "text": True,
+            "cwd": module.PROJECT_ROOT,
+            "check": False,
+        }
+    ]
+
+
+def test_cmd_create_rejects_unsafe_name(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module.cmd_create(argparse.Namespace(name="../outside", from_branch=None))
+
+    assert result == 1
+    assert commands == []
+
+
 def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
@@ -90,13 +144,178 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
         (["npm", "install"], webui_path),
         (["npm", "run", "build"], webui_path),
     ]
+    assert not (worktree_path / ".vorch" / "WORKTREE.md").exists()
 
 
-def test_cmd_remove_uses_expected_data_dir_when_marker_is_tampered(tmp_path, monkeypatch):
+def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
+    tmp_path, monkeypatch
+):
+    module = _load_worktree_module()
+
+    name = "failing-worktree"
+    worktrees_dir = tmp_path / ".worktrees"
+    worktree_path = worktrees_dir / name
+    webui_path = worktree_path / "webui"
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append((command, cwd))
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            return 1, ""
+        if command[:3] == ["git", "worktree", "add"]:
+            webui_path.mkdir(parents=True, exist_ok=True)
+            return 0, ""
+        if command == ["npm", "run", "build"]:
+            return 1, "build failed"
+        return 0, ""
+
+    removed_paths = []
+
+    def fake_rmtree(path, ignore_errors):
+        removed_paths.append((Path(path), ignore_errors))
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
+
+    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
+
+    assert result == 1
+    assert (["git", "worktree", "remove", "--force", str(worktree_path)], None) in commands
+    assert (["git", "branch", "-D", name], None) in commands
+    assert removed_paths == [(data_dir, True)]
+
+
+def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+
+    name = "preexisting-data"
+    worktrees_dir = tmp_path / ".worktrees"
+    worktree_path = worktrees_dir / name
+    webui_path = worktree_path / "webui"
+    data_dir = tmp_path / "home" / f".vbot-{name}"
+    data_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
+    monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append((command, cwd))
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            return 1, ""
+        if command[:3] == ["git", "worktree", "add"]:
+            webui_path.mkdir(parents=True, exist_ok=True)
+            return 0, ""
+        if command == ["npm", "run", "build"]:
+            return 1, "build failed"
+        return 0, ""
+
+    removed_paths = []
+
+    def fake_rmtree(path, ignore_errors):
+        removed_paths.append((Path(path), ignore_errors))
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
+
+    result = module.cmd_create(argparse.Namespace(name=name, from_branch=None))
+
+    assert result == 1
+    assert (["git", "worktree", "remove", "--force", str(worktree_path)], None) in commands
+    assert removed_paths == []
+
+
+def test_iter_worktree_entries_lists_marker_backed_worktrees(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    worktrees_dir = tmp_path / ".worktrees"
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda path: f"{path.name}-branch")
+
+    first_data_dir = tmp_path / "home" / ".vbot-alpha"
+    first_data_dir.mkdir(parents=True)
+    (first_data_dir / "settings.json").write_text(
+        json.dumps({"server_port": 8421}),
+        encoding="utf-8",
+    )
+    first_worktree = worktrees_dir / "alpha"
+    first_worktree.mkdir(parents=True)
+    (first_worktree / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": str(first_data_dir), "managed_branch": True}),
+        encoding="utf-8",
+    )
+
+    second_worktree = worktrees_dir / "beta"
+    second_worktree.mkdir()
+    (second_worktree / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": str(tmp_path / "missing"), "managed_branch": False}),
+        encoding="utf-8",
+    )
+
+    ignored_worktree = worktrees_dir / "no-marker"
+    ignored_worktree.mkdir()
+
+    entries = module.iter_worktree_entries(worktrees_dir)
+
+    assert entries == [
+        {
+            "name": "alpha",
+            "path": first_worktree,
+            "branch": "alpha-branch",
+            "data-dir": str(first_data_dir),
+            "port": 8421,
+            "managed-branch": "true",
+        },
+        {
+            "name": "beta",
+            "path": second_worktree,
+            "branch": "beta-branch",
+            "data-dir": str(tmp_path / "missing"),
+            "port": "unknown",
+            "managed-branch": "false",
+        },
+    ]
+
+
+def test_parse_args_accepts_create_delete_and_list():
+    module = _load_worktree_module()
+
+    assert module.parse_args(["create", "task"]).command == "create"
+    assert module.parse_args(["delete", "task"]).command == "delete"
+    assert module.parse_args(["list"]).command == "list"
+
+
+def test_cmd_delete_rejects_unsafe_name(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
-    name = "safe-remove"
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module.cmd_delete(argparse.Namespace(name="nested/task", force=False))
+
+    assert result == 1
+    assert commands == []
+
+
+def test_cmd_delete_uses_expected_data_dir_when_marker_is_tampered(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "safe-delete"
     worktree_path = module.WORKTREES_DIR / name
     worktree_path.mkdir(parents=True)
 
@@ -120,7 +339,7 @@ def test_cmd_remove_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", fake_rmtree)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert removed_paths == [(Path.home() / f".vbot-{name}", True)]
@@ -130,7 +349,7 @@ def test_cmd_remove_uses_expected_data_dir_when_marker_is_tampered(tmp_path, mon
     ]
 
 
-def test_cmd_remove_missing_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
+def test_cmd_delete_missing_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -148,13 +367,13 @@ def test_cmd_remove_missing_marker_same_name_branch_skips_branch_delete(tmp_path
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert commands == [["git", "worktree", "remove", str(worktree_path)]]
 
 
-def test_cmd_remove_tolerates_non_object_marker_and_skips_branch_delete(tmp_path, monkeypatch):
+def test_cmd_delete_tolerates_non_object_marker_and_skips_branch_delete(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -177,7 +396,7 @@ def test_cmd_remove_tolerates_non_object_marker_and_skips_branch_delete(tmp_path
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert commands == [
@@ -186,7 +405,7 @@ def test_cmd_remove_tolerates_non_object_marker_and_skips_branch_delete(tmp_path
     ]
 
 
-def test_cmd_remove_malformed_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
+def test_cmd_delete_malformed_marker_same_name_branch_skips_branch_delete(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -206,7 +425,7 @@ def test_cmd_remove_malformed_marker_same_name_branch_skips_branch_delete(tmp_pa
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert commands == [
@@ -215,7 +434,7 @@ def test_cmd_remove_malformed_marker_same_name_branch_skips_branch_delete(tmp_pa
     ]
 
 
-def test_cmd_remove_force_skips_marker_cleanup(tmp_path, monkeypatch):
+def test_cmd_delete_force_skips_marker_cleanup(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -238,13 +457,13 @@ def test_cmd_remove_force_skips_marker_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: "main")
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=True))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=True))
 
     assert result == 0
     assert commands == [["git", "worktree", "remove", "--force", str(worktree_path)]]
 
 
-def test_cmd_remove_skips_branch_delete_when_marker_declares_unmanaged_branch(
+def test_cmd_delete_skips_branch_delete_when_marker_declares_unmanaged_branch(
     tmp_path, monkeypatch
 ):
     module = _load_worktree_module()
@@ -269,7 +488,7 @@ def test_cmd_remove_skips_branch_delete_when_marker_declares_unmanaged_branch(
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert commands == [
@@ -278,7 +497,7 @@ def test_cmd_remove_skips_branch_delete_when_marker_declares_unmanaged_branch(
     ]
 
 
-def test_cmd_remove_deletes_branch_when_marker_declares_managed_branch(tmp_path, monkeypatch):
+def test_cmd_delete_deletes_branch_when_marker_declares_managed_branch(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -301,7 +520,7 @@ def test_cmd_remove_deletes_branch_when_marker_declares_managed_branch(tmp_path,
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert result == 0
     assert commands == [
@@ -311,7 +530,7 @@ def test_cmd_remove_deletes_branch_when_marker_declares_managed_branch(tmp_path,
     ]
 
 
-def test_cmd_remove_restores_marker_after_failed_remove_for_retry(tmp_path, monkeypatch):
+def test_cmd_delete_restores_marker_after_failed_remove_for_retry(tmp_path, monkeypatch):
     module = _load_worktree_module()
     monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
 
@@ -348,12 +567,12 @@ def test_cmd_remove_restores_marker_after_failed_remove_for_retry(tmp_path, monk
     monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
     monkeypatch.setattr(module.shutil, "rmtree", lambda *_args, **_kwargs: None)
 
-    first_result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    first_result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert first_result == 1
     assert marker_path.exists()
 
-    second_result = module.cmd_remove(argparse.Namespace(name=name, force=False))
+    second_result = module.cmd_delete(argparse.Namespace(name=name, force=False))
 
     assert second_result == 0
     assert commands == [
