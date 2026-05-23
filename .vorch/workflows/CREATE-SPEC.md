@@ -6,8 +6,6 @@ Spec files live in `.vorch/specs/<domain>.md`. The Orchestrator creates and main
 
 **Remove every section that doesn't apply.** A spec for a small utility module might only have Overview and Interfaces. A spec for a payments module might have all sections. There is no required minimum.
 
----
-
 ## Template
 
 ```markdown
@@ -50,8 +48,6 @@ Note auth method, rate limits, or quirks relevant for development.]
 Performance-sensitive areas. Things that look safe to change but aren't.
 This section pays for itself the first time it prevents a bug.]
 ```
-
----
 
 ## Examples
 

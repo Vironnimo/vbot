@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -43,10 +44,14 @@ MAIN_PORT = 8420
 FIRST_WORKTREE_PORT = 8421
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 WORKTREE_FILE_NAME = ".vbot-worktree"
-WORKTREE_DOC_PATH = Path(".vorch") / "WORKTREE.md"
+DATA_DIR_KEY = "data_dir"
+MANAGED_BRANCH_KEY = "managed_branch"
+SERVER_PORT_KEY = "server_port"
+UNKNOWN_VALUE = "unknown"
+VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def print_ok(**fields: str | int | Path) -> None:
+def print_ok(**fields: str | int | bool | Path) -> None:
     """Print structured success output as key-value lines."""
     for key, value in fields.items():
         rendered = str(value) if isinstance(value, Path) else value
@@ -56,6 +61,17 @@ def print_ok(**fields: str | int | Path) -> None:
 def print_error(reason: str) -> None:
     """Print structured error output."""
     print(f"error: {reason}")
+
+
+def validate_worktree_name(name: str) -> str | None:
+    """Return an error message when a worktree name is unsafe."""
+    if VALID_WORKTREE_NAME_PATTERN.fullmatch(name):
+        return None
+
+    return (
+        "worktree name must start with a letter or number and contain only "
+        "letters, numbers, dots, underscores, and hyphens"
+    )
 
 
 def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
@@ -82,7 +98,7 @@ def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -
     if marker_data is None:
         return expected
 
-    raw_data_dir = marker_data.get("data_dir")
+    raw_data_dir = marker_data.get(DATA_DIR_KEY)
     if not isinstance(raw_data_dir, str) or not raw_data_dir:
         return expected
 
@@ -133,7 +149,7 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             continue
 
         try:
-            raw_data_dir = data.get("data_dir", "")
+            raw_data_dir = data.get(DATA_DIR_KEY, "")
             if not isinstance(raw_data_dir, str) or not raw_data_dir:
                 continue
             settings_path = Path(raw_data_dir).expanduser() / "settings.json"
@@ -142,7 +158,7 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             if not isinstance(settings, dict):
                 continue
-            port = settings.get("server_port")
+            port = settings.get(SERVER_PORT_KEY)
             if isinstance(port, int):
                 ports.add(port)
         except (OSError, json.JSONDecodeError):
@@ -184,22 +200,6 @@ def merge_settings(settings_path: Path, updates: dict[str, object]) -> None:
     settings_path.write_text(f"{json.dumps(settings, indent=2)}\n", encoding="utf-8")
 
 
-def worktree_doc_content(name: str, port: int, data_dir_tilde: str) -> str:
-    """Render the per-worktree WORKTREE.md with no flags in commands."""
-    return (
-        f"# Worktree: {name}\n\n"
-        f"port: {port}\n"
-        f"data-dir: {data_dir_tilde}\n\n"
-        f"You are in the '{name}' worktree. All vBot commands recognise this context\n"
-        "automatically - no --port or --data-dir flags needed.\n\n"
-        "Start server: python scripts/test-env.py start\n"
-        "Stop server:  python scripts/test-env.py stop\n"
-        "CLI:          python cli/main.py server <command>\n"
-        f"URL:          http://localhost:{port}\n\n"
-        "When finished: tell the Orchestrator to merge and clean up.\n"
-    )
-
-
 def _run_command(
     command: list[str],
     *,
@@ -207,16 +207,125 @@ def _run_command(
 ) -> tuple[int, str]:
     """Run a command and return returncode and stderr text."""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, cwd=cwd, check=False)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            cwd=cwd or PROJECT_ROOT,
+            check=False,
+        )
     except OSError as exc:
         return 1, str(exc)
     return result.returncode, result.stderr.strip()
 
 
+def _read_settings_port(data_dir: Path | None) -> int | None:
+    """Read the configured server port from a data directory."""
+    if data_dir is None:
+        return None
+
+    settings_path = data_dir / "settings.json"
+    if not settings_path.exists():
+        return None
+
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(settings, dict):
+        return None
+
+    port = settings.get(SERVER_PORT_KEY)
+    if isinstance(port, int):
+        return port
+    return None
+
+
+def _marker_data_dir(marker_data: dict[str, object] | None) -> tuple[str, Path | None]:
+    """Return display and resolved data-dir values from marker data."""
+    if marker_data is None:
+        return UNKNOWN_VALUE, None
+
+    raw_data_dir = marker_data.get(DATA_DIR_KEY)
+    if not isinstance(raw_data_dir, str) or not raw_data_dir:
+        return UNKNOWN_VALUE, None
+
+    return raw_data_dir, Path(raw_data_dir).expanduser()
+
+
+def _marker_managed_branch(marker_data: dict[str, object] | None) -> str:
+    """Return a stable display value for marker managed-branch state."""
+    if marker_data is None:
+        return UNKNOWN_VALUE
+
+    managed_branch = marker_data.get(MANAGED_BRANCH_KEY)
+    if isinstance(managed_branch, bool):
+        return str(managed_branch).lower()
+    return UNKNOWN_VALUE
+
+
+def iter_worktree_entries(worktrees_dir: Path) -> list[dict[str, str | int | Path]]:
+    """Collect script-managed worktree entries sorted by name."""
+    if not worktrees_dir.exists():
+        return []
+
+    entries: list[dict[str, str | int | Path]] = []
+    for worktree_path in sorted(worktrees_dir.iterdir(), key=lambda path: path.name):
+        if not worktree_path.is_dir():
+            continue
+
+        marker_path = worktree_path / WORKTREE_FILE_NAME
+        if not marker_path.exists():
+            continue
+
+        marker_data = _read_worktree_marker(marker_path)
+        data_dir_display, data_dir = _marker_data_dir(marker_data)
+        port = _read_settings_port(data_dir)
+        branch = _read_worktree_branch_name(worktree_path) or UNKNOWN_VALUE
+
+        entries.append(
+            {
+                "name": worktree_path.name,
+                "path": worktree_path,
+                "branch": branch,
+                "data-dir": data_dir_display,
+                "port": port if port is not None else UNKNOWN_VALUE,
+                "managed-branch": _marker_managed_branch(marker_data),
+            }
+        )
+
+    return entries
+
+
+def cleanup_failed_create(
+    name: str,
+    worktree_path: Path,
+    data_dir: Path,
+    *,
+    managed_branch: bool,
+    remove_data_dir: bool,
+) -> None:
+    """Remove artifacts created before a failed create operation."""
+    _run_command(["git", "worktree", "remove", "--force", str(worktree_path)])
+
+    if remove_data_dir:
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+    if managed_branch:
+        _run_command(["git", "branch", "-D", name])
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new worktree with dedicated port and data directory."""
     name: str = args.name
+    validation_error = validate_worktree_name(name)
+    if validation_error is not None:
+        print_error(validation_error)
+        return 1
+
     worktree_path = WORKTREES_DIR / name
+    managed_branch = args.from_branch is None
 
     if worktree_path.exists():
         print_error(f"worktree '{name}' already exists")
@@ -240,23 +349,38 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     data_dir_tilde = f"~/.vbot-{name}"
     data_dir = Path.home() / f".vbot-{name}"
+    data_dir_preexisting = data_dir.exists()
 
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
         print_error(str(exc))
         return 1
 
     try:
-        merge_settings(data_dir / "settings.json", {"server_port": port})
+        merge_settings(data_dir / "settings.json", {SERVER_PORT_KEY: port})
     except (OSError, json.JSONDecodeError) as exc:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
         print_error(str(exc))
         return 1
 
     marker = worktree_path / WORKTREE_FILE_NAME
     marker_data = {
-        "data_dir": data_dir_tilde,
-        "managed_branch": args.from_branch is None,
+        DATA_DIR_KEY: data_dir_tilde,
+        MANAGED_BRANCH_KEY: managed_branch,
     }
     try:
         marker.write_text(
@@ -264,26 +388,39 @@ def cmd_create(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
     except OSError as exc:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
         print_error(str(exc))
         return 1
 
     npm_command = shutil.which("npm") or "npm"
     return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")
     if return_code != 0:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
         print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
         return 1
 
     return_code, stderr = _run_command([npm_command, "run", "build"], cwd=worktree_path / "webui")
     if return_code != 0:
+        cleanup_failed_create(
+            name,
+            worktree_path,
+            data_dir,
+            managed_branch=managed_branch,
+            remove_data_dir=not data_dir_preexisting,
+        )
         print_error(f"npm run build failed: {stderr}" if stderr else "npm run build failed")
-        return 1
-
-    doc_path = worktree_path / WORKTREE_DOC_PATH
-    try:
-        doc_path.parent.mkdir(parents=True, exist_ok=True)
-        doc_path.write_text(worktree_doc_content(name, port, data_dir_tilde), encoding="utf-8")
-    except OSError as exc:
-        print_error(str(exc))
         return 1
 
     print_ok(
@@ -296,9 +433,14 @@ def cmd_create(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_remove(args: argparse.Namespace) -> int:
-    """Remove a worktree and its dedicated data directory."""
+def cmd_delete(args: argparse.Namespace) -> int:
+    """Delete a worktree and its dedicated data directory."""
     name: str = args.name
+    validation_error = validate_worktree_name(name)
+    if validation_error is not None:
+        print_error(validation_error)
+        return 1
+
     worktree_path = WORKTREES_DIR / name
 
     if not worktree_path.exists():
@@ -323,7 +465,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
     delete_branch = False
     if marker_data is not None:
-        managed_branch = marker_data.get("managed_branch")
+        managed_branch = marker_data.get(MANAGED_BRANCH_KEY)
         if isinstance(managed_branch, bool) and managed_branch:
             delete_branch = worktree_branch == name
 
@@ -357,7 +499,22 @@ def cmd_remove(args: argparse.Namespace) -> int:
             reason = branch_stderr or f"git branch {branch_delete_flag} {name} failed"
             print_error(reason)
 
-    print_ok(name=name, path=worktree_path, **{"data-dir": data_dir}, status="removed")
+    print_ok(name=name, path=worktree_path, **{"data-dir": data_dir}, status="deleted")
+    return 0
+
+
+def cmd_list(_args: argparse.Namespace) -> int:
+    """List script-managed worktrees."""
+    entries = iter_worktree_entries(WORKTREES_DIR)
+    if not entries:
+        print_ok(status="empty")
+        return 0
+
+    for index, entry in enumerate(entries):
+        if index:
+            print()
+        print_ok(**entry)
+
     return 0
 
 
@@ -370,9 +527,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     create_parser.add_argument("name")
     create_parser.add_argument("--from", dest="from_branch", metavar="BRANCH")
 
-    remove_parser = subparsers.add_parser("remove", help="Remove a worktree")
-    remove_parser.add_argument("name")
-    remove_parser.add_argument("--force", action="store_true")
+    delete_parser = subparsers.add_parser("delete", help="Delete a worktree")
+    delete_parser.add_argument("name")
+    delete_parser.add_argument("--force", action="store_true")
+
+    subparsers.add_parser("list", help="List worktrees")
 
     return parser.parse_args(argv)
 
@@ -382,8 +541,10 @@ def main() -> int:
     args = parse_args()
     if args.command == "create":
         return cmd_create(args)
-    if args.command == "remove":
-        return cmd_remove(args)
+    if args.command == "delete":
+        return cmd_delete(args)
+    if args.command == "list":
+        return cmd_list(args)
     return 1
 
 
