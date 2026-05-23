@@ -38,9 +38,10 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   and starts `CronService` when an event loop is active, registers the `cron`
   tool, creates the in-memory `SubAgentBatchTracker`, registers
   sub-agent tools, wires `AgentStore` with `defaults_provider=lambda:
-  storage.load_defaults().get("agent", {})`, and ensures a usable default Agent exists. Writes `Runtime
-  started` at info level. Second call is no-op (debug log) and preserves service
-  instances.
+  storage.load_defaults().get("agent", {})`, and ensures a usable default Agent exists. Before the final
+  `Runtime started` line it also writes one info-level inventory summary with loaded tool and skill counts plus
+  usable-provider and usable-connection counts derived from the current provider registry and credential state.
+  Second call is no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
   `ProcessManager` sweeper, stops `ChannelService`, stops `CronService`, resets
   started state, and clears service references.
