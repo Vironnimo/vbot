@@ -313,7 +313,8 @@ class AnthropicAdapter(ProviderAdapter):
             NetworkError: Connection and mid-stream read errors.
             ProviderTimeoutError: Timeout errors (initial connection retried;
                 mid-stream timeouts raised).
-            ProviderError: Other HTTP errors.
+            ProviderError: Other HTTP errors and in-band stream/provider
+                error payloads.
         """
         headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
