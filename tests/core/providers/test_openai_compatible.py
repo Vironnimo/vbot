@@ -1196,6 +1196,47 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_raises_network_error_on_eof_without_done_marker(self, openai_adapter):
+        """stream() raises NetworkError when SSE ends without the [DONE] marker."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hello"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(NetworkError, match=r"Stream ended without \[DONE\] marker"):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_error_on_in_band_error_chunk(self, openai_adapter):
+        """stream() raises ProviderError when the provider sends an in-band error chunk."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hello"}}]}\n\n'
+            'data: {"error":{"message":"quota exceeded"}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderError, match="Provider stream error: quota exceeded"):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, openai_adapter):
         """Reasoning text streams visibly while recognized metadata stays opaque."""
         # Arrange
@@ -1586,6 +1627,38 @@ class TestStreamSSE:
                 ),
             ),
             pytest.raises(NetworkError, match="Stream read failed: connection reset"),
+        ):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_timeout_error_on_mid_stream_timeout(
+        self,
+        openai_adapter,
+    ):
+        """stream() wraps mid-stream httpx.TimeoutException as ProviderTimeoutError."""
+
+        class _TimeoutStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}\n\n'
+                raise httpx.TimeoutException("stream timed out")
+
+            async def aclose(self) -> None:
+                pass
+
+        with (
+            patch.object(
+                openai_adapter._client,
+                "send",
+                new=AsyncMock(
+                    return_value=httpx.Response(
+                        200,
+                        stream=_TimeoutStream(),
+                        headers={"content-type": "text/event-stream"},
+                    )
+                ),
+            ),
+            pytest.raises(ProviderTimeoutError, match="stream timed out"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass

@@ -311,8 +311,10 @@ class AnthropicAdapter(ProviderAdapter):
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
             NetworkError: Connection and mid-stream read errors.
-            ProviderTimeoutError: Timeout errors during initial connection (retried, then raised).
-            ProviderError: Other HTTP errors.
+            ProviderTimeoutError: Timeout errors (initial connection retried;
+                mid-stream timeouts raised).
+            ProviderError: Other HTTP errors and in-band stream/provider
+                error payloads.
         """
         headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
@@ -351,6 +353,7 @@ class AnthropicAdapter(ProviderAdapter):
         content_blocks_by_index: dict[int, dict[str, Any]] = {}
         reasoning_meta_blocks: list[dict[str, Any]] = []
         _usage_input_tokens: int | None = None
+        seen_message_stop = False
 
         try:
             async for line in response.aiter_lines():
@@ -396,9 +399,14 @@ class AnthropicAdapter(ProviderAdapter):
                                 "output_tokens": output_tokens,
                             }
                 if parsed.get("type") == "message_stop":
+                    seen_message_stop = True
                     break
+            if not seen_message_stop:
+                raise NetworkError("Stream ended without message_stop event")
         except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
@@ -409,6 +417,12 @@ def _normalize_anthropic_stream_event(
     reasoning_meta_blocks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     event_type = event.get("type")
+    if event_type == "error":
+        error_info = event.get("error", {})
+        message = (error_info.get("message") if isinstance(error_info, dict) else None) or str(
+            event
+        )
+        raise ProviderError(f"Provider stream error: {message}", retryable=False)
     if event_type == "content_block_start":
         return _normalize_anthropic_content_block_start(event, content_blocks_by_index)
     if event_type == "content_block_delta":

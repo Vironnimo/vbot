@@ -9,7 +9,7 @@ import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import classify_http_status, wrap_network_error
-from core.providers.errors import ProviderError
+from core.providers.errors import NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
@@ -246,6 +246,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             if event_lines:
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
                     yield delta
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
@@ -256,6 +260,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             async for line in response.aiter_lines():
                 for delta in normalize_copilot_messages_sse_line(line, state):
                     yield delta
+        except httpx.ReadError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
