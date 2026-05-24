@@ -1004,6 +1004,15 @@ function appendHistoryAssistantMessage(assistantRun, message) {
     });
   }
 
+  if (message.content) {
+    appendTextSection(assistantRun, {
+      type: 'assistant_output',
+      content: message.content,
+      message,
+      streaming: false,
+    });
+  }
+
   for (const [index, toolCall] of (message.tool_calls ?? []).entries()) {
     mergeToolStarted(assistantRun, {
       type: 'tool_call_started',
@@ -1015,15 +1024,6 @@ function appendHistoryAssistantMessage(assistantRun, message) {
           ...toolCall,
         },
       },
-    });
-  }
-
-  if (message.content) {
-    appendTextSection(assistantRun, {
-      type: 'assistant_output',
-      content: message.content,
-      message,
-      streaming: false,
     });
   }
 
