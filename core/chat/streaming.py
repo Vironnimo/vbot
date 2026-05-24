@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from core.chat.runs import (
@@ -78,28 +78,29 @@ class StreamingAssistantFields:
 @dataclass
 class _ToolCallFragments:
     tool_call_id: str
-    name_parts: list[str] = field(default_factory=list)
-    argument_parts: list[str] = field(default_factory=list)
+    name_text: str = ""
+    arguments_text: str = ""
 
-    def append(self, *, name_delta: str, arguments_delta: str) -> None:
-        if name_delta:
-            self.name_parts.append(name_delta)
-        if arguments_delta:
-            self.argument_parts.append(arguments_delta)
+    def append(self, *, name_delta: str, arguments_delta: str) -> tuple[str, str]:
+        self.name_text, normalized_name_delta = _merge_stream_fragment(self.name_text, name_delta)
+        self.arguments_text, normalized_arguments_delta = _merge_stream_fragment(
+            self.arguments_text,
+            arguments_delta,
+        )
+        return normalized_name_delta, normalized_arguments_delta
 
     def to_tool_call(self) -> JsonObject | None:
-        arguments_text = "".join(self.argument_parts)
-        arguments = _parse_tool_arguments(arguments_text)
+        arguments = _parse_tool_arguments(self.arguments_text)
         if arguments is None:
             _LOGGER.warning(
                 "dropping streamed tool call %r due malformed arguments JSON fragment: %r",
                 self.tool_call_id,
-                arguments_text,
+                self.arguments_text,
             )
             return None
         return {
             "id": self.tool_call_id,
-            "name": "".join(self.name_parts),
+            "name": self.name_text,
             "arguments": arguments,
         }
 
@@ -205,7 +206,12 @@ class StreamingAccumulator:
             tool_call_id,
             _ToolCallFragments(tool_call_id=tool_call_id),
         )
-        fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
+        name_delta, arguments_delta = fragments.append(
+            name_delta=name_delta,
+            arguments_delta=arguments_delta,
+        )
+        if not name_delta and not arguments_delta:
+            return None
 
         payload: JsonObject = {"tool_call_id": tool_call_id}
         if name_delta:
@@ -282,6 +288,32 @@ def _joined_or_none(parts: list[str]) -> str | None:
     if not parts:
         return None
     return "".join(parts)
+
+
+def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
+    if not delta:
+        return existing, ""
+    if not existing:
+        return delta, delta
+    if delta in existing:
+        return existing, ""
+    if delta.startswith(existing):
+        suffix = delta[len(existing) :]
+        return delta, suffix
+
+    overlap = _suffix_prefix_overlap(existing, delta)
+    if overlap > 0:
+        suffix = delta[overlap:]
+        return existing + suffix, suffix
+    return existing + delta, delta
+
+
+def _suffix_prefix_overlap(left: str, right: str) -> int:
+    max_overlap = min(len(left), len(right))
+    for overlap in range(max_overlap, 0, -1):
+        if left.endswith(right[:overlap]):
+            return overlap
+    return 0
 
 
 def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
