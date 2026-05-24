@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -18,6 +19,9 @@ _ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
         "qwen3.6-plus",
         "qwen3.5-plus",
     }
+)
+_SYSTEM_REMINDER_BLOCKS_PATTERN = re.compile(
+    r"^<system-reminder>\n[\s\S]*?\n</system-reminder>(?:\n<system-reminder>\n[\s\S]*?\n</system-reminder>)*$"
 )
 
 
@@ -146,12 +150,42 @@ def _active_assistant_continuation_index(messages: list[dict[str, Any]]) -> int 
         if not message.get("tool_calls"):
             return None
         continuation_suffix = messages[index + 1 :]
-        if continuation_suffix and all(
-            candidate.get("role") == "tool" for candidate in continuation_suffix
-        ):
+        if _is_active_continuation_suffix(continuation_suffix):
             return index
         return None
     return None
+
+
+def _is_active_continuation_suffix(continuation_suffix: list[dict[str, Any]]) -> bool:
+    if not continuation_suffix:
+        return False
+
+    saw_tool_result = False
+    saw_synthetic_user_note = False
+    for candidate in continuation_suffix:
+        if candidate.get("role") == "tool":
+            if saw_synthetic_user_note:
+                return False
+            saw_tool_result = True
+            continue
+        if candidate.get("role") == "user" and _is_synthetic_system_reminder_message(candidate):
+            if not saw_tool_result:
+                return False
+            saw_synthetic_user_note = True
+            continue
+        return False
+    return saw_tool_result
+
+
+def _is_synthetic_system_reminder_message(message: dict[str, Any]) -> bool:
+    if "id" in message or "timestamp" in message:
+        return False
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+
+    return bool(_SYSTEM_REMINDER_BLOCKS_PATTERN.fullmatch(content.strip()))
 
 
 def _uses_anthropic_messages_path(model_id: str) -> bool:
