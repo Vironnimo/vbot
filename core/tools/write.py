@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
@@ -73,13 +74,17 @@ def write_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     )
 
 
+async def _write_handler_async(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    return await asyncio.to_thread(write_handler, context, arguments)
+
+
 def register_write_tool(registry: ToolRegistry) -> None:
     """Register the write tool with a vBot tool registry."""
     registry.register(
         WRITE_TOOL_NAME,
         WRITE_TOOL_DESCRIPTION,
         WRITE_TOOL_PARAMETERS,
-        write_handler,
+        _write_handler_async,
     )
 
 

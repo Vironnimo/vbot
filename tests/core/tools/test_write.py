@@ -1,5 +1,7 @@
 """Tests for the built-in write tool."""
 
+import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -76,6 +78,56 @@ def test_register_write_tool_exposes_provider_schema() -> None:
     assert set(parameters["properties"]) == {"path", "content"}
     assert parameters["properties"]["path"]["type"] == "string"
     assert parameters["properties"]["content"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_write_offloads_sync_file_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = ToolRegistry()
+    register_write_tool(registry)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    handler_started = threading.Event()
+    release_handler = threading.Event()
+    original_write_bytes = Path.write_bytes
+
+    def blocking_write_bytes(self: Path, data: bytes) -> int:
+        handler_started.set()
+        release_handler.wait(timeout=1)
+        return original_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", blocking_write_bytes)
+
+    dispatch_task = asyncio.create_task(
+        registry.dispatch(
+            make_context(workspace),
+            {"path": "notes.txt", "content": "hello"},
+            ["write"],
+        )
+    )
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 0.5
+    while not handler_started.is_set() and loop.time() < deadline:
+        await asyncio.sleep(0.001)
+
+    assert handler_started.is_set() is True
+    await asyncio.sleep(0)
+    assert dispatch_task.done() is False
+
+    ticked: list[str] = []
+
+    async def tick() -> None:
+        ticked.append("tick")
+
+    await asyncio.create_task(tick())
+    assert ticked == ["tick"]
+
+    release_handler.set()
+    result = await dispatch_task
+    assert result["ok"] is True
 
 
 def test_write_writes_relative_workspace_path(tmp_path: Path) -> None:

@@ -298,20 +298,7 @@ def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
     if delta.startswith(existing):
         suffix = delta[len(existing) :]
         return delta, suffix
-
-    overlap = _suffix_prefix_overlap(existing, delta)
-    if overlap > 0:
-        suffix = delta[overlap:]
-        return existing + suffix, suffix
     return existing + delta, delta
-
-
-def _suffix_prefix_overlap(left: str, right: str) -> int:
-    max_overlap = min(len(left), len(right))
-    for overlap in range(max_overlap, 0, -1):
-        if left.endswith(right[:overlap]):
-            return overlap
-    return 0
 
 
 def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
