@@ -332,6 +332,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         response = await retry_async(_connect_stream)
         tool_call_ids_by_index: dict[int, str] = {}
+        seen_done_marker = False
 
         try:
             async for line in response.aiter_lines():
@@ -339,6 +340,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     continue
                 data = line[len(SSE_DATA_PREFIX) :]
                 if data.strip() == SSE_DONE_MARKER:
+                    seen_done_marker = True
                     break
                 raw_chunk = json.loads(data)
                 for normalized_delta in self._normalize_stream_chunk(
@@ -346,7 +348,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     tool_call_ids_by_index,
                 ):
                     yield normalized_delta
-        except httpx.ReadError as exc:
+            if not seen_done_marker:
+                raise NetworkError("Stream ended without [DONE] marker")
+        except (httpx.ReadError, httpx.TimeoutException) as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
@@ -363,6 +367,11 @@ def _normalize_openai_stream_chunk(
     chunk: dict[str, Any],
     tool_call_ids_by_index: dict[int, str],
 ) -> list[dict[str, Any]]:
+    error = chunk.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or str(error)
+        raise ProviderError(f"Provider stream error: {message}", retryable=False)
+
     normalized_deltas: list[dict[str, Any]] = []
     for choice in _stream_choices(chunk):
         delta = choice.get("delta", {})
