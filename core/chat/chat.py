@@ -2065,6 +2065,11 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
             request_messages.append(_message_to_request_dict(message))
             continue
 
+        # Reasoning-only assistant turns lose reasoning fields for follow-up turns.
+        # Skip them so request history never contains empty assistant entries.
+        if _is_empty_assistant_history_message(message):
+            continue
+
         if deferred_until_after_tools:
             request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
             deferred_until_after_tools = []
@@ -2088,6 +2093,10 @@ def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
         "role": "user",
         "content": "\n".join(_system_reminder_block(note) for note in notes),
     }
+
+
+def _is_empty_assistant_history_message(message: ChatMessage) -> bool:
+    return message.role == "assistant" and message.content is None and not message.tool_calls
 
 
 def _system_reminder_block(message: ChatMessage) -> str:
@@ -2344,6 +2353,18 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")
+    has_tool_calls = bool(message.tool_calls)
+    has_visible_reasoning = message.reasoning is not None
+    has_reasoning_meta = message.reasoning_meta is not None
+    if (
+        message.content is None
+        and not has_tool_calls
+        and not has_visible_reasoning
+        and not has_reasoning_meta
+    ):
+        raise ChatMessageValidationError(
+            "assistant messages require content, reasoning, reasoning_meta, or tool_calls"
+        )
     _reject_fields(message, "tool_call_id", "name", "error_kind", "tail_boundary_id")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")

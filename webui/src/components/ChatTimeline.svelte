@@ -5,7 +5,10 @@
   import { t } from '$lib/i18n.js';
   import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
 
-  import { visibleTimelineItems } from '../lib/chatState.js';
+  import {
+    assistantRunChildProgressKey,
+    visibleTimelineItemsForRender,
+  } from '../lib/chatState.js';
 
   let {
     sessionState,
@@ -21,7 +24,7 @@
     );
   }
 
-  let timelineItems = $derived(visibleTimelineItems(sessionState));
+  let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
   let latestTerminalState = $derived.by(() => {
@@ -72,13 +75,16 @@
 
   function timelineItemSignature(item) {
     if (item.type === 'streaming') {
-      return `${item.id}:${item.streamingItem.sequence}:${item.streamingItem.content ?? ''}:${item.streamingItem.name ?? ''}`;
+      if (item.streamingItem?.type === 'tool_call') {
+        return `${item.id}:${item.streamingItem.sequence}:${(item.streamingItem.name ?? '').length}:${(item.streamingItem.argumentsText ?? '').length}`;
+      }
+      return `${item.id}:${item.streamingItem.sequence}`;
     }
     if (item.type === 'assistant_run') {
       return `${item.id}:${item.status}:${(item.items ?? [])
         .map(
           (child) =>
-            `${child.id}:${child.status ?? ''}:${child.content ?? ''}:${child.name ?? ''}:${formatJson(child.arguments ?? '')}:${formatJson(child.result ?? '')}`,
+            `${child.id}:${child.type}:${child.sequence ?? ''}:${child.status ?? ''}:${child.streaming ? '1' : '0'}:${assistantRunChildProgressKey(child)}`,
         )
         .join('~')}`;
     }
@@ -825,10 +831,13 @@
     if (item.type === 'assistant_run') {
       return item.timestamp ?? item.startTimestamp ?? item.endTimestamp;
     }
+    if (item.type === 'streaming') {
+      return item.streamingItem?.timestamp;
+    }
     if (item.type === 'compaction_separator') {
       return item.timestamp;
     }
-    return item.event.timestamp;
+    return item.event?.timestamp;
   };
 
   const avatarForItem = (item) => {
@@ -913,6 +922,21 @@
 
   const streamingToolName = (streamingItem) =>
     streamingItem.name || t('chat.toolPendingName', 'tool');
+
+  const shouldRenderStreamingItem = (streamingItem) => {
+    if (!['assistant', 'reasoning'].includes(streamingItem?.type)) {
+      return true;
+    }
+
+    if (!streamingItem?.run_id) {
+      return true;
+    }
+
+    return !timelineItems.some(
+      (item) =>
+        item.type === 'assistant_run' && item.runId === streamingItem.run_id,
+    );
+  };
 </script>
 
 {#snippet toolDetailSection(
@@ -1039,7 +1063,7 @@
         {formatDate(timestampForItem(timelineItems[0]))}
       </div>
       {#each timelineItems as item (item.id)}
-        {#if item.type === 'streaming'}
+        {#if item.type === 'streaming' && shouldRenderStreamingItem(item.streamingItem)}
           <article class="msg assistant streaming-message">
             <div class="msg-header">
               <div class="msg-avatar">{avatarForItem(item)}</div>

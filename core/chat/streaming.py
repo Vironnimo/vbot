@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from core.chat.runs import (
@@ -15,8 +15,11 @@ from core.chat.runs import (
     TOOL_CALL_DELTA_EVENT,
 )
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("chat.streaming")
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 
@@ -75,20 +78,30 @@ class StreamingAssistantFields:
 @dataclass
 class _ToolCallFragments:
     tool_call_id: str
-    name_parts: list[str] = field(default_factory=list)
-    argument_parts: list[str] = field(default_factory=list)
+    name_text: str = ""
+    arguments_text: str = ""
 
-    def append(self, *, name_delta: str, arguments_delta: str) -> None:
-        if name_delta:
-            self.name_parts.append(name_delta)
-        if arguments_delta:
-            self.argument_parts.append(arguments_delta)
+    def append(self, *, name_delta: str, arguments_delta: str) -> tuple[str, str]:
+        self.name_text, normalized_name_delta = _merge_stream_fragment(self.name_text, name_delta)
+        self.arguments_text, normalized_arguments_delta = _merge_stream_fragment(
+            self.arguments_text,
+            arguments_delta,
+        )
+        return normalized_name_delta, normalized_arguments_delta
 
-    def to_tool_call(self) -> JsonObject:
+    def to_tool_call(self) -> JsonObject | None:
+        arguments = _parse_tool_arguments(self.arguments_text)
+        if arguments is None:
+            _LOGGER.warning(
+                "dropping streamed tool call %r due malformed arguments JSON fragment: %r",
+                self.tool_call_id,
+                self.arguments_text,
+            )
+            return None
         return {
             "id": self.tool_call_id,
-            "name": "".join(self.name_parts),
-            "arguments": _parse_tool_arguments("".join(self.argument_parts)),
+            "name": self.name_text,
+            "arguments": arguments,
         }
 
 
@@ -148,7 +161,11 @@ class StreamingAccumulator:
 
     def finalize_assistant_fields(self) -> StreamingAssistantFields:
         """Build final canonical assistant fields from accumulated deltas."""
-        tool_calls = [fragments.to_tool_call() for fragments in self._tool_calls.values()]
+        tool_calls: list[JsonObject] = []
+        for fragments in self._tool_calls.values():
+            tool_call = fragments.to_tool_call()
+            if tool_call is not None:
+                tool_calls.append(tool_call)
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),
@@ -189,7 +206,12 @@ class StreamingAccumulator:
             tool_call_id,
             _ToolCallFragments(tool_call_id=tool_call_id),
         )
-        fragments.append(name_delta=name_delta, arguments_delta=arguments_delta)
+        name_delta, arguments_delta = fragments.append(
+            name_delta=name_delta,
+            arguments_delta=arguments_delta,
+        )
+        if not name_delta and not arguments_delta:
+            return None
 
         payload: JsonObject = {"tool_call_id": tool_call_id}
         if name_delta:
@@ -268,15 +290,39 @@ def _joined_or_none(parts: list[str]) -> str | None:
     return "".join(parts)
 
 
-def _parse_tool_arguments(arguments_text: str) -> JsonObject:
+def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
+    if not delta:
+        return existing, ""
+    if not existing:
+        return delta, delta
+    if delta.startswith(existing):
+        suffix = delta[len(existing) :]
+        return delta, suffix
+
+    overlap = _suffix_prefix_overlap(existing, delta)
+    if overlap > 0:
+        suffix = delta[overlap:]
+        return existing + suffix, suffix
+    return existing + delta, delta
+
+
+def _suffix_prefix_overlap(left: str, right: str) -> int:
+    max_overlap = min(len(left), len(right))
+    for overlap in range(max_overlap, 0, -1):
+        if left.endswith(right[:overlap]):
+            return overlap
+    return 0
+
+
+def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
     if not arguments_text:
         return {}
     try:
         value = json.loads(arguments_text)
     except json.JSONDecodeError:
-        return {}
+        return None
     if not isinstance(value, dict):
-        return {}
+        return None
     return value
 
 

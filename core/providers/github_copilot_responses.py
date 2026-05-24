@@ -367,11 +367,14 @@ def _extract_function_calls(output_items: list[Mapping[str, Any]]) -> list[dict[
     for item in output_items:
         if item.get("type") != "function_call":
             continue
+        arguments = _parse_tool_arguments(_function_call_arguments(item))
+        if arguments is None:
+            continue
         tool_calls.append(
             {
                 "id": _function_call_id(item),
                 "name": _function_call_name(item),
-                "arguments": _parse_tool_arguments(_function_call_arguments(item)),
+                "arguments": arguments,
             }
         )
     return tool_calls or None
@@ -743,16 +746,20 @@ def _serialize_tool_arguments(arguments: Any) -> str:
     return json.dumps(arguments if arguments is not None else {}, separators=(",", ":"))
 
 
-def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any] | None:
     if isinstance(arguments, Mapping):
         return dict(arguments)
-    if not isinstance(arguments, str) or not arguments:
+    if arguments is None:
+        return {}
+    if not isinstance(arguments, str):
+        return None
+    if not arguments:
         return {}
     try:
         parsed = json.loads(arguments)
     except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, Mapping) else {}
+        return None
+    return dict(parsed) if isinstance(parsed, Mapping) else None
 
 
 def _mapping_list(value: Any) -> list[Mapping[str, Any]]:

@@ -21,7 +21,10 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_compatible import (
+    OpenAICompatibleAdapter,
+    _to_openai_assistant_message,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
@@ -199,6 +202,48 @@ def openai_adapter():
 def openrouter_adapter():
     """OpenAI-compatible adapter with OpenRouter config (extra headers)."""
     return OpenAICompatibleAdapter(OPENROUTER_CONFIG, API_KEY)
+
+
+class TestAssistantMessageFormatting:
+    """Verify assistant wire-message formatting edge cases."""
+
+    def test_assistant_message_without_tool_calls_uses_empty_content_string(self) -> None:
+        wire_message = _to_openai_assistant_message(
+            {
+                "role": "assistant",
+                "content": None,
+            }
+        )
+
+        assert wire_message["content"] == ""
+        assert "tool_calls" not in wire_message
+
+    def test_assistant_message_with_tool_calls_keeps_null_content(self) -> None:
+        wire_message = _to_openai_assistant_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "name": "read",
+                        "arguments": {"path": "README.md"},
+                    }
+                ],
+            }
+        )
+
+        assert wire_message["content"] is None
+        assert wire_message["tool_calls"] == [
+            {
+                "id": "call_abc",
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": '{"path":"README.md"}',
+                },
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -593,8 +638,8 @@ class TestSendSuccess:
             ],
         }
 
-    def test_normalize_response_uses_empty_arguments_for_malformed_tool_json(self, openai_adapter):
-        """Malformed provider tool-call JSON does not leak JSONDecodeError."""
+    def test_normalize_response_drops_tool_call_for_malformed_tool_json(self, openai_adapter):
+        """Malformed provider tool-call JSON is ignored instead of becoming fake empty arguments."""
         response = {
             "choices": [
                 {
@@ -618,8 +663,50 @@ class TestSendSuccess:
 
         normalized = openai_adapter.normalize_response(response)
 
+        assert normalized["tool_calls"] is None
+
+    def test_normalize_response_keeps_valid_tool_calls_when_one_is_malformed(
+        self,
+        openai_adapter,
+    ):
+        """Malformed tool-call JSON does not suppress valid sibling tool calls."""
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_bad",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city":',
+                                },
+                            },
+                            {
+                                "id": "call_ok",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path":"README.md"}',
+                                },
+                            },
+                        ],
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
         assert normalized["tool_calls"] == [
-            {"id": "call_abc", "name": "get_weather", "arguments": {}}
+            {
+                "id": "call_ok",
+                "name": "read_file",
+                "arguments": {"path": "README.md"},
+            }
         ]
 
     def test_normalize_response_preserves_openrouter_reasoning_details(self, openrouter_adapter):
