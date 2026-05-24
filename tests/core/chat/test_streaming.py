@@ -264,6 +264,7 @@ async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:
 
 async def test_malformed_tool_arguments_are_dropped(
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     accumulator = StreamingAccumulator()
 
@@ -279,12 +280,20 @@ async def test_malformed_tool_arguments_are_dropped(
         fields = accumulator.finalize_assistant_fields()
 
     assert fields.tool_calls is None
-    assert any(
+    matched_in_log_records = any(
         record.name == "vbot.chat.streaming"
-        and record.args == ("call_abc", '{"path":')
-        and record.getMessage().startswith("dropping streamed tool call")
+        and "dropping streamed tool call 'call_abc'" in record.getMessage()
+        and "malformed arguments JSON fragment: '{\"path\":'" in record.getMessage()
         for record in caplog.records
     )
+    stderr_output = capsys.readouterr().err
+    matched_in_stderr = (
+        "dropping streamed tool call 'call_abc'" in stderr_output
+        and "malformed arguments JSON fragment: '{\"path\":'" in stderr_output
+    )
+
+    # Full-suite logging config can route warnings directly to stderr.
+    assert matched_in_log_records or matched_in_stderr
 
 
 async def test_finish_delta_records_reason_without_visible_event() -> None:
