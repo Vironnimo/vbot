@@ -180,6 +180,48 @@ async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     ]
 
 
+async def test_cumulative_tool_argument_fragments_emit_only_missing_suffix_and_finalize() -> None:
+    accumulator = StreamingAccumulator()
+
+    first_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": '{"path":"',
+        }
+    )[0]
+    second_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '{"path":"notes.md"}',
+        }
+    )[0]
+    duplicate_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '{"path":"notes.md"}',
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert first_delta.payload == {
+        "tool_call_id": "call_abc",
+        "name_delta": "write",
+        "arguments_delta": '{"path":"',
+    }
+    assert second_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": 'notes.md"}',
+    }
+    assert duplicate_delta == []
+    assert fields.tool_calls == [
+        {"id": "call_abc", "name": "write", "arguments": {"path": "notes.md"}}
+    ]
+
+
 async def test_malformed_tool_arguments_are_dropped(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
