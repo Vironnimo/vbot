@@ -1817,6 +1817,72 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_raises_network_error_on_eof_without_message_stop(self, anthropic_adapter):
+        """stream() raises NetworkError when the stream ends without message_stop."""
+        # Arrange
+        sse_body = (
+            "event: message_start\n"
+            'data: {"type":"message_start","message":{"id":"msg_01"}}\n'
+            "\n"
+            "event: content_block_start\n"
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"Hello"}}\n'
+            "\n"
+            "event: content_block_stop\n"
+            'data: {"type":"content_block_stop","index":0}\n'
+            "\n"
+            "event: message_delta\n"
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(NetworkError, match="Stream ended without message_stop event"):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_error_on_in_band_error_event(self, anthropic_adapter):
+        """stream() raises ProviderError when an in-band Anthropic error event arrives."""
+        # Arrange
+        sse_body = (
+            "event: error\n"
+            'data: {"type":"error","error":{"type":"invalid_request_error","message":"bad"}}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderError, match="Provider stream error: bad"):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_401_raises_provider_auth_error(self, anthropic_adapter):
         """stream() raises ProviderAuthError on 401 — no retry."""
         # Arrange
@@ -1922,6 +1988,51 @@ class TestStreamSSE:
                 new=AsyncMock(return_value=broken_response),
             ),
             pytest.raises(NetworkError, match="Stream read failed: socket closed"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+        assert broken_response.closed is True
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_timeout_error_on_mid_stream_timeout(
+        self,
+        anthropic_adapter,
+    ):
+        """stream() wraps mid-stream httpx.TimeoutException as ProviderTimeoutError."""
+
+        request = httpx.Request("POST", ANTHROPIC_URL)
+
+        class _BrokenTimeoutLineIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise httpx.TimeoutException("timed out", request=request)
+
+        class _BrokenTimeoutStreamResponse:
+            status_code = 200
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            def aiter_lines(self):
+                return _BrokenTimeoutLineIterator()
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        broken_response = _BrokenTimeoutStreamResponse()
+        with (
+            patch.object(
+                anthropic_adapter._client,
+                "send",
+                new=AsyncMock(return_value=broken_response),
+            ),
+            pytest.raises(ProviderTimeoutError, match="timed out"),
         ):
             async for _ in anthropic_adapter.stream(
                 SAMPLE_MESSAGES,

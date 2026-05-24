@@ -291,8 +291,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderAuthError: 401 / 403 responses.
             ProviderRateLimitError: 429 responses (retried, then raised).
             NetworkError: Connection and mid-stream read errors.
-            ProviderTimeoutError: Timeout errors during initial connection (retried, then raised).
-            ProviderError: Other HTTP errors.
+            ProviderTimeoutError: Timeout errors (initial connection retried;
+                mid-stream timeouts raised).
+            ProviderError: Other HTTP errors and in-band stream/provider
+                error payloads.
         """
         headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
@@ -332,6 +334,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         response = await retry_async(_connect_stream)
         tool_call_ids_by_index: dict[int, str] = {}
+        seen_done_marker = False
 
         try:
             async for line in response.aiter_lines():
@@ -339,6 +342,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     continue
                 data = line[len(SSE_DATA_PREFIX) :]
                 if data.strip() == SSE_DONE_MARKER:
+                    seen_done_marker = True
                     break
                 raw_chunk = json.loads(data)
                 for normalized_delta in self._normalize_stream_chunk(
@@ -346,8 +350,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     tool_call_ids_by_index,
                 ):
                     yield normalized_delta
+            if not seen_done_marker:
+                raise NetworkError("Stream ended without [DONE] marker")
         except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
@@ -363,6 +371,11 @@ def _normalize_openai_stream_chunk(
     chunk: dict[str, Any],
     tool_call_ids_by_index: dict[int, str],
 ) -> list[dict[str, Any]]:
+    error = chunk.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or str(error)
+        raise ProviderError(f"Provider stream error: {message}", retryable=False)
+
     normalized_deltas: list[dict[str, Any]] = []
     for choice in _stream_choices(chunk):
         delta = choice.get("delta", {})

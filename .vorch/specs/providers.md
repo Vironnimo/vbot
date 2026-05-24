@@ -295,7 +295,8 @@ Errors are classified by HTTP status code (not by parsing the body):
 OpenCode Go is OpenAI-compatible for chat completions but requires one provider-specific assistant-message round-trip rule.
 
 - Runtime reasoning round-trip: when an internal assistant message carries non-empty `reasoning`, `OpenCodeGoAdapter` echoes it back on the wire as `reasoning_content`.
-- `minimax-m2.7` is the current exception to the normal OpenAI-compatible transport: `OpenCodeGoAdapter` routes that model through an internal `AnthropicAdapter` instance to `POST /messages` using the provider's configured base URL and `x-api-key` auth metadata. All other OpenCode Go models continue to use `POST /chat/completions`.
+- `minimax-m2.7`, `minimax-m2.5`, `qwen3.6-plus`, and `qwen3.5-plus` are the current exceptions to the normal OpenAI-compatible transport: `OpenCodeGoAdapter` routes those models through an internal `AnthropicAdapter` instance to `POST /messages` using the provider's configured base URL and `x-api-key` auth metadata. All other OpenCode Go models continue to use `POST /chat/completions`.
+- Anthropic-routed OpenCode Go models apply `_bound_assistant_reasoning_replay()` before request building, send, and stream. That helper strips `reasoning` and `reasoning_meta` from historical assistant messages except the active continuation turn (the most recent assistant tool-call message immediately followed by tool results and optional synthetic system reminders), which prevents stale completed-turn reasoning from inflating later prompts while preserving the current tool-use continuation contract.
 - Constructor contract: `OpenCodeGoAdapter` accepts the shared optional `model_lookup` parameter through the `ProviderAdapter` base contract even though it does not currently use catalog facts at runtime.
 - This behavior is intentionally subclass-local; the generic `OpenAICompatibleAdapter` does not infer provider-specific `reasoning_content` replay rules.
 
