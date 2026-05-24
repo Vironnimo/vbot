@@ -452,6 +452,92 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_minimax_send_keeps_reasoning_for_tool_continuation_with_synthetic_user_note(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        captured_payload: dict[str, Any] = {}
+
+        def _capture_messages_request(request: httpx.Request) -> httpx.Response:
+            captured_payload.update(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+
+        respx.post(OPENCODE_GO_MESSAGES_URL).mock(side_effect=_capture_messages_request)
+
+        await opencode_go_adapter.send(
+            [
+                {"role": "user", "content": "Run tool"},
+                {
+                    "role": "assistant",
+                    "content": "Tool turn assistant",
+                    "reasoning": "active thinking",
+                    "reasoning_meta": {
+                        "content_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "active thinking",
+                                "signature": "sig-active",
+                            }
+                        ]
+                    },
+                    "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": {}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "record_note",
+                    "content": json.dumps({"ok": True}),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "<system-reminder>\nTool finished background work\n</system-reminder>"
+                    ),
+                },
+            ],
+            model_id="minimax-m2.7",
+        )
+
+        payload_messages = captured_payload.get("messages", [])
+        assert isinstance(payload_messages, list)
+        assert payload_messages[-1]["role"] == "user"
+        reminder_content = payload_messages[-1].get("content", [])
+        assert isinstance(reminder_content, list)
+        assert any(
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and block.get("text")
+            == ("<system-reminder>\nTool finished background work\n</system-reminder>")
+            for block in reminder_content
+        )
+
+        assistant_messages = [
+            message
+            for message in payload_messages
+            if isinstance(message, dict) and message.get("role") == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+        assistant_blocks = assistant_messages[0].get("content", [])
+        assert isinstance(assistant_blocks, list)
+        assert any(
+            isinstance(block, dict) and block.get("type") == "thinking"
+            for block in assistant_blocks
+        )
+        assert any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in assistant_blocks
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_minimax_send_drops_stale_reasoning_when_completed_tool_span_is_not_tail(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
