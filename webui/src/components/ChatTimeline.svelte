@@ -78,7 +78,7 @@
       return `${item.id}:${item.status}:${(item.items ?? [])
         .map(
           (child) =>
-            `${child.id}:${child.status ?? ''}:${child.content ?? ''}:${child.name ?? ''}:${formatJson(child.arguments ?? '')}:${formatJson(child.result ?? '')}`,
+            `${child.id}:${child.type}:${child.sequence ?? ''}:${child.status ?? ''}:${child.streaming ? '1' : '0'}`,
         )
         .join('~')}`;
     }
