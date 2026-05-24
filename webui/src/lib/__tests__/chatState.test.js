@@ -379,6 +379,70 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('keeps reload history ordering with assistant content before same-message tool rows', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-reload-history-ordering',
+    );
+
+    loadHistory(sessionState, [
+      {
+        id: 'user-one',
+        role: 'user',
+        content: 'Investigate chat ordering.',
+      },
+      {
+        id: 'assistant-plan',
+        role: 'assistant',
+        content: 'I will run bash first.',
+        tool_calls: [
+          {
+            id: 'call-bash',
+            name: 'bash',
+            arguments: { command: 'ls -la' },
+          },
+        ],
+      },
+      {
+        id: 'tool-bash',
+        role: 'tool',
+        tool_call_id: 'call-bash',
+        name: 'bash',
+        content: '{"ok": true, "stdout": "file.txt"}',
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'I found the file list.',
+      },
+    ]);
+
+    const timelineItems = visibleTimelineItems(sessionState);
+    const assistantRun = timelineItems[1];
+
+    expect(timelineItems).toHaveLength(2);
+    expect(assistantRun).toEqual(
+      expect.objectContaining({ type: 'assistant_run', source: 'history' }),
+    );
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'assistant_output',
+      'tool_call',
+      'assistant_output',
+    ]);
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'I will run bash first.',
+      'I found the file list.',
+    ]);
+    expect(assistantRun.tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-bash',
+        name: 'bash',
+        status: 'success',
+      }),
+    ]);
+  });
+
   it('keeps one assistant run when SSE replay overlaps with persisted active run history', () => {
     const sessionState = ensureSessionState(
       createChatState(),
