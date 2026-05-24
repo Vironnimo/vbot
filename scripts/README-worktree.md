@@ -21,6 +21,8 @@ For each created worktree it does all of the following:
 
 - creates a Git worktree under `.worktrees/<name>`
 - creates a dedicated data directory at `~/.vbot-<name>`
+- copies the default contents from `.data-dir-base/` into that data directory
+- rewrites `agents/main/agent.json` so the main agent points at that data dir's `workspace-main`
 - writes `settings.json` in that data directory with a dedicated `server_port`
 - writes a `.vbot-worktree` marker into the worktree root
 - installs frontend dependencies in `webui/`
