@@ -608,8 +608,14 @@ def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] 
         return None
     tool_calls: list[dict[str, Any]] = []
     for raw_call in raw_tool_calls:
+        if not isinstance(raw_call, dict):
+            continue
         function = raw_call.get("function", {})
+        if not isinstance(function, dict):
+            continue
         arguments = _parse_tool_arguments(function.get("arguments"))
+        if arguments is None:
+            continue
         tool_calls.append(
             {
                 "id": raw_call["id"],
@@ -617,19 +623,23 @@ def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] 
                 "arguments": arguments,
             }
         )
-    return tool_calls
+    return tool_calls or None
 
 
-def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
+def _parse_tool_arguments(arguments: Any) -> dict[str, Any] | None:
     if isinstance(arguments, dict):
         return dict(arguments)
-    if not isinstance(arguments, str) or not arguments:
+    if arguments is None:
+        return {}
+    if not isinstance(arguments, str):
+        return None
+    if not arguments:
         return {}
     try:
         parsed = json.loads(arguments)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _extract_openai_reasoning(message: dict[str, Any]) -> str | None:

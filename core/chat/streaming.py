@@ -87,11 +87,20 @@ class _ToolCallFragments:
         if arguments_delta:
             self.argument_parts.append(arguments_delta)
 
-    def to_tool_call(self) -> JsonObject:
+    def to_tool_call(self) -> JsonObject | None:
+        arguments_text = "".join(self.argument_parts)
+        arguments = _parse_tool_arguments(arguments_text)
+        if arguments is None:
+            _LOGGER.warning(
+                "dropping streamed tool call %r due malformed arguments JSON fragment: %r",
+                self.tool_call_id,
+                arguments_text,
+            )
+            return None
         return {
             "id": self.tool_call_id,
             "name": "".join(self.name_parts),
-            "arguments": _parse_tool_arguments("".join(self.argument_parts)),
+            "arguments": arguments,
         }
 
 
@@ -151,7 +160,11 @@ class StreamingAccumulator:
 
     def finalize_assistant_fields(self) -> StreamingAssistantFields:
         """Build final canonical assistant fields from accumulated deltas."""
-        tool_calls = [fragments.to_tool_call() for fragments in self._tool_calls.values()]
+        tool_calls: list[JsonObject] = []
+        for fragments in self._tool_calls.values():
+            tool_call = fragments.to_tool_call()
+            if tool_call is not None:
+                tool_calls.append(tool_call)
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),
@@ -271,19 +284,15 @@ def _joined_or_none(parts: list[str]) -> str | None:
     return "".join(parts)
 
 
-def _parse_tool_arguments(arguments_text: str) -> JsonObject:
+def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
     if not arguments_text:
         return {}
     try:
         value = json.loads(arguments_text)
     except json.JSONDecodeError:
-        _LOGGER.warning(
-            "tool call arguments JSON parse failed - fragment: %r",
-            arguments_text,
-        )
-        return {}
+        return None
     if not isinstance(value, dict):
-        return {}
+        return None
     return value
 
 
