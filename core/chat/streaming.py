@@ -15,8 +15,11 @@ from core.chat.runs import (
     TOOL_CALL_DELTA_EVENT,
 )
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("chat.streaming")
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 
@@ -274,6 +277,10 @@ def _parse_tool_arguments(arguments_text: str) -> JsonObject:
     try:
         value = json.loads(arguments_text)
     except json.JSONDecodeError:
+        _LOGGER.warning(
+            "tool call arguments JSON parse failed - fragment: %r",
+            arguments_text,
+        )
         return {}
     if not isinstance(value, dict):
         return {}
