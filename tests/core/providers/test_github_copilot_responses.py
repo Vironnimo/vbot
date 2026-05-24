@@ -359,7 +359,7 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
     }
 
 
-def test_normalize_response_uses_empty_arguments_for_malformed_function_json() -> None:
+def test_normalize_response_drops_malformed_function_arguments_json() -> None:
     normalized = normalize_responses_response(
         {
             "output": [
@@ -373,7 +373,34 @@ def test_normalize_response_uses_empty_arguments_for_malformed_function_json() -
         }
     )
 
-    assert normalized["tool_calls"] == [{"id": "call_1", "name": "search", "arguments": {}}]
+    assert normalized["tool_calls"] is None
+
+
+def test_normalize_response_keeps_valid_sibling_when_one_function_arguments_json_is_malformed() -> (
+    None
+):
+    normalized = normalize_responses_response(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_bad",
+                    "name": "search",
+                    "arguments": "{not json",
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_ok",
+                    "name": "read_file",
+                    "arguments": '{"path":"README.md"}',
+                },
+            ]
+        }
+    )
+
+    assert normalized["tool_calls"] == [
+        {"id": "call_ok", "name": "read_file", "arguments": {"path": "README.md"}}
+    ]
 
 
 def test_normalize_response_extracts_nested_function_call_name_and_visible_reasoning() -> None:

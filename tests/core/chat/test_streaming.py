@@ -180,20 +180,120 @@ async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     ]
 
 
-async def test_malformed_tool_arguments_degrade_to_empty_object() -> None:
+async def test_cumulative_tool_argument_fragments_emit_only_missing_suffix_and_finalize() -> None:
+    accumulator = StreamingAccumulator()
+
+    first_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": '{"path":"',
+        }
+    )[0]
+    second_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '{"path":"notes.md"}',
+        }
+    )[0]
+    duplicate_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '{"path":"notes.md"}',
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert first_delta.payload == {
+        "tool_call_id": "call_abc",
+        "name_delta": "write",
+        "arguments_delta": '{"path":"',
+    }
+    assert second_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": 'notes.md"}',
+    }
+    assert duplicate_delta == []
+    assert fields.tool_calls == [
+        {"id": "call_abc", "name": "write", "arguments": {"path": "notes.md"}}
+    ]
+
+
+async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:
     accumulator = StreamingAccumulator()
 
     accumulator.add_delta(
         {
             "type": "tool_call_delta",
             "id": "call_abc",
-            "name_delta": "read_file",
-            "arguments_delta": '{"path":',
+            "name_delta": "write",
+            "arguments_delta": '{"pattern":"abc","value":"',
+        }
+    )
+    repeated_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": "abc",
+        }
+    )[0]
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '"}',
         }
     )
 
     fields = accumulator.finalize_assistant_fields()
-    assert fields.tool_calls == [{"id": "call_abc", "name": "read_file", "arguments": {}}]
+    assert repeated_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": "abc",
+    }
+    assert fields.tool_calls == [
+        {
+            "id": "call_abc",
+            "name": "write",
+            "arguments": {"pattern": "abc", "value": "abc"},
+        }
+    ]
+
+
+async def test_malformed_tool_arguments_are_dropped(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    accumulator = StreamingAccumulator()
+
+    with caplog.at_level("WARNING", logger="vbot.chat.streaming"):
+        accumulator.add_delta(
+            {
+                "type": "tool_call_delta",
+                "id": "call_abc",
+                "name_delta": "read_file",
+                "arguments_delta": '{"path":',
+            }
+        )
+        fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls is None
+    matched_in_log_records = any(
+        record.name == "vbot.chat.streaming"
+        and "dropping streamed tool call 'call_abc'" in record.getMessage()
+        and "malformed arguments JSON fragment: '{\"path\":'" in record.getMessage()
+        for record in caplog.records
+    )
+    stderr_output = capsys.readouterr().err
+    matched_in_stderr = (
+        "dropping streamed tool call 'call_abc'" in stderr_output
+        and "malformed arguments JSON fragment: '{\"path\":'" in stderr_output
+    )
+
+    # Full-suite logging config can route warnings directly to stderr.
+    assert matched_in_log_records or matched_in_stderr
 
 
 async def test_finish_delta_records_reason_without_visible_event() -> None:
