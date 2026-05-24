@@ -452,6 +452,74 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_minimax_send_drops_stale_reasoning_when_completed_tool_span_is_not_tail(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        captured_payload: dict[str, Any] = {}
+
+        def _capture_messages_request(request: httpx.Request) -> httpx.Response:
+            captured_payload.update(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+
+        respx.post(OPENCODE_GO_MESSAGES_URL).mock(side_effect=_capture_messages_request)
+
+        await opencode_go_adapter.send(
+            [
+                {"role": "user", "content": "First"},
+                {
+                    "role": "assistant",
+                    "content": "Older assistant",
+                    "reasoning": "old thinking",
+                    "reasoning_meta": {
+                        "content_blocks": [
+                            {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
+                        ]
+                    },
+                    "tool_calls": [{"id": "call_old", "name": "old_tool", "arguments": {}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_old",
+                    "name": "old_tool",
+                    "content": json.dumps({"ok": True}),
+                },
+                {"role": "user", "content": "Follow-up question after tool turn"},
+            ],
+            model_id="minimax-m2.7",
+        )
+
+        payload_messages = captured_payload.get("messages", [])
+        assert isinstance(payload_messages, list)
+        assert payload_messages[-1]["role"] == "user"
+
+        assistant_messages = [
+            message
+            for message in payload_messages
+            if isinstance(message, dict) and message.get("role") == "assistant"
+        ]
+        assert len(assistant_messages) == 1
+        assistant_blocks = assistant_messages[0].get("content", [])
+        assert isinstance(assistant_blocks, list)
+        assert not any(
+            isinstance(block, dict) and block.get("type") == "thinking"
+            for block in assistant_blocks
+        )
+        assert any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in assistant_blocks
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_non_minimax_send_uses_openai_path(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,

@@ -145,7 +145,10 @@ def _active_assistant_continuation_index(messages: list[dict[str, Any]]) -> int 
             continue
         if not message.get("tool_calls"):
             return None
-        if any(candidate.get("role") == "tool" for candidate in messages[index + 1 :]):
+        continuation_suffix = messages[index + 1 :]
+        if continuation_suffix and all(
+            candidate.get("role") == "tool" for candidate in continuation_suffix
+        ):
             return index
         return None
     return None
