@@ -180,20 +180,29 @@ async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     ]
 
 
-async def test_malformed_tool_arguments_degrade_to_empty_object() -> None:
+async def test_malformed_tool_arguments_degrade_to_empty_object(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     accumulator = StreamingAccumulator()
 
-    accumulator.add_delta(
-        {
-            "type": "tool_call_delta",
-            "id": "call_abc",
-            "name_delta": "read_file",
-            "arguments_delta": '{"path":',
-        }
-    )
+    with caplog.at_level("WARNING", logger="vbot.chat.streaming"):
+        accumulator.add_delta(
+            {
+                "type": "tool_call_delta",
+                "id": "call_abc",
+                "name_delta": "read_file",
+                "arguments_delta": '{"path":',
+            }
+        )
+        fields = accumulator.finalize_assistant_fields()
 
-    fields = accumulator.finalize_assistant_fields()
     assert fields.tool_calls == [{"id": "call_abc", "name": "read_file", "arguments": {}}]
+    assert any(
+        record.name == "vbot.chat.streaming"
+        and record.args == ('{"path":',)
+        and record.getMessage().startswith("tool call arguments JSON parse failed - fragment:")
+        for record in caplog.records
+    )
 
 
 async def test_finish_delta_records_reason_without_visible_event() -> None:
