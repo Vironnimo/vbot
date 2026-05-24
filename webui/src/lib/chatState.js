@@ -368,6 +368,25 @@ export function visibleTimelineItemsForRender(sessionState) {
   );
 }
 
+export function assistantRunChildProgressKey(child) {
+  if (!child || typeof child !== 'object') {
+    return '0::0';
+  }
+
+  const { chunkCount, latestSequence } = childStreamingProgress(child);
+  if (child.type === 'tool_call') {
+    const toolNameLength = (child.name ?? '').length;
+    const streamedArgumentsLength = (child.partialArgumentsText ?? '').length;
+    const finalizedArgumentsLength =
+      typeof child.arguments === 'string' ? child.arguments.length : 0;
+    return `${chunkCount}:${latestSequence ?? ''}:${toolNameLength}:${streamedArgumentsLength + finalizedArgumentsLength}:${child.resultEvent ? 1 : 0}`;
+  }
+
+  const contentLength =
+    typeof child.content === 'string' ? child.content.length : 0;
+  return `${chunkCount}:${latestSequence ?? ''}:${contentLength}`;
+}
+
 function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
   if (!sessionState) {
     return [];
@@ -389,10 +408,17 @@ function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
       )
     : [...historyItems, ...liveItems];
 
+  const strippedReconciledItems = reconciledItems.map((item) =>
+    stripTimelineSequence(item),
+  );
+
   const streamingTimelineItems = (sessionState.streamingItems ?? [])
     .filter((item) => {
       if (item.type === 'tool_call') {
-        return includeStreamingToolCalls;
+        return (
+          includeStreamingToolCalls &&
+          !streamingToolCallAlreadyRendered(strippedReconciledItems, item)
+        );
       }
       if (item.type === 'assistant' || item.type === 'reasoning') {
         return includeStreamingAssistantAndReasoning;
@@ -405,10 +431,72 @@ function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
       streamingItem: item,
     }));
 
-  return [
-    ...reconciledItems.map((item) => stripTimelineSequence(item)),
-    ...streamingTimelineItems,
-  ];
+  return [...strippedReconciledItems, ...streamingTimelineItems];
+}
+
+function streamingToolCallAlreadyRendered(reconciledItems, streamingItem) {
+  if (streamingItem?.type !== 'tool_call' || !streamingItem.toolCallId) {
+    return false;
+  }
+
+  return (reconciledItems ?? []).some((item) => {
+    if (item?.type !== 'assistant_run') {
+      return false;
+    }
+
+    if (!runIdsMatch(item.runId ?? item.run_id, streamingItem.run_id)) {
+      return false;
+    }
+
+    return (item.tools ?? item.items ?? []).some(
+      (child) =>
+        child?.type === 'tool_call' &&
+        child.toolCallId === streamingItem.toolCallId,
+    );
+  });
+}
+
+function runIdsMatch(leftRunId, rightRunId) {
+  return Boolean(leftRunId) && Boolean(rightRunId) && leftRunId === rightRunId;
+}
+
+function childStreamingProgress(child) {
+  let chunkCount = 0;
+  let latestSequence = Number.isFinite(child?.sequence) ? child.sequence : null;
+
+  for (const event of child?.events ?? []) {
+    chunkCount += streamEventChunkCount(event);
+    const eventLatestSequence = streamEventLatestSequence(event);
+    if (!Number.isFinite(eventLatestSequence)) {
+      continue;
+    }
+    latestSequence = Number.isFinite(latestSequence)
+      ? Math.max(latestSequence, eventLatestSequence)
+      : eventLatestSequence;
+  }
+
+  if (chunkCount === 0) {
+    chunkCount = (child?.messages ?? []).length;
+  }
+
+  return { chunkCount, latestSequence };
+}
+
+function streamEventChunkCount(event) {
+  if (
+    Number.isFinite(event?._streamChunkCount) &&
+    event._streamChunkCount > 0
+  ) {
+    return event._streamChunkCount;
+  }
+  return 1;
+}
+
+function streamEventLatestSequence(event) {
+  if (Number.isFinite(event?._streamLatestSequence)) {
+    return event._streamLatestSequence;
+  }
+  return event?.sequence;
 }
 
 function shouldSelectTrackedRunSource(
@@ -1285,6 +1373,8 @@ function appendCompressedStreamingRunEvent(sessionState, event) {
     lastEvent.payload[payloadKey] =
       `${lastEvent.payload?.[payloadKey] ?? ''}${deltaText}`;
     lastEvent.sequence = firstSeenSequence(lastEvent.sequence, event.sequence);
+    lastEvent._streamChunkCount = streamEventChunkCount(lastEvent) + 1;
+    lastEvent._streamLatestSequence = streamEventLatestSequence(event);
     lastEvent.timestamp ??= event.timestamp;
     return;
   }
@@ -1297,6 +1387,8 @@ function appendCompressedStreamingRunEvent(sessionState, event) {
         ...event.payload,
       },
       _streamingPhase: sessionState.streamingPhase,
+      _streamChunkCount: 1,
+      _streamLatestSequence: streamEventLatestSequence(event),
     },
   ];
 }

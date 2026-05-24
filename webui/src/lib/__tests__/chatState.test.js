@@ -4,6 +4,7 @@ import {
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_FAILED,
   CHAT_STATUS_RUNNING,
+  assistantRunChildProgressKey,
   addServerQueuedMessage,
   appendRunEvent,
   canCreateNewSession,
@@ -1861,6 +1862,112 @@ describe('chat state helpers', () => {
           ['assistant', 'reasoning'].includes(item.streamingItem?.type),
       ),
     ).toBe(false);
+  });
+
+  it('suppresses render selector tool-call wrappers once assistant-run rows include the same call', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-selector-tool-call-dedup',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-tool-call-dedup',
+      sequence: 1,
+      payload: { content_delta: 'Preparing tool call.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-render-selector-tool-call-dedup',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'read',
+        arguments_delta: '{"path":"a.txt"}',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-render-selector-tool-call-dedup',
+      sequence: 3,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems.map((item) => item.type)).toEqual(['assistant_run']);
+    expect(renderItems[0]).toEqual(
+      expect.objectContaining({
+        runId: 'run-render-selector-tool-call-dedup',
+        outputs: [
+          expect.objectContaining({
+            content: 'Preparing tool call.',
+            streaming: true,
+          }),
+        ],
+        tools: [
+          expect.objectContaining({
+            toolCallId: 'call-one',
+            name: 'read',
+            status: CHAT_STATUS_RUNNING,
+          }),
+        ],
+      }),
+    );
+    expect(
+      renderItems.some(
+        (item) =>
+          item.type === 'streaming' && item.streamingItem?.type === 'tool_call',
+      ),
+    ).toBe(false);
+  });
+
+  it('updates assistant-run child progress keys as compressed streaming chunks grow', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-selector-progress-key',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-progress-key',
+      sequence: 1,
+      payload: { content_delta: 'Hel' },
+    });
+
+    const [firstRun] = visibleTimelineItemsForRender(sessionState);
+    const firstOutput = firstRun.outputs[0];
+    const firstKey = assistantRunChildProgressKey(firstOutput);
+
+    expect(firstOutput.events).toHaveLength(1);
+    expect(firstOutput.events[0]._streamChunkCount).toBe(1);
+    expect(firstOutput.events[0]._streamLatestSequence).toBe(1);
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-progress-key',
+      sequence: 2,
+      payload: { content_delta: 'lo' },
+    });
+
+    const [secondRun] = visibleTimelineItemsForRender(sessionState);
+    const secondOutput = secondRun.outputs[0];
+    const secondKey = assistantRunChildProgressKey(secondOutput);
+
+    expect(secondOutput.content).toBe('Hello');
+    expect(secondOutput.events).toHaveLength(1);
+    expect(secondOutput.events[0]._streamChunkCount).toBe(2);
+    expect(secondOutput.events[0]._streamLatestSequence).toBe(2);
+    expect(secondKey).not.toBe(firstKey);
   });
 
   it('ignores duplicate streaming event sequences', () => {
