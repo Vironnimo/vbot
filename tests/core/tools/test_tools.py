@@ -1,6 +1,7 @@
 """Tests for tool registry, envelopes, and execution scheduling."""
 
 import asyncio
+import threading
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
@@ -410,6 +411,28 @@ class TestToolRegistryDispatch:
         )
 
         assert result == tool_success({"written": "SOUL.md", "bytes": 5, "workspace": "workspace"})
+
+    @pytest.mark.asyncio
+    async def test_dispatch_runs_sync_handler_on_event_loop_thread(self) -> None:
+        registry = ToolRegistry()
+        loop_thread_id = threading.get_ident()
+        seen_thread_ids: list[int] = []
+
+        def sync_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            seen_thread_ids.append(threading.get_ident())
+            return tool_success({"thread_id": seen_thread_ids[-1]})
+
+        registry.register(
+            "sync_tool",
+            "Run a sync handler and return its thread id.",
+            {"type": "object"},
+            sync_handler,
+        )
+
+        result = await registry.dispatch(make_context("sync_tool"), {}, ["*"])
+
+        assert seen_thread_ids == [loop_thread_id]
+        assert result == tool_success({"thread_id": loop_thread_id})
 
     @pytest.mark.asyncio
     async def test_dispatch_non_envelope_result_raises_value_error(self) -> None:
