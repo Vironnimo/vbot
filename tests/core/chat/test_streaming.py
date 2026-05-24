@@ -180,7 +180,7 @@ async def test_suppresses_parsed_tool_arguments_until_finalization() -> None:
     ]
 
 
-async def test_malformed_tool_arguments_degrade_to_empty_object(
+async def test_malformed_tool_arguments_are_dropped(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     accumulator = StreamingAccumulator()
@@ -196,11 +196,11 @@ async def test_malformed_tool_arguments_degrade_to_empty_object(
         )
         fields = accumulator.finalize_assistant_fields()
 
-    assert fields.tool_calls == [{"id": "call_abc", "name": "read_file", "arguments": {}}]
+    assert fields.tool_calls is None
     assert any(
         record.name == "vbot.chat.streaming"
-        and record.args == ('{"path":',)
-        and record.getMessage().startswith("tool call arguments JSON parse failed - fragment:")
+        and record.args == ("call_abc", '{"path":')
+        and record.getMessage().startswith("dropping streamed tool call")
         for record in caplog.records
     )
 
