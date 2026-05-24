@@ -1998,8 +1998,11 @@ class TestStreamSSE:
         assert broken_response.closed is True
 
     @pytest.mark.asyncio
-    async def test_stream_raises_network_error_on_mid_stream_timeout(self, anthropic_adapter):
-        """stream() wraps mid-stream httpx.TimeoutException as NetworkError."""
+    async def test_stream_raises_provider_timeout_error_on_mid_stream_timeout(
+        self,
+        anthropic_adapter,
+    ):
+        """stream() wraps mid-stream httpx.TimeoutException as ProviderTimeoutError."""
 
         request = httpx.Request("POST", ANTHROPIC_URL)
 
@@ -2029,7 +2032,7 @@ class TestStreamSSE:
                 "send",
                 new=AsyncMock(return_value=broken_response),
             ),
-            pytest.raises(NetworkError, match="Stream read failed: timed out"),
+            pytest.raises(ProviderTimeoutError, match="timed out"),
         ):
             async for _ in anthropic_adapter.stream(
                 SAMPLE_MESSAGES,

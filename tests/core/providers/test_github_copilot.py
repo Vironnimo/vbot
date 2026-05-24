@@ -14,7 +14,7 @@ import respx
 from core.chat.chat import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
 from core.models.models import Model
-from core.providers.errors import NetworkError
+from core.providers.errors import NetworkError, ProviderTimeoutError
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
@@ -787,7 +787,7 @@ async def test_stream_responses_raises_network_error_on_mid_stream_read_error(
 
 
 @pytest.mark.asyncio
-async def test_stream_responses_raises_network_error_on_mid_stream_timeout(
+async def test_stream_responses_raises_provider_timeout_error_on_mid_stream_timeout(
     metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     broken_response = _BrokenStreamResponse(
@@ -801,7 +801,7 @@ async def test_stream_responses_raises_network_error_on_mid_stream_timeout(
             "_connect_stream",
             new=AsyncMock(return_value=broken_response),
         ),
-        pytest.raises(NetworkError, match="Stream read failed: timed out"),
+        pytest.raises(ProviderTimeoutError, match="timed out"),
     ):
         async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
             pass
@@ -1749,7 +1749,7 @@ async def test_stream_messages_raises_network_error_on_mid_stream_read_error(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_raises_network_error_on_mid_stream_timeout(
+async def test_stream_messages_raises_provider_timeout_error_on_mid_stream_timeout(
     metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     broken_response = _BrokenStreamResponse(
@@ -1763,7 +1763,7 @@ async def test_stream_messages_raises_network_error_on_mid_stream_timeout(
             "_connect_stream",
             new=AsyncMock(return_value=broken_response),
         ),
-        pytest.raises(NetworkError, match="Stream read failed: timed out"),
+        pytest.raises(ProviderTimeoutError, match="timed out"),
     ):
         async for _ in metadata_copilot_adapter.stream(
             SAMPLE_MESSAGES,

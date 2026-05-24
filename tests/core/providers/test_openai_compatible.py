@@ -1632,8 +1632,11 @@ class TestStreamSSE:
                 pass
 
     @pytest.mark.asyncio
-    async def test_stream_raises_network_error_on_mid_stream_timeout(self, openai_adapter):
-        """stream() wraps mid-stream httpx.TimeoutException as NetworkError."""
+    async def test_stream_raises_provider_timeout_error_on_mid_stream_timeout(
+        self,
+        openai_adapter,
+    ):
+        """stream() wraps mid-stream httpx.TimeoutException as ProviderTimeoutError."""
 
         class _TimeoutStream(httpx.AsyncByteStream):
             async def __aiter__(self):
@@ -1655,7 +1658,7 @@ class TestStreamSSE:
                     )
                 ),
             ),
-            pytest.raises(NetworkError, match="Stream read failed: stream timed out"),
+            pytest.raises(ProviderTimeoutError, match="stream timed out"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass

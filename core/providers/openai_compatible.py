@@ -350,8 +350,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     yield normalized_delta
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
-        except (httpx.ReadError, httpx.TimeoutException) as exc:
+        except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
