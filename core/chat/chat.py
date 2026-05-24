@@ -2065,6 +2065,11 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
             request_messages.append(_message_to_request_dict(message))
             continue
 
+        # Reasoning-only assistant turns lose reasoning fields for follow-up turns.
+        # Skip them so request history never contains empty assistant entries.
+        if _is_empty_assistant_history_message(message):
+            continue
+
         if deferred_until_after_tools:
             request_messages.append(_notes_to_synthetic_user_message(deferred_until_after_tools))
             deferred_until_after_tools = []
@@ -2088,6 +2093,10 @@ def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:
         "role": "user",
         "content": "\n".join(_system_reminder_block(note) for note in notes),
     }
+
+
+def _is_empty_assistant_history_message(message: ChatMessage) -> bool:
+    return message.role == "assistant" and message.content is None and not message.tool_calls
 
 
 def _system_reminder_block(message: ChatMessage) -> str:
