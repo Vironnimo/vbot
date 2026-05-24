@@ -301,9 +301,54 @@ def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
 
     overlap = _suffix_prefix_overlap(existing, delta)
     if overlap > 0:
+        if _should_preserve_leading_quote(
+            existing=existing,
+            delta=delta,
+            overlap=overlap,
+        ) or _should_preserve_leading_backslash(
+            existing=existing,
+            delta=delta,
+            overlap=overlap,
+        ):
+            return existing + delta, delta
         suffix = delta[overlap:]
         return existing + suffix, suffix
     return existing + delta, delta
+
+
+def _should_preserve_leading_quote(*, existing: str, delta: str, overlap: int) -> bool:
+    """Avoid dropping a JSON-closing quote after an escaped inner quote boundary."""
+    if overlap != 1 or not existing.endswith('"') or not delta.startswith('"'):
+        return False
+    if not _ends_with_escaped_quote(existing):
+        return False
+    if len(delta) == 1:
+        return True
+    return delta[1] in {",", ":", "}", "]", " ", "\t", "\r", "\n"}
+
+
+def _should_preserve_leading_backslash(*, existing: str, delta: str, overlap: int) -> bool:
+    """Keep escape-pair boundaries intact when chunks meet on a single backslash."""
+    if overlap != 1 or not existing.endswith("\\") or not delta.startswith("\\"):
+        return False
+    return _ends_with_unpaired_backslash(existing)
+
+
+def _ends_with_escaped_quote(text: str) -> bool:
+    if not text.endswith('"'):
+        return False
+    return _ends_with_unpaired_backslash(text[:-1])
+
+
+def _ends_with_unpaired_backslash(text: str) -> bool:
+    if not text.endswith("\\"):
+        return False
+    slash_count = 0
+    index = len(text) - 1
+    while index >= 0 and text[index] == "\\":
+        slash_count += 1
+        index -= 1
+    return slash_count % 2 == 1
 
 
 def _suffix_prefix_overlap(left: str, right: str) -> int:

@@ -262,6 +262,74 @@ async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:
     ]
 
 
+async def test_tool_argument_merge_preserves_closing_quote_after_escaped_inner_quote() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "bash",
+            "arguments_delta": '{"command":"echo \\"',
+        }
+    )
+    second_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '"}',
+        }
+    )[0]
+
+    fields = accumulator.finalize_assistant_fields()
+    assert second_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": '"}',
+    }
+    assert fields.tool_calls == [
+        {
+            "id": "call_abc",
+            "name": "bash",
+            "arguments": {"command": 'echo "'},
+        }
+    ]
+
+
+async def test_tool_argument_merge_preserves_backslash_escape_pair_at_chunk_boundary() -> None:
+    accumulator = StreamingAccumulator()
+
+    first_fragment = '{"path":"C:' + "\\"
+    second_fragment = '\\Users\\\\notes.txt"}'
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": first_fragment,
+        }
+    )
+    second_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": second_fragment,
+        }
+    )[0]
+
+    fields = accumulator.finalize_assistant_fields()
+    assert second_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": second_fragment,
+    }
+    assert fields.tool_calls == [
+        {
+            "id": "call_abc",
+            "name": "write",
+            "arguments": {"path": r"C:\Users\notes.txt"},
+        }
+    ]
+
+
 async def test_malformed_tool_arguments_are_dropped(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
