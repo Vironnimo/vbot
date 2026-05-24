@@ -222,6 +222,46 @@ async def test_cumulative_tool_argument_fragments_emit_only_missing_suffix_and_f
     ]
 
 
+async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": '{"pattern":"abc","value":"',
+        }
+    )
+    repeated_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": "abc",
+        }
+    )[0]
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": '"}',
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert repeated_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": "abc",
+    }
+    assert fields.tool_calls == [
+        {
+            "id": "call_abc",
+            "name": "write",
+            "arguments": {"pattern": "abc", "value": "abc"},
+        }
+    ]
+
+
 async def test_malformed_tool_arguments_are_dropped(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
