@@ -2344,6 +2344,8 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")
+    if message.content is None and not message.tool_calls:
+        raise ChatMessageValidationError("assistant messages require content or tool_calls")
     _reject_fields(message, "tool_call_id", "name", "error_kind", "tail_boundary_id")
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
