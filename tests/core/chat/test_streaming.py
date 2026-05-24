@@ -262,6 +262,39 @@ async def test_tool_argument_merge_keeps_non_tail_repeated_text() -> None:
     ]
 
 
+async def test_tool_argument_merge_preserves_repeated_boundary_text() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": '{"value":"ab',
+        }
+    )
+    repeated_boundary_delta = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "arguments_delta": 'ab"}',
+        }
+    )[0]
+
+    fields = accumulator.finalize_assistant_fields()
+    assert repeated_boundary_delta.payload == {
+        "tool_call_id": "call_abc",
+        "arguments_delta": 'ab"}',
+    }
+    assert fields.tool_calls == [
+        {
+            "id": "call_abc",
+            "name": "write",
+            "arguments": {"value": "abab"},
+        }
+    ]
+
+
 async def test_tool_argument_merge_preserves_closing_quote_after_escaped_inner_quote() -> None:
     accumulator = StreamingAccumulator()
 
