@@ -28,8 +28,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ``reasoning_content`` in assistant messages.
 
     For OpenCode Go models routed through the Anthropic ``/messages`` path,
-    this adapter replays reasoning only from the latest assistant turn to avoid
-    unbounded prompt growth when full conversation history is resent.
+    this adapter replays reasoning only for the active assistant continuation
+    turn (assistant tool call followed by tool results) to avoid stale reasoning
+    from older completed turns and unbounded prompt growth.
 
     For OpenCode Go models routed through OpenAI ``/chat/completions``, the
     adapter replays assistant reasoning for every historical assistant message
@@ -116,9 +117,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
 
 def _bound_assistant_reasoning_replay(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    keep_index = _last_assistant_reasoning_index(messages)
-    if keep_index is None:
-        return messages
+    keep_index = _active_assistant_continuation_index(messages)
 
     sanitized_messages: list[dict[str, Any]] = []
     changed = False
@@ -139,17 +138,16 @@ def _bound_assistant_reasoning_replay(messages: list[dict[str, Any]]) -> list[di
     return sanitized_messages if changed else messages
 
 
-def _last_assistant_reasoning_index(messages: list[dict[str, Any]]) -> int | None:
+def _active_assistant_continuation_index(messages: list[dict[str, Any]]) -> int | None:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if message.get("role") != "assistant":
             continue
-        reasoning = message.get("reasoning")
-        if isinstance(reasoning, str) and reasoning:
+        if not message.get("tool_calls"):
+            return None
+        if any(candidate.get("role") == "tool" for candidate in messages[index + 1 :]):
             return index
-        reasoning_meta = message.get("reasoning_meta")
-        if isinstance(reasoning_meta, dict) and reasoning_meta:
-            return index
+        return None
     return None
 
 

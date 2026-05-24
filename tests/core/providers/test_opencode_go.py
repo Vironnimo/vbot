@@ -291,7 +291,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_minimax_send_replays_reasoning_meta_only_for_latest_assistant(
+    async def test_minimax_send_replays_reasoning_meta_only_for_active_continuation_assistant(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -323,9 +323,14 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                             {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
                         ]
                     },
-                    "tool_calls": None,
+                    "tool_calls": [{"id": "call_old", "name": "old_tool", "arguments": {}}],
                 },
-                {"role": "user", "content": "Second"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_old",
+                    "name": "old_tool",
+                    "content": json.dumps({"ok": True}),
+                },
                 {
                     "role": "assistant",
                     "content": "Latest assistant",
@@ -339,9 +344,14 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                             }
                         ]
                     },
-                    "tool_calls": None,
+                    "tool_calls": [{"id": "call_latest", "name": "latest_tool", "arguments": {}}],
                 },
-                {"role": "user", "content": "Continue"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_latest",
+                    "name": "latest_tool",
+                    "content": json.dumps({"ok": True}),
+                },
             ],
             model_id="minimax-m2.7",
         )
@@ -361,6 +371,83 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         )
         assert any(
             isinstance(block, dict) and block.get("type") == "thinking" for block in latest_blocks
+        )
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_minimax_send_drops_stale_reasoning_when_latest_assistant_has_no_reasoning(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        captured_payload: dict[str, Any] = {}
+
+        def _capture_messages_request(request: httpx.Request) -> httpx.Response:
+            captured_payload.update(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+
+        respx.post(OPENCODE_GO_MESSAGES_URL).mock(side_effect=_capture_messages_request)
+
+        await opencode_go_adapter.send(
+            [
+                {"role": "user", "content": "First"},
+                {
+                    "role": "assistant",
+                    "content": "Older assistant",
+                    "reasoning": "old thinking",
+                    "reasoning_meta": {
+                        "content_blocks": [
+                            {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
+                        ]
+                    },
+                    "tool_calls": [{"id": "call_old", "name": "old_tool", "arguments": {}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_old",
+                    "name": "old_tool",
+                    "content": json.dumps({"ok": True}),
+                },
+                {
+                    "role": "assistant",
+                    "content": "Latest assistant",
+                    "tool_calls": [{"id": "call_latest", "name": "latest_tool", "arguments": {}}],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_latest",
+                    "name": "latest_tool",
+                    "content": json.dumps({"ok": True}),
+                },
+            ],
+            model_id="minimax-m2.7",
+        )
+
+        assistant_messages = [
+            message
+            for message in captured_payload.get("messages", [])
+            if isinstance(message, dict) and message.get("role") == "assistant"
+        ]
+        assert len(assistant_messages) == 2
+        older_blocks = assistant_messages[0].get("content", [])
+        latest_blocks = assistant_messages[1].get("content", [])
+        assert isinstance(older_blocks, list)
+        assert isinstance(latest_blocks, list)
+        assert not any(
+            isinstance(block, dict) and block.get("type") == "thinking" for block in older_blocks
+        )
+        assert not any(
+            isinstance(block, dict) and block.get("type") == "thinking" for block in latest_blocks
+        )
+        assert any(
+            isinstance(block, dict) and block.get("type") == "tool_use" for block in latest_blocks
         )
 
     @respx.mock
@@ -506,7 +593,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_minimax_stream_replays_reasoning_meta_only_for_latest_assistant(
+    async def test_minimax_stream_replays_reasoning_meta_only_for_active_continuation_assistant(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -535,9 +622,14 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                             {"type": "thinking", "thinking": "old thinking", "signature": "sig-old"}
                         ]
                     },
-                    "tool_calls": None,
+                    "tool_calls": [{"id": "call_old", "name": "old_tool", "arguments": {}}],
                 },
-                {"role": "user", "content": "Second"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_old",
+                    "name": "old_tool",
+                    "content": json.dumps({"ok": True}),
+                },
                 {
                     "role": "assistant",
                     "content": "Latest assistant",
@@ -551,9 +643,14 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                             }
                         ]
                     },
-                    "tool_calls": None,
+                    "tool_calls": [{"id": "call_latest", "name": "latest_tool", "arguments": {}}],
                 },
-                {"role": "user", "content": "Continue"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_latest",
+                    "name": "latest_tool",
+                    "content": json.dumps({"ok": True}),
+                },
             ],
             model_id="minimax-m2.7",
         ):
