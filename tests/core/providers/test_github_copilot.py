@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ import respx
 from core.chat.chat import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
 from core.models.models import Model
+from core.providers.errors import NetworkError
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
@@ -147,6 +149,36 @@ def _copilot_metadata_lookup(model_id: str) -> Model | None:
     if model_id not in raw_models:
         return None
     return _copilot_model(model_id)
+
+
+class _BrokenLineIterator:
+    def __init__(self, first_line: str, error: Exception) -> None:
+        self._first_line = first_line
+        self._error = error
+        self._emitted_first_line = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str:
+        if not self._emitted_first_line:
+            self._emitted_first_line = True
+            return self._first_line
+        raise self._error
+
+
+class _BrokenStreamResponse:
+    status_code = 200
+
+    def __init__(self, first_line: str, error: Exception) -> None:
+        self._iterator = _BrokenLineIterator(first_line, error)
+        self.closed = False
+
+    def aiter_lines(self):
+        return self._iterator
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 @pytest.fixture()
@@ -729,6 +761,52 @@ async def test_stream_responses_yields_normalized_deltas(
         {"type": "usage", "input_tokens": 1, "output_tokens": 2},
         {"type": "finish", "reason": "stop"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_responses_raises_network_error_on_mid_stream_read_error(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    broken_response = _BrokenStreamResponse(
+        "event: response.output_text.delta",
+        httpx.ReadError("connection reset"),
+    )
+
+    with (
+        patch.object(
+            metadata_copilot_adapter,
+            "_connect_stream",
+            new=AsyncMock(return_value=broken_response),
+        ),
+        pytest.raises(NetworkError, match="Stream read failed: connection reset"),
+    ):
+        async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+            pass
+
+    assert broken_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_responses_raises_network_error_on_mid_stream_timeout(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    broken_response = _BrokenStreamResponse(
+        "event: response.output_text.delta",
+        httpx.TimeoutException("timed out"),
+    )
+
+    with (
+        patch.object(
+            metadata_copilot_adapter,
+            "_connect_stream",
+            new=AsyncMock(return_value=broken_response),
+        ),
+        pytest.raises(NetworkError, match="Stream read failed: timed out"),
+    ):
+        async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+            pass
+
+    assert broken_response.closed is True
 
 
 @respx.mock
@@ -1642,6 +1720,58 @@ async def test_stream_messages_yields_normalized_deltas(
         {"type": "content_delta", "text": "Hi"},
         {"type": "finish", "reason": "stop"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_raises_network_error_on_mid_stream_read_error(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    broken_response = _BrokenStreamResponse(
+        '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        httpx.ReadError("connection reset"),
+    )
+
+    with (
+        patch.object(
+            metadata_copilot_adapter,
+            "_connect_stream",
+            new=AsyncMock(return_value=broken_response),
+        ),
+        pytest.raises(NetworkError, match="Stream read failed: connection reset"),
+    ):
+        async for _ in metadata_copilot_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4.6",
+        ):
+            pass
+
+    assert broken_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_raises_network_error_on_mid_stream_timeout(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    broken_response = _BrokenStreamResponse(
+        '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        httpx.TimeoutException("timed out"),
+    )
+
+    with (
+        patch.object(
+            metadata_copilot_adapter,
+            "_connect_stream",
+            new=AsyncMock(return_value=broken_response),
+        ),
+        pytest.raises(NetworkError, match="Stream read failed: timed out"),
+    ):
+        async for _ in metadata_copilot_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4.6",
+        ):
+            pass
+
+    assert broken_response.closed is True
 
 
 @respx.mock
