@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -11,15 +12,33 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
 
-_MINIMAX_ANTHROPIC_MODELS: frozenset[str] = frozenset({"minimax-m2.7"})
+_ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
+    {
+        "minimax-m2.7",
+        "minimax-m2.5",
+        "qwen3.6-plus",
+        "qwen3.5-plus",
+    }
+)
+_SYSTEM_REMINDER_BLOCKS_PATTERN = re.compile(
+    r"^<system-reminder>\n[\s\S]*?\n</system-reminder>(?:\n<system-reminder>\n[\s\S]*?\n</system-reminder>)*$"
+)
 
 
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter for the OpenCode Go gateway.
 
     Models with reasoning capability (DeepSeek, Kimi, GLM, ...) return
-    ``reasoning_content`` in the assistant message and require it to be
-    echoed back in every subsequent request of the same conversation.
+    ``reasoning_content`` in assistant messages.
+
+    For OpenCode Go models routed through the Anthropic ``/messages`` path,
+    this adapter replays reasoning only for the active assistant continuation
+    turn (assistant tool call followed by tool results) to avoid stale reasoning
+    from older completed turns and unbounded prompt growth.
+
+    For OpenCode Go models routed through OpenAI ``/chat/completions``, the
+    adapter replays assistant reasoning for every historical assistant message
+    because the provider expects full ``reasoning_content`` round-tripping.
     """
 
     def __init__(
@@ -60,8 +79,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if model_id in _MINIMAX_ANTHROPIC_MODELS:
-            return await self._anthropic.send(messages, model_id=model_id, **kwargs)
+        if _uses_anthropic_messages_path(model_id):
+            bounded_messages = _bound_assistant_reasoning_replay(messages)
+            return await self._anthropic.send(bounded_messages, model_id=model_id, **kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
     def stream(
@@ -71,9 +91,21 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        if model_id in _MINIMAX_ANTHROPIC_MODELS:
-            return self._anthropic.stream(messages, model_id=model_id, **kwargs)
+        if _uses_anthropic_messages_path(model_id):
+            bounded_messages = _bound_assistant_reasoning_replay(messages)
+            return self._anthropic.stream(bounded_messages, model_id=model_id, **kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        payload_messages = messages
+        if _uses_anthropic_messages_path(model_id):
+            payload_messages = _bound_assistant_reasoning_replay(messages)
+        return super()._build_payload(payload_messages, model_id, **kwargs)
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         if "choices" in response:
@@ -86,3 +118,75 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if isinstance(reasoning, str) and reasoning:
             wire["reasoning_content"] = reasoning
         return wire
+
+
+def _bound_assistant_reasoning_replay(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    keep_index = _active_assistant_continuation_index(messages)
+
+    sanitized_messages: list[dict[str, Any]] = []
+    changed = False
+    for index, message in enumerate(messages):
+        if message.get("role") != "assistant" or index == keep_index:
+            sanitized_messages.append(message)
+            continue
+        if "reasoning" not in message and "reasoning_meta" not in message:
+            sanitized_messages.append(message)
+            continue
+
+        sanitized_message = dict(message)
+        sanitized_message.pop("reasoning", None)
+        sanitized_message.pop("reasoning_meta", None)
+        sanitized_messages.append(sanitized_message)
+        changed = True
+
+    return sanitized_messages if changed else messages
+
+
+def _active_assistant_continuation_index(messages: list[dict[str, Any]]) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "assistant":
+            continue
+        if not message.get("tool_calls"):
+            return None
+        continuation_suffix = messages[index + 1 :]
+        if _is_active_continuation_suffix(continuation_suffix):
+            return index
+        return None
+    return None
+
+
+def _is_active_continuation_suffix(continuation_suffix: list[dict[str, Any]]) -> bool:
+    if not continuation_suffix:
+        return False
+
+    saw_tool_result = False
+    saw_synthetic_user_note = False
+    for candidate in continuation_suffix:
+        if candidate.get("role") == "tool":
+            if saw_synthetic_user_note:
+                return False
+            saw_tool_result = True
+            continue
+        if candidate.get("role") == "user" and _is_synthetic_system_reminder_message(candidate):
+            if not saw_tool_result:
+                return False
+            saw_synthetic_user_note = True
+            continue
+        return False
+    return saw_tool_result
+
+
+def _is_synthetic_system_reminder_message(message: dict[str, Any]) -> bool:
+    if "id" in message or "timestamp" in message:
+        return False
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+
+    return bool(_SYSTEM_REMINDER_BLOCKS_PATTERN.fullmatch(content.strip()))
+
+
+def _uses_anthropic_messages_path(model_id: str) -> bool:
+    return model_id in _ANTHROPIC_MESSAGES_MODELS
