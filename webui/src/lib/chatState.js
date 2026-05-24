@@ -68,6 +68,9 @@ export function ensureSessionState(state, agentId, sessionId) {
       messages: [],
       runEvents: [],
       streamingItems: [],
+      streamingRunEvents: [],
+      streamingPhase: 0,
+      seenStreamingEventKeys: new Set(),
       currentRun: null,
       queue: [],
       status: CHAT_STATUS_IDLE,
@@ -99,11 +102,23 @@ export function loadHistory(sessionState, messages) {
   const activeStreamingItems = isRunActive(sessionState)
     ? sessionState.streamingItems
     : [];
+  const activeStreamingRunEvents = isRunActive(sessionState)
+    ? sessionState.streamingRunEvents
+    : [];
+  const activeStreamingPhase = isRunActive(sessionState)
+    ? sessionState.streamingPhase
+    : 0;
+  const activeSeenStreamingEventKeys = isRunActive(sessionState)
+    ? sessionState.seenStreamingEventKeys
+    : new Set();
   sessionState.messages = Array.isArray(messages)
     ? messages.filter(isVisibleHistoryMessage)
     : [];
   sessionState.runEvents = activeRunEvents;
   sessionState.streamingItems = activeStreamingItems;
+  sessionState.streamingRunEvents = activeStreamingRunEvents;
+  sessionState.streamingPhase = activeStreamingPhase;
+  sessionState.seenStreamingEventKeys = activeSeenStreamingEventKeys;
   sessionState.error = null;
   if (!isRunActive(sessionState)) {
     sessionState.status = CHAT_STATUS_IDLE;
@@ -134,6 +149,9 @@ export function startRun(sessionState, run) {
   sessionState.error = null;
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
   sessionState.streamingItems = [];
+  sessionState.streamingRunEvents = [];
+  sessionState.streamingPhase = 0;
+  sessionState.seenStreamingEventKeys = new Set();
   appendRunEvents(sessionState, run.events ?? []);
   return sessionState.currentRun;
 }
@@ -142,6 +160,18 @@ export function appendRunEvent(sessionState, event) {
   const normalizedEvent = normalizeRunEvent(event);
   if (!normalizedEvent) {
     return null;
+  }
+  if (isStreamingDeltaRunEvent(normalizedEvent.type)) {
+    const eventKey = streamingDeltaEventKey(normalizedEvent);
+    if (eventKey && sessionState.seenStreamingEventKeys.has(eventKey)) {
+      return normalizedEvent;
+    }
+    if (eventKey) {
+      sessionState.seenStreamingEventKeys.add(eventKey);
+    }
+    updateStreamingItems(sessionState, normalizedEvent);
+    appendCompressedStreamingRunEvent(sessionState, normalizedEvent);
+    return normalizedEvent;
   }
   if (
     sessionState.runEvents.some(
@@ -192,6 +222,9 @@ export function finishRun(sessionState, event) {
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.streamingItems = [];
+  sessionState.streamingRunEvents = [];
+  sessionState.streamingPhase = 0;
+  sessionState.seenStreamingEventKeys = new Set();
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }
@@ -202,11 +235,15 @@ export function finishRun(sessionState, event) {
 }
 
 export function highestRunEventSequence(sessionState) {
+  const streamingItemSequences = (sessionState?.streamingItems ?? [])
+    .map((item) => item.sequence)
+    .filter((sequence) => Number.isFinite(sequence));
   return Math.max(
     0,
     ...(sessionState?.runEvents ?? [])
       .map((event) => event.sequence)
       .filter((sequence) => Number.isFinite(sequence)),
+    ...streamingItemSequences,
   );
 }
 
@@ -310,24 +347,58 @@ export function isRunActive(sessionState) {
 }
 
 export function visibleTimelineItems(sessionState) {
+  return buildVisibleTimelineItems(sessionState, sessionState?.runEvents ?? []);
+}
+
+export function visibleTimelineItemsForRender(sessionState) {
+  if (!sessionState) {
+    return [];
+  }
+
+  return buildVisibleTimelineItems(sessionState, [
+    ...(sessionState.runEvents ?? []),
+    ...(sessionState.streamingRunEvents ?? []),
+  ]);
+}
+
+function buildVisibleTimelineItems(sessionState, runEvents) {
   if (!sessionState) {
     return [];
   }
 
   const historyItems = historyTimelineItems(sessionState.messages);
-  const liveItems = liveTimelineItems(sessionState.runEvents);
-  const reconciledItems = shouldSelectTrackedRunSource(sessionState)
-    ? selectTrackedRunTimelineSource(sessionState, historyItems, liveItems)
+  const liveItems = liveTimelineItems(runEvents);
+  const reconciledItems = shouldSelectTrackedRunSource(sessionState, runEvents)
+    ? selectTrackedRunTimelineSource(
+        sessionState,
+        historyItems,
+        liveItems,
+        runEvents,
+      )
     : [...historyItems, ...liveItems];
 
-  return reconciledItems.map((item) => stripTimelineSequence(item));
+  const streamingTimelineItems = (sessionState.streamingItems ?? []).map(
+    (item) => ({
+      id: item.id,
+      type: 'streaming',
+      streamingItem: item,
+    }),
+  );
+
+  return [
+    ...reconciledItems.map((item) => stripTimelineSequence(item)),
+    ...streamingTimelineItems,
+  ];
 }
 
-function shouldSelectTrackedRunSource(sessionState) {
+function shouldSelectTrackedRunSource(
+  sessionState,
+  runEvents = sessionState?.runEvents,
+) {
   return (
     Boolean(sessionState?.currentRun?.runId) &&
-    Array.isArray(sessionState?.runEvents) &&
-    sessionState.runEvents.length > 0
+    Array.isArray(runEvents) &&
+    runEvents.length > 0
   );
 }
 
@@ -433,7 +504,12 @@ function isVisibleHistoryMessage(message) {
   ].includes(message?.role);
 }
 
-function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {
+function selectTrackedRunTimelineSource(
+  sessionState,
+  historyItems,
+  liveItems,
+  runEvents = sessionState?.runEvents,
+) {
   const activeRunId = sessionState.currentRun?.runId ?? null;
   const liveAssistantRun = liveItems.find(
     (item) =>
@@ -443,10 +519,7 @@ function selectTrackedRunTimelineSource(sessionState, historyItems, liveItems) {
     return [...historyItems, ...liveItems];
   }
 
-  const activeUserEvent = activeRunUserEvent(
-    sessionState.runEvents,
-    activeRunId,
-  );
+  const activeUserEvent = activeRunUserEvent(runEvents, activeRunId);
   if (!activeUserEvent?.payload?.message) {
     return [...historyItems, ...liveItems];
   }
@@ -678,9 +751,10 @@ function createStandaloneRunEventItem(event) {
 function buildLiveAssistantRunItem(runKey, events) {
   const orderedEvents = [...events].sort(compareRunEvents);
   const firstEvent = orderedEvents[0] ?? {};
+  const runId = firstEvent.run_id ?? runKey;
   const assistantRun = createAssistantRunItem({
     id: `assistant-run-${runKey}`,
-    runId: firstEvent.run_id,
+    runId,
     source: 'live',
     sequence: firstEvent.sequence ?? 0,
     timestamp: firstEvent.timestamp,
@@ -1160,6 +1234,84 @@ function isAssistantRunEvent(event) {
   ].includes(event?.type);
 }
 
+function isStreamingDeltaRunEvent(eventType) {
+  return [
+    RUN_EVENT_REASONING_DELTA,
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+    RUN_EVENT_TOOL_CALL_DELTA,
+  ].includes(eventType);
+}
+
+function appendCompressedStreamingRunEvent(sessionState, event) {
+  const payloadKey = streamingDeltaPayloadKey(event.type);
+  if (!payloadKey) {
+    return;
+  }
+
+  const deltaText = event.payload?.[payloadKey];
+  if (!deltaText) {
+    return;
+  }
+
+  const lastEvent = sessionState.streamingRunEvents.at(-1);
+  if (
+    canMergeCompressedStreamingEvent(
+      lastEvent,
+      event,
+      payloadKey,
+      sessionState.streamingPhase,
+    )
+  ) {
+    lastEvent.payload[payloadKey] =
+      `${lastEvent.payload?.[payloadKey] ?? ''}${deltaText}`;
+    lastEvent.sequence = firstSeenSequence(lastEvent.sequence, event.sequence);
+    lastEvent.timestamp ??= event.timestamp;
+    return;
+  }
+
+  sessionState.streamingRunEvents = [
+    ...sessionState.streamingRunEvents,
+    {
+      ...event,
+      payload: {
+        ...event.payload,
+      },
+      _streamingPhase: sessionState.streamingPhase,
+    },
+  ];
+}
+
+function canMergeCompressedStreamingEvent(
+  existingEvent,
+  incomingEvent,
+  payloadKey,
+  streamingPhase,
+) {
+  return (
+    existingEvent?.type === incomingEvent.type &&
+    existingEvent?.run_id === incomingEvent.run_id &&
+    existingEvent?._streamingPhase === streamingPhase &&
+    typeof existingEvent.payload?.[payloadKey] === 'string'
+  );
+}
+
+function streamingDeltaPayloadKey(eventType) {
+  if (eventType === RUN_EVENT_REASONING_DELTA) {
+    return 'reasoning_delta';
+  }
+  if (eventType === RUN_EVENT_ASSISTANT_OUTPUT_DELTA) {
+    return 'content_delta';
+  }
+  return null;
+}
+
+function streamingDeltaEventKey(event) {
+  if (!Number.isFinite(event?.sequence)) {
+    return null;
+  }
+  return `${event.run_id ?? 'run'}:${event.type}:${event.sequence}`;
+}
+
 function shouldShowStandaloneRunEvent(event) {
   return event?.type === 'user_message_persisted';
 }
@@ -1281,6 +1433,10 @@ function updateStreamingItems(sessionState, event) {
     appendToolCallStreamingItem(sessionState, event);
     return;
   }
+  if (event.type === 'tool_call_started' || event.type === 'tool_call_result') {
+    sessionState.streamingPhase += 1;
+    return;
+  }
   if (event.type === 'assistant_output') {
     sessionState.streamingItems = [];
   }
@@ -1292,18 +1448,25 @@ function appendTextStreamingItem(sessionState, event, itemType, payloadKey) {
     return;
   }
   const trailingItem = sessionState.streamingItems.at(-1);
-  if (trailingItem?.type === itemType) {
+  if (
+    trailingItem?.type === itemType &&
+    trailingItem.phase === sessionState.streamingPhase
+  ) {
     trailingItem.content += contentDelta;
     trailingItem.sequence = event.sequence;
+    trailingItem.timestamp ??= event.timestamp;
     return;
   }
   sessionState.streamingItems = [
     ...sessionState.streamingItems,
     {
       id: `${itemType}-${event.run_id ?? 'run'}-${event.sequence ?? sessionState.streamingItems.length}`,
+      run_id: event.run_id,
       type: itemType,
       content: contentDelta,
       sequence: event.sequence,
+      timestamp: event.timestamp,
+      phase: sessionState.streamingPhase,
     },
   ];
 }
@@ -1315,23 +1478,34 @@ function appendToolCallStreamingItem(sessionState, event) {
     return;
   }
   const existingItem = sessionState.streamingItems.find(
-    (item) => item.type === 'tool_call' && item.toolCallId === toolCallId,
+    (item) =>
+      item.type === 'tool_call' &&
+      item.toolCallId === toolCallId &&
+      item.phase === sessionState.streamingPhase,
   );
   if (existingItem) {
     existingItem.name += payload.name_delta ?? '';
     existingItem.argumentsText += payload.arguments_delta ?? '';
+    existingItem.sequence = firstSeenSequence(
+      existingItem.sequence,
+      event.sequence,
+    );
+    existingItem.timestamp ??= event.timestamp;
     return;
   }
   sessionState.streamingItems = [
     ...sessionState.streamingItems,
     {
       id: `tool-call-${event.run_id ?? 'run'}-${toolCallId}`,
+      run_id: event.run_id,
       type: 'tool_call',
       toolCallId,
       name: payload.name_delta ?? '',
       argumentsText: payload.arguments_delta ?? '',
       complete: false,
       sequence: event.sequence,
+      timestamp: event.timestamp,
+      phase: sessionState.streamingPhase,
     },
   ];
 }
