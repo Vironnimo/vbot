@@ -1908,6 +1908,37 @@ async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_reque
 
 
 @pytest.mark.asyncio
+async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Fresh answer", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Previous question"))
+    session.append(
+        ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4",
+            content=None,
+            reasoning="Old readable reasoning",
+            reasoning_meta={"opaque": "provider-signed"},
+        )
+    )
+
+    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    persisted = session.load()
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert request_messages[1]["content"] == "Previous question"
+    assert request_messages[2]["content"] == "Follow up"
+    assert [message.role for message in persisted] == ["user", "assistant", "user", "assistant"]
+    assert persisted[1].content is None
+    assert persisted[1].reasoning == "Old readable reasoning"
+    assert persisted[1].reasoning_meta == {"opaque": "provider-signed"}
+
+
+@pytest.mark.asyncio
 async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -3023,6 +3054,25 @@ class TestEmbedNotesIntoRequest:
             "role": "user",
             "content": "<system-reminder>\nPre-sequence note\n</system-reminder>",
         }
+
+    def test_skips_reasoning_only_assistant_message(self) -> None:
+        from core.chat.chat import _embed_notes_into_request
+
+        messages = [
+            ChatMessage.user("Previous question"),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                reasoning="Old reasoning",
+            ),
+            ChatMessage.user("Follow up"),
+        ]
+
+        request = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in request] == ["user", "user"]
+        assert request[0]["content"] == "Previous question"
+        assert request[1]["content"] == "Follow up"
 
 
 class TestMessageToRequestDict:
