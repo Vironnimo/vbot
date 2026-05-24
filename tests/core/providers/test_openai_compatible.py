@@ -21,7 +21,10 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_compatible import (
+    OpenAICompatibleAdapter,
+    _to_openai_assistant_message,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
@@ -199,6 +202,48 @@ def openai_adapter():
 def openrouter_adapter():
     """OpenAI-compatible adapter with OpenRouter config (extra headers)."""
     return OpenAICompatibleAdapter(OPENROUTER_CONFIG, API_KEY)
+
+
+class TestAssistantMessageFormatting:
+    """Verify assistant wire-message formatting edge cases."""
+
+    def test_assistant_message_without_tool_calls_uses_empty_content_string(self) -> None:
+        wire_message = _to_openai_assistant_message(
+            {
+                "role": "assistant",
+                "content": None,
+            }
+        )
+
+        assert wire_message["content"] == ""
+        assert "tool_calls" not in wire_message
+
+    def test_assistant_message_with_tool_calls_keeps_null_content(self) -> None:
+        wire_message = _to_openai_assistant_message(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "name": "read",
+                        "arguments": {"path": "README.md"},
+                    }
+                ],
+            }
+        )
+
+        assert wire_message["content"] is None
+        assert wire_message["tool_calls"] == [
+            {
+                "id": "call_abc",
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": '{"path":"README.md"}',
+                },
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------

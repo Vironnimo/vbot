@@ -555,6 +555,8 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
             }
             for tool_call in message["tool_calls"]
         ]
+    if openai_message.get("content") is None and "tool_calls" not in openai_message:
+        openai_message["content"] = ""
     _apply_openai_reasoning_meta(openai_message, message.get("reasoning_meta"))
     return openai_message
 
