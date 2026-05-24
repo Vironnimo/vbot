@@ -401,8 +401,10 @@ class AnthropicAdapter(ProviderAdapter):
                     break
             if not seen_message_stop:
                 raise NetworkError("Stream ended without message_stop event")
-        except (httpx.ReadError, httpx.TimeoutException) as exc:
+        except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 

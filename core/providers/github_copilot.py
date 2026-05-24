@@ -246,8 +246,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             if event_lines:
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
                     yield delta
-        except (httpx.ReadError, httpx.TimeoutException) as exc:
+        except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
@@ -258,8 +260,10 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             async for line in response.aiter_lines():
                 for delta in normalize_copilot_messages_sse_line(line, state):
                     yield delta
-        except (httpx.ReadError, httpx.TimeoutException) as exc:
+        except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
         finally:
             await response.aclose()
 
