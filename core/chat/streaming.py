@@ -295,8 +295,6 @@ def _merge_stream_fragment(existing: str, delta: str) -> tuple[str, str]:
         return existing, ""
     if not existing:
         return delta, delta
-    if delta in existing:
-        return existing, ""
     if delta.startswith(existing):
         suffix = delta[len(existing) :]
         return delta, suffix
