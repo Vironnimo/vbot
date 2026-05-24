@@ -20,6 +20,7 @@ import {
   updateQueuedMessageContent,
   updateSessionUsage,
   visibleTimelineItems,
+  visibleTimelineItemsForRender,
 } from '../chatState.js';
 
 describe('chat state helpers', () => {
@@ -1751,6 +1752,115 @@ describe('chat state helpers', () => {
     expect(visibleTimelineItems(sessionState).map((item) => item.type)).toEqual(
       ['streaming', 'streaming'],
     );
+  });
+
+  it('keeps render selector assistant/reasoning streaming content inside assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-selector-text',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-render-selector-text',
+      sequence: 1,
+      payload: { reasoning_delta: 'Plan first.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-text',
+      sequence: 2,
+      payload: { content_delta: 'Draft response.' },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems).toEqual([
+      expect.objectContaining({
+        type: 'assistant_run',
+        runId: 'run-render-selector-text',
+        reasoning: [
+          expect.objectContaining({
+            content: 'Plan first.',
+            streaming: true,
+          }),
+        ],
+        outputs: [
+          expect.objectContaining({
+            content: 'Draft response.',
+            streaming: true,
+          }),
+        ],
+      }),
+    ]);
+    expect(
+      renderItems.some(
+        (item) =>
+          item.type === 'streaming' &&
+          ['assistant', 'reasoning'].includes(item.streamingItem?.type),
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps render selector tool-call deltas as streaming wrappers without duplicating live text', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-selector-tool-delta',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-tool-delta',
+      sequence: 1,
+      payload: { content_delta: 'Preparing tool call.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-render-selector-tool-delta',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'read',
+        arguments_delta: '{"path":"a.txt"}',
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems.map((item) => item.type)).toEqual([
+      'assistant_run',
+      'streaming',
+    ]);
+    expect(renderItems[0]).toEqual(
+      expect.objectContaining({
+        runId: 'run-render-selector-tool-delta',
+        outputs: [
+          expect.objectContaining({
+            content: 'Preparing tool call.',
+            streaming: true,
+          }),
+        ],
+      }),
+    );
+    expect(renderItems[1]).toEqual(
+      expect.objectContaining({
+        type: 'streaming',
+        streamingItem: expect.objectContaining({
+          type: 'tool_call',
+          toolCallId: 'call-one',
+          name: 'read',
+        }),
+      }),
+    );
+    expect(
+      renderItems.some(
+        (item) =>
+          item.type === 'streaming' &&
+          ['assistant', 'reasoning'].includes(item.streamingItem?.type),
+      ),
+    ).toBe(false);
   });
 
   it('ignores duplicate streaming event sequences', () => {

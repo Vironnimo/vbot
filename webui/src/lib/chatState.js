@@ -355,16 +355,28 @@ export function visibleTimelineItemsForRender(sessionState) {
     return [];
   }
 
-  return buildVisibleTimelineItems(sessionState, [
-    ...(sessionState.runEvents ?? []),
-    ...(sessionState.streamingRunEvents ?? []),
-  ]);
+  return buildVisibleTimelineItems(
+    sessionState,
+    [
+      ...(sessionState.runEvents ?? []),
+      ...(sessionState.streamingRunEvents ?? []),
+    ],
+    {
+      includeStreamingAssistantAndReasoning: false,
+      includeStreamingToolCalls: true,
+    },
+  );
 }
 
-function buildVisibleTimelineItems(sessionState, runEvents) {
+function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
   if (!sessionState) {
     return [];
   }
+
+  const {
+    includeStreamingAssistantAndReasoning = true,
+    includeStreamingToolCalls = true,
+  } = options;
 
   const historyItems = historyTimelineItems(sessionState.messages);
   const liveItems = liveTimelineItems(runEvents);
@@ -377,13 +389,21 @@ function buildVisibleTimelineItems(sessionState, runEvents) {
       )
     : [...historyItems, ...liveItems];
 
-  const streamingTimelineItems = (sessionState.streamingItems ?? []).map(
-    (item) => ({
+  const streamingTimelineItems = (sessionState.streamingItems ?? [])
+    .filter((item) => {
+      if (item.type === 'tool_call') {
+        return includeStreamingToolCalls;
+      }
+      if (item.type === 'assistant' || item.type === 'reasoning') {
+        return includeStreamingAssistantAndReasoning;
+      }
+      return true;
+    })
+    .map((item) => ({
       id: item.id,
       type: 'streaming',
       streamingItem: item,
-    }),
-  );
+    }));
 
   return [
     ...reconciledItems.map((item) => stripTimelineSequence(item)),
