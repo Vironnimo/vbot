@@ -5,7 +5,10 @@
   import { t } from '$lib/i18n.js';
   import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
 
-  import { visibleTimelineItemsForRender } from '../lib/chatState.js';
+  import {
+    assistantRunChildProgressKey,
+    visibleTimelineItemsForRender,
+  } from '../lib/chatState.js';
 
   let {
     sessionState,
@@ -72,13 +75,16 @@
 
   function timelineItemSignature(item) {
     if (item.type === 'streaming') {
+      if (item.streamingItem?.type === 'tool_call') {
+        return `${item.id}:${item.streamingItem.sequence}:${(item.streamingItem.name ?? '').length}:${(item.streamingItem.argumentsText ?? '').length}`;
+      }
       return `${item.id}:${item.streamingItem.sequence}`;
     }
     if (item.type === 'assistant_run') {
       return `${item.id}:${item.status}:${(item.items ?? [])
         .map(
           (child) =>
-            `${child.id}:${child.type}:${child.sequence ?? ''}:${child.status ?? ''}:${child.streaming ? '1' : '0'}`,
+            `${child.id}:${child.type}:${child.sequence ?? ''}:${child.status ?? ''}:${child.streaming ? '1' : '0'}:${assistantRunChildProgressKey(child)}`,
         )
         .join('~')}`;
     }
