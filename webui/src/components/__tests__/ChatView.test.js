@@ -854,7 +854,7 @@ describe('ChatView', () => {
     });
   });
 
-  it('links an unlinked session to a channel from the sessions drawer', async () => {
+  it('renders unlinked sessions as selection-only rows in the sessions drawer', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
     listSessionsMock.mockResolvedValue({
       sessions: [
@@ -883,42 +883,10 @@ describe('ChatView', () => {
       100,
     );
 
-    const linkButton = findButtonByText('Link to channel');
-    expect(linkButton).toBeTruthy();
-    linkButton.click();
-
-    await waitForCondition(
-      () => Boolean(document.querySelector('input[name="channel-id"]')),
-      100,
-    );
-
-    const channelIdInput = document.querySelector('input[name="channel-id"]');
-    const platformConvIdInput = document.querySelector(
-      'input[name="platform-conv-id"]',
-    );
-
-    expect(channelIdInput).toBeTruthy();
-    expect(platformConvIdInput).toBeTruthy();
-
-    setInputValue(channelIdInput, 'tg-assistant');
-    setInputValue(platformConvIdInput, '12345');
-
-    const confirmLinkButton = findButtonByText('Link session');
-    expect(confirmLinkButton).toBeTruthy();
-    confirmLinkButton.click();
-
-    await waitForCondition(
-      () => linkSessionToChannelMock.mock.calls.length > 0,
-      100,
-    );
-
-    expect(linkSessionToChannelMock).toHaveBeenCalledWith(
-      'alpha',
-      'session-legacy',
-      'tg-assistant',
-      '12345',
-    );
-    expect(document.body.textContent).toContain('Session linked to channel.');
+    expect(findButtonByText('session-legacy')).toBeTruthy();
+    expect(findButtonByText('Link to channel')).toBeFalsy();
+    expect(document.querySelector('input[name="channel-id"]')).toBeNull();
+    expect(linkSessionToChannelMock).not.toHaveBeenCalled();
   });
 });
 
