@@ -101,14 +101,10 @@ def __getattr__(name: str) -> object:
         from core.tools.cron import register_cron_tool
 
         return register_cron_tool
-    if name in {"SubAgentBatchTracker", "register_subagent_tools"}:
-        from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
+    if name == "register_subagent_tools":
+        from core.tools.subagent import register_subagent_tools
 
-        exports = {
-            "SubAgentBatchTracker": SubAgentBatchTracker,
-            "register_subagent_tools": register_subagent_tools,
-        }
-        return exports[name]
+        return register_subagent_tools
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -137,7 +133,6 @@ __all__ = [
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
-    "SubAgentBatchTracker",
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",

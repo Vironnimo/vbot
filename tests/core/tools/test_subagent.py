@@ -10,17 +10,20 @@ from typing import Any
 import pytest
 
 import core.chat as chat_api
-import core.tools.subagent as subagent_module
+import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.runs import ActiveRunError, Run, RunNotFoundError
-from core.tools.subagent import (
-    SUBAGENT_RESULT_TOOL_NAME,
-    SUBAGENT_TOOL_NAME,
+from core.subagents.subagents import (
     SubAgentBatchTracker,
+    SubAgentCoordinator,
     _handle_subagent,
     _handle_subagent_result,
     _wait_for_subagent_result,
+)
+from core.tools.subagent import (
+    SUBAGENT_RESULT_TOOL_NAME,
+    SUBAGENT_TOOL_NAME,
     register_subagent_tools,
 )
 from core.tools.tools import ToolContext, ToolRegistry
@@ -319,9 +322,10 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     registry = ToolRegistry()
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
+    coordinator = SubAgentCoordinator(SimpleNamespace(), trigger_service, batch_tracker=tracker)
 
     # Act
-    register_subagent_tools(registry, SimpleNamespace(), trigger_service, tracker)
+    register_subagent_tools(registry, coordinator)
 
     # Assert
     assert [tool.name for tool in registry.list_tools()] == [

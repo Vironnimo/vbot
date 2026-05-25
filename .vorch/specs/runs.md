@@ -49,7 +49,7 @@ to render without re-inferring tool semantics from raw arguments.
 - `core/chat/` owns ChatMessage, provider/tool execution, retry/fallback behavior, and when to call Run APIs.
 - `core/sessions/` owns persisted history. Runs do not read or write Session files.
 - `server/` maps Run state to RPC, SSE, and WebSocket payloads. SSE streams Run events directly; WebSocket receives lifecycle summaries and excludes SSE-only delta events.
-- `core/automation/` and `core/tools/subagent.py` start or queue work through the shared manager instead of creating their own queues.
+- `core/automation/` and `core/subagents/` start or queue work through the shared manager instead of creating their own queues.
 - `core/channels/` subscribes to Runs for final replies and cancellation/failure outcomes.
 - `webui/` treats queue state as server-owned and listens to Run SSE/WS contracts; it does not own lifecycle truth.
 

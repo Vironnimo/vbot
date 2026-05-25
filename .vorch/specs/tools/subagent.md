@@ -1,14 +1,11 @@
 # Sub-Agent Tools
 
-Starts or resumes sub-agent Runs and fetches sub-agent results.
+Registers the public sub-agent tools and delegates orchestration to `core/subagents/`.
 
 ## Data Model
 
-- `SubAgentBatchTracker` tracks in-memory batches by parent `(agent_id, session_id, run_id)`.
-- Batch tracking is process-local and does not persist across restarts.
-- The tracker reserves a per-turn slot before async spawn work begins, so
-  sibling tool calls cannot bypass `max_subagents_per_turn` while they are
-  waiting on session or queue state.
+- `core.tools.subagent` owns tool names, descriptions, JSON Schemas, display metadata, and registration.
+- `SubAgentCoordinator` in `core/subagents/` owns queueing, cancellation, batch tracking, and result lookup.
 
 ## Interfaces
 
@@ -18,7 +15,7 @@ Starts or resumes sub-agent Runs and fetches sub-agent results.
 - Tool name: `subagent_result`
 - Schema: required `session_id`; optional `agent_id` and `run_id`.
 - Display: summary fields `agent_id` and `session_id`.
-- Registration: `register_subagent_tools(registry, runtime, trigger_service, batch_tracker)`
+- Registration: `register_subagent_tools(registry, coordinator)`
 
 ## Conventions
 
