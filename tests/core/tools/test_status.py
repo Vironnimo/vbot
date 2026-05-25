@@ -10,9 +10,10 @@ from typing import Any, cast
 import core.tools.status as status_tool_module
 from core.agents.agents import Agent, AgentNotFoundError, AgentStore
 from core.chat import ChatRunManager, CommandDispatcher, CommandHandled
-from core.chat.chat import ChatMessage, ChatSessionManager
+from core.chat.chat import ChatMessage
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
 

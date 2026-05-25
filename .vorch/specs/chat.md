@@ -1,16 +1,17 @@
 # Chat
 
-Canonical backend chat messages, append-only JSONL sessions, and the chat run
-execution model exposed through the server layer.
+Canonical backend chat messages and the chat run execution model exposed through
+the server layer.
 
 ## Overview
 
 `core/chat/` owns the provider-agnostic conversation representation used between
-the chat layer and provider adapters. Session files are append-only JSONL under
-`<data_dir>/agents/<agent-id>/sessions/`, with one canonical message per line.
-Provider-specific wire details stay in `core/providers/`; chat should assemble
-canonical history and request options only. A Session is the persisted chat
-container; a Run is one active execution inside that session.
+the chat layer and provider adapters, plus the Run execution model. Session
+persistence lives in `core/sessions/`; chat should interact with it through the
+session API rather than knowing storage paths. Provider-specific wire details
+stay in `core/providers/`; chat should assemble canonical history and request
+options only. A Session is the persisted chat container; a Run is one active
+execution inside that session.
 
 ## Data Model
 
@@ -32,15 +33,7 @@ container; a Run is one active execution inside that session.
 - `ChatMessage.system(content, model)` / `.user(content)` / `.assistant(...)` / `.tool(...)` / `.note(content)` / `.compaction_checkpoint(summary, tail_boundary_id, compacted_token_count)` / `.error(error_kind, content)` — constructors for role-specific messages.
 - `ChatMessage.to_dict()` / `ChatMessage.from_dict(data)` — canonical JSON-compatible conversion.
 - `error_kind_llm_visible(kind)` — returns whether a persisted error should be embedded into the next provider request.
-- `ChatSession.create(sessions_dir, session_id=None)` — creates an empty session file. Public/server-facing session creation uses a server-generated UUID session ID.
-- `ChatSession.append(message)` — appends one compact UTF-8 JSON object plus newline.
-- `ChatSession.load()` — returns validated `ChatMessage` objects in file order.
-- `ChatSession.add_note(content)` — enqueues a `role: "note"` message in-memory for the next provider request and persists it to JSONL, except during active tool dispatch where persistence is deferred until after that assistant turn's tool-result messages are appended.
-- `ChatSession.begin_defer_notes()` / `ChatSession.flush_deferred_notes()` — internal helpers that bracket tool dispatch so note persistence stays after the current assistant turn's tool-result span.
-- `ChatSession.drain_pending_notes()` — returns queued note messages and clears the in-memory pending-note buffer; it does not re-read the session file.
-- `ChatSession.activate_skill_context(name, data)` — stores one activated skill's `<skill_content>` context once per Session, persists it as an internal skill-context note, and returns a stable tool result envelope. Re-activating the same skill returns an already-active success envelope.
-- `ChatSession.skill_context_messages()` — returns restored activated skill contexts as provider request messages.
-- `ChatSessionManager(data_dir)` — resolves `agents/<id>/sessions/` and creates/gets/lists/deletes sessions.
+- Session persistence interfaces live in `.vorch/specs/sessions.md` and are exported from `core.sessions`.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `compaction_completed` is a visible Run event carrying `{ message }` after auto-compaction appends a `compaction_checkpoint` during a Run.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
@@ -59,7 +52,8 @@ container; a Run is one active execution inside that session.
 
 ## Phase 3 Server Contract Alignment
 
-- Sessions remain the canonical persisted JSONL history.
+- Sessions remain the canonical persisted history. The current storage format is
+  append-only JSONL owned by `core/sessions/`.
 - In the public/server contract, creating a new session is an explicit action;
   chat turns should target an already chosen session instead of implicitly
   switching away from the current one.
@@ -93,8 +87,8 @@ container; a Run is one active execution inside that session.
 
 - Timestamps are UTC ISO 8601 with an explicit offset.
 - UTC timestamps using either `+00:00` or `Z` are accepted when reading persisted messages.
-- Session files use `.jsonl` and are append-only during normal chat operation.
-- Public/server-facing session identifiers are UUID strings. If lower-level helpers accept custom IDs internally, they must still validate them before path construction.
+- Public/server-facing session identifiers are UUID strings. Storage-level ID
+  validation and path construction rules are owned by `core/sessions/`.
 - Current code can still create a session implicitly when `ChatLoop.send()` is
   called without an existing `session_id`, or create the named session if it
   does not yet exist. This describes current implementation behavior and should

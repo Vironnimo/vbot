@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from core.agents.agents import AgentNotFoundError, AgentStore
-from core.chat.chat import ChatSessionError, ChatSessionManager
 from core.chat.commands import build_status_reply, build_status_text, resolve_status_model_details
+from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
+from core.sessions import ChatSessionManager
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
 from core.utils.logging import get_logger
 

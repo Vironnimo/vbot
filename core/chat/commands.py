@@ -13,8 +13,9 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.agents.agents import Agent, AgentStore
-    from core.chat.chat import ChatMessage, ChatSessionManager
+    from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
+    from core.sessions import ChatSessionManager
 else:
     Agent = Any
     AgentStore = Any

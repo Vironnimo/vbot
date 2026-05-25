@@ -18,9 +18,9 @@ from core.chat import (
     Run,
     RunCancelledError,
 )
-from core.chat.chat import ChatSessionManager
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.sessions import ChatSessionManager
 
 
 def _make_agent(

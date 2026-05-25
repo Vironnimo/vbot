@@ -31,8 +31,8 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
-    from core.chat.chat import ChatSessionManager
     from core.chat.runs import Run, RunEvent
+    from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
 
@@ -552,9 +552,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         return chat_id in self._allowed_chat_ids
 
     def _session_exists(self, route: RouteFacts) -> bool:
-        sessions_dir = self._chat_sessions.sessions_dir(route.agent_id)
-        session_path = sessions_dir / f"{route.session_id}.jsonl"
-        return session_path.exists()
+        return self._chat_sessions.exists(route.agent_id, route.session_id)
 
     def _update_session_metadata(
         self,

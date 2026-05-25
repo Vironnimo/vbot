@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from core.attachments import AttachmentStore
-from core.chat.chat import ChatError
+from core.chat.errors import ChatError
 
 JsonObject = dict[str, Any]
 

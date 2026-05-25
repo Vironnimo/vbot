@@ -16,7 +16,6 @@ from core.automation import CronService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatRunManager, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
-from core.chat.chat import ChatSessionManager
 from core.extensions import ExtensionRegistry
 from core.models.models import Model, ModelRegistry
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -35,6 +34,7 @@ from core.runtime.interfaces import (
     LoggerProtocol,
     ProviderCredentialResolverProtocol,
 )
+from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
 from core.tools import (
