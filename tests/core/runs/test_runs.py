@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -158,6 +159,48 @@ async def test_cancel_invokes_registered_abort_callback() -> None:
 
     assert callbacks == ["aborted"]
     assert run.status == RunStatus.CANCELLED
+
+
+async def test_cancel_callback_failure_does_not_skip_remaining_callbacks(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    callbacks: list[str] = []
+
+    def fail() -> None:
+        callbacks.append("failed")
+        raise RuntimeError("cancel callback boom")
+
+    def succeed() -> None:
+        callbacks.append("succeeded")
+
+    run.add_cancel_callback(fail)
+    run.add_cancel_callback(succeed)
+
+    caplog.set_level(logging.WARNING, logger="vbot.runs")
+    run.request_cancel()
+
+    assert callbacks == ["failed", "succeeded"]
+    assert run.cancel_requested is True
+    assert "Run cancel callback failed" in caplog.text
+
+
+async def test_async_cancel_callback_failure_is_observed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    async def fail() -> None:
+        raise RuntimeError("async cancel callback boom")
+
+    run.add_cancel_callback(fail)
+
+    caplog.set_level(logging.WARNING, logger="vbot.runs")
+    run.request_cancel()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert "Run async cancel callback failed" in caplog.text
 
 
 async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:

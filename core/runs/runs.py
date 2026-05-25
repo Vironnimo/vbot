@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -17,6 +18,7 @@ from core.utils.errors import VBotError
 JsonObject = dict[str, Any]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
+_LOGGER = logging.getLogger("vbot.runs")
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
@@ -450,6 +452,20 @@ class ChatRunManager:
 
 
 def _schedule_callback(callback: CancelCallback) -> None:
-    result = callback()
+    try:
+        result = callback()
+    except Exception:
+        _LOGGER.warning("Run cancel callback failed", exc_info=True)
+        return
     if inspect.isawaitable(result):
-        asyncio.create_task(cast(Coroutine[Any, Any, Any], result))
+        task = asyncio.create_task(cast(Coroutine[Any, Any, Any], result))
+        task.add_done_callback(_on_cancel_callback_done)
+
+
+def _on_cancel_callback_done(task: asyncio.Task[Any]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        _LOGGER.warning("Run async cancel callback failed", exc_info=True)
