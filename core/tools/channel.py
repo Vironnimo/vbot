@@ -12,7 +12,7 @@ from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure
 
 if TYPE_CHECKING:
     from core.channels.channels import ChannelService
-    from core.chat.chat import ChatSessionManager
+    from core.sessions import ChatSessionManager
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = "Send a proactive outbound message through a configured channel."

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.channels.channels import ChannelConfig
-from core.chat.chat import ChatSession, ChatSessionError, ChatSessionManager
+from core.sessions import ChatSessionManager
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
@@ -178,7 +178,7 @@ class AgentStore:
         )
 
         agent_dir.mkdir(parents=True)
-        session = ChatSession.create(self._sessions_dir(agent_id))
+        session = self._session_manager().create(agent_id)
         agent = Agent(
             id=agent_id,
             name=validated_name,
@@ -299,9 +299,6 @@ class AgentStore:
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
 
-    def _sessions_dir(self, agent_id: str) -> Path:
-        return self._agent_dir(agent_id) / "sessions"
-
     def _default_workspace(self, agent_id: str) -> Path:
         return self._data_dir / f"workspace-{agent_id}"
 
@@ -356,7 +353,7 @@ class AgentStore:
         if agent.current_session_id and self._session_exists(agent.id, agent.current_session_id):
             return agent
 
-        session = ChatSession.create(self._sessions_dir(agent.id))
+        session = self._session_manager().create(agent.id)
         updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
         self._write_agent(updated_agent)
         return updated_agent
@@ -368,11 +365,10 @@ class AgentStore:
             raise AgentError(f"current session does not exist: {session_id}")
 
     def _session_exists(self, agent_id: str, session_id: str) -> bool:
-        try:
-            ChatSessionManager(self._data_dir).get(agent_id, session_id)
-        except ChatSessionError:
-            return False
-        return True
+        return self._session_manager().exists(agent_id, session_id)
+
+    def _session_manager(self) -> ChatSessionManager:
+        return ChatSessionManager(self._data_dir)
 
     def _seed_workspace(self, workspace_path: Path) -> None:
         workspace_path.mkdir(parents=True, exist_ok=True)

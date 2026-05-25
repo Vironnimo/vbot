@@ -20,8 +20,8 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
-    from core.chat.chat import ChatSessionManager
     from core.chat.commands import CommandDispatcher
+    from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels")
 

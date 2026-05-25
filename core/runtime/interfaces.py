@@ -7,9 +7,9 @@ and testability without dragging in concrete implementations.
 from typing import Any, Protocol
 
 from core.agents.agents import Agent
-from core.chat.chat import ChatSession
 from core.models.models import Model
 from core.providers.providers import ProviderConfig
+from core.sessions import ChatSession
 from core.skills.skills import SkillMetadata
 from core.tools.tools import Tool
 

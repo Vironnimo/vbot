@@ -21,10 +21,10 @@ from core.channels.adapter import (
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
-from core.chat.chat import ChatSessionManager
 from core.chat.commands import CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.chat.runs import ASSISTANT_OUTPUT_EVENT, Run
+from core.sessions import ChatSessionManager
 
 
 def make_config(

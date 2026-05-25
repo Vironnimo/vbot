@@ -2,15 +2,9 @@
 
 from core.chat.chat import (
     MAX_TOOL_ITERATIONS,
-    ChatError,
     ChatLoop,
     ChatMessage,
-    ChatMessageValidationError,
-    ChatSession,
-    ChatSessionError,
-    ChatSessionManager,
     ToolCall,
-    ToolIterationLimitError,
 )
 from core.chat.commands import (
     CommandDispatcher,
@@ -19,6 +13,12 @@ from core.chat.commands import (
     NotACommand,
 )
 from core.chat.compaction import CompactionError, CompactionService, CompactionSettings
+from core.chat.errors import (
+    ChatError,
+    ChatMessageValidationError,
+    ChatSessionError,
+    ToolIterationLimitError,
+)
 from core.chat.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -45,6 +45,7 @@ from core.chat.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.sessions import ChatSession, ChatSessionManager
 
 __all__ = [
     "ASSISTANT_OUTPUT_DELTA_EVENT",

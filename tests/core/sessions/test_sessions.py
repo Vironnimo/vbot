@@ -7,7 +7,8 @@ from uuid import UUID
 
 import pytest
 
-from core.chat import ChatMessage, ChatSession, ChatSessionError, ChatSessionManager, ToolCall
+from core.chat import ChatMessage, ToolCall
+from core.sessions import ChatSession, ChatSessionError, ChatSessionManager
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
@@ -195,6 +196,17 @@ class TestChatSessionManager:
         session = manager.get_or_create("coder", "session-one")
 
         assert session.path == created.path
+
+    def test_exists_returns_true_for_existing_session(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        assert manager.exists("coder", "session-one") is True
+
+    def test_exists_returns_false_for_missing_session(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+
+        assert manager.exists("coder", "missing") is False
 
     def test_get_or_create_rejects_invalid_session_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
