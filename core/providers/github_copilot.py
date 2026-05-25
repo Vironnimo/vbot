@@ -8,13 +8,18 @@ from typing import Any
 import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._http_shared import (
+    classify_http_status,
+    iter_sse_data,
+    parse_sse_json_data,
+    wrap_network_error,
+)
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
     normalize_copilot_messages_response,
-    normalize_copilot_messages_sse_line,
+    normalize_copilot_messages_stream_event,
 )
 from core.providers.github_copilot_policy import (
     CHAT_COMPLETIONS_ENDPOINT,
@@ -265,8 +270,16 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         state = CopilotMessagesStreamState()
         seen_finish_delta = False
         try:
-            async for line in response.aiter_lines():
-                for delta in normalize_copilot_messages_sse_line(line, state):
+            async for data in iter_sse_data(response):
+                if not data.strip():
+                    continue
+                parsed = parse_sse_json_data(data, context="GitHub Copilot Messages provider")
+                if not isinstance(parsed, dict):
+                    raise ProviderError(
+                        "GitHub Copilot Messages provider sent non-object JSON in stream",
+                        retryable=False,
+                    )
+                for delta in normalize_copilot_messages_stream_event(parsed, state):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta

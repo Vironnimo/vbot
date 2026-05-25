@@ -1100,5 +1100,19 @@ def test_stream_raises_provider_error_for_error_events() -> None:
         list(iter_responses_sse_deltas(lines))
 
 
+def test_stream_raises_provider_error_for_malformed_json() -> None:
+    lines = ["event: response.output_text.delta\ndata: not-json\n\n"]
+
+    with pytest.raises(ProviderError, match="malformed JSON"):
+        list(iter_responses_sse_deltas(lines))
+
+
+def test_stream_raises_provider_error_for_non_object_json() -> None:
+    lines = ["event: response.output_text.delta\ndata: []\n\n"]
+
+    with pytest.raises(ProviderError, match="non-object JSON"):
+        list(iter_responses_sse_deltas(lines))
+
+
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
