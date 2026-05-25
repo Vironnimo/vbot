@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHAT_STATUS_COMPLETED,
+  CHAT_STATUS_CANCELLED,
   CHAT_STATUS_FAILED,
   CHAT_STATUS_RUNNING,
   assistantRunChildProgressKey,
@@ -1438,6 +1439,44 @@ describe('chat state helpers', () => {
       CHAT_STATUS_RUNNING,
       CHAT_STATUS_FAILED,
     ]);
+  });
+
+  it('marks pending tool rows cancelled when a run is cancelled', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-cancelled',
+      sequence: 1,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      payload: {
+        tool_call: { id: 'call-bash', index: 0, name: 'bash' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_cancelled',
+      run_id: 'run-cancelled',
+      sequence: 2,
+      timestamp: '2026-01-01T00:00:01.000Z',
+      payload: { status: CHAT_STATUS_CANCELLED },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+
+    expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(assistantRun.tools).toHaveLength(1);
+    expect(assistantRun.tools[0]).toEqual(
+      expect.objectContaining({
+        status: CHAT_STATUS_CANCELLED,
+        endTimestamp: '2026-01-01T00:00:01.000Z',
+        cancelledEvent: expect.objectContaining({ type: 'run_cancelled' }),
+      }),
+    );
+    expect(assistantRun.tools[0].resultEvent).toBeNull();
   });
 
   it('keeps new runs ordered after older runs without nesting tool rows', () => {

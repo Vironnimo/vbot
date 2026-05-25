@@ -134,6 +134,7 @@ export const englishCatalog = Object.freeze({
   'chat.toolArgs': 'Args',
   'chat.toolStatus': 'Status',
   'chat.toolPendingName': 'tool',
+  'chat.toolCancelled': 'cancelled',
   'chat.toolPreparingArguments': 'preparing arguments',
   'chat.toolArgumentsHidden':
     'Arguments are streaming and will appear when ready.',

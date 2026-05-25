@@ -959,6 +959,9 @@ function appendLiveRunEvent(assistantRun, event) {
     assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
     assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
     assistantRun.terminalEvent = event;
+    if (event.type === 'run_cancelled') {
+      markPendingToolsCancelled(assistantRun, event);
+    }
     return;
   }
 
@@ -1357,6 +1360,32 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
   assistantRun.items.push(tool);
   syncAssistantRunCollections(assistantRun);
   return tool;
+}
+
+function markPendingToolsCancelled(assistantRun, event) {
+  let changed = false;
+  for (const item of assistantRun.items) {
+    if (
+      item.type !== 'tool_call' ||
+      item.resultEvent ||
+      item.status === CHAT_STATUS_COMPLETED ||
+      item.status === CHAT_STATUS_FAILED ||
+      item.status === CHAT_STATUS_CANCELLED ||
+      item.status === 'success'
+    ) {
+      continue;
+    }
+
+    item.status = CHAT_STATUS_CANCELLED;
+    item.endTimestamp = event.timestamp ?? item.endTimestamp;
+    item.cancelledEvent = event;
+    item.events = [...(item.events ?? []), event];
+    changed = true;
+  }
+
+  if (changed) {
+    syncAssistantRunCollections(assistantRun);
+  }
 }
 
 function syncAssistantRunCollections(assistantRun) {

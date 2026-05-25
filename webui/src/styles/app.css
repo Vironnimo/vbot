@@ -1469,6 +1469,14 @@ textarea::placeholder {
   color: var(--red);
 }
 
+.te-dot.cancelled {
+  color: var(--text-lo);
+}
+
+.te-time.cancelled {
+  color: var(--text-lo);
+}
+
 @keyframes blink {
   0%,
   100% {
