@@ -133,7 +133,10 @@ class FakeRunManager:
         internal: bool = False,
     ) -> Any:
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
-        item = SimpleNamespace(future=future)
+        item = SimpleNamespace(
+            future=future,
+            item_id=f"queued-item-{len(self.enqueued) + 1}",
+        )
         run = Run(
             run_id=f"queued-sub-run-{len(self.enqueued) + 1}",
             agent_id=agent_id,
@@ -157,6 +160,24 @@ class FakeRunManager:
             future.set_result(run)
             self._schedule_terminal_state(run)
         return item
+
+    def remove_queued(self, agent_id: str, session_id: str, item_id: str) -> bool:
+        for record in list(self.enqueued):
+            item = record["item"]
+            if (
+                record["agent_id"] != agent_id
+                or record["session_id"] != session_id
+                or item.item_id != item_id
+            ):
+                continue
+            self.enqueued.remove(record)
+            self._pending_enqueued_starts = [
+                pending for pending in self._pending_enqueued_starts if pending[0] is not item
+            ]
+            if not item.future.done():
+                item.future.cancel()
+            return True
+        return False
 
     def release_next_enqueued_start(self) -> Run:
         item, run = self._pending_enqueued_starts.pop(0)
@@ -253,7 +274,7 @@ async def test_batch_tracker_does_not_trigger_when_completed_item_was_fetched() 
 
     # Assert
     assert trigger_service.calls == []
-    assert tracker.spawn_count(parent_key) == 1
+    assert tracker.spawn_count(parent_key) == 0
 
 
 async def test_batch_tracker_logs_trigger_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -511,7 +532,7 @@ async def test_subagent_tool_queues_when_start_races_active_run(
     assert len(manager.enqueued) == 1
 
 
-async def test_subagent_tool_queues_and_waits_for_run_start_when_session_is_busy(
+async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_start(
     tmp_path: Path,
 ) -> None:
     # Arrange
@@ -540,16 +561,139 @@ async def test_subagent_tool_queues_and_waits_for_run_start_when_session_is_busy
 
     # Assert
     assert len(manager.enqueued) == 1
-    assert task.done() is False
+    assert task.done() is True
+    result = await task
+    assert result["ok"] is True
+    assert result["data"] == {
+        "agent_id": "parent",
+        "session_id": "waiting-sub-session",
+        "queue_item_id": "queued-item-1",
+        "status": "queued",
+    }
+    manager.remove_queued("parent", "waiting-sub-session", "queued-item-1")
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+
+async def test_subagent_tool_counts_queued_run_against_per_turn_limit(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager, {"max_subagents_per_turn": 1})
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="limited-sub-session")
+    manager.busy_sessions[(context.agent_id, "limited-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="limited-sub-session",
+    )
 
     # Act
-    queued_run = manager.release_next_enqueued_start()
-    result = await task
+    first_result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "limited-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    second_result = await _handle_subagent(
+        context,
+        {"content": "spawn again", "session_id": "limited-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert first_result["ok"] is True
+    assert first_result["data"]["status"] == "queued"
+    assert second_result["ok"] is False
+    assert second_result["error"]["code"] == "subagent_limit_exceeded"
+    assert len(manager.enqueued) == 1
+    manager.remove_queued("parent", "limited-sub-session", "queued-item-1")
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+
+async def test_parent_cancellation_removes_queued_subagent(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    runtime.chat_sessions.create(context.agent_id, session_id="cancel-sub-session")
+    manager.busy_sessions[(context.agent_id, "cancel-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="cancel-sub-session",
+    )
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "cancel-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    manager.parent_run.request_cancel()
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["status"] == "running"
-    assert result["data"]["run_id"] == queued_run.id
+    assert result["data"]["status"] == "queued"
+    assert manager.enqueued == []
+    assert tracker.spawn_count(parent_key) == 0
+
+
+async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    result_context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+    runtime.chat_sessions.create(context.agent_id, session_id="queued-result-sub-session")
+    manager.busy_sessions[(context.agent_id, "queued-result-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="queued-result-sub-session",
+    )
+
+    spawn_result = await _handle_subagent(
+        context,
+        {"content": "spawn", "session_id": "queued-result-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Act
+    result = await _handle_subagent_result(
+        result_context,
+        {"agent_id": "parent", "session_id": "queued-result-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert spawn_result["ok"] is True
+    assert result["ok"] is True
+    assert result["data"] == {
+        "agent_id": "parent",
+        "session_id": "queued-result-sub-session",
+        "run_id": None,
+        "queue_item_id": "queued-item-1",
+        "status": "queued",
+        "result": None,
+        "usage": None,
+    }
+    manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1")
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
 
 
 async def test_subagent_tool_blocking_waits_for_queued_run_to_complete(
@@ -767,7 +911,7 @@ async def test_subagent_tool_blocking_timeout_completes_tracker(
     assert result["ok"] is False
     assert result["error"]["code"] == "subagent_timeout"
     assert manager.started[0][3].cancel_requested is True
-    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
     trigger_service = tracker._trigger_service  # noqa: SLF001 - test observes tracker outcome.
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)

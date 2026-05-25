@@ -39,6 +39,7 @@ SECONDS_PER_MINUTE = 60
 RESULT_PREVIEW_LIMIT = 300
 SESSION_RESULT_RETRY_ATTEMPTS = 3
 SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
+SUBAGENT_STATUS_QUEUED = "queued"
 
 _LOGGER = get_logger("tools.subagent")
 
@@ -98,7 +99,8 @@ ParentKey = tuple[str, str, str]
 class _SubAgentEntry:
     agent_id: str
     session_id: str
-    run_id: str
+    run_id: str | None
+    queue_item_id: str | None = None
     complete: bool = False
     fetched: bool = False
     result: JsonObject | None = None
@@ -107,6 +109,7 @@ class _SubAgentEntry:
 @dataclass
 class _SubAgentBatch:
     entries: dict[str, _SubAgentEntry]
+    reserved_count: int = 0
     notification_sent: bool = False
 
 
@@ -132,6 +135,103 @@ class SubAgentBatchTracker:
             run_id=sub_run_id,
         )
 
+    def reserve_slot(self, parent_key: ParentKey, max_count: int) -> bool:
+        """Reserve one sub-agent slot before async session/run work begins."""
+        batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
+        if self._spawn_count(batch) >= max_count:
+            self._prune_if_empty(parent_key, batch)
+            return False
+        batch.reserved_count += 1
+        return True
+
+    def release_slot(self, parent_key: ParentKey) -> None:
+        """Release one previously reserved sub-agent slot."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return
+        if batch.reserved_count > 0:
+            batch.reserved_count -= 1
+        self._prune_if_empty(parent_key, batch)
+
+    def register_reserved(
+        self,
+        parent_key: ParentKey,
+        sub_agent_id: str,
+        sub_session_id: str,
+        sub_run_id: str,
+    ) -> None:
+        """Convert one reserved slot into a live sub-agent run entry."""
+        batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
+        if batch.reserved_count > 0:
+            batch.reserved_count -= 1
+        batch.entries[sub_run_id] = _SubAgentEntry(
+            agent_id=sub_agent_id,
+            session_id=sub_session_id,
+            run_id=sub_run_id,
+        )
+
+    def register_queued(
+        self,
+        parent_key: ParentKey,
+        sub_agent_id: str,
+        sub_session_id: str,
+        queue_item_id: str,
+    ) -> None:
+        """Convert one reserved slot into a queued sub-agent run entry."""
+        batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
+        if batch.reserved_count > 0:
+            batch.reserved_count -= 1
+        batch.entries[_queue_entry_key(queue_item_id)] = _SubAgentEntry(
+            agent_id=sub_agent_id,
+            session_id=sub_session_id,
+            run_id=None,
+            queue_item_id=queue_item_id,
+        )
+
+    def mark_started(
+        self,
+        parent_key: ParentKey,
+        queue_item_id: str,
+        sub_run_id: str,
+    ) -> bool:
+        """Move a queued sub-agent entry to its live run id."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return False
+        queued_key = _queue_entry_key(queue_item_id)
+        entry = batch.entries.pop(queued_key, None)
+        if entry is None:
+            return False
+        entry.run_id = sub_run_id
+        batch.entries[sub_run_id] = entry
+        return True
+
+    def remove_queued(self, parent_key: ParentKey, queue_item_id: str) -> None:
+        """Remove a queued sub-agent entry that will never start."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return
+        batch.entries.pop(_queue_entry_key(queue_item_id), None)
+        self._prune_if_empty(parent_key, batch)
+
+    def discard_parent(self, parent_key: ParentKey) -> None:
+        """Discard all in-memory tracking for a parent run."""
+        self._batches.pop(parent_key, None)
+
+    def queued_entry_for_session(
+        self,
+        parent_key: ParentKey,
+        sub_session_id: str,
+    ) -> _SubAgentEntry | None:
+        """Return the latest queued entry for a sub-agent session, if any."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return None
+        for entry in reversed(list(batch.entries.values())):
+            if entry.session_id == sub_session_id and entry.run_id is None:
+                return entry
+        return None
+
     def on_sub_agent_complete(
         self,
         parent_key: ParentKey,
@@ -149,6 +249,7 @@ class SubAgentBatchTracker:
         entry.complete = True
         entry.result = dict(result_dict)
         if batch.notification_sent or not self._all_complete(batch):
+            self._prune_if_finished(parent_key, batch)
             return
 
         batch.notification_sent = True
@@ -156,6 +257,7 @@ class SubAgentBatchTracker:
             candidate for candidate in batch.entries.values() if not candidate.fetched
         ]
         if not pending_entries:
+            self._prune_if_finished(parent_key, batch)
             return
 
         message = _batch_completion_message(pending_entries)
@@ -193,6 +295,7 @@ class SubAgentBatchTracker:
         if entry is None or entry.session_id != sub_session_id:
             return
         entry.fetched = True
+        self._prune_if_finished(parent_key, batch)
 
     def run_id_for_session(self, parent_key: ParentKey, sub_session_id: str) -> str | None:
         """Return the registered run id for a sub-agent session in a parent batch."""
@@ -200,7 +303,7 @@ class SubAgentBatchTracker:
         if batch is None:
             return None
         for entry in reversed(list(batch.entries.values())):
-            if entry.session_id == sub_session_id:
+            if entry.session_id == sub_session_id and entry.run_id is not None:
                 return entry.run_id
         return None
 
@@ -209,11 +312,31 @@ class SubAgentBatchTracker:
         batch = self._batches.get(parent_key)
         if batch is None:
             return 0
-        return len(batch.entries)
+        return self._spawn_count(batch)
 
     @staticmethod
     def _all_complete(batch: _SubAgentBatch) -> bool:
-        return bool(batch.entries) and all(entry.complete for entry in batch.entries.values())
+        return (
+            batch.reserved_count == 0
+            and bool(batch.entries)
+            and all(entry.complete for entry in batch.entries.values())
+        )
+
+    @staticmethod
+    def _spawn_count(batch: _SubAgentBatch) -> int:
+        return len(batch.entries) + batch.reserved_count
+
+    def _prune_if_empty(self, parent_key: ParentKey, batch: _SubAgentBatch) -> None:
+        if batch.reserved_count == 0 and not batch.entries:
+            self._batches.pop(parent_key, None)
+
+    def _prune_if_finished(self, parent_key: ParentKey, batch: _SubAgentBatch) -> None:
+        if (
+            batch.reserved_count == 0
+            and bool(batch.entries)
+            and all(entry.complete and entry.fetched for entry in batch.entries.values())
+        ):
+            self._batches.pop(parent_key, None)
 
 
 def register_subagent_tools(
@@ -291,85 +414,144 @@ async def _handle_subagent(
             "subagent_depth_exceeded",
             f"Sub-agent nesting depth limit exceeded: {settings['max_subagent_depth']}",
         )
-    if batch_tracker.spawn_count(parent_key) >= settings["max_subagents_per_turn"]:
+    if not batch_tracker.reserve_slot(parent_key, settings["max_subagents_per_turn"]):
         return tool_failure(
             "subagent_limit_exceeded",
             f"Sub-agent per-turn limit exceeded: {settings['max_subagents_per_turn']}",
         )
 
-    if context.is_cancelled():
-        return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
-
-    validation_error = _validate_target_agent(runtime, target_agent_id)
-    if validation_error is not None:
-        return validation_error
-
-    if session_id is None:
-        session = runtime.chat_sessions.create(target_agent_id)
-    else:
-        try:
-            session = runtime.chat_sessions.get(target_agent_id, session_id)
-        except ChatSessionError:
-            return tool_failure("session_not_found", f"session does not exist: {session_id}")
-
+    slot_registered = False
     try:
-        sub_run = await _start_subagent_run(runtime, target_agent_id, session.id, content, context)
-    except ActiveRunError:
+        if context.is_cancelled():
+            return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
+
+        validation_error = _validate_target_agent(runtime, target_agent_id)
+        if validation_error is not None:
+            return validation_error
+
         if session_id is None:
-            return tool_failure(
-                "session_busy",
-                f"session already has an active run: {session.id}",
+            session = runtime.chat_sessions.create(target_agent_id)
+        else:
+            try:
+                session = runtime.chat_sessions.get(target_agent_id, session_id)
+            except ChatSessionError:
+                return tool_failure("session_not_found", f"session does not exist: {session_id}")
+
+        try:
+            sub_run = await _start_subagent_run(
+                runtime, target_agent_id, session.id, content, context
+            )
+        except ActiveRunError:
+            if session_id is None:
+                return tool_failure(
+                    "session_busy",
+                    f"session already has an active run: {session.id}",
+                )
+
+            _, executor = _make_subagent_executor(
+                runtime,
+                target_agent_id,
+                session.id,
+                content,
+                context,
+            )
+            item = await _chat_run_manager(runtime).enqueue(
+                agent_id=target_agent_id,
+                session_id=session.id,
+                executor=executor,
+                display_content=content,
+            )
+            if not blocking:
+                queued_run = _started_run_from_queue_item(item)
+                if queued_run is None:
+                    batch_tracker.register_queued(
+                        parent_key, target_agent_id, session.id, item.item_id
+                    )
+                    slot_registered = True
+                    _attach_parent_cancellation(
+                        runtime,
+                        context.run_id,
+                        queued_item=item,
+                        queued_agent_id=target_agent_id,
+                        queued_session_id=session.id,
+                        batch_tracker=batch_tracker,
+                        parent_key=parent_key,
+                    )
+                    _track_queued_subagent_completion(batch_tracker, parent_key, item)
+                    return tool_success(
+                        {
+                            "agent_id": target_agent_id,
+                            "session_id": session.id,
+                            "queue_item_id": item.item_id,
+                            "status": SUBAGENT_STATUS_QUEUED,
+                        }
+                    )
+                sub_run = queued_run
+            else:
+                _attach_parent_cancellation(
+                    runtime,
+                    context.run_id,
+                    queued_item=item,
+                    queued_agent_id=target_agent_id,
+                    queued_session_id=session.id,
+                )
+                try:
+                    sub_run = await item.future
+                except asyncio.CancelledError:
+                    _chat_run_manager(runtime).remove_queued(
+                        target_agent_id, session.id, item.item_id
+                    )
+                    raise
+
+        batch_tracker.register_reserved(parent_key, target_agent_id, session.id, sub_run.id)
+        slot_registered = True
+        _attach_parent_cancellation(
+            runtime,
+            context.run_id,
+            sub_run=sub_run,
+            batch_tracker=batch_tracker,
+            parent_key=parent_key,
+        )
+
+        if not blocking:
+            _track_subagent_completion(batch_tracker, parent_key, sub_run)
+            return tool_success(
+                {
+                    "agent_id": target_agent_id,
+                    "session_id": session.id,
+                    "run_id": sub_run.id,
+                    "status": RunStatus.RUNNING.value,
+                }
             )
 
-        _, executor = _make_subagent_executor(
-            runtime,
-            target_agent_id,
-            session.id,
-            content,
-            context,
-        )
-        item = await _chat_run_manager(runtime).enqueue(
-            agent_id=target_agent_id,
-            session_id=session.id,
-            executor=executor,
-            display_content=content,
-        )
-        sub_run = await item.future
+        timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
+        try:
+            result = await asyncio.wait_for(
+                _wait_for_subagent_result(sub_run), timeout=timeout_seconds
+            )
+        except TimeoutError:
+            sub_run.request_cancel()
+            timeout_message = (
+                f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes"
+            )
+            result = _result_dict(
+                sub_run,
+                status=RunStatus.FAILED.value,
+                message=timeout_message,
+            )
+            batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
+            batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
+            return tool_failure(
+                "subagent_timeout",
+                f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
+            )
 
-    batch_tracker.register(parent_key, target_agent_id, session.id, sub_run.id)
-    _attach_parent_cancellation(runtime, context.run_id, sub_run)
-
-    if not blocking:
-        _track_subagent_completion(batch_tracker, parent_key, sub_run)
-        return tool_success(
-            {
-                "agent_id": target_agent_id,
-                "session_id": session.id,
-                "run_id": sub_run.id,
-                "status": RunStatus.RUNNING.value,
-            }
-        )
-
-    timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
-    try:
-        result = await asyncio.wait_for(_wait_for_subagent_result(sub_run), timeout=timeout_seconds)
-    except TimeoutError:
-        sub_run.request_cancel()
-        result = _result_dict(
-            sub_run,
-            status=RunStatus.FAILED.value,
-            message=f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
-        )
         batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
-        return tool_failure(
-            "subagent_timeout",
-            f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
-        )
-
-    batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
-    batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
-    return tool_success(result)
+        return tool_success(result)
+    finally:
+        if not slot_registered:
+            batch_tracker.release_slot(parent_key)
 
 
 async def _handle_subagent_result(
@@ -393,6 +575,11 @@ async def _handle_subagent_result(
 
     parent_key = _parent_key(context)
     resolved_run_id = run_id or batch_tracker.run_id_for_session(parent_key, session_id)
+    if resolved_run_id is None:
+        queued_entry = batch_tracker.queued_entry_for_session(parent_key, session_id)
+        if queued_entry is not None:
+            return tool_success(_queued_result_dict(queued_entry))
+
     batch_tracker.mark_fetched(parent_key, session_id, resolved_run_id)
     result: JsonObject
     if resolved_run_id:
@@ -466,6 +653,32 @@ def _track_subagent_completion(
             completed,
             "Sub-agent completion tracker failed for "
             f"agent={run.agent_id} session={run.session_id} run={run.id}",
+        )
+    )
+
+
+def _track_queued_subagent_completion(
+    batch_tracker: SubAgentBatchTracker,
+    parent_key: ParentKey,
+    item: Any,
+) -> None:
+    async def complete_when_started_and_terminal() -> None:
+        try:
+            run = await item.future
+        except asyncio.CancelledError:
+            batch_tracker.remove_queued(parent_key, item.item_id)
+            return
+        if not batch_tracker.mark_started(parent_key, item.item_id, run.id):
+            return
+        result = await _wait_for_subagent_result(run)
+        batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
+
+    task = asyncio.create_task(complete_when_started_and_terminal())
+    task.add_done_callback(
+        lambda completed: _log_background_task_result(
+            completed,
+            "Queued sub-agent completion tracker failed for "
+            f"queue_item={item.item_id} parent={parent_key[0]}/{parent_key[1]}/{parent_key[2]}",
         )
     )
 
@@ -580,6 +793,18 @@ def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
     return data
 
 
+def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
+    return {
+        "agent_id": entry.agent_id,
+        "session_id": entry.session_id,
+        "run_id": None,
+        "queue_item_id": entry.queue_item_id,
+        "status": SUBAGENT_STATUS_QUEUED,
+        "result": None,
+        "usage": None,
+    }
+
+
 def _should_poll_session_result(result: JsonObject) -> bool:
     if result.get("status") == RunStatus.FAILED.value:
         return True
@@ -647,12 +872,73 @@ def _validate_target_agent(runtime: Any, target_agent_id: str) -> JsonObject | N
     return None
 
 
-def _attach_parent_cancellation(runtime: Any, parent_run_id: str, sub_run: Run) -> None:
+def _started_run_from_queue_item(item: Any) -> Run | None:
+    if not item.future.done() or item.future.cancelled():
+        return None
+    return cast(Run, item.future.result())
+
+
+def _attach_parent_cancellation(
+    runtime: Any,
+    parent_run_id: str,
+    *,
+    sub_run: Run | None = None,
+    queued_item: Any | None = None,
+    queued_agent_id: str | None = None,
+    queued_session_id: str | None = None,
+    batch_tracker: SubAgentBatchTracker | None = None,
+    parent_key: ParentKey | None = None,
+) -> None:
     try:
         parent_run = _chat_run_manager(runtime).get(parent_run_id)
     except RunNotFoundError:
         return
-    parent_run.add_cancel_callback(lambda: sub_run.request_cancel())
+    parent_run.add_cancel_callback(
+        lambda: _cancel_subagent_child(
+            runtime,
+            sub_run=sub_run,
+            queued_item=queued_item,
+            queued_agent_id=queued_agent_id,
+            queued_session_id=queued_session_id,
+            batch_tracker=batch_tracker,
+            parent_key=parent_key,
+        )
+    )
+
+
+def _cancel_subagent_child(
+    runtime: Any,
+    *,
+    sub_run: Run | None,
+    queued_item: Any | None,
+    queued_agent_id: str | None,
+    queued_session_id: str | None,
+    batch_tracker: SubAgentBatchTracker | None,
+    parent_key: ParentKey | None,
+) -> None:
+    if sub_run is not None:
+        if batch_tracker is not None and parent_key is not None:
+            batch_tracker.discard_parent(parent_key)
+        sub_run.request_cancel()
+        return
+    if queued_item is None or queued_agent_id is None or queued_session_id is None:
+        return
+    if not queued_item.future.done():
+        _chat_run_manager(runtime).remove_queued(
+            queued_agent_id,
+            queued_session_id,
+            queued_item.item_id,
+        )
+        if batch_tracker is not None and parent_key is not None:
+            batch_tracker.remove_queued(parent_key, queued_item.item_id)
+        return
+    try:
+        started_run = cast(Run, queued_item.future.result())
+    except (asyncio.CancelledError, Exception):
+        return
+    if batch_tracker is not None and parent_key is not None:
+        batch_tracker.discard_parent(parent_key)
+    started_run.request_cancel()
 
 
 def _chat_run_manager(runtime: Any) -> ChatRunManager:
@@ -664,3 +950,7 @@ def _chat_run_manager(runtime: Any) -> ChatRunManager:
 
 def _parent_key(context: ToolContext) -> ParentKey:
     return (context.agent_id, context.session_id, context.run_id)
+
+
+def _queue_entry_key(queue_item_id: str) -> str:
+    return f"queued:{queue_item_id}"
