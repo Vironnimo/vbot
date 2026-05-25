@@ -26,6 +26,7 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
                 "type": "content_delta",
                 "text": "Hello",
             },
+            {"type": "finish", "reason": "stop"},
         ]
     )
     runtime = StubRuntime(tmp_path, adapter)
@@ -68,6 +69,7 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
         stream_deltas=[
             {"type": "reasoning_delta", "text": "Thinking"},
             {"type": "content_delta", "text": "Hello"},
+            {"type": "finish", "reason": "stop"},
         ]
     )
     runtime = StubRuntime(tmp_path, adapter)

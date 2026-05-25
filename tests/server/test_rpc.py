@@ -2960,7 +2960,13 @@ async def test_chat_stream_starts_run_and_returns_run_id_without_waiting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": "OK"},
+            {"type": "finish", "reason": "stop"},
+        ],
+        block=True,
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
@@ -2990,7 +2996,13 @@ async def test_second_run_in_same_session_is_queued_while_active(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": "OK"},
+            {"type": "finish", "reason": "stop"},
+        ],
+        block=True,
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
@@ -3034,7 +3046,13 @@ async def test_chat_cancel_marks_running_run_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "OK"}], block=True)
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": "OK"},
+            {"type": "finish", "reason": "stop"},
+        ],
+        block=True,
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")
@@ -3086,7 +3104,12 @@ async def test_chat_stream_uses_streaming_chat_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = StubAdapter(stream_deltas=[{"type": "content_delta", "text": "Streamed response"}])
+    adapter = StubAdapter(
+        stream_deltas=[
+            {"type": "content_delta", "text": "Streamed response"},
+            {"type": "finish", "reason": "stop"},
+        ]
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     state = make_state(tmp_path, adapter)
     state.runtime.chat_sessions.create("coder", session_id="session-one")

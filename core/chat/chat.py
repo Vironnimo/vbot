@@ -1541,6 +1541,10 @@ class ChatLoop:
             _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
 
+        if accumulator.finish_reason is None:
+            _maybe_persist_partial_thinking(accumulator, note_hook)
+            raise NetworkError("Provider stream ended without finish delta")
+
         try:
             assistant_fields = accumulator.finalize_assistant_fields()
         except BaseException:

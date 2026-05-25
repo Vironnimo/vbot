@@ -1733,6 +1733,37 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
 
 
 @pytest.mark.asyncio
+async def test_streaming_mode_requires_finish_delta(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Partial answer"},
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="finish delta"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "network_error"
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "user_message_persisted",
+        ASSISTANT_OUTPUT_DELTA_EVENT,
+        ERROR_MESSAGE_PERSISTED_EVENT,
+        "run_failed",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
