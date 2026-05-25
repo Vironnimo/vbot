@@ -35,6 +35,7 @@ describe('AgentsView', () => {
     }
 
     document.body.innerHTML = '';
+    vi.useRealTimers();
   });
 
   it('renders model dropdown options using canonical model ids', async () => {
@@ -384,6 +385,111 @@ describe('AgentsView', () => {
     selectSimpleOption('agent-thinking-effort', 'high');
     await waitForCondition(() => thinkingTriggerLabel() === 'high', 100);
     expect(document.body.textContent).toContain('high');
+  });
+
+  it('auto-saves model changes 800 ms after the last edit', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        connections: [
+          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:api-key', 'openai', 'API Key'),
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => modelTriggerLabel() === 'openai/gpt-5.2 (API Key)',
+      100,
+    );
+
+    vi.useFakeTimers();
+
+    openSearchableDropdownSync('agent-model');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(799);
+    await flushAsyncUpdates();
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      model: 'openai/gpt-5.2::oauth',
+    });
+
+    const saveButton = getButton('Save changes');
+    expect(saveButton.disabled).toBe(false);
+
+    saveButton.click();
+    flushSync();
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(document.body.textContent).toContain('Already saved');
+  });
+
+  it('auto-saves tool access changes', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        tools: [
+          { name: 'bash', description: 'Run shell commands.' },
+          { name: 'write', description: 'Write files.' },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('write');
+
+    vi.useFakeTimers();
+
+    getButtonByAriaLabel('Toggle tool write').click();
+    flushSync();
+
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      allowed_tools: ['bash'],
+      id: 'alpha',
+    });
+  });
+
+  it('manual save cancels a pending agent autosave', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+
+    vi.useFakeTimers();
+
+    setTextInputValue(1, 'Alpha Manual');
+    submitAgentForm();
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      name: 'Alpha Manual',
+    });
+
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
   });
 
   it('sends null for cleared temperature and thinking effort', async () => {
@@ -898,6 +1004,16 @@ async function openSearchableDropdown(id, rect = defaultTriggerRect()) {
   return getSearchableRoot(id);
 }
 
+function openSearchableDropdownSync(id, rect = defaultTriggerRect()) {
+  const trigger = getSearchableTrigger(id);
+  stubTriggerRect(trigger, rect);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+
+  expect(getSearchableRoot(id).dataset.state).toBe('open');
+  return getSearchableRoot(id);
+}
+
 function setSearchableFilter(id, value) {
   const input = getSearchablePanel(id).querySelector('input');
   expect(input).toBeTruthy();
@@ -1011,6 +1127,38 @@ function setTextInputValue(index, value) {
   flushSync();
 }
 
+function getButton(label) {
+  const button = Array.from(document.body.querySelectorAll('button')).find(
+    (item) => item.textContent.trim() === label,
+  );
+  expect(button).toBeTruthy();
+  return button;
+}
+
+function getButtonByAriaLabel(label) {
+  const button = document.body.querySelector(`button[aria-label="${label}"]`);
+  expect(button).toBeTruthy();
+  return button;
+}
+
+function submitAgentForm() {
+  document.body
+    .querySelector('form')
+    .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  flushSync();
+}
+
+function getAgentUpdateCalls() {
+  return rpcMock.mock.calls.filter((call) => call[0] === 'agent.update');
+}
+
+async function flushAsyncUpdates(iterations = 4) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
+}
+
 function textInputValue(index) {
   const input = Array.from(
     document.body.querySelectorAll('input.s-input[type="text"]'),
@@ -1036,7 +1184,7 @@ function createAgentsRpcMock(options = {}) {
     }
 
     if (method === 'tool.list') {
-      return { tools: [] };
+      return { tools: options.tools ?? [] };
     }
 
     if (method === 'skill.list') {
