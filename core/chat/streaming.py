@@ -15,13 +15,11 @@ from core.chat.runs import (
     TOOL_CALL_DELTA_EVENT,
 )
 from core.utils.errors import VBotError
-from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
-_LOGGER = get_logger("chat.streaming")
-
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
+MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
 
 CONTENT_DELTA_TYPE = "content_delta"
 REASONING_DELTA_TYPE = "reasoning_delta"
@@ -89,15 +87,15 @@ class _ToolCallFragments:
         )
         return normalized_name_delta, normalized_arguments_delta
 
-    def to_tool_call(self) -> JsonObject | None:
+    def to_tool_call(self) -> JsonObject:
         arguments = _parse_tool_arguments(self.arguments_text)
         if arguments is None:
-            _LOGGER.warning(
-                "dropping streamed tool call %r due malformed arguments JSON fragment: %r",
-                self.tool_call_id,
-                self.arguments_text,
+            raise StreamingDeltaError(
+                f"streamed tool call {self.tool_call_id!r} has malformed or incomplete "
+                "arguments JSON fragment "
+                f"({len(self.arguments_text)} chars): "
+                f"{_preview_malformed_tool_arguments(self.arguments_text)}"
             )
-            return None
         return {
             "id": self.tool_call_id,
             "name": self.name_text,
@@ -163,9 +161,7 @@ class StreamingAccumulator:
         """Build final canonical assistant fields from accumulated deltas."""
         tool_calls: list[JsonObject] = []
         for fragments in self._tool_calls.values():
-            tool_call = fragments.to_tool_call()
-            if tool_call is not None:
-                tool_calls.append(tool_call)
+            tool_calls.append(fragments.to_tool_call())
         return StreamingAssistantFields(
             content=_joined_or_none(self._content_parts),
             reasoning=_joined_or_none(self._reasoning_parts),
@@ -311,6 +307,17 @@ def _parse_tool_arguments(arguments_text: str) -> JsonObject | None:
     if not isinstance(value, dict):
         return None
     return value
+
+
+def _preview_malformed_tool_arguments(arguments_text: str) -> str:
+    if len(arguments_text) <= MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS:
+        return repr(arguments_text)
+
+    edge_length = MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS // 2
+    head = arguments_text[:edge_length]
+    tail = arguments_text[-edge_length:]
+    omitted_count = len(arguments_text) - (edge_length * 2)
+    return f"{head!r} ... <{omitted_count} chars omitted> ... {tail!r}"
 
 
 async def _close_async_iterator(iterator: AsyncIterator[JsonObject]) -> None:

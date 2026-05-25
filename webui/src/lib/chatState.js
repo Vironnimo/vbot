@@ -2,6 +2,8 @@ import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
+  RUN_EVENT_TOOL_CALL_STDERR,
+  RUN_EVENT_TOOL_CALL_STDOUT,
 } from './api.js';
 
 export const CHAT_STATUS_IDLE = 'idle';
@@ -184,6 +186,9 @@ export function appendRunEvent(sessionState, event) {
   }
 
   sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
+  if (normalizedEvent.type === 'run_started') {
+    beginRunFromEvent(sessionState, normalizedEvent);
+  }
   updateStreamingItems(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
@@ -196,6 +201,27 @@ export function appendRunEvents(sessionState, events) {
     appendRunEvent(sessionState, event);
   }
   return sessionState.runEvents;
+}
+
+function beginRunFromEvent(sessionState, event) {
+  const currentRun = sessionState.currentRun;
+  const isSameRun = currentRun?.runId === event.run_id;
+  const currentSseUrl = isSameRun ? currentRun.sseUrl : '';
+  sessionState.currentRun = {
+    runId: event.run_id,
+    sseUrl: currentSseUrl,
+    status: CHAT_STATUS_RUNNING,
+  };
+  sessionState.status = CHAT_STATUS_RUNNING;
+  sessionState.error = null;
+  sessionState.streamStatus = CHAT_STATUS_RUNNING;
+  if (isSameRun) {
+    return;
+  }
+  sessionState.streamingItems = [];
+  sessionState.streamingRunEvents = [];
+  sessionState.streamingPhase = 0;
+  sessionState.seenStreamingEventKeys = new Set();
 }
 
 export function appendCompactionCheckpoint(sessionState, message) {
@@ -248,9 +274,14 @@ export function highestRunEventSequence(sessionState) {
 }
 
 export function markSessionError(sessionState, error) {
+  if (sessionState.currentRun) {
+    sessionState.currentRun.status = CHAT_STATUS_FAILED;
+  }
   sessionState.status = CHAT_STATUS_FAILED;
   sessionState.error = error?.message ?? String(error);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
+  sessionState.streamingItems = [];
+  sessionState.streamingRunEvents = [];
   return sessionState;
 }
 
@@ -379,7 +410,9 @@ export function assistantRunChildProgressKey(child) {
     const streamedArgumentsLength = (child.partialArgumentsText ?? '').length;
     const finalizedArgumentsLength =
       typeof child.arguments === 'string' ? child.arguments.length : 0;
-    return `${chunkCount}:${latestSequence ?? ''}:${toolNameLength}:${streamedArgumentsLength + finalizedArgumentsLength}:${child.resultEvent ? 1 : 0}`;
+    const outputLength =
+      (child.stdout ?? '').length + (child.stderr ?? '').length;
+    return `${chunkCount}:${latestSequence ?? ''}:${toolNameLength}:${streamedArgumentsLength + finalizedArgumentsLength}:${outputLength}:${child.resultEvent ? 1 : 0}`;
   }
 
   const contentLength =
@@ -989,6 +1022,14 @@ function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (
+    event.type === RUN_EVENT_TOOL_CALL_STDOUT ||
+    event.type === RUN_EVENT_TOOL_CALL_STDERR
+  ) {
+    mergeToolOutput(assistantRun, event);
+    return;
+  }
+
   if (event.type === 'tool_call_result') {
     mergeToolResult(assistantRun, event);
   }
@@ -1241,6 +1282,25 @@ function mergeToolStarted(assistantRun, event) {
   syncAssistantRunCollections(assistantRun);
 }
 
+function mergeToolOutput(assistantRun, event) {
+  const payload = event.payload ?? {};
+  const toolCallId = payload.tool_call_id ?? payload.id;
+  const tool = upsertToolRow(
+    assistantRun,
+    toolKeyFromValues(toolCallId),
+    event,
+    {
+      id: toolCallId,
+    },
+  );
+  const key = event.type === RUN_EVENT_TOOL_CALL_STDERR ? 'stderr' : 'stdout';
+  tool.toolCallId = toolCallId ?? tool.toolCallId;
+  tool[key] = `${tool[key] ?? ''}${payload.data ?? ''}`;
+  tool.outputEvents = [...(tool.outputEvents ?? []), event];
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
 function mergeToolResult(assistantRun, event) {
   const toolCall = event.payload?.tool_call ?? {};
   const tool = upsertToolRow(
@@ -1289,6 +1349,9 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     toolCall: null,
     startedEvent: null,
     resultEvent: null,
+    stdout: '',
+    stderr: '',
+    outputEvents: [],
     events: [],
   };
   assistantRun.items.push(tool);
@@ -1333,6 +1396,8 @@ function isAssistantRunEvent(event) {
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,
     'tool_call_started',
+    RUN_EVENT_TOOL_CALL_STDOUT,
+    RUN_EVENT_TOOL_CALL_STDERR,
     'tool_call_result',
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     'assistant_output',

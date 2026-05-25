@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,7 @@ import httpx
 import pytest
 import respx
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -56,6 +58,21 @@ def opencode_go_config() -> ProviderConfig:
 @pytest.fixture()
 def opencode_go_adapter(opencode_go_config: ProviderConfig) -> OpenCodeGoAdapter:
     return OpenCodeGoAdapter(opencode_go_config, API_KEY)
+
+
+def model_with_output_limit(model_id: str, max_output_tokens: int) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=True),
+        ),
+        context_window=1_000_000,
+        max_output_tokens=max_output_tokens,
+    )
 
 
 class TestOpenCodeGoAdapter:
@@ -223,6 +240,70 @@ class TestOpenCodeGoAdapter:
         assert assistant_messages[0]["reasoning_details"] == [{"trace": "first"}]
         assert assistant_messages[1]["reasoning_content"] == "second reasoning"
         assert assistant_messages[1]["reasoning_details"] == [{"trace": "second"}]
+
+    def test_build_payload_uses_catalog_output_limit_over_provider_default(
+        self,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        config = replace(opencode_go_config, defaults={"max_tokens": 4096})
+        catalog_model = model_with_output_limit("deepseek-v4-flash", 384_000)
+        adapter = OpenCodeGoAdapter(
+            config,
+            API_KEY,
+            model_lookup=lambda model_id: (
+                catalog_model if model_id == catalog_model.model_id else None
+            ),
+        )
+
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "Write a complete HTML app."}],
+            model_id="deepseek-v4-flash",
+        )
+
+        assert payload["max_tokens"] == 384_000
+
+    def test_build_payload_uses_catalog_output_limit_for_vendor_prefixed_model_id(
+        self,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        config = replace(opencode_go_config, defaults={"max_tokens": 4096})
+        catalog_model = model_with_output_limit("deepseek-v4-flash", 384_000)
+        adapter = OpenCodeGoAdapter(
+            config,
+            API_KEY,
+            model_lookup=lambda model_id: (
+                catalog_model if model_id == catalog_model.model_id else None
+            ),
+        )
+
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "Write a complete HTML app."}],
+            model_id="deepseek/deepseek-v4-flash",
+        )
+
+        assert payload["max_tokens"] == 384_000
+
+    def test_build_payload_preserves_explicit_output_limit(
+        self,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        config = replace(opencode_go_config, defaults={"max_tokens": 4096})
+        catalog_model = model_with_output_limit("deepseek-v4-flash", 384_000)
+        adapter = OpenCodeGoAdapter(
+            config,
+            API_KEY,
+            model_lookup=lambda model_id: (
+                catalog_model if model_id == catalog_model.model_id else None
+            ),
+        )
+
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "Write a short file."}],
+            model_id="deepseek-v4-flash",
+            max_tokens=2048,
+        )
+
+        assert payload["max_tokens"] == 2048
 
 
 class TestOpenCodeGoAdapterMinimaxRouting:

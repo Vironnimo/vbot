@@ -23,6 +23,7 @@ _ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
 _SYSTEM_REMINDER_BLOCKS_PATTERN = re.compile(
     r"^<system-reminder>\n[\s\S]*?\n</system-reminder>(?:\n<system-reminder>\n[\s\S]*?\n</system-reminder>)*$"
 )
+_OUTPUT_LIMIT_KEYS = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 
 
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
@@ -66,6 +67,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 prefix="",
                 credential_key=selected_auth_config.credential_key,
             ),
+            model_lookup=model_lookup,
         )
 
     async def aclose(self) -> None:
@@ -79,10 +81,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if _uses_anthropic_messages_path(model_id):
             bounded_messages = _bound_assistant_reasoning_replay(messages)
-            return await self._anthropic.send(bounded_messages, model_id=model_id, **kwargs)
-        return await super().send(messages, model_id=model_id, **kwargs)
+            return await self._anthropic.send(
+                bounded_messages,
+                model_id=model_id,
+                **request_kwargs,
+            )
+        return await super().send(messages, model_id=model_id, **request_kwargs)
 
     def stream(
         self,
@@ -91,10 +98,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
+        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if _uses_anthropic_messages_path(model_id):
             bounded_messages = _bound_assistant_reasoning_replay(messages)
-            return self._anthropic.stream(bounded_messages, model_id=model_id, **kwargs)
-        return super().stream(messages, model_id=model_id, **kwargs)
+            return self._anthropic.stream(
+                bounded_messages,
+                model_id=model_id,
+                **request_kwargs,
+            )
+        return super().stream(messages, model_id=model_id, **request_kwargs)
 
     def _build_payload(
         self,
@@ -105,7 +117,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         payload_messages = messages
         if _uses_anthropic_messages_path(model_id):
             payload_messages = _bound_assistant_reasoning_replay(messages)
-        return super()._build_payload(payload_messages, model_id, **kwargs)
+        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
+        return super()._build_payload(payload_messages, model_id, **request_kwargs)
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         if "choices" in response:
@@ -118,6 +131,42 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if isinstance(reasoning, str) and reasoning:
             wire["reasoning_content"] = reasoning
         return wire
+
+    def _kwargs_with_model_output_limit(
+        self,
+        model_id: str,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_kwargs = dict(kwargs)
+        if _has_explicit_output_limit(request_kwargs):
+            return request_kwargs
+
+        max_output_tokens = self._model_max_output_tokens(model_id)
+        if max_output_tokens is not None:
+            request_kwargs["max_tokens"] = max_output_tokens
+        return request_kwargs
+
+    def _model_max_output_tokens(self, model_id: str) -> int | None:
+        if self._model_lookup is None:
+            return None
+
+        for candidate in _model_lookup_candidates(model_id):
+            model = self._model_lookup(candidate)
+            if model is not None and model.max_output_tokens > 0:
+                return model.max_output_tokens
+        return None
+
+
+def _has_explicit_output_limit(kwargs: dict[str, Any]) -> bool:
+    return any(key in kwargs for key in _OUTPUT_LIMIT_KEYS)
+
+
+def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
+    without_connection_suffix = model_id.split("::", 1)[0]
+    candidates = [model_id, without_connection_suffix]
+    if "/" in without_connection_suffix:
+        candidates.append(without_connection_suffix.rsplit("/", 1)[-1])
+    return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def _bound_assistant_reasoning_replay(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

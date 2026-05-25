@@ -1237,6 +1237,48 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_accepts_multiline_sse_data_frames(self, openai_adapter):
+        """SSE data fields may be split across multiple data lines."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1",\n'
+            'data: "choices":[{"delta":{"content":"Hello"}}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [{"type": "content_delta", "text": "Hello"}]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_error_on_malformed_sse_json(self, openai_adapter):
+        """Malformed SSE JSON is classified as a non-retryable provider error."""
+        # Arrange
+        sse_body = 'data: {"id":\n\n'
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderError, match="malformed JSON") as exc_info:
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+        assert exc_info.value.retryable is False
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, openai_adapter):
         """Reasoning text streams visibly while recognized metadata stays opaque."""
         # Arrange

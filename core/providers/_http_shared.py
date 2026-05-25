@@ -8,6 +8,10 @@ exceptions.
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+
 import httpx
 
 from core.providers.errors import (
@@ -89,3 +93,37 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     if isinstance(error, httpx.ConnectError):
         return NetworkError(f"Connection failed: {error}")
     return ProviderTimeoutError(f"Request failed: {error}")
+
+
+async def iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
+    """Yield complete Server-Sent Event data payloads from an HTTPX stream.
+
+    SSE events may contain multiple ``data:`` lines. HTTPX yields individual
+    lines, so adapters should consume framed payloads instead of parsing every
+    line as a complete JSON document.
+    """
+    data_parts: list[str] = []
+    async for line in response.aiter_lines():
+        if line == "":
+            if data_parts:
+                yield "\n".join(data_parts)
+                data_parts = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data_parts.append(line[len("data:") :].lstrip(" "))
+
+    if data_parts:
+        yield "\n".join(data_parts)
+
+
+def parse_sse_json_data(data: str, *, context: str) -> Any:
+    """Parse one SSE data payload and classify malformed JSON as provider error."""
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"{context} sent malformed JSON in stream: {exc.msg}",
+            retryable=False,
+        ) from exc

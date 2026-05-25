@@ -32,6 +32,7 @@ from core.chat import (
     RunStatus,
     ToolCall,
 )
+from core.chat.streaming import StreamingDeltaError
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
@@ -1690,6 +1691,45 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         for event in run.events
         if isinstance(event.payload, dict)
     )
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Need to write the file."},
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_write",
+                    "name_delta": "write",
+                    "arguments_delta": '{"path":"todo.html","content":"<html>',
+                },
+                {"type": "finish", "reason": "tool_calls"},
+            ]
+        ],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Build it", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert messages[1].content == "Partial thinking before interruption:\nNeed to write the file."
+    assert messages[2].error_kind == "provider_error"
+    assert "malformed or incomplete arguments" in (messages[2].content or "")
+    assert [event.type for event in run.events][-2:] == [
+        ERROR_MESSAGE_PERSISTED_EVENT,
+        "run_failed",
+    ]
 
 
 @pytest.mark.asyncio

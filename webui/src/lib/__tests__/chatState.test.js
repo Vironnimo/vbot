@@ -1025,6 +1025,81 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('marks a session running when a run_started event arrives from server push', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-from-ws',
+      sequence: 1,
+      payload: {},
+    });
+
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.streamStatus).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.currentRun).toEqual({
+      runId: 'run-from-ws',
+      sseUrl: '',
+      status: CHAT_STATUS_RUNNING,
+    });
+  });
+
+  it('merges live tool stdout and stderr into the matching assistant-run tool row', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'printf hello' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { tool_call_id: 'call-one', data: 'hel' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { tool_call_id: 'call-one', data: 'lo\n' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stderr',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { tool_call_id: 'call-one', data: 'warn\n' },
+    });
+
+    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [tool] = assistantRun.tools;
+
+    expect(tool).toEqual(
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        stdout: 'hello\n',
+        stderr: 'warn\n',
+      }),
+    );
+    expect(assistantRunChildProgressKey(tool)).toContain(':11:');
+  });
+
   it('treats model fallback activation as an assistant-run event and appends a fallback item', () => {
     const sessionState = ensureSessionState(
       createChatState(),

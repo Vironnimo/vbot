@@ -1203,6 +1203,19 @@
                           t('chat.toolArgs', 'Args'),
                           toolArguments(child),
                         )}
+                        {#if child.stdout}
+                          {@render toolDetailSection(
+                            t('chat.toolStdout', 'Stdout'),
+                            child.stdout,
+                          )}
+                        {/if}
+                        {#if child.stderr}
+                          {@render toolDetailSection(
+                            t('chat.toolStderr', 'Stderr'),
+                            child.stderr,
+                            true,
+                          )}
+                        {/if}
                         {@render toolDetailSection(
                           t('chat.toolResultLabel', 'Result'),
                           child.result,
@@ -1233,6 +1246,19 @@
                           t('chat.toolArgs', 'Args'),
                           toolArguments(child),
                         )}
+                        {#if child.stdout}
+                          {@render toolDetailSection(
+                            t('chat.toolStdout', 'Stdout'),
+                            child.stdout,
+                          )}
+                        {/if}
+                        {#if child.stderr}
+                          {@render toolDetailSection(
+                            t('chat.toolStderr', 'Stderr'),
+                            child.stderr,
+                            true,
+                          )}
+                        {/if}
                         {@render toolDetailSection(
                           t('chat.toolResultLabel', 'Result'),
                           child.result,
