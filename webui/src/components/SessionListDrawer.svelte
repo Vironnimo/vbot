@@ -237,7 +237,7 @@
           >
             <div class="session-row__heading">
               <p class="session-row__name">
-                {session.display_name ?? sessionDisplayName(session)}
+                {session.display_name || sessionDisplayName(session)}
               </p>
               {#if session.platform}
                 <span class="session-row__badge">
@@ -397,31 +397,45 @@
 
   .session-drawer__list {
     margin: 0;
-    padding: 10px;
+    padding: 12px 10px 14px;
     list-style: none;
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
   }
 
   .session-row {
+    flex: 0 0 auto;
     border: 1px solid var(--border);
     border-radius: var(--r-md);
     background: var(--surface-2);
     overflow: hidden;
+    box-shadow: inset 3px 0 0 transparent;
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease,
+      background 150ms ease;
+  }
+
+  .session-row:has(.session-row__select--active) {
+    border-color: rgba(232, 135, 10, 0.46);
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .session-row__select {
     width: 100%;
+    min-height: 64px;
     border: 0;
-    padding: 10px;
+    padding: 12px 12px 11px 14px;
     text-align: left;
     background: transparent;
     color: var(--text-hi);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    justify-content: center;
+    gap: 7px;
+    line-height: 1.35;
     transition:
       background 150ms ease,
       border-color 150ms ease;
@@ -440,17 +454,20 @@
 
   .session-row__heading {
     display: flex;
+    min-width: 0;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
 
   .session-row__name {
+    min-width: 0;
     margin: 0;
     color: var(--text-hi);
     font-family: var(--font-ui);
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -480,6 +497,10 @@
     margin: 0;
     color: var(--text-med);
     font-size: 11.5px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .session-row__meta--mono {
@@ -488,11 +509,16 @@
   }
 
   .session-row__link-block {
-    padding: 0 10px 10px;
+    display: flex;
+    justify-content: flex-end;
+    padding: 0 12px 10px 14px;
   }
 
   .session-row__link-toggle {
-    width: 100%;
+    width: auto;
+    min-height: 28px;
+    padding: 4px 10px;
+    font-size: 11.5px;
   }
 
   .session-row__link-form {
