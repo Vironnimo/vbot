@@ -88,22 +88,28 @@ async def test_openrouter_reasoning_uses_openrouter_wire_format(
     assert "reasoning_effort" not in request_body
 
 
+@pytest.mark.parametrize(
+    ("thinking_effort", "expected_effort"),
+    [("none", "none"), ("max", "xhigh")],
+)
 @respx.mock
 @pytest.mark.asyncio
 async def test_openrouter_reasoning_maps_to_nearest_supported_effort(
     openrouter_adapter: OpenRouterAdapter,
+    thinking_effort: str,
+    expected_effort: str,
 ) -> None:
     route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
     await openrouter_adapter.send(
         SAMPLE_MESSAGES,
         model_id="openai/gpt-5.2",
-        thinking_effort="none",
+        thinking_effort=thinking_effort,
     )
 
     request_body = json.loads(route.calls.last.request.content)
-    assert "reasoning" not in request_body
-    assert "include_reasoning" not in request_body
+    assert request_body["reasoning"] == {"effort": expected_effort}
+    assert request_body["include_reasoning"] is True
 
 
 @respx.mock

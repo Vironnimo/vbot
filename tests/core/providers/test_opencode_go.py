@@ -22,7 +22,6 @@ OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
 ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
     "minimax-m2.7",
     "minimax-m2.5",
-    "qwen3.6-plus",
     "qwen3.5-plus",
 )
 
@@ -241,6 +240,18 @@ class TestOpenCodeGoAdapter:
         assert assistant_messages[1]["reasoning_content"] == "second reasoning"
         assert assistant_messages[1]["reasoning_details"] == [{"trace": "second"}]
 
+    def test_deepseek_none_thinking_effort_omits_reasoning_effort(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        payload = opencode_go_adapter._build_payload(
+            [{"role": "user", "content": "Reply OK."}],
+            model_id="deepseek-v4-flash",
+            thinking_effort="none",
+        )
+
+        assert "reasoning_effort" not in payload
+
     def test_build_payload_uses_catalog_output_limit_over_provider_default(
         self,
         opencode_go_config: ProviderConfig,
@@ -369,6 +380,45 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         assert messages_route.called
         assert not chat_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_qwen36_send_uses_openai_path(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "messages"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "chat"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "hello"}],
+            model_id="qwen3.6-plus",
+        )
+
+        assert chat_route.called
+        assert not messages_route.called
 
     @respx.mock
     @pytest.mark.asyncio

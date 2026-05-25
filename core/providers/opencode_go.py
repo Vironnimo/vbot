@@ -16,7 +16,6 @@ _ANTHROPIC_MESSAGES_MODELS: frozenset[str] = frozenset(
     {
         "minimax-m2.7",
         "minimax-m2.5",
-        "qwen3.6-plus",
         "qwen3.5-plus",
     }
 )
