@@ -793,6 +793,87 @@ def test_stream_backfills_only_missing_argument_suffix_after_added_item() -> Non
     ]
 
 
+def test_stream_preserves_repeated_tool_argument_boundary_text() -> None:
+    lines = [
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "call_id": "call_1",
+                "delta": '{"value":"ab',
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "call_id": "call_1",
+                "delta": 'ab"}',
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": '{"value":"ab',
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": 'ab"}',
+        },
+    ]
+
+
+def test_stream_preserves_tool_argument_delta_that_appears_elsewhere_in_payload() -> None:
+    lines = [
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "call_id": "call_1",
+                "delta": '{"pattern":"abc","value":"',
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "call_id": "call_1",
+                "delta": "abc",
+            },
+        ),
+        _sse(
+            "response.function_call_arguments.delta",
+            {
+                "call_id": "call_1",
+                "delta": '"}',
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": '{"pattern":"abc","value":"',
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": "abc",
+        },
+        {
+            "type": "tool_call_delta",
+            "id": "call_1",
+            "name_delta": "",
+            "arguments_delta": '"}',
+        },
+    ]
+
+
 def test_stream_emits_visible_reasoning_from_completed_response_output() -> None:
     reasoning_item = {
         "type": "reasoning",
