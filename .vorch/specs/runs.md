@@ -27,6 +27,11 @@ Stable Run event constants live in `core.runs`:
 
 Every emitted event increments the Run-local `sequence`, including transient delta events. Subscribers can replay events after a sequence number and then follow live events until a terminal event.
 
+`tool_call_started` payloads include both the raw call and display metadata:
+`{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`.
+The `display` object is produced by the tool registry and is safe for accessors
+to render without re-inferring tool semantics from raw arguments.
+
 ## Interfaces
 
 - `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes a visible event unless the Run is already terminal or cancellation is suppressing non-terminal output.
