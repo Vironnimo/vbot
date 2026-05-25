@@ -845,6 +845,151 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).not.toContain('{"content":"draft content"');
   });
 
+  it('omits large write content from tool argument details', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-write-large-content',
+    );
+    const largeContent = 'body { color: red; }\n'.repeat(2000);
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-write-large-content',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-write-large-content',
+          index: 0,
+          name: 'write',
+          arguments: {
+            content: largeContent,
+            path: 'todo-app/style.css',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('write');
+    expect(summaryLine.textContent).toContain('todo-app/style.css');
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (element) => element.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    const argsText = argsRow.querySelector('.teb-code').textContent;
+    expect(argsText).toContain('path');
+    expect(argsText).toContain('todo-app/style.css');
+    expect(argsText).not.toContain('content');
+    expect(document.body.textContent).not.toContain(largeContent);
+  });
+
+  it('does not fall back to raw write JSON when path is missing', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-write-missing-path',
+    );
+    const largeContent = '<main>large generated document</main>\n'.repeat(2000);
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-write-missing-path',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-write-missing-path',
+          index: 0,
+          name: 'write',
+          arguments: JSON.stringify({ content: largeContent }),
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('write');
+    expect(summaryLine.textContent).not.toContain('content');
+    expect(summaryLine.textContent).not.toContain('<main>');
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (element) => element.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    expect(argsRow.querySelector('.teb-code').textContent).toBe('—');
+    expect(document.body.textContent).not.toContain(largeContent);
+  });
+
+  it('omits large edit replacement strings from tool argument details', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-edit-large-replacement',
+    );
+    const oldString = 'old generated block\n'.repeat(2000);
+    const newString = 'new generated block\n'.repeat(2000);
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-edit-large-replacement',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-edit-large-replacement',
+          index: 0,
+          name: 'edit',
+          arguments: {
+            new_string: newString,
+            old_string: oldString,
+            path: 'todo-app/app.js',
+            replace_all: true,
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('edit');
+    expect(summaryLine.textContent).toContain('todo-app/app.js');
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (element) => element.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    const argsText = argsRow.querySelector('.teb-code').textContent;
+    expect(argsText).toContain('path');
+    expect(argsText).toContain('todo-app/app.js');
+    expect(argsText).toContain('replace_all');
+    expect(argsText).not.toContain('old_string');
+    expect(argsText).not.toContain('new_string');
+    expect(document.body.textContent).not.toContain(oldString);
+    expect(document.body.textContent).not.toContain(newString);
+  });
+
   it('prefers description argument over path/command in tool summary', () => {
     const sessionState = ensureSessionState(
       createChatState(),
