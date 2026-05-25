@@ -1,5 +1,5 @@
 <script>
-  import { linkSessionToChannel, listSessions } from '$lib/api.js';
+  import { listSessions } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     applySessionList,
@@ -20,12 +20,6 @@
   });
 
   let sessionState = $state(createSessionListState());
-  let openLinkSessionId = $state('');
-  let linkChannelId = $state('');
-  let linkPlatformConvId = $state('');
-  let linkLoading = $state(false);
-  let linkError = $state('');
-  let linkNotice = $state('');
 
   let loadedAgentId = '';
   let loadVersion = 0;
@@ -37,7 +31,6 @@
     }
 
     loadedAgentId = normalizedAgentId;
-    resetLinkForm();
 
     if (!normalizedAgentId) {
       sessionState = createSessionListState();
@@ -109,64 +102,6 @@
   const handleSelectSession = (sessionId) => {
     sessionState = selectSession(sessionState, sessionId);
     onSessionSelected?.(sessionId);
-  };
-
-  const openLinkForm = (sessionId) => {
-    openLinkSessionId = sessionId;
-    linkChannelId = '';
-    linkPlatformConvId = '';
-    linkError = '';
-    linkNotice = '';
-  };
-
-  const closeLinkForm = () => {
-    openLinkSessionId = '';
-    linkChannelId = '';
-    linkPlatformConvId = '';
-    linkError = '';
-  };
-
-  const resetLinkForm = () => {
-    closeLinkForm();
-    linkNotice = '';
-  };
-
-  const submitLink = async (sessionId) => {
-    const normalizedAgentId = asText(agentId);
-    const normalizedChannelId = asText(linkChannelId);
-    const normalizedPlatformConvId = asText(linkPlatformConvId);
-
-    if (!normalizedAgentId || !sessionId) {
-      return;
-    }
-
-    if (!normalizedChannelId || !normalizedPlatformConvId) {
-      linkError = t(
-        'errors.validation',
-        'Check the highlighted fields and try again.',
-      );
-      return;
-    }
-
-    linkLoading = true;
-    linkError = '';
-    linkNotice = '';
-
-    try {
-      await linkSessionToChannel(
-        normalizedAgentId,
-        sessionId,
-        normalizedChannelId,
-        normalizedPlatformConvId,
-      );
-      linkNotice = t('sessions.link_success', 'Session linked to channel.');
-      closeLinkForm();
-      await loadSessions(normalizedAgentId);
-    } catch (error) {
-      linkError = error.message;
-    } finally {
-      linkLoading = false;
-    }
   };
 
   const formatTimestamp = (value) => {
@@ -263,99 +198,9 @@
               </p>
             {/if}
           </button>
-
-          {#if !session.is_channel_session}
-            <div class="session-row__link-block">
-              {#if openLinkSessionId === session.id}
-                <form
-                  class="session-row__link-form"
-                  onsubmit={(event) => {
-                    event.preventDefault();
-                    submitLink(session.id);
-                  }}
-                >
-                  <label
-                    class="session-row__label"
-                    for={`channel-id-${session.id}`}
-                  >
-                    {t('sessions.link_channel_id', 'Channel ID')}
-                  </label>
-                  <input
-                    id={`channel-id-${session.id}`}
-                    class="s-input"
-                    name="channel-id"
-                    bind:value={linkChannelId}
-                    placeholder={t('sessions.link_channel_id', 'Channel ID')}
-                    autocomplete="off"
-                  />
-
-                  <label
-                    class="session-row__label"
-                    for={`platform-conv-id-${session.id}`}
-                  >
-                    {t(
-                      'sessions.link_platform_conv_id',
-                      'Platform conversation ID',
-                    )}
-                  </label>
-                  <input
-                    id={`platform-conv-id-${session.id}`}
-                    class="s-input"
-                    name="platform-conv-id"
-                    bind:value={linkPlatformConvId}
-                    placeholder={t(
-                      'sessions.link_platform_conv_id',
-                      'Platform conversation ID',
-                    )}
-                    autocomplete="off"
-                  />
-
-                  <div class="session-row__link-actions">
-                    <button
-                      type="submit"
-                      class="btn-new"
-                      disabled={linkLoading}
-                    >
-                      {linkLoading
-                        ? t('common.loading', 'Loading…')
-                        : t('sessions.link_confirm', 'Link session')}
-                    </button>
-                    <button
-                      type="button"
-                      class="btn-outline"
-                      disabled={linkLoading}
-                      onclick={closeLinkForm}
-                    >
-                      {t('common.cancel', 'Cancel')}
-                    </button>
-                  </div>
-                </form>
-              {:else}
-                <button
-                  type="button"
-                  class="btn-outline session-row__link-toggle"
-                  onclick={() => openLinkForm(session.id)}
-                >
-                  {t('sessions.link_to_channel', 'Link to channel')}
-                </button>
-              {/if}
-            </div>
-          {/if}
         </li>
       {/each}
     </ul>
-  {/if}
-
-  {#if linkError}
-    <p class="session-drawer__state session-drawer__state--error">
-      {linkError}
-    </p>
-  {/if}
-
-  {#if linkNotice}
-    <p class="session-drawer__state session-drawer__state--notice">
-      {linkNotice}
-    </p>
   {/if}
 </aside>
 
@@ -508,42 +353,6 @@
     font-size: 11px;
   }
 
-  .session-row__link-block {
-    display: flex;
-    justify-content: flex-end;
-    padding: 0 12px 10px 14px;
-  }
-
-  .session-row__link-toggle {
-    width: auto;
-    min-height: 28px;
-    padding: 4px 10px;
-    font-size: 11.5px;
-  }
-
-  .session-row__link-form {
-    display: grid;
-    gap: 6px;
-  }
-
-  .session-row__label {
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .session-row__link-actions {
-    display: flex;
-    gap: 6px;
-    margin-top: 4px;
-  }
-
-  .session-row__link-actions :global(button) {
-    flex: 1;
-  }
-
   .session-drawer__state {
     margin: 0;
     padding: 10px 12px;
@@ -553,10 +362,6 @@
 
   .session-drawer__state--error {
     color: var(--red);
-  }
-
-  .session-drawer__state--notice {
-    color: var(--green);
   }
 
   @media (max-width: 760px) {
