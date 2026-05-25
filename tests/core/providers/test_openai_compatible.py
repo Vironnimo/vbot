@@ -14,6 +14,7 @@ import httpx
 import pytest
 import respx
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -202,6 +203,21 @@ def openai_adapter():
 def openrouter_adapter():
     """OpenAI-compatible adapter with OpenRouter config (extra headers)."""
     return OpenAICompatibleAdapter(OPENROUTER_CONFIG, API_KEY)
+
+
+def _openai_test_model(model_id: str, *, reasoning: bool) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=reasoning),
+        ),
+        context_window=128000,
+        max_output_tokens=4096,
+    )
 
 
 class TestAssistantMessageFormatting:
@@ -487,11 +503,87 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_ignores_non_openai_reasoning_effort(self, openai_adapter):
-        """Base OpenAI-compatible reasoning only emits OpenAI-supported efforts."""
+    @pytest.mark.parametrize(
+        ("thinking_effort", "expected_reasoning_effort"),
+        [
+            ("minimal", "low"),
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("xhigh", "high"),
+            ("max", "high"),
+        ],
+    )
+    async def test_send_maps_to_nearest_openai_reasoning_effort(
+        self,
+        openai_adapter,
+        thinking_effort,
+        expected_reasoning_effort,
+    ):
+        """Base OpenAI-compatible reasoning maps vBot levels to safe OpenAI efforts."""
         route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
-        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="xhigh")
+        await openai_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.2",
+            thinking_effort=thinking_effort,
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == expected_reasoning_effort
+        assert "reasoning" not in request_body
+        assert "include_reasoning" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_uses_explicit_none_when_catalog_confirms_reasoning_model(self):
+        """Explicit none is sent only when the catalog says reasoning is supported."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _openai_test_model(model_id, reasoning=True),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", thinking_effort="none")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == "none"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_normalizes_explicit_reasoning_effort_kwarg(self, openai_adapter):
+        """Raw reasoning_effort kwargs follow the same nearest-effort mapping."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        await openai_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-5.2",
+            reasoning_effort="max",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["reasoning_effort"] == "high"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_suppresses_reasoning_when_catalog_disables_it(self):
+        """Catalog-known non-reasoning models do not receive reasoning controls."""
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = OpenAICompatibleAdapter(
+            OPENAI_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _openai_test_model(model_id, reasoning=False),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-4o",
+            thinking_effort="high",
+            reasoning_effort="high",
+            reasoning={"effort": "high"},
+            include_reasoning=True,
+        )
 
         request_body = json.loads(route.calls.last.request.content)
         assert "reasoning_effort" not in request_body

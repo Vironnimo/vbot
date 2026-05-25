@@ -418,9 +418,8 @@ def _thinking_from_effort(
         return None
     if thinking_effort == "none":
         return {"type": "disabled"} if policy.supports_adaptive_thinking else None
-    if thinking_effort == "minimal":
-        return None
-    if policy.supports_adaptive_thinking and policy.allows_reasoning_effort(thinking_effort):
+    safe_effort = policy.closest_reasoning_effort(thinking_effort)
+    if policy.supports_adaptive_thinking and safe_effort is not None:
         return {"type": "adaptive", "display": "summarized"}
     if policy.supports_adaptive_thinking and not policy.allowed_reasoning_efforts:
         return {"type": "adaptive", "display": "summarized"}
@@ -434,20 +433,22 @@ def _safe_output_config(
     if not isinstance(output_config, dict):
         return None
     effort = output_config.get("effort")
-    if not isinstance(effort, str) or not policy.allows_reasoning_effort(effort):
+    safe_effort = policy.closest_reasoning_effort(effort)
+    if safe_effort is None:
         return None
-    return {"effort": effort}
+    return {"effort": safe_effort}
 
 
 def _output_config_from_effort(
     thinking_effort: str,
     policy: GitHubCopilotModelPolicy,
 ) -> dict[str, Any] | None:
-    if thinking_effort in {"", "none", "minimal"}:
+    if thinking_effort in {"", "none"}:
         return None
-    if not policy.allows_reasoning_effort(thinking_effort):
+    safe_effort = policy.closest_reasoning_effort(thinking_effort)
+    if safe_effort is None:
         return None
-    return {"effort": thinking_effort}
+    return {"effort": safe_effort}
 
 
 def _budget_allowed(value: Any, policy: GitHubCopilotModelPolicy) -> bool:

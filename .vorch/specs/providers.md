@@ -1,6 +1,6 @@
 # Providers
 
-Last updated: 2026-05-21 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. All adapter families may receive a provider-scoped `model_lookup` for normalized catalog facts. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping. New-provider work starts from real catalog and probe-response inspection, and catalog overrides are reserved for non-discoverable externally researched facts.
+Last updated: 2026-05-25 — provider auth is connection-based. Provider JSON files use `connections`, not the old single `auth` object. OAuth connections may use the Token Store instead of an environment credential. All adapter families may receive a provider-scoped `model_lookup` for normalized catalog facts. Reasoning-capable adapters translate vBot `thinking_effort` values to the nearest provider/model-supported effort and suppress reasoning controls when the normalized catalog says reasoning is unsupported. GitHub Copilot request shaping is conservative for `/responses` temperature and normalizes Messages output-token aliases to `max_tokens`. Mistral is supported as an OpenAI-compatible subclass with provider-specific `/models` normalization and reasoning-effort mapping. New-provider work starts from real catalog and probe-response inspection, and catalog overrides are reserved for non-discoverable externally researched facts.
 
 Provider configuration, registry, and adapters. Translates vBot requests into provider-specific wire formats.
 
@@ -284,7 +284,7 @@ Errors are classified by HTTP status code (not by parsing the body):
 - Timeout → `ProviderTimeoutError` (retryable)
 - ConnectError → `NetworkError` (retryable, does not trigger model fallback)
 
-**Reasoning:** vBot `thinking_effort` is adapter-translated. The generic OpenAI-compatible adapter emits `reasoning_effort: "low" | "medium" | "high"` for supported non-`none` values. Provider-specific subclasses own alternate wire formats.
+**Reasoning:** vBot `thinking_effort` is adapter-translated. The generic OpenAI-compatible adapter maps active values to the nearest OpenAI-safe `reasoning_effort` among `"low" | "medium" | "high"`: `minimal` maps to `low`, `low`/`medium`/`high` stay exact, and `xhigh`/`max` map to `high`. Explicit `none` is only sent as `reasoning_effort: "none"` when catalog data confirms the model supports reasoning; otherwise it is omitted. When `model_lookup` reports `Model.capabilities.reasoning.supported == false`, reasoning controls are stripped. Provider-specific subclasses own alternate wire formats.
 
 **Response normalization:** Reads assistant `content`, `reasoning`/`reasoning_content`/`thinking`, opaque `encrypted_content`/`reasoning_details`, and function `tool_calls` into canonical assistant fields.
 
@@ -305,9 +305,11 @@ OpenCode Go is OpenAI-compatible for chat completions but requires one provider-
 OpenRouter is OpenAI-compatible for chat completions but has provider-specific
 reasoning and catalog schema.
 
-- Runtime reasoning: non-`none` `thinking_effort` values accepted by OpenRouter
-  (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`) are sent as
-  `reasoning: {"effort": ...}` plus `include_reasoning: true`.
+- Runtime reasoning: non-`none` `thinking_effort` values are mapped to the
+  nearest OpenRouter-supported effort from `minimal`, `low`, `medium`, `high`,
+  `xhigh`, and `max`, then sent as `reasoning: {"effort": ...}` plus
+  `include_reasoning: true`. OpenRouter currently supports every active vBot
+  effort exactly. `none` omits reasoning controls.
 - Streaming usage: inherited from the generic OpenAI-compatible stream behavior.
 - Catalog normalization: reads OpenRouter `/models` fields such as
   `architecture.input_modalities`, `supported_parameters`, `context_length`, and
@@ -319,9 +321,9 @@ Mistral uses the standard OpenAI-style `POST /chat/completions` runtime path but
 needs provider-specific reasoning and catalog handling.
 
 - Runtime reasoning: Mistral accepts only `reasoning_effort: "high" | "none"`.
-  `MistralAdapter` maps vBot `thinking_effort` values `medium`, `high`, `xhigh`,
-  and `max` to `"high"`; `none` maps to `"none"`; `low`, `minimal`, and unset
-  values omit the parameter.
+  `MistralAdapter` maps every active vBot `thinking_effort` value (`minimal`,
+  `low`, `medium`, `high`, `xhigh`, `max`) to `"high"`; `none` maps to
+  `"none"`; unset values omit the parameter.
 - Runtime catalog access: `MistralAdapter` uses the shared `model_lookup` to suppress reasoning controls when the normalized catalog marks `Model.capabilities.reasoning.supported` as false. Pinned connection suffixes such as `::<connection-local-id>` are stripped in the adapter before catalog lookup.
 - Auth: bundled config uses `Authorization: Bearer <MISTRAL_API_KEY>` via an
   `api_key` connection.
@@ -387,9 +389,11 @@ Endpoint selection currently follows these rules:
 Request shaping is policy-gated per model and endpoint. Unsupported optional
 features are omitted rather than sent optimistically: tools/tool choice,
 parallel tool calls, structured output/JSON-style controls, OpenAI-style
-reasoning efforts, thinking budgets, and adaptive thinking. Unknown Copilot
-models default to `/chat/completions`, no explicit reasoning/thinking controls,
-no tools, and no structured-output controls.
+reasoning efforts, thinking budgets, and adaptive thinking. Advertised
+reasoning-effort sets are treated as model-specific; requested vBot effort
+values are normalized to the nearest advertised effort before being sent.
+Unknown Copilot models default to `/chat/completions`, no explicit
+reasoning/thinking controls, no tools, and no structured-output controls.
 
 For `/responses`, `temperature` is currently treated as unsupported unless a
 future Copilot policy explicitly adds positive support. Partial or incomplete
@@ -467,7 +471,7 @@ and other unsanitized provider data are not stored in model catalogs.
 
 **Wire protocol** — Anthropic Messages API, own format.
 
-- Constructor contract: `AnthropicAdapter` accepts the shared optional `model_lookup` parameter through the `ProviderAdapter` base contract even though it does not currently consume catalog facts at runtime.
+- Constructor contract: `AnthropicAdapter` accepts the shared optional `model_lookup` parameter through the `ProviderAdapter` base contract and uses normalized catalog reasoning support to strip thinking/reasoning controls for known non-reasoning models.
 
 **Endpoint:** `POST /messages`
 

@@ -191,10 +191,13 @@ def test_normalize_catalog_entry_sets_json_mode_true_for_chat_models() -> None:
     assert model.capabilities.json_mode is True
 
 
-@pytest.mark.parametrize("thinking_effort", ["high", "xhigh", "max", "medium"])
+@pytest.mark.parametrize(
+    "thinking_effort",
+    ["minimal", "low", "medium", "high", "xhigh", "max"],
+)
 @respx.mock
 @pytest.mark.asyncio
-async def test_build_payload_maps_supported_reasoning_efforts_to_high(
+async def test_build_payload_maps_active_reasoning_efforts_to_high(
     mistral_adapter: MistralAdapter,
     thinking_effort: str,
 ) -> None:
@@ -208,40 +211,6 @@ async def test_build_payload_maps_supported_reasoning_efforts_to_high(
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning_effort"] == "high"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_build_payload_does_not_set_reasoning_effort_for_low(
-    mistral_adapter: MistralAdapter,
-) -> None:
-    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await mistral_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="mistral-large-latest",
-        thinking_effort="low",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert "reasoning_effort" not in request_body
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_build_payload_does_not_set_reasoning_effort_for_minimal(
-    mistral_adapter: MistralAdapter,
-) -> None:
-    route = respx.post(MISTRAL_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
-
-    await mistral_adapter.send(
-        SAMPLE_MESSAGES,
-        model_id="mistral-large-latest",
-        thinking_effort="minimal",
-    )
-
-    request_body = json.loads(route.calls.last.request.content)
-    assert "reasoning_effort" not in request_body
 
 
 @respx.mock

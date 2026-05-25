@@ -220,6 +220,21 @@ def test_build_payload_gates_thinking_by_exact_policy() -> None:
     assert payload["output_config"] == {"effort": "xhigh"}
 
 
+def test_build_payload_maps_output_config_to_nearest_policy_effort() -> None:
+    policy = _messages_policy(reasoning_efforts=["high"])
+
+    payload = build_copilot_messages_payload(
+        [{"role": "user", "content": "Think."}],
+        model_id="claude-sonnet-4.6",
+        policy=policy,
+        thinking_effort="low",
+        output_config={"effort": "low", "unknown": True},
+    )
+
+    assert payload["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert payload["output_config"] == {"effort": "high"}
+
+
 def test_build_payload_omits_unsupported_tools_and_reasoning_controls() -> None:
     model_id = "claude-haiku-4.5-runtime-metadata"
     policy = _messages_policy(

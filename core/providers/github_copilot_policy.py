@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
+
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 RESPONSES_ENDPOINT = "/responses"
 MESSAGES_ENDPOINT = "/v1/messages"
@@ -211,15 +213,17 @@ class GitHubCopilotModelPolicy:
                 filtered_kwargs.pop(parameter_name, None)
         else:
             thinking_effort = filtered_kwargs.get("thinking_effort")
-            if isinstance(thinking_effort, str) and not self.allows_reasoning_effort(
-                thinking_effort
-            ):
+            safe_thinking_effort = self.closest_reasoning_effort(thinking_effort)
+            if safe_thinking_effort is None:
                 filtered_kwargs.pop("thinking_effort", None)
+            elif isinstance(thinking_effort, str):
+                filtered_kwargs["thinking_effort"] = safe_thinking_effort
             reasoning_effort = filtered_kwargs.get("reasoning_effort")
-            if isinstance(reasoning_effort, str) and not self.allows_reasoning_effort(
-                reasoning_effort
-            ):
+            safe_reasoning_effort = self.closest_reasoning_effort(reasoning_effort)
+            if safe_reasoning_effort is None:
                 filtered_kwargs.pop("reasoning_effort", None)
+            elif isinstance(reasoning_effort, str):
+                filtered_kwargs["reasoning_effort"] = safe_reasoning_effort
 
         if not self.supports_thinking_budget:
             filtered_kwargs.pop("thinking_budget", None)
@@ -254,6 +258,14 @@ class GitHubCopilotModelPolicy:
         if not effort or effort == "none":
             return True
         return effort in self.allowed_reasoning_efforts
+
+    def closest_reasoning_effort(self, effort: Any) -> str | None:
+        normalized_effort = normalize_thinking_effort(effort)
+        if not normalized_effort:
+            return None
+        if normalized_effort == "none":
+            return "none" if self.allows_any_reasoning_controls else None
+        return closest_supported_effort(normalized_effort, self.allowed_reasoning_efforts)
 
     def allows_openai_reasoning_effort(self, thinking_effort: str) -> bool:
         """Compatibility alias used by existing Copilot tests and adapter code."""
@@ -300,25 +312,32 @@ class GitHubCopilotModelPolicy:
         return False
 
     def _is_active_reasoning_effort(self, effort: Any) -> bool:
-        if not isinstance(effort, str):
+        normalized_effort = normalize_thinking_effort(effort)
+        if not normalized_effort or normalized_effort == "none":
             return False
-        if effort in {"", "none", "minimal"}:
-            return False
-        return self.allows_reasoning_effort(effort)
+        return self.closest_reasoning_effort(normalized_effort) is not None or (
+            self.supports_adaptive_thinking and not self.allowed_reasoning_efforts
+        )
 
     def _filter_messages_reasoning_kwargs(self, filtered_kwargs: dict[str, Any]) -> None:
         filtered_kwargs.pop("reasoning", None)
         filtered_kwargs.pop("include_reasoning", None)
 
         reasoning_effort = filtered_kwargs.get("reasoning_effort")
-        if isinstance(reasoning_effort, str) and not self.allows_reasoning_effort(reasoning_effort):
+        safe_reasoning_effort = self.closest_reasoning_effort(reasoning_effort)
+        if safe_reasoning_effort is None:
             filtered_kwargs.pop("reasoning_effort", None)
+        elif isinstance(reasoning_effort, str):
+            filtered_kwargs["reasoning_effort"] = safe_reasoning_effort
 
         output_config = filtered_kwargs.get("output_config")
         if isinstance(output_config, Mapping):
             effort = output_config.get("effort")
-            if not isinstance(effort, str) or not self.allows_reasoning_effort(effort):
+            safe_effort = self.closest_reasoning_effort(effort)
+            if safe_effort is None:
                 filtered_kwargs.pop("output_config", None)
+            else:
+                filtered_kwargs["output_config"] = {**output_config, "effort": safe_effort}
         else:
             filtered_kwargs.pop("output_config", None)
 
@@ -338,15 +357,21 @@ class GitHubCopilotModelPolicy:
         if isinstance(thinking_effort, str):
             if not self._messages_accepts_thinking_effort_trigger(thinking_effort):
                 filtered_kwargs.pop("thinking_effort", None)
+            else:
+                safe_thinking_effort = self.closest_reasoning_effort(thinking_effort)
+                if safe_thinking_effort is not None:
+                    filtered_kwargs["thinking_effort"] = safe_thinking_effort
         else:
             filtered_kwargs.pop("thinking_effort", None)
 
     def _messages_accepts_thinking_effort_trigger(self, thinking_effort: str) -> bool:
-        if not thinking_effort or thinking_effort == "minimal":
+        if not thinking_effort:
             return False
         if thinking_effort == "none":
             return self.supports_adaptive_thinking or self.supports_thinking_budget
-        return self.allows_reasoning_effort(thinking_effort)
+        return self.closest_reasoning_effort(thinking_effort) is not None or (
+            self.supports_adaptive_thinking and not self.allowed_reasoning_efforts
+        )
 
 
 def copilot_model_policy(

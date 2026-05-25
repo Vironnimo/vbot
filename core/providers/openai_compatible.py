@@ -25,6 +25,11 @@ from core.providers._http_shared import (
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.reasoning import (
+    closest_supported_effort,
+    model_reasoning_supported,
+    remove_reasoning_kwargs,
+)
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
@@ -34,7 +39,7 @@ from core.utils.retry import retry_async
 
 SSE_DONE_MARKER = "[DONE]"
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
-OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
+OPENAI_REASONING_EFFORTS = {"none", "low", "medium", "high"}
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "thinking")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
@@ -200,7 +205,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             "messages": [self._format_message(message) for message in messages],
         }
         _apply_openai_tools(payload, request_kwargs)
-        _apply_openai_reasoning(payload, request_kwargs)
+        _apply_openai_reasoning(
+            payload,
+            request_kwargs,
+            reasoning_supported=self._model_reasoning_supported(model_id),
+        )
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
@@ -208,6 +217,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
         return payload
+
+    def _model_reasoning_supported(self, model_id: str) -> bool | None:
+        return model_reasoning_supported(self._model_lookup, model_id)
 
     # ------------------------------------------------------------------
     # send() — non-streaming
@@ -600,12 +612,26 @@ def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None
     ]
 
 
-def _apply_openai_reasoning(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
+def _apply_openai_reasoning(
+    payload: dict[str, Any],
+    kwargs: dict[str, Any],
+    *,
+    reasoning_supported: bool | None,
+) -> None:
     thinking_effort = kwargs.pop("thinking_effort", "")
-    if not thinking_effort or thinking_effort == "none":
+    reasoning_effort = kwargs.pop("reasoning_effort", "")
+    if reasoning_supported is False:
+        remove_reasoning_kwargs(kwargs, *REASONING_PARAMETER_NAMES)
         return
-    if thinking_effort in OPENAI_REASONING_EFFORTS:
-        payload["reasoning_effort"] = thinking_effort
+    supported_effort = closest_supported_effort(
+        thinking_effort or reasoning_effort,
+        OPENAI_REASONING_EFFORTS,
+    )
+    if supported_effort is None:
+        return
+    if supported_effort == "none" and reasoning_supported is not True:
+        return
+    payload["reasoning_effort"] = supported_effort
 
 
 def _merge_stream_usage_options(payload: dict[str, Any]) -> None:

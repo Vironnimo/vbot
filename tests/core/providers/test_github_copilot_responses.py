@@ -50,7 +50,7 @@ def test_build_payload_extracts_system_instructions_and_user_input() -> None:
     ]
 
 
-def test_build_payload_gates_reasoning_tools_and_structured_output() -> None:
+def test_build_payload_maps_reasoning_and_gates_tools_and_structured_output() -> None:
     policy = responses_policy(reasoning_efforts=["low"], structured_outputs=False)
 
     payload = build_responses_payload(
@@ -63,7 +63,8 @@ def test_build_payload_gates_reasoning_tools_and_structured_output() -> None:
         response_format={"type": "json_object"},
     )
 
-    assert "reasoning" not in payload
+    assert payload["reasoning"] == {"effort": "low", "summary": "auto"}
+    assert payload["include"] == ["reasoning.encrypted_content"]
     assert payload["tools"] == [
         {
             "type": "function",
