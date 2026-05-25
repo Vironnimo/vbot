@@ -412,6 +412,11 @@
   const MAX_TOOL_LABEL_LENGTH = 80;
   const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
   const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
+  const SUBAGENT_TERMINAL_STATUSES = new Set([
+    'completed',
+    'failed',
+    'cancelled',
+  ]);
   const TOOL_ERROR_DETAIL_KEYS = [
     'error',
     'message',
@@ -564,6 +569,18 @@
     return resultEnvelope;
   };
 
+  const subAgentSessionId = (tool) => {
+    const args = subAgentArguments(tool);
+    const data = subAgentResultData(tool);
+    return trimmedString(data.session_id) || trimmedString(args.session_id);
+  };
+
+  const subAgentRunId = (tool) => {
+    const args = subAgentArguments(tool);
+    const data = subAgentResultData(tool);
+    return trimmedString(data.run_id) || trimmedString(args.run_id);
+  };
+
   const subAgentAgentId = (tool) => {
     const args = subAgentArguments(tool);
     const data = subAgentResultData(tool);
@@ -604,20 +621,82 @@
     return [agentId, preview].filter(Boolean).join(' · ');
   };
 
-  const subAgentStatusLabel = (tool) => {
-    if (toolStatus(tool) === 'running') {
-      return t('chat.subagent.running', 'running');
+  const subAgentCompletionData = (tool, assistantRun) => {
+    if (toolNameForRunTool(tool) !== 'subagent') {
+      return null;
     }
 
-    const data = subAgentResultData(tool);
-    const status = trimmedString(data.status) || toolStatus(tool);
+    const sessionId = subAgentSessionId(tool);
+    if (!sessionId || !assistantRun?.items) {
+      return null;
+    }
+
+    const runId = subAgentRunId(tool);
+    for (const child of assistantRun.items) {
+      if (
+        child === tool ||
+        child.type !== 'tool_call' ||
+        toolNameForRunTool(child) !== 'subagent_result'
+      ) {
+        continue;
+      }
+
+      const childData = subAgentResultData(child);
+      const childSessionId = subAgentSessionId(child);
+      const childRunId = subAgentRunId(child);
+      const childStatus = trimmedString(childData.status);
+      if (
+        childSessionId === sessionId &&
+        (!runId || !childRunId || childRunId === runId) &&
+        SUBAGENT_TERMINAL_STATUSES.has(childStatus)
+      ) {
+        return childData;
+      }
+    }
+    return null;
+  };
+
+  const subAgentLifecycleStatus = (tool, assistantRun = null) => {
+    const completionData = subAgentCompletionData(tool, assistantRun);
+    const completionStatus = trimmedString(completionData?.status);
+    if (completionStatus) {
+      return completionStatus;
+    }
+
+    const dataStatus = trimmedString(subAgentResultData(tool).status);
+    if (dataStatus) {
+      return dataStatus;
+    }
+
+    return toolStatus(tool);
+  };
+
+  const subAgentDotStatus = (tool, assistantRun) => {
+    const status = subAgentLifecycleStatus(tool, assistantRun);
+    if (status === 'completed' || status === 'success') {
+      return 'success';
+    }
+    if (status === 'failed') {
+      return 'failed';
+    }
+    if (status === 'cancelled') {
+      return 'cancelled';
+    }
+    return 'running';
+  };
+
+  const subAgentStatusLabel = (tool, assistantRun = null) => {
+    const status = subAgentLifecycleStatus(tool, assistantRun);
+    if (status === 'running') {
+      return t('chat.subagent.running', 'running');
+    }
     return t('chat.subagent.resultStatus', 'Status: {status}', { status });
   };
 
   const subAgentNavigationTarget = (tool) => {
     const data = subAgentResultData(tool);
     const agentId = trimmedString(data.agent_id);
-    const sessionId = trimmedString(data.session_id);
+    const sessionId = subAgentSessionId(tool);
     if (!agentId || !sessionId) {
       return null;
     }
@@ -1232,14 +1311,18 @@
                   {#if isSubAgentTool(child)}
                     <details
                       class="tool-event run-tool-event subagent-tool-event"
-                      open={toolStatus(child) === 'running'}
+                      open={subAgentDotStatus(child, item) === 'running'}
                     >
                       <summary class="tool-event-line subagent-line">
                         <span
-                          class:done={toolStatus(child) === 'success'}
-                          class:error={toolStatus(child) === 'failed'}
-                          class:cancelled={toolStatus(child) === 'cancelled'}
-                          class:running={toolStatus(child) === 'running'}
+                          class:done={subAgentDotStatus(child, item) ===
+                            'success'}
+                          class:error={subAgentDotStatus(child, item) ===
+                            'failed'}
+                          class:cancelled={subAgentDotStatus(child, item) ===
+                            'cancelled'}
+                          class:running={subAgentDotStatus(child, item) ===
+                            'running'}
                           class="te-dot">●</span
                         >
                         <span class="te-fn">
@@ -1256,7 +1339,7 @@
                           </span>
                         {/if}
                         <span class="te-time subagent-status">
-                          {subAgentStatusLabel(child)}
+                          {subAgentStatusLabel(child, item)}
                         </span>
                         {#if subAgentNavigationTarget(child)}
                           <button

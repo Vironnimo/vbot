@@ -57,7 +57,7 @@
   let availableSkills = $state([]);
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
-  let viewingSessionReadOnly = $state(false);
+  let viewingSubAgentSession = $state(false);
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
   const pendingReconnects = {};
@@ -79,13 +79,11 @@
 
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(getActiveSessionState());
-  let readOnlySessionActive = $derived(
-    Boolean(viewingSessionId) && viewingSessionReadOnly,
+  let subAgentSessionActive = $derived(
+    Boolean(viewingSessionId) && viewingSubAgentSession,
   );
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
-  let composerDisabled = $derived(
-    !activeAgent || loadingHistory || readOnlySessionActive,
-  );
+  let composerDisabled = $derived(!activeAgent || loadingHistory);
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
@@ -343,7 +341,7 @@
 
   const handleSelectAgent = async (agentId) => {
     if (agentId === chatState.selectedAgentId) {
-      if (readOnlySessionActive) {
+      if (subAgentSessionActive) {
         clearSessionOverride();
         await loadCurrentHistory();
       }
@@ -366,7 +364,7 @@
     }
 
     viewingSessionId = sessionId;
-    viewingSessionReadOnly = true;
+    viewingSubAgentSession = true;
     await loadHistoryForSession(agentId, sessionId);
   };
 
@@ -377,7 +375,7 @@
       return;
     }
 
-    viewingSessionReadOnly = false;
+    viewingSubAgentSession = false;
     viewingSessionId =
       normalizedSessionId === agent.current_session_id
         ? ''
@@ -387,11 +385,11 @@
 
   const clearSessionOverride = () => {
     viewingSessionId = '';
-    viewingSessionReadOnly = false;
+    viewingSubAgentSession = false;
   };
 
   const handleReturnToCurrentSession = async () => {
-    if (!readOnlySessionActive || loadingHistory) {
+    if (!subAgentSessionActive || loadingHistory) {
       return;
     }
 
@@ -430,11 +428,6 @@
   };
 
   const handleSendMessage = async (content) => {
-    if (readOnlySessionActive) {
-      clearSessionOverride();
-      await loadCurrentHistory();
-    }
-
     const agent = selectedAgent(chatState);
     const sessionState = activeSessionState;
     if (!agent || !sessionState) {
@@ -712,11 +705,6 @@
   };
 
   const handleRetry = async () => {
-    if (readOnlySessionActive) {
-      clearSessionOverride();
-      await loadCurrentHistory();
-    }
-
     const agent = selectedAgent(chatState);
     const sessionState = activeSessionState;
     if (!agent || !sessionState || isRunActive(sessionState)) {
@@ -881,37 +869,8 @@
         />
       {/if}
       <div class="chat-view__surface">
-        {#if readOnlySessionActive || loadingHistory || historyError || actionError || actionInfo || activeSessionState?.error}
+        {#if loadingHistory || historyError || actionError || actionInfo || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
-            {#if readOnlySessionActive}
-              <div class="chat-view__readonly-notice">
-                <div class="chat-view__readonly-copy">
-                  <p class="chat-view__readonly-title">
-                    {t(
-                      'chat.subagentSessionReadOnly',
-                      'Viewing a sub-agent session',
-                    )}
-                  </p>
-                  <p class="chat-view__readonly-hint">
-                    {t(
-                      'chat.subagentSessionReadOnlyHint',
-                      'This historical session is read-only. Return to the current agent session to continue chatting.',
-                    )}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="btn-outline chat-view__readonly-return"
-                  disabled={loadingHistory}
-                  onclick={handleReturnToCurrentSession}
-                >
-                  {t(
-                    'chat.returnToCurrentSession',
-                    'Return to current session',
-                  )}
-                </button>
-              </div>
-            {/if}
             {#if loadingHistory}
               <p class="chat-view__notice">
                 {t('loading.history', 'Loading chat history…')}
@@ -949,6 +908,32 @@
           />
         </div>
         <div class="chat-view__footer-stack">
+          {#if subAgentSessionActive}
+            <div class="chat-view__subagent-session-notice" aria-live="polite">
+              <div class="chat-view__subagent-session-copy">
+                <p class="chat-view__subagent-session-title">
+                  {t(
+                    'chat.subagentSessionNotice',
+                    'Viewing a sub-agent session',
+                  )}
+                </p>
+                <p class="chat-view__subagent-session-hint">
+                  {t(
+                    'chat.subagentSessionHint',
+                    'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="btn-outline chat-view__subagent-session-return"
+                disabled={loadingHistory}
+                onclick={handleReturnToCurrentSession}
+              >
+                {t('chat.returnToCurrentSession', 'Return to current session')}
+              </button>
+            </div>
+          {/if}
           <QueuedMessages
             queuedMessages={activeSessionState?.queue ?? []}
             onRemoveQueuedMessage={handleRemoveQueuedMessage}
@@ -1131,13 +1116,15 @@
     color: var(--red);
   }
 
-  .chat-view__readonly-notice {
+  .chat-view__subagent-session-notice {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 14px;
+    flex-shrink: 0;
     border-left: 3px solid var(--accent);
-    padding: 7px 0 7px 12px;
+    padding: 9px 20px 9px 12px;
+    border-top: 1px solid var(--border);
     background: linear-gradient(
       90deg,
       rgba(232, 135, 10, 0.08),
@@ -1145,16 +1132,16 @@
     );
   }
 
-  .chat-view__readonly-copy {
+  .chat-view__subagent-session-copy {
     min-width: 0;
   }
 
-  .chat-view__readonly-title,
-  .chat-view__readonly-hint {
+  .chat-view__subagent-session-title,
+  .chat-view__subagent-session-hint {
     margin: 0;
   }
 
-  .chat-view__readonly-title {
+  .chat-view__subagent-session-title {
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 10.5px;
@@ -1163,15 +1150,14 @@
     text-transform: uppercase;
   }
 
-  .chat-view__readonly-hint {
+  .chat-view__subagent-session-hint {
     margin-top: 4px;
     color: var(--text-med);
     font-size: 12.5px;
   }
 
-  .chat-view__readonly-return {
+  .chat-view__subagent-session-return {
     flex-shrink: 0;
-    margin-right: 12px;
   }
 
   .btn-new svg {
@@ -1211,12 +1197,12 @@
       flex-direction: column;
     }
 
-    .chat-view__readonly-notice {
+    .chat-view__subagent-session-notice {
       align-items: flex-start;
       flex-direction: column;
     }
 
-    .chat-view__readonly-return {
+    .chat-view__subagent-session-return {
       margin-right: 0;
     }
   }

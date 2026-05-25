@@ -702,7 +702,7 @@ describe('ChatView', () => {
     ).toHaveLength(commandItems.length);
   });
 
-  it('loads a sub-agent session override and shows it as read-only', async () => {
+  it('loads a sub-agent session override as a writable session notice', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
     mountedComponent = mount(ChatView, {
@@ -729,10 +729,15 @@ describe('ChatView', () => {
     });
     expect(document.body.textContent).toContain('Viewing a sub-agent session');
     expect(document.body.textContent).toContain('Return to current session');
-    expect(document.querySelector('textarea')?.disabled).toBe(true);
+    expect(
+      document.querySelector(
+        '.chat-view__footer-stack .chat-view__subagent-session-notice',
+      ),
+    ).toBeTruthy();
+    expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
-  it('returns from a read-only sub-agent session to the current session', async () => {
+  it('returns from a sub-agent session override to the current session', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
     mountedComponent = mount(ChatView, {
@@ -774,7 +779,7 @@ describe('ChatView', () => {
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
-  it('retries the current session when retry is requested from a read-only override', async () => {
+  it('retries the sub-agent session when retry is requested from its override', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         retryRunResponse: {
@@ -814,23 +819,70 @@ describe('ChatView', () => {
           ([method, params]) =>
             method === 'chat.retry_last_turn' &&
             params?.agent_id === 'alpha' &&
-            params?.session_id === 'session-1',
+            params?.session_id === 'sub-session-1',
         ),
       100,
     );
 
-    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
-      agent_id: 'alpha',
-      session_id: 'session-1',
-    });
     expect(rpcMock).toHaveBeenCalledWith('chat.retry_last_turn', {
-      agent_id: 'alpha',
-      session_id: 'session-1',
-    });
-    expect(rpcMock).not.toHaveBeenCalledWith('chat.retry_last_turn', {
       agent_id: 'alpha',
       session_id: 'sub-session-1',
     });
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.retry_last_turn', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    });
+  });
+
+  it('sends messages from a sub-agent session override', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          run_id: 'sub-run-continue',
+          sse_url: '/api/runs/sub-run-continue/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Sub-agent response'),
+      100,
+    );
+
+    sendComposerMessage('Continue child work');
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' &&
+            params?.agent_id === 'alpha' &&
+            params?.session_id === 'sub-session-1' &&
+            params?.content === 'Continue child work',
+        ),
+      100,
+    );
+
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/sub-run-continue/events',
+      expect.any(Object),
+      { afterSequence: 0 },
+    );
   });
 
   it('loads selected session history from the sessions drawer', async () => {
