@@ -12,7 +12,8 @@ import pytest
 import core.chat as chat_api
 import core.tools.subagent as subagent_module
 from core.agents import AgentNotFoundError
-from core.chat import ActiveRunError, ChatMessage, ChatSessionManager, Run, RunNotFoundError
+from core.chat import ChatMessage, ChatSessionManager
+from core.runs import ActiveRunError, Run, RunNotFoundError
 from core.tools.subagent import (
     SUBAGENT_RESULT_TOOL_NAME,
     SUBAGENT_TOOL_NAME,

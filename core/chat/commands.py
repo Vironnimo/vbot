@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from core.chat.runs import ChatRunManager, RunNotFoundError
+from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:

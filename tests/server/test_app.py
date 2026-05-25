@@ -8,7 +8,8 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.chat import ChatLoop, ChatRunManager
+from core.chat import ChatLoop
+from core.runs import ChatRunManager
 from core.runtime import Runtime
 from core.utils.config import Config
 from server.app import ServerEventBus, create_app

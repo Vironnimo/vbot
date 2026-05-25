@@ -6,6 +6,8 @@ The old handoff content was stale. This file now tracks the current candidates f
 
 ### 1. Compaction / Context Management
 
+Status: extracted to `core/compaction/`.
+
 Strongest next candidate. Compaction already spans a service/strategy, chat-loop control flow, manual `/compact` command handling, persisted settings, bundled prompt fragments, Run events, and WebUI settings/timeline rendering.
 
 Candidate shape: `core/compaction/` with a dedicated `.vorch/specs/compaction.md` spec.
@@ -16,6 +18,8 @@ Why it matters:
 - Current summary-adapter resolution exists both in the chat loop and server manual compact path.
 
 ### 2. Runs / Queue / Lifecycle
+
+Status: active extraction target.
 
 Large candidate. `ChatRunManager` owns active Runs, Run events, cancellation, replay/subscription, and the busy-session FIFO queue. Automation, subagents, server RPC, channels, and WebUI queue state all depend on it.
 
@@ -59,4 +63,4 @@ Why it matters:
 
 ## Current Priority
 
-Start with Compaction / Context Management.
+Current work is Runs / Queue / Lifecycle.

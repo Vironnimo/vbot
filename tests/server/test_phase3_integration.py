@@ -12,8 +12,9 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.chat import ChatLoop, ChatRunManager, ChatSessionManager
+from core.chat import ChatLoop, ChatSessionManager
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.delegates import dispatch_rpc

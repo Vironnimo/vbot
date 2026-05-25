@@ -12,9 +12,9 @@ import pytest
 from core.agents.agents import AgentStore, SystemPromptManager
 from core.channels import ChannelService
 from core.chat.chat import ChatLoop
-from core.chat.runs import ChatRunManager, RunCancelledError
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
+from core.runs import ChatRunManager, RunCancelledError
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry

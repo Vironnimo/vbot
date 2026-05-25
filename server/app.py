@@ -17,8 +17,9 @@ from core.attachments.attachments import (
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
 )
-from core.chat import ChatLoop, ChatRunManager, CommandDispatcher, RunNotFoundError
+from core.chat import ChatLoop, CommandDispatcher
 from core.compaction import CompactionService, SummarizationStrategy
+from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc

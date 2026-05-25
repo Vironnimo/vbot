@@ -21,7 +21,7 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
 from core.chat.commands import CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
-from core.chat.runs import (
+from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
@@ -31,7 +31,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
-    from core.chat.runs import Run, RunEvent
+    from core.runs import Run, RunEvent
     from core.sessions import ChatSessionManager
 
 _LOGGER = get_logger("channels.telegram")
