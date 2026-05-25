@@ -561,7 +561,8 @@
   };
 
   const recoverRunStream = (sessionState, sseUrl, retryAttempt, error) => {
-    flushPendingRunEvents(sessionState.key);
+    const sessionKey = sessionState.key;
+    flushPendingRunEvents(sessionKey);
     const currentRun = sessionState.currentRun;
     if (!currentRun || currentRun.status !== 'running') {
       return;
@@ -572,8 +573,12 @@
         'errors.streamReconnecting',
         'The live stream closed. Reconnecting...',
       );
-      pendingReconnects[sessionState.key] = setTimeout(() => {
-        delete pendingReconnects[sessionState.key];
+      if (pendingReconnects[sessionKey] !== undefined) {
+        return;
+      }
+      closeRunSubscription(sessionKey);
+      pendingReconnects[sessionKey] = setTimeout(() => {
+        delete pendingReconnects[sessionKey];
         if (sessionState.currentRun?.runId !== currentRun.runId) {
           return;
         }
