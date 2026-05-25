@@ -79,7 +79,7 @@ class SummarizationStrategy:
         settings: CompactionSettings,
     ) -> ChatMessage:
         """Summarize pre-tail history and return a compaction checkpoint."""
-        del agent  # Agent-specific behavior is deferred to later phases.
+        del agent
 
         if not messages:
             raise CompactionError("Cannot compact an empty message list")

@@ -1,4 +1,4 @@
-"""Tests for chat compaction primitives and strategy."""
+"""Tests for compaction primitives and strategy."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.compaction import (
+from core.compaction import (
     TOOL_RESULT_CONTENT_PLACEHOLDER,
     CompactionError,
     CompactionService,

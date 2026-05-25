@@ -36,7 +36,6 @@ from core.chat import (
     ChatSessionError,
     CommandDispatcher,
     CommandHandled,
-    CompactionSettings,
     QueuedRunItem,
     Run,
     RunCancelledError,
@@ -60,6 +59,7 @@ from core.chat.content_blocks import (
     content_block_from_dict,
 )
 from core.chat.runs import TOOL_CALL_STDERR_EVENT, TOOL_CALL_STDOUT_EVENT
+from core.compaction import CompactionSettings
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.providers.auth_flow import DeviceFlowEngine

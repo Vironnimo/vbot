@@ -7,11 +7,12 @@ the server layer.
 
 `core/chat/` owns the provider-agnostic conversation representation used between
 the chat layer and provider adapters, plus the Run execution model. Session
-persistence lives in `core/sessions/`; chat should interact with it through the
-session API rather than knowing storage paths. Provider-specific wire details
-stay in `core/providers/`; chat should assemble canonical history and request
-options only. A Session is the persisted chat container; a Run is one active
-execution inside that session.
+persistence lives in `core/sessions/`; compaction/context management lives in
+`core/compaction/`; chat should interact with both through their public APIs
+rather than knowing storage paths or compaction internals. Provider-specific wire
+details stay in `core/providers/`; chat should assemble canonical history and
+request options only. A Session is the persisted chat container; a Run is one
+active execution inside that session.
 
 ## Data Model
 
@@ -43,7 +44,7 @@ execution inside that session.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
-- `ChatLoop(runtime, max_tool_iterations=1000, streaming=False, attachment_resolver=None, compaction_service=None)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure.
+- `ChatLoop(runtime, max_tool_iterations=1000, streaming=False, attachment_resolver=None, compaction_service=None)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure. The optional compaction service comes from `core.compaction`.
   - `send(agent_id, content, session_id=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=..., internal=False) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager. Internal runs persist `content` as a `role: "note"` system reminder rather than a visible `role: "user"` message.
   - `queue_run(agent_id, content, *, session_id, internal=False) -> QueuedRunItem` — validates the same agent/provider/session prerequisites as `start_run(...)`, derives a display preview for the queued message, and delegates busy-session enqueue/start behavior to `ChatRunManager`.
