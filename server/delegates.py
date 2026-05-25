@@ -67,6 +67,7 @@ from core.runs import (
     RunEvent,
     RunNotFoundError,
 )
+from core.settings import SettingsValidationError, parse_settings_update
 from core.storage.storage import PROMPT_FRAGMENT_NAMES
 from core.utils.errors import ConfigError, VBotError
 from core.utils.log_viewer import LogViewer
@@ -88,7 +89,6 @@ JsonObject = dict[str, Any]
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -1468,7 +1468,11 @@ def _get_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _update_settings(state: Any, params: JsonObject) -> JsonObject:
-    settings_update = _parse_settings_update(params)
+    try:
+        settings_update = parse_settings_update(params)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
     try:
         if "appearance" in settings_update:
             state.runtime.storage.update_appearance_settings(settings_update["appearance"])
@@ -1588,230 +1592,6 @@ def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
     if not isinstance(params, dict):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "RPC params must be an object")
     return method, params
-
-
-def _parse_settings_update(params: JsonObject) -> JsonObject:
-    supported_sections = {"appearance", "skills", "subagents", "compaction", "defaults"}
-    unsupported_sections = sorted(set(params) - supported_sections)
-    if unsupported_sections:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported settings sections: {', '.join(unsupported_sections)}",
-        )
-
-    if not params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.update requires a section")
-
-    parsed_update: JsonObject = {}
-
-    if "appearance" in params:
-        parsed_update["appearance"] = _parse_appearance_update(params["appearance"])
-
-    if "skills" in params:
-        parsed_update["skills"] = _parse_skills_update(params["skills"])
-
-    if "subagents" in params:
-        parsed_update["subagents"] = _parse_subagents_update(params["subagents"])
-
-    if "compaction" in params:
-        parsed_update["compaction"] = _parse_compaction_update(params["compaction"])
-
-    if "defaults" in params:
-        parsed_update["defaults"] = _parse_defaults_update(params["defaults"])
-
-    return parsed_update
-
-
-def _parse_defaults_update(defaults: Any) -> JsonObject:
-    if not isinstance(defaults, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.defaults must be an object")
-
-    unsupported_sections = sorted(set(defaults) - {"agent"})
-    if unsupported_sections:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported defaults settings: {', '.join(unsupported_sections)}",
-        )
-
-    if "agent" not in defaults:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.defaults must include an agent object",
-        )
-
-    raw_agent_defaults = defaults["agent"]
-    if not isinstance(raw_agent_defaults, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.defaults.agent must be an object")
-
-    unsupported_agent_fields = sorted(set(raw_agent_defaults) - AGENT_DEFAULT_FIELDS)
-    if unsupported_agent_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported defaults.agent settings: {', '.join(unsupported_agent_fields)}",
-        )
-
-    agent_defaults: JsonObject = {}
-    for field, value in raw_agent_defaults.items():
-        if value is None:
-            agent_defaults[field] = None
-            continue
-
-        if field in {"model", "fallback_model"}:
-            if not isinstance(value, str):
-                raise RpcError(
-                    RPC_ERROR_INVALID_REQUEST,
-                    f"params.defaults.agent.{field} must be a string or null",
-                )
-            agent_defaults[field] = value
-            continue
-
-        if field == "temperature":
-            agent_defaults[field] = _validate_temperature(
-                value,
-                label="params.defaults.agent.temperature",
-                allow_none=True,
-            )
-            continue
-
-        if field == "thinking_effort":
-            agent_defaults[field] = _validate_thinking_effort(
-                value,
-                label="params.defaults.agent.thinking_effort",
-                allow_none=True,
-            )
-
-    return {"agent": agent_defaults}
-
-
-def _parse_appearance_update(appearance: Any) -> JsonObject:
-    if not isinstance(appearance, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.appearance must be an object")
-
-    unsupported_fields = sorted(set(appearance) - {"language"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported appearance settings: {', '.join(unsupported_fields)}",
-        )
-
-    language = appearance.get("language")
-    if not isinstance(language, str) or not language:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.appearance.language must be a non-empty string",
-        )
-
-    return {"language": language}
-
-
-def _parse_skills_update(skills: Any) -> JsonObject:
-    if not isinstance(skills, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.skills must be an object")
-
-    unsupported_fields = sorted(set(skills) - {"directories"})
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported skills settings: {', '.join(unsupported_fields)}",
-        )
-
-    directories = skills.get("directories")
-    if not isinstance(directories, list) or not all(
-        isinstance(directory, str) for directory in directories
-    ):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.skills.directories must be a list of strings",
-        )
-
-    return {"directories": list(directories)}
-
-
-def _parse_subagents_update(subagents: Any) -> JsonObject:
-    if not isinstance(subagents, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.subagents must be an object")
-
-    supported_fields = set(SUBAGENT_SETTING_FIELDS)
-    unsupported_fields = sorted(set(subagents) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported sub-agent settings: {', '.join(unsupported_fields)}",
-        )
-
-    missing_fields = [field for field in SUBAGENT_SETTING_FIELDS if field not in subagents]
-    if missing_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"missing sub-agent settings: {', '.join(missing_fields)}",
-        )
-
-    return {
-        field: _positive_integer(subagents[field], f"params.subagents.{field}")
-        for field in SUBAGENT_SETTING_FIELDS
-    }
-
-
-def _parse_compaction_update(compaction: Any) -> JsonObject:
-    if not isinstance(compaction, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.compaction must be an object")
-
-    supported_fields = {"auto", "threshold", "tail_tokens", "summary_model"}
-    unsupported_fields = sorted(set(compaction) - supported_fields)
-    if unsupported_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"unsupported compaction settings: {', '.join(unsupported_fields)}",
-        )
-
-    required_fields = ("auto", "threshold", "tail_tokens", "summary_model")
-    missing_fields = [field for field in required_fields if field not in compaction]
-    if missing_fields:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"missing compaction settings: {', '.join(missing_fields)}",
-        )
-
-    auto = compaction["auto"]
-    if not isinstance(auto, bool):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.compaction.auto must be a boolean")
-
-    threshold_value = compaction["threshold"]
-    if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.compaction.threshold must be a number",
-        )
-    threshold = float(threshold_value)
-    if threshold <= 0 or threshold > 1:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.compaction.threshold must be in (0, 1]",
-        )
-
-    tail_tokens = _positive_integer(compaction["tail_tokens"], "params.compaction.tail_tokens")
-
-    summary_model = compaction["summary_model"]
-    if summary_model is not None and not isinstance(summary_model, str):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "params.compaction.summary_model must be a string or null",
-        )
-
-    return {
-        "auto": auto,
-        "threshold": threshold,
-        "tail_tokens": tail_tokens,
-        "summary_model": summary_model,
-    }
-
-
-def _positive_integer(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a positive integer")
-    if value <= 0:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a positive integer")
-    return cast("int", value)
 
 
 def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:
