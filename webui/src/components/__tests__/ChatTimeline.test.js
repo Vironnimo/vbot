@@ -2120,6 +2120,50 @@ describe('ChatTimeline', () => {
     expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
   });
 
+  it('shows cancelled status for a tool that was active when the run was cancelled', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-cancelled-tool',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-cancelled-tool',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-bash',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'sleep 30' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_cancelled',
+      run_id: 'run-cancelled-tool',
+      sequence: 2,
+      payload: { status: 'cancelled' },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const toolLine = document.querySelector('.tool-event-line');
+
+    expect(toolLine?.textContent).toContain('bash');
+    expect(toolLine?.textContent).toContain('cancelled');
+    expect(toolLine?.querySelector('.te-dot.running')).toBeNull();
+    expect(toolLine?.querySelector('.te-dot.cancelled')).not.toBeNull();
+  });
+
   it('renders one assistant block when terminal events arrive after overlapping history refresh', () => {
     const sessionState = ensureSessionState(
       createChatState(),

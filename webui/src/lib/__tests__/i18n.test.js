@@ -86,6 +86,7 @@ describe('i18n t()', () => {
       'chat.toolResultLabel',
       'chat.toolSucceeded',
       'chat.toolFailed',
+      'chat.toolCancelled',
       'chat.toolPreparingArguments',
       'chat.toolArgumentsHidden',
       'chat.subagent.label',

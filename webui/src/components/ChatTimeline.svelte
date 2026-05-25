@@ -358,10 +358,20 @@
     if (tool.status === 'failed') {
       return 'failed';
     }
+    if (tool.status === 'cancelled') {
+      return 'cancelled';
+    }
     if (tool.status === 'success' || tool.status === 'completed') {
       return 'success';
     }
     return 'running';
+  };
+
+  const toolStatusLabel = (tool) => {
+    if (toolStatus(tool) === 'cancelled') {
+      return t('chat.toolCancelled', 'cancelled');
+    }
+    return '';
   };
 
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
@@ -1185,6 +1195,7 @@
                         <span
                           class:done={toolStatus(child) === 'success'}
                           class:error={toolStatus(child) === 'failed'}
+                          class:cancelled={toolStatus(child) === 'cancelled'}
                           class:running={toolStatus(child) === 'running'}
                           class="te-dot">●</span
                         >
@@ -1251,6 +1262,7 @@
                         <span
                           class:done={toolStatus(child) === 'success'}
                           class:error={toolStatus(child) === 'failed'}
+                          class:cancelled={toolStatus(child) === 'cancelled'}
                           class:running={toolStatus(child) === 'running'}
                           class="te-dot">●</span
                         >
@@ -1259,6 +1271,11 @@
                           <span class="te-arg"
                             >{toolArgumentSummary(child)}</span
                           >
+                        {/if}
+                        {#if toolStatusLabel(child)}
+                          <span class="te-time cancelled">
+                            {toolStatusLabel(child)}
+                          </span>
                         {/if}
                       </summary>
                       <div class="tool-event-body">
