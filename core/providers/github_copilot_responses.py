@@ -540,17 +540,11 @@ def _record_tool_argument_delta(
     if not emitted_arguments:
         state.emitted_tool_arguments[tool_call_id] = delta
         return delta
-    if delta in emitted_arguments:
+    if delta == emitted_arguments:
         return None
     if delta.startswith(emitted_arguments):
         suffix = delta[len(emitted_arguments) :]
         state.emitted_tool_arguments[tool_call_id] = delta
-        return suffix or None
-
-    overlap = _suffix_prefix_overlap(emitted_arguments, delta)
-    if overlap > 0:
-        suffix = delta[overlap:]
-        state.emitted_tool_arguments[tool_call_id] = emitted_arguments + suffix
         return suffix or None
 
     state.emitted_tool_arguments[tool_call_id] = emitted_arguments + delta
