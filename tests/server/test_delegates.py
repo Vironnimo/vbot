@@ -19,6 +19,7 @@ from core.chat import (
 )
 from core.chat.content_blocks import TextBlock
 from core.runs import (
+    RUN_STARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
     ActiveRunError,
@@ -386,6 +387,29 @@ async def test_chat_stream_busy_queue_bridges_started_run_to_event_bus(
     assert response["ok"] is True
     assert response["result"]["queued"] is True
     assert bridged_runs == [dequeued_run]
+
+
+@pytest.mark.asyncio
+async def test_run_event_bridge_observes_publish_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingEventBus:
+        def publish(self, _event_type: str, _payload: dict[str, Any]) -> None:
+            raise RuntimeError("publish failed")
+
+    run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1")
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    warnings: list[tuple[str, bool]] = []
+
+    def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
+        warnings.append((message, kwargs.get("exc_info") is True))
+
+    monkeypatch.setattr(delegates._LOGGER, "warning", record_warning)
+    delegates._bridge_run_to_event_bus(SimpleNamespace(event_bus=FailingEventBus()), run)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert warnings == [("Run event bridge failed", True)]
 
 
 @pytest.mark.asyncio
