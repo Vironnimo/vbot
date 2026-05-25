@@ -34,6 +34,7 @@ from core.providers._http_shared import (
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.reasoning import model_reasoning_supported, remove_reasoning_kwargs
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
@@ -48,6 +49,14 @@ _HTTP_OVERLOADED = 529
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+ANTHROPIC_REASONING_PARAMETER_NAMES = {
+    "thinking",
+    "thinking_budget",
+    "output_config",
+    "reasoning_effort",
+    "reasoning",
+    "include_reasoning",
+}
 TEXT_BLOCK_TYPE = "text"
 TOOL_USE_BLOCK_TYPE = "tool_use"
 THINKING_BLOCK_TYPE = "thinking"
@@ -176,7 +185,11 @@ class AnthropicAdapter(ProviderAdapter):
         if system_content is not None:
             payload["system"] = system_content
         _apply_anthropic_tools(payload, request_kwargs)
-        _apply_anthropic_reasoning(payload, request_kwargs)
+        _apply_anthropic_reasoning(
+            payload,
+            request_kwargs,
+            reasoning_supported=self._model_reasoning_supported(model_id),
+        )
 
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
@@ -185,6 +198,9 @@ class AnthropicAdapter(ProviderAdapter):
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
         return payload
+
+    def _model_reasoning_supported(self, model_id: str) -> bool | None:
+        return model_reasoning_supported(self._model_lookup, model_id)
 
     # ------------------------------------------------------------------
     # Error detail helper (Anthropic-specific)
@@ -751,8 +767,16 @@ def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> N
     ]
 
 
-def _apply_anthropic_reasoning(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
+def _apply_anthropic_reasoning(
+    payload: dict[str, Any],
+    kwargs: dict[str, Any],
+    *,
+    reasoning_supported: bool | None,
+) -> None:
     thinking_effort = kwargs.pop("thinking_effort", "")
+    if reasoning_supported is False:
+        remove_reasoning_kwargs(kwargs, *ANTHROPIC_REASONING_PARAMETER_NAMES)
+        return
     if not thinking_effort:
         return
     if thinking_effort == "none":

@@ -218,7 +218,7 @@ All are provider-specific. A model through OpenRouter may have `reasoning.suppor
 - OpenAI: `reasoning_effort` (single string)
 - OpenRouter: `reasoning` (object) + `include_reasoning` (boolean)
 
-The adapter translates vBot's internal reasoning configuration into the provider's format.
+The adapter translates vBot's internal reasoning configuration into the provider's format. When a provider/model exposes only a subset of vBot's effort levels, the adapter maps the requested `thinking_effort` to the nearest supported level instead of requiring an exact match.
 
 For GitHub Copilot, `reasoning.supported` still means only that Copilot advertises
 some reasoning/thinking capability for that model. Runtime request compatibility

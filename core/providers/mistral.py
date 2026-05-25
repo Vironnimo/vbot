@@ -20,8 +20,9 @@ from core.providers.openai_compatible import (
     _read_optional_non_empty_string,
     _read_string,
 )
+from core.providers.reasoning import closest_supported_effort
 
-MISTRAL_HIGH_REASONING_EFFORTS = {"medium", "high", "xhigh", "max"}
+MISTRAL_REASONING_EFFORTS = {"none", "high"}
 MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES = ("magistral-medium",)
 
 
@@ -82,13 +83,14 @@ class MistralAdapter(OpenAICompatibleAdapter):
             model_id.startswith(prefix) for prefix in MISTRAL_PROMPT_MODE_REASONING_MODEL_PREFIXES
         )
 
-        if thinking_effort in MISTRAL_HIGH_REASONING_EFFORTS:
+        supported_effort = closest_supported_effort(thinking_effort, MISTRAL_REASONING_EFFORTS)
+        if supported_effort == "high":
             if use_prompt_mode_reasoning:
                 payload["prompt_mode"] = "reasoning"
                 payload.pop("reasoning_effort", None)
             else:
                 payload["reasoning_effort"] = "high"
-        elif thinking_effort == "none":
+        elif supported_effort == "none":
             if use_prompt_mode_reasoning:
                 payload.pop("reasoning_effort", None)
                 payload.pop("prompt_mode", None)
@@ -96,17 +98,6 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 payload["reasoning_effort"] = "none"
 
         return payload
-
-    def _model_reasoning_supported(self, model_id: str) -> bool | None:
-        if self._model_lookup is None:
-            return None
-
-        catalog_model_id = model_id.split("::", 1)[0]
-        model = self._model_lookup(catalog_model_id)
-        if model is None:
-            return None
-
-        return model.capabilities.reasoning.supported
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         message = _first_choice_message(response)

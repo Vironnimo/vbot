@@ -244,13 +244,10 @@ def _apply_responses_reasoning(
         return
     if isinstance(reasoning, Mapping):
         payload["reasoning"] = dict(reasoning)
-    elif (
-        isinstance(effort, str)
-        and effort
-        and effort != "none"
-        and policy.allows_reasoning_effort(effort)
-    ):
-        payload["reasoning"] = {"effort": effort, "summary": "auto"}
+    else:
+        safe_effort = policy.closest_reasoning_effort(effort)
+        if safe_effort is not None and safe_effort != "none":
+            payload["reasoning"] = {"effort": safe_effort, "summary": "auto"}
     if payload.get("reasoning") or include_reasoning is True:
         _append_include(payload, REASONING_ENCRYPTED_CONTENT_INCLUDE)
 

@@ -90,6 +90,80 @@ async def test_openrouter_reasoning_uses_openrouter_wire_format(
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_openrouter_reasoning_maps_to_nearest_supported_effort(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await openrouter_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="openai/gpt-5.2",
+        thinking_effort="none",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning" not in request_body
+    assert "include_reasoning" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_normalizes_explicit_reasoning_effort_kwarg(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await openrouter_adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="openai/gpt-5.2",
+        reasoning_effort="xhigh",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["reasoning"] == {"effort": "xhigh"}
+    assert request_body["include_reasoning"] is True
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_suppresses_reasoning_when_catalog_disables_it(
+    openrouter_config: ProviderConfig,
+) -> None:
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=lambda model_id: Model(
+            model_id=model_id,
+            name=model_id,
+            capabilities=Capabilities(
+                vision=False,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=128000,
+            max_output_tokens=4096,
+        ),
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="openai/gpt-4o",
+        thinking_effort="high",
+        reasoning={"effort": "high"},
+        include_reasoning=True,
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert "reasoning" not in request_body
+    assert "include_reasoning" not in request_body
+    assert "reasoning_effort" not in request_body
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAdapter) -> None:
     sse_body = 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
     route = respx.post(OPENROUTER_URL).mock(

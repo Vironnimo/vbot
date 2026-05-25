@@ -14,6 +14,7 @@ import httpx
 import pytest
 import respx
 
+from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import (
     NetworkError,
@@ -227,6 +228,21 @@ def anthropic_adapter():
 def custom_adapter():
     """Anthropic adapter with custom config (extra headers, overrides)."""
     return AnthropicAdapter(CUSTOM_CONFIG, API_KEY)
+
+
+def _anthropic_test_model(model_id: str, *, reasoning: bool) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(supported=reasoning),
+        ),
+        context_window=200000,
+        max_output_tokens=8192,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -830,6 +846,33 @@ class TestSendRequestFormat:
 
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["thinking"] == {"type": "disabled"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_suppresses_reasoning_when_catalog_disables_it(self):
+        """Catalog-known non-reasoning models do not receive Anthropic thinking controls."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            ANTHROPIC_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_test_model(model_id, reasoning=False),
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-3-5-haiku-20241022",
+            thinking_effort="high",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            include_reasoning=True,
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert "thinking" not in request_body
+        assert "output_config" not in request_body
+        assert "include_reasoning" not in request_body
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from core.providers.openai_compatible import (
     _read_string,
     _read_string_list,
 )
+from core.providers.reasoning import closest_supported_effort
 
 OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
@@ -68,12 +69,18 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         """Build an OpenRouter payload with OpenRouter reasoning parameters."""
 
         thinking_effort = kwargs.pop("thinking_effort", "")
+        reasoning_effort = kwargs.pop("reasoning_effort", "")
         payload = super()._build_payload(messages, model_id, **kwargs)
-        if (
-            thinking_effort
-            and thinking_effort != "none"
-            and thinking_effort in OPENROUTER_REASONING_EFFORTS
-        ):
-            payload["reasoning"] = {"effort": thinking_effort}
+        if self._model_reasoning_supported(model_id) is False:
+            payload.pop("reasoning", None)
+            payload.pop("include_reasoning", None)
+            return payload
+
+        supported_effort = closest_supported_effort(
+            thinking_effort or reasoning_effort,
+            OPENROUTER_REASONING_EFFORTS,
+        )
+        if supported_effort is not None:
+            payload["reasoning"] = {"effort": supported_effort}
             payload["include_reasoning"] = True
         return payload

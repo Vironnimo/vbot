@@ -82,6 +82,27 @@ def test_metadata_driven_routing_wins_over_static_fallback() -> None:
     assert policy.allows_reasoning_effort("high") is False
 
 
+def test_filter_request_kwargs_maps_reasoning_to_nearest_metadata_effort() -> None:
+    policy = copilot_model_policy(
+        "gpt-5-mini",
+        copilot_metadata(supported_endpoints=[RESPONSES_ENDPOINT], reasoning_efforts=["low"]),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "high",
+            "reasoning_effort": "max",
+            "max_output_tokens": 2048,
+        }
+    )
+
+    assert filtered == {
+        "thinking_effort": "low",
+        "reasoning_effort": "low",
+        "max_output_tokens": 2048,
+    }
+
+
 def test_static_fallback_applies_when_metadata_is_missing() -> None:
     policy = copilot_model_policy("gpt-5-mini")
 
@@ -230,6 +251,36 @@ def test_messages_policy_omits_temperature_for_sonnet_when_thinking_active() -> 
     }
 
 
+def test_messages_policy_maps_output_config_to_nearest_metadata_effort() -> None:
+    policy = copilot_model_policy(
+        "claude-sonnet-4.6",
+        copilot_metadata(
+            vendor="Anthropic",
+            family="claude-sonnet-4.6",
+            version="claude-sonnet-4.6",
+            supported_endpoints=[CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT],
+            reasoning_efforts=["high"],
+            adaptive_thinking=True,
+            min_thinking_budget=1024,
+            max_thinking_budget=32000,
+        ),
+    )
+
+    filtered = policy.filter_request_kwargs(
+        {
+            "thinking_effort": "low",
+            "output_config": {"effort": "low"},
+            "temperature": 0.2,
+        }
+    )
+
+    assert policy.endpoint_path == MESSAGES_ENDPOINT
+    assert filtered == {
+        "thinking_effort": "high",
+        "output_config": {"effort": "high"},
+    }
+
+
 def test_messages_policy_keeps_temperature_for_haiku_when_thinking_active() -> None:
     policy = copilot_model_policy(
         "claude-haiku-4.5",
@@ -255,6 +306,7 @@ def test_messages_policy_keeps_temperature_for_haiku_when_thinking_active() -> N
 
     assert policy.endpoint_path == MESSAGES_ENDPOINT
     assert filtered == {
+        "thinking_effort": "high",
         "temperature": 0.2,
         "top_k": 10,
         "stop_sequences": ["END"],
@@ -292,6 +344,7 @@ def test_exact_override_strips_haiku_budget_even_when_metadata_declares_budget()
     assert policy.supports_thinking_budget is False
     assert policy.allowed_reasoning_efforts == frozenset()
     assert filtered == {
+        "thinking_effort": "high",
         "temperature": 0.2,
     }
 
@@ -324,6 +377,7 @@ def test_messages_policy_keeps_adaptive_thinking_for_haiku_without_reasoning_eff
     assert policy.supports_adaptive_thinking is True
     assert policy.allowed_reasoning_efforts == frozenset()
     assert filtered == {
+        "thinking_effort": "high",
         "thinking": {"type": "adaptive", "display": "summarized"},
         "temperature": 0.2,
         "top_k": 10,
@@ -358,6 +412,7 @@ def test_haiku_policy_supports_visible_thinking_controls() -> None:
     assert policy.supports_thinking_budget is False
     assert policy.allowed_reasoning_efforts == frozenset()
     assert filtered == {
+        "thinking_effort": "high",
         "temperature": 0.2,
         "top_k": 10,
         "stop_sequences": ["END"],
