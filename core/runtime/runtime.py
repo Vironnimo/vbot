@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptManager
+from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
 from core.automation import CronService, TriggerService
 from core.channels import ChannelService
@@ -18,6 +18,7 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.extensions import ExtensionRegistry
 from core.models.models import Model, ModelRegistry
+from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
