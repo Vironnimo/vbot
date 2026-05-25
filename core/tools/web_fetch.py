@@ -13,7 +13,14 @@ import httpx
 from bs4 import BeautifulSoup, Comment, Tag
 from bs4.element import NavigableString, PageElement
 
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 _MAX_URL_BYTES = 100 * 1024
 _RESPONSE_TRUNCATED_MARKER = "\n\n[... response truncated ...]"
@@ -835,6 +842,7 @@ def register_web_fetch_tool(registry: ToolRegistry) -> None:
         WEB_FETCH_TOOL_DESCRIPTION,
         WEB_FETCH_TOOL_PARAMETERS,
         web_fetch_handler,
+        display=ToolDisplay(summary_fields=("url",)),
     )
 
 

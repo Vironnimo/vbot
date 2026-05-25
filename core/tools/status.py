@@ -9,7 +9,7 @@ from core.chat.commands import build_status_reply, build_status_text, resolve_st
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
 from core.sessions import ChatSessionManager
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_success
+from core.tools.tools import JsonObject, ToolContext, ToolDisplay, ToolRegistry, tool_success
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.status")
@@ -102,4 +102,5 @@ def register_status_tool(
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
         make_status_handler(agents, sessions, models, started_at),
+        display=ToolDisplay(),
     )

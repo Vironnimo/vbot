@@ -10,7 +10,14 @@ from typing import Any
 
 import httpx
 
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
@@ -409,6 +416,7 @@ def register_web_search_tool(
         WEB_SEARCH_TOOL_DESCRIPTION,
         WEB_SEARCH_TOOL_PARAMETERS,
         _handler,
+        display=ToolDisplay(summary_fields=("query",)),
     )
 
 

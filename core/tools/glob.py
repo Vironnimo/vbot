@@ -5,7 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.tools.search import normalize_file_filter_pattern, resolve_search_path
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 MAX_GLOB_MATCHES = 100
 
@@ -102,6 +109,7 @@ def register_glob_tool(registry: ToolRegistry) -> None:
         GLOB_TOOL_DESCRIPTION,
         GLOB_TOOL_PARAMETERS,
         glob_handler,
+        display=ToolDisplay(summary_fields=("pattern",)),
     )
 
 

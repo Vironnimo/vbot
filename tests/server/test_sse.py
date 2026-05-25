@@ -82,7 +82,8 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
             "index": 0,
             "name": "read",
             "arguments": {"path": "note.txt"},
-        }
+        },
+        "display": {"summary": "note.txt", "hidden_argument_keys": []},
     }
     assert tool_result_data["payload"]["tool_call"] == {
         "id": "call-one",

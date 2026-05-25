@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
@@ -287,6 +294,10 @@ def register_edit_tool(registry: ToolRegistry) -> None:
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
         edit_handler,
+        display=ToolDisplay(
+            summary_fields=("path",),
+            hidden_argument_keys=("newString", "new_string", "oldString", "old_string"),
+        ),
     )
 
 

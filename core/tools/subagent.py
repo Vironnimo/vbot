@@ -20,7 +20,14 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 from core.utils.logging import get_logger
 
 SUBAGENT_TOOL_NAME = "subagent"
@@ -226,6 +233,10 @@ def register_subagent_tools(
             runtime=runtime,
             batch_tracker=batch_tracker,
         ),
+        display=ToolDisplay(
+            summary_fields=("agent_id", "content"),
+            hidden_argument_keys=("content",),
+        ),
     )
     registry.register(
         SUBAGENT_RESULT_TOOL_NAME,
@@ -237,6 +248,7 @@ def register_subagent_tools(
             runtime=runtime,
             batch_tracker=batch_tracker,
         ),
+        display=ToolDisplay(summary_fields=("agent_id", "session_id")),
     )
 
 

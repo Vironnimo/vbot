@@ -198,6 +198,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     it and refreshes settings. Settings sends public compositional connection IDs such as
     `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
+  - Renders tool-call summary text from
+    `tool_call_started.payload.display.summary` when available. Legacy
+    argument-label fallbacks exist only for history or old events without a
+    display payload; empty summaries render no parenthesized argument text.
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
   - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.

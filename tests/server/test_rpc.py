@@ -2939,7 +2939,8 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
             "index": 0,
             "name": "read",
             "arguments": {"path": "note.txt"},
-        }
+        },
+        "display": {"summary": "note.txt", "hidden_argument_keys": []},
     }
     assert tool_result["payload"]["tool_call"] == {
         "id": "call_read",
