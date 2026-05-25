@@ -2611,6 +2611,108 @@ describe('ChatTimeline', () => {
     expect(chevron.style.transform).toBe('rotate(180deg)');
   });
 
+  it('updates spawned sub-agent rows when a matching result is completed', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-status',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-status',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            content: 'Inspect the logs',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-status',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            run_id: 'sub-run-1',
+            status: 'running',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-status',
+      sequence: 3,
+      payload: {
+        tool_call: {
+          id: 'call-subagent-result',
+          index: 1,
+          name: 'subagent_result',
+          arguments: {
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            run_id: 'sub-run-1',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-status',
+      sequence: 4,
+      payload: {
+        tool_call: {
+          id: 'call-subagent-result',
+          index: 1,
+          name: 'subagent_result',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-1',
+            run_id: 'sub-run-1',
+            status: 'completed',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const subagentRows = document.querySelectorAll(
+      '.subagent-tool-event .subagent-line',
+    );
+
+    expect(subagentRows).toHaveLength(2);
+    expect(subagentRows[0].textContent).toContain('Status: completed');
+    expect(subagentRows[0].querySelector('.te-dot.done')).not.toBeNull();
+    expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
+  });
+
   it('calls the sub-agent navigation callback with a spawned session target', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = ensureSessionState(
