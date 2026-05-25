@@ -75,7 +75,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   lifecycle, and outbound platform delivery rooted at `<data_dir>/channels/`.
 - `cron_service` — `CronService` for persisted cron and one-shot scheduled
   triggers rooted at `<data_dir>/cron/jobs.json`.
-- `system_prompts` — `SystemPromptManager` using runtime storage/tools/skills.
+- `system_prompts` — `core.prompts.SystemPromptManager` using runtime storage/tools/skills.
 - `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
 - `reload_channel_tool()` — unregisters `channel_send` and re-registers it when
   `channel_service.has_active_channels()` is true so runtime channel

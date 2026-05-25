@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.agents.agents import AgentStore, SystemPromptManager
+from core.agents.agents import AgentStore
 from core.channels import ChannelService
 from core.chat.chat import ChatLoop
+from core.prompts import SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager, RunCancelledError

@@ -4,7 +4,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Overview
 
-`core/storage/` owns Phase 2 data-directory creation and simple JSON/settings storage. It also mediates prompt fragment access so prompt bodies live in files rather than hardcoded code strings. The default data directory is `~/.vbot` unless supplied directly or through config. Public Settings update payload validation lives in `core/settings/`; storage validates and normalizes persisted subsets after that public schema has been accepted.
+`core/storage/` owns Phase 2 data-directory creation and simple JSON/settings storage. It also mediates raw prompt fragment file access so prompt bodies live in files rather than hardcoded code strings. The default data directory is `~/.vbot` unless supplied directly or through config. Public Settings update payload validation lives in `core/settings/`; storage validates and normalizes persisted subsets after that public schema has been accepted. System Prompt assembly and editable prompt-fragment rules live in `core/prompts/`.
 
 ## Data Model
 

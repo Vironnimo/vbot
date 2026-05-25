@@ -23,7 +23,8 @@ Clients call the vBot server contract; provider wire details stay behind
   `chat.stream`, `chat.cancel`, `chat.queue_list`, `chat.queue_remove`,
   `chat.queue_update`, `channel.list`, `channel.create`,
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
-  `channel.status`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
+  `channel.status`, `prompt.list`, `prompt.update`, `prompt.reset`,
+  `prompt.preview`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
   `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
@@ -56,6 +57,11 @@ Clients call the vBot server contract; provider wire details stay behind
   each parsed entry includes `timestamp`, `level`, `logger_name`, `message`,
   and `continuation` for multiline tails. `cursor` is a short-lived handoff
   token for the follow-up log WebSocket subscription.
+- `prompt.list`, `prompt.update`, and `prompt.reset` use `core/prompts/` for
+  editable fragment order, variable metadata, and prompt-specific name validation.
+  Storage remains responsible for raw prompt file reads/writes. `prompt.preview`
+  renders through the runtime-owned `SystemPromptManager` and returns text plus
+  token estimate metadata.
 - `POST /api/upload` accepts one multipart file upload and returns
   `{ attachment_id, filename, media_type, size_bytes }`. Oversize uploads map
   to HTTP 413; blocked MIME types map to HTTP 415.

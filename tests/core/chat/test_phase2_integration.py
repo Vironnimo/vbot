@@ -10,8 +10,8 @@ from typing import Any, cast
 
 import pytest
 
-from core.agents.agents import SkillPromptRegistry
 from core.chat import ChatLoop
+from core.prompts import SkillPromptRegistry
 from core.providers.adapter import ProviderAdapter
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry

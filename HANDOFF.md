@@ -45,7 +45,9 @@ Why it matters:
 
 ### 4. Prompts / System Prompt
 
-Medium candidate. Prompt assembly lives under Agents, prompt fragment file access under Storage, prompt RPC in Server delegates, and the editor in WebUI.
+Status: extracted first pass to `core/prompts/` for System Prompt assembly and editable fragment rules.
+
+Medium candidate. Prompt fragment file I/O still lives under Storage, prompt RPC transport remains in Server delegates, and the editor remains in WebUI.
 
 Candidate shape: `core/prompts/` owning fragment manifests, variables, read/write/reset, preview assembly, and prompt-specific storage rules.
 
@@ -65,4 +67,4 @@ Why it matters:
 
 ## Current Priority
 
-Current work is Settings / Configuration. The first extraction pass moved public `settings.update` schema parsing into `core/settings/`; future work can consider a fuller settings service if the domain grows.
+Current work is Prompts / System Prompt. The first extraction pass moved System Prompt assembly and editable fragment rules into `core/prompts/`; future work can consider prompt preview/editor service expansion if the surface grows.

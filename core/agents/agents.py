@@ -5,18 +5,14 @@ from __future__ import annotations
 import json
 import math
 import os
-import platform
 import re
 import shutil
-import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
-from html import escape
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
-from core.channels.channels import ChannelConfig
 from core.sessions import ChatSessionManager
 
 DEFAULT_FALLBACK_MODEL = ""
@@ -29,7 +25,6 @@ ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhi
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-INCLUDE_PATTERN = re.compile(r"\{include:([^{}]+)\}")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -49,59 +44,6 @@ class AgentNotFoundError(AgentError):
 
 class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
-
-
-class PromptFragmentReader(Protocol):
-    """Minimal prompt storage interface used by the system prompt manager."""
-
-    def read_prompt_fragment(self, fragment_name: str) -> str:
-        """Return a prompt fragment by resource name."""
-
-
-class ToolPromptRegistry(Protocol):
-    """Tool registry methods needed for prompt and provider definitions."""
-
-    def prompt_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
-    ) -> list[dict[str, Any]]:
-        """Return prompt-ready tool name and description mappings."""
-
-    def provider_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
-    ) -> list[dict[str, Any]]:
-        """Return provider-ready tool schemas."""
-
-
-class SkillPromptMetadata(Protocol):
-    """Skill metadata fields needed for prompt assembly."""
-
-    @property
-    def name(self) -> str:
-        """Stable skill identifier."""
-
-    @property
-    def description(self) -> str:
-        """Prompt-visible skill description."""
-
-
-class SkillPromptRegistry(Protocol):
-    """Skill registry method needed for prompt-visible skill filtering."""
-
-    def filter_allowed(self, allowed_skills: list[str]) -> list[SkillPromptMetadata]:
-        """Return prompt-visible skills filtered by an agent allowlist."""
-
-
-class ChannelPromptRegistry(Protocol):
-    """Channel registry methods needed for prompt-visible channel filtering."""
-
-    def has_active_channels(self) -> bool:
-        """Return whether any channel adapter is currently running."""
-
-    def list_channels(self) -> list[ChannelConfig]:
-        """Return all configured channels."""
-
-    def _is_running(self, channel_id: str) -> bool:
-        """Return whether one configured channel adapter is currently running."""
 
 
 @dataclass(frozen=True)
@@ -388,129 +330,6 @@ class AgentStore:
             )
 
 
-class SystemPromptManager:
-    """Assemble system prompts from prompt fragments and workspace includes."""
-
-    def __init__(
-        self,
-        storage: PromptFragmentReader,
-        tool_registry: ToolPromptRegistry,
-        skill_registry: SkillPromptRegistry,
-        channel_registry: ChannelPromptRegistry | None = None,
-        *,
-        app_version: str,
-        app_dir: str | Path,
-        data_root: str | Path,
-        host: str | None = None,
-        os_name: str | None = None,
-        current_date: Callable[[], str] | None = None,
-    ) -> None:
-        self._storage = storage
-        self._tool_registry = tool_registry
-        self._skill_registry = skill_registry
-        self._channel_registry = channel_registry
-        self._app_version = app_version
-        self._app_dir = Path(app_dir)
-        self._data_root = Path(data_root)
-        self._host = host
-        self._os_name = os_name
-        self._current_date = current_date or _current_utc_date
-
-    def update_skill_registry(self, skill_registry: SkillPromptRegistry) -> None:
-        """Replace the skill registry used for prompt and provider tool decisions."""
-        self._skill_registry = skill_registry
-
-    def build_system_prompt(self, agent: Agent) -> str:
-        """Build the complete system prompt for an agent."""
-        prompt = self._storage.read_prompt_fragment("system.md")
-        replacements = {
-            "{app_version}": self._app_version,
-            "{runtime}": self._build_runtime_block(agent),
-            "{tools}": self._build_tools_block(agent),
-            "{channels}": self._build_channels_block(agent),
-            "{skills}": self._build_skills_block(agent),
-        }
-        for placeholder, value in replacements.items():
-            prompt = prompt.replace(placeholder, value)
-
-        return self._replace_workspace_includes(prompt, Path(agent.workspace))
-
-    def provider_tool_definitions(self, agent: Agent) -> list[dict[str, Any]]:
-        """Return provider tool definitions filtered by the agent allowlist."""
-        definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
-        if not self._agent_has_loadable_skills(agent):
-            return definitions
-
-        return [
-            *definitions,
-            *self._tool_registry.provider_definitions(["skill"], include_internal=True),
-        ]
-
-    def _build_runtime_block(self, agent: Agent) -> str:
-        runtime = self._storage.read_prompt_fragment("runtime.md")
-        thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
-        replacements = {
-            "{host}": self._host or socket.gethostname(),
-            "{os}": self._os_name or platform.platform(),
-            "{model}": agent.model,
-            "{agent_workspace}": agent.workspace,
-            "{app_dir}": str(self._app_dir.resolve()),
-            "{data_root}": str(self._data_root.resolve()),
-            "{thinking_effort}": thinking_effort,
-            "{current_date}": self._current_date(),
-        }
-        return _replace_placeholders(runtime, replacements)
-
-    def _build_tools_block(self, agent: Agent) -> str:
-        tools = self._storage.read_prompt_fragment("tools.md")
-        tool_list = _format_tool_list(
-            self._tool_registry.prompt_definitions(agent.allowed_tools),
-        )
-        return tools.replace("{tool_list}", tool_list)
-
-    def _build_channels_block(self, agent: Agent) -> str:
-        channels = self._storage.read_prompt_fragment("channels.md")
-        channel_list = _format_channel_list(self._agent_active_channels(agent))
-        return channels.replace("{channel_list}", channel_list)
-
-    def _build_skills_block(self, agent: Agent) -> str:
-        skills = self._storage.read_prompt_fragment("skills.md")
-        skill_list = _format_skill_list(self._skill_registry.filter_allowed(agent.allowed_skills))
-        return skills.replace("{skill_list}", skill_list)
-
-    def _agent_has_loadable_skills(self, agent: Agent) -> bool:
-        return bool(self._skill_registry.filter_allowed(agent.allowed_skills))
-
-    def _agent_active_channels(self, agent: Agent) -> list[ChannelConfig]:
-        channel_registry = self._channel_registry
-        if channel_registry is None or not channel_registry.has_active_channels():
-            return []
-
-        active_channels: list[ChannelConfig] = []
-        for channel in channel_registry.list_channels():
-            if channel.agent_id != agent.id:
-                continue
-            if not channel.enabled:
-                continue
-            if not channel_registry._is_running(channel.id):
-                continue
-            active_channels.append(channel)
-        return active_channels
-
-    def _replace_workspace_includes(self, prompt: str, workspace_path: Path) -> str:
-        def replace_include(match: re.Match[str]) -> str:
-            filename = match.group(1).strip()
-            _validate_workspace_include(filename)
-            include_path = workspace_path / filename
-            try:
-                content = include_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise AgentError(f"Cannot read workspace include {filename}: {exc}") from exc
-            return f'<file name="{filename}">\n{content}\n</file>'
-
-        return INCLUDE_PATTERN.sub(replace_include, prompt)
-
-
 def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
     if not isinstance(value, str):
         raise AgentError(f"{field} must be a string")
@@ -561,59 +380,6 @@ def _validate_workspace(workspace: str | Path) -> Path:
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _current_utc_date() -> str:
-    return datetime.now(UTC).date().isoformat()
-
-
-def _replace_placeholders(template: str, replacements: dict[str, str]) -> str:
-    result = template
-    for placeholder, value in replacements.items():
-        result = result.replace(placeholder, value)
-    return result
-
-
-def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
-    return "\n".join(
-        f"- {definition['name']}: {definition['description']}" for definition in tool_definitions
-    )
-
-
-def _format_channel_list(channels: list[ChannelConfig]) -> str:
-    if not channels:
-        return "- None"
-
-    lines: list[str] = []
-    for channel in channels:
-        target_hint = (
-            "default target available"
-            if len(channel.allowed_chat_ids) == 1
-            else "explicit target required"
-        )
-        lines.append(f"- {channel.id}: {channel.platform} ({target_hint})")
-    return "\n".join(lines)
-
-
-def _format_skill_list(skills: list[SkillPromptMetadata]) -> str:
-    lines = ["<available_skills>"]
-    for skill in skills:
-        lines.extend(
-            [
-                "  <skill>",
-                f"    <name>{escape(skill.name)}</name>",
-                f"    <description>{escape(skill.description)}</description>",
-                "  </skill>",
-            ]
-        )
-    lines.append("</available_skills>")
-    return "\n".join(lines)
-
-
-def _validate_workspace_include(filename: str) -> None:
-    path = Path(filename)
-    if path.name != filename or path.is_absolute():
-        raise AgentError(f"Unsafe workspace include: {filename}")
 
 
 def _agent_from_dict(data: dict[str, Any]) -> Agent:

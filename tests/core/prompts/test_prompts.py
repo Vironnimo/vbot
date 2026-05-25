@@ -7,14 +7,16 @@ from typing import Any
 
 import pytest
 
-from core.agents.agents import (
-    Agent,
-    AgentError,
+from core.agents.agents import Agent
+from core.channels.channels import ChannelConfig
+from core.prompts.prompts import (
+    EDITABLE_PROMPT_FRAGMENT_NAMES,
+    PromptError,
+    PromptFragmentManager,
     SkillPromptMetadata,
     SystemPromptManager,
     _validate_workspace_include,
 )
-from core.channels.channels import ChannelConfig
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,32 @@ class StubStorage:
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
         return self._fragments[fragment_name]
+
+
+class EditableStubStorage(StubStorage):
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(
+            {
+                fragment_name: f"{fragment_name} content"
+                for fragment_name in EDITABLE_PROMPT_FRAGMENT_NAMES
+            }
+        )
+        self.prompts_dir = tmp_path / "prompts"
+
+    def write_prompt_fragment(self, fragment_name: str, content: str) -> Path:
+        self._fragments[fragment_name] = content
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        target_path = self.prompts_dir / fragment_name
+        target_path.write_text(content, encoding="utf-8")
+        return target_path
+
+    def reset_prompt_fragment(self, fragment_name: str) -> Path:
+        content = f"default {fragment_name}"
+        self._fragments[fragment_name] = content
+        self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        target_path = self.prompts_dir / fragment_name
+        target_path.write_text(content, encoding="utf-8")
+        return target_path
 
 
 class StubTools:
@@ -385,7 +413,7 @@ def test_unsafe_workspace_include_raises_error(
         data_root=tmp_path / "data",
     )
 
-    with pytest.raises(AgentError, match="Unsafe workspace include"):
+    with pytest.raises(PromptError, match="Unsafe workspace include"):
         manager.build_system_prompt(_agent(workspace))
 
 
@@ -404,7 +432,7 @@ def test_validate_workspace_include_accepts_safe_flat_filenames(filename: str) -
     ],
 )
 def test_validate_workspace_include_rejects_unsafe_paths(filename: str) -> None:
-    with pytest.raises(AgentError, match="Unsafe workspace include"):
+    with pytest.raises(PromptError, match="Unsafe workspace include"):
         _validate_workspace_include(filename)
 
 
@@ -426,6 +454,37 @@ def test_workspace_include_wraps_content_in_xml_file_tag(
     prompt = manager.build_system_prompt(_agent(workspace))
 
     assert prompt == '<file name="SOUL.md">\nSoul text\n</file>'
+
+
+def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: Path) -> None:
+    storage = EditableStubStorage(tmp_path)
+    storage.write_prompt_fragment("runtime.md", "custom runtime")
+    manager = PromptFragmentManager(storage)
+
+    fragments = manager.list_fragments()
+
+    assert [fragment["name"] for fragment in fragments] == list(EDITABLE_PROMPT_FRAGMENT_NAMES)
+    assert fragments[0]["is_modified"] is False
+    assert fragments[1]["is_modified"] is True
+    assert any(variable["placeholder"] == "{app_version}" for variable in fragments[0]["variables"])
+
+
+def test_prompt_fragment_manager_updates_and_resets_editable_fragment(tmp_path: Path) -> None:
+    storage = EditableStubStorage(tmp_path)
+    manager = PromptFragmentManager(storage)
+
+    updated = manager.update_fragment("tools.md", "custom tools")
+    reset = manager.reset_fragment("tools.md")
+
+    assert updated == {"name": "tools.md", "content": "custom tools", "is_modified": True}
+    assert reset == {"name": "tools.md", "content": "default tools.md"}
+
+
+def test_prompt_fragment_manager_rejects_internal_compaction_fragment(tmp_path: Path) -> None:
+    manager = PromptFragmentManager(EditableStubStorage(tmp_path))
+
+    with pytest.raises(PromptError, match="unknown prompt fragment: compaction.md"):
+        manager.update_fragment("compaction.md", "custom compaction")
 
 
 def _agent(
