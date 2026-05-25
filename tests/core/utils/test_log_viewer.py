@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.utils.log_viewer import (
+    MAX_READ_HANDOFFS,
     LogViewer,
     _build_snapshot_event,
     _LogSnapshot,
@@ -205,6 +206,34 @@ def test_read_file_filters_persisted_websocket_noise(tmp_path: Path) -> None:
             "continuation": "",
         },
     ]
+
+
+def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    viewer = LogViewer(tmp_path)
+
+    first_cursor = ""
+    for index in range(MAX_READ_HANDOFFS + 3):
+        file_name = f"2026-05-{index + 1:02d}"
+        (logs_dir / file_name).write_text(
+            f"2026-05-{index + 1:02d} 09:00:00 [INFO] vbot.core - Ready\n",
+            encoding="utf-8",
+        )
+        result = viewer.read_file(file_name)
+        if index == 0:
+            first_cursor = str(result["cursor"])
+
+    assert len(viewer._read_handoffs) == MAX_READ_HANDOFFS
+
+    async def consume_pruned_cursor() -> None:
+        async with aclosing(
+            viewer.subscribe("2026-05-01", cursor=first_cursor),
+        ) as stream:
+            await stream.__anext__()
+
+    with pytest.raises(ValueError, match="invalid log cursor"):
+        asyncio.run(consume_pruned_cursor())
 
 
 @pytest.mark.asyncio

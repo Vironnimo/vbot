@@ -199,9 +199,8 @@ def test_log_websocket_streams_append_events_for_selected_file(tmp_path: Path) -
         TestClient(app) as client,
         client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
     ):
+        wait_for_log_subscriber(app, "2026-05-11")
         assert app.state.event_bus.subscriber_count == 0
-        assert app.state.log_viewer.watcher_count == 1
-        assert app.state.log_viewer.subscriber_count("2026-05-11") == 1
 
         log_file.write_text(
             "\n".join(
@@ -298,6 +297,8 @@ def test_log_websocket_streams_reset_events_when_file_is_truncated(tmp_path: Pat
         TestClient(app) as client,
         client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
     ):
+        wait_for_log_subscriber(app, "2026-05-11")
+
         log_file.write_text(
             "2026-05-11 09:00:02 [WARN] vbot.server.app - Reset\n",
             encoding="utf-8",
@@ -335,6 +336,8 @@ def test_log_websocket_filters_routine_websocket_noise_from_append_events(tmp_pa
         TestClient(app) as client,
         client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
     ):
+        wait_for_log_subscriber(app, "2026-05-11")
+
         log_file.write_text(
             "\n".join(
                 [
@@ -387,6 +390,8 @@ def test_log_websocket_filters_routine_websocket_noise_from_reset_events(tmp_pat
         TestClient(app) as client,
         client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
     ):
+        wait_for_log_subscriber(app, "2026-05-11")
+
         log_file.write_text(
             "\n".join(
                 [
@@ -429,14 +434,26 @@ def test_log_websocket_disconnect_releases_watcher_resources(tmp_path: Path) -> 
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws/logs?file=2026-05-11"):
-            assert app.state.log_viewer.watcher_count == 1
-            assert app.state.log_viewer.subscriber_count("2026-05-11") == 1
+            wait_for_log_subscriber(app, "2026-05-11")
 
         deadline = time.time() + 2
         while time.time() < deadline and app.state.log_viewer.watcher_count != 0:
             time.sleep(0.05)
 
     assert app.state.log_viewer.watcher_count == 0
+
+
+def wait_for_log_subscriber(app: Any, file_name: str, timeout_seconds: float = 2.0) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if (
+            app.state.log_viewer.watcher_count == 1
+            and app.state.log_viewer.subscriber_count(file_name) == 1
+        ):
+            return
+        time.sleep(0.01)
+
+    raise AssertionError(f"timed out waiting for log subscriber: {file_name}")
 
 
 # -- Unit tests for _parse_after_sequence --
