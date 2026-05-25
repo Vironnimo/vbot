@@ -8,7 +8,7 @@ The old handoff content was stale. This file now tracks the current candidates f
 
 Status: extracted to `core/compaction/`.
 
-Strongest next candidate. Compaction already spans a service/strategy, chat-loop control flow, manual `/compact` command handling, persisted settings, bundled prompt fragments, Run events, and WebUI settings/timeline rendering.
+Compaction already spans a service/strategy, chat-loop control flow, manual `/compact` command handling, persisted settings, bundled prompt fragments, Run events, and WebUI settings/timeline rendering.
 
 Candidate shape: `core/compaction/` with a dedicated `.vorch/specs/compaction.md` spec.
 
@@ -19,7 +19,7 @@ Why it matters:
 
 ### 2. Runs / Queue / Lifecycle
 
-Status: active extraction target.
+Status: extracted to `core/runs/`.
 
 Large candidate. `ChatRunManager` owns active Runs, Run events, cancellation, replay/subscription, and the busy-session FIFO queue. Automation, subagents, server RPC, channels, and WebUI queue state all depend on it.
 
@@ -32,7 +32,9 @@ Why it matters:
 
 ### 3. Settings / Configuration
 
-Medium-strong candidate. Settings are currently partly storage, partly server schema/validation, partly runtime side effects, and partly WebUI normalization.
+Status: extracted first pass to `core/settings/` for public update-schema validation.
+
+Medium-strong candidate. Settings are still partly storage, partly runtime side effects, and partly WebUI normalization.
 
 Candidate shape: `core/settings/` owning schemas, defaults, validation, update services, and normalized public payloads.
 
@@ -63,4 +65,4 @@ Why it matters:
 
 ## Current Priority
 
-Current work is Runs / Queue / Lifecycle.
+Current work is Settings / Configuration. The first extraction pass moved public `settings.update` schema parsing into `core/settings/`; future work can consider a fuller settings service if the domain grows.

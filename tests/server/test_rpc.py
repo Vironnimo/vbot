@@ -23,6 +23,7 @@ from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
 from core.runs import ChatRunManager
+from core.settings import AGENT_DEFAULT_FIELDS
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
@@ -487,7 +488,7 @@ class StubStorage:
         if not isinstance(raw_agent_defaults, dict):
             return {}
 
-        unsupported_fields = sorted(set(raw_agent_defaults) - delegates.AGENT_DEFAULT_FIELDS)
+        unsupported_fields = sorted(set(raw_agent_defaults) - AGENT_DEFAULT_FIELDS)
         if unsupported_fields:
             raise StorageError(
                 f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
@@ -510,7 +511,7 @@ class StubStorage:
         if not isinstance(values, dict):
             raise StorageError("Defaults values must be a mapping")
 
-        unsupported_fields = sorted(set(values) - delegates.AGENT_DEFAULT_FIELDS)
+        unsupported_fields = sorted(set(values) - AGENT_DEFAULT_FIELDS)
         if unsupported_fields:
             raise StorageError(
                 f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
