@@ -19,8 +19,6 @@ export const TERMINAL_RUN_EVENTS = new Set([
   'run_cancelled',
 ]);
 
-let queuedMessageCounter = 0;
-
 export function createChatState() {
   return {
     agents: [],
@@ -330,35 +328,6 @@ export function updateQueuedMessageContent(sessionState, itemId, newContent) {
   }
   queuedItem.content = newContent;
   return true;
-}
-
-// Deprecated local queue helpers are kept temporarily for compatibility.
-export function enqueueMessage(sessionState, content) {
-  const trimmedContent = content.trim();
-  if (!trimmedContent) {
-    return null;
-  }
-  const queuedMessage = {
-    id: `queued-${queuedMessageCounter}`,
-    content: trimmedContent,
-  };
-  queuedMessageCounter += 1;
-  sessionState.queue = [...sessionState.queue, queuedMessage];
-  return queuedMessage;
-}
-
-export function dequeueMessage(sessionState) {
-  const [nextMessage, ...remainingMessages] = sessionState.queue;
-  sessionState.queue = remainingMessages;
-  return nextMessage ?? null;
-}
-
-export function restoreDequeuedMessage(sessionState, queuedMessage) {
-  if (!queuedMessage) {
-    return sessionState.queue;
-  }
-  sessionState.queue = [queuedMessage, ...sessionState.queue];
-  return sessionState.queue;
 }
 
 export function removeQueuedMessage(sessionState, queuedMessageId) {

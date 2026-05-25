@@ -46,8 +46,6 @@ from core.providers.openai_compatible import (
 )
 from core.utils.retry import retry_async
 
-OPENAI_REASONING_COPILOT_MODEL_POLICY = copilot_model_policy("gpt-5-mini")
-
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
@@ -332,10 +330,6 @@ def _copilot_supports_reasoning(supports: Mapping[str, Any]) -> bool:
     if isinstance(reasoning_effort, list) and reasoning_effort:
         return True
     return "min_thinking_budget" in supports or "max_thinking_budget" in supports
-
-
-def _copilot_model_policy(model_id: str) -> GitHubCopilotModelPolicy:
-    return copilot_model_policy(model_id)
 
 
 def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:

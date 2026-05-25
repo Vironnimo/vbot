@@ -58,17 +58,6 @@ export const englishCatalog = Object.freeze({
   'errors.minimumAgents': 'At least one agent must remain.',
   'errors.unknownMethod': 'The requested server method is not available.',
 
-  'placeholders.status': 'Foundation placeholder',
-  'placeholders.previewLabel': 'Upcoming view preview',
-  'placeholders.chat.description':
-    'Agent chat will appear here once the chat view is wired.',
-  'placeholders.agents.description':
-    'Agent creation, editing, and deletion controls are coming next.',
-  'placeholders.systemPrompt.description':
-    'Editable prompt pieces will be managed from this space later.',
-  'placeholders.settings.description':
-    'Runtime and WebUI settings placeholders live here for now.',
-
   'chat.title': 'Chat',
   'chat.subtitle': 'Select an agent and continue its active session.',
   'chat.selectAgent': 'Select agent',
@@ -84,7 +73,6 @@ export const englishCatalog = Object.freeze({
   'chat.sendMessage': 'Send message',
   'chat.send': 'Send',
   'chat.queueMessage': 'Queue message',
-  'chat.attachPlaceholder': 'Attachments are not available yet',
   'chat.attachment.addFile': 'Add file',
   'chat.attachment.uploading': 'Uploading…',
   'chat.attachment.uploadFailed': 'Attachment upload failed.',
@@ -172,7 +160,7 @@ export const englishCatalog = Object.freeze({
   'sessions.source_channel': 'Source channel',
 
   'skillAutocomplete.label': 'Skill suggestions',
-  'skillAutocomplete.eyebrow': 'skills',
+  'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',
   'skillAutocomplete.noDescription': 'No description available',
 
   'queue.title': 'Queued messages',
@@ -333,7 +321,6 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.description':
     'The current minimal WebUI uses the server-managed system prompt.',
   'systemPrompt.pieces': 'Prompt pieces',
-  'systemPrompt.prototypePlaceholder': 'Placeholder — coming in a later phase.',
 
   'settings.title': 'Settings',
   'settings.subtitle': 'Runtime and WebUI settings will live here.',

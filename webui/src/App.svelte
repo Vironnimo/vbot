@@ -4,17 +4,11 @@
       id: 'chat',
       labelKey: 'navigation.chat',
       labelFallback: 'Chat',
-      descriptionKey: 'placeholders.chat.description',
-      descriptionFallback:
-        'Agent chat will appear here once the chat view is wired.',
     },
     {
       id: 'agents',
       labelKey: 'navigation.agents',
       labelFallback: 'Agents',
-      descriptionKey: 'placeholders.agents.description',
-      descriptionFallback:
-        'Agent creation, editing, and deletion controls are coming next.',
     },
     {
       id: 'cron',
@@ -25,17 +19,11 @@
       id: 'system-prompt',
       labelKey: 'navigation.systemPrompt',
       labelFallback: 'System Prompt',
-      descriptionKey: 'placeholders.systemPrompt.description',
-      descriptionFallback:
-        'Editable prompt pieces will be managed from this space later.',
     },
     {
       id: 'settings',
       labelKey: 'navigation.settings',
       labelFallback: 'Settings',
-      descriptionKey: 'placeholders.settings.description',
-      descriptionFallback:
-        'Runtime and WebUI settings placeholders live here for now.',
     },
     {
       id: 'logs',

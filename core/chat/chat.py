@@ -508,36 +508,8 @@ class _EmittingToolRegistry(ToolRegistry):
         arguments: JsonObject,
         allowed_tools: Sequence[str] | None,
     ) -> JsonObject:
-        try:
-            result = await self._registry.dispatch(context, arguments, allowed_tools)
-            return _validated_tool_result(context.tool_name, result)
-        except TypeError as error:
-            if not _looks_like_legacy_dispatch_type_error(error):
-                raise
-            return await self._dispatch_legacy(context, arguments, allowed_tools)
-
-    async def _dispatch_legacy(
-        self,
-        context: ToolContext,
-        arguments: JsonObject,
-        allowed_tools: Sequence[str] | None,
-    ) -> JsonObject:
-        try:
-            result = self._registry.dispatch(context.tool_name, arguments, allowed_tools)
-            if inspect.isawaitable(result):
-                result = await result
-            return _validated_tool_result(context.tool_name, result)
-        except ToolNotFoundError as error:
-            return tool_failure("tool_not_found", str(error))
-        except ToolNotAllowedError as error:
-            return tool_failure("tool_not_allowed", str(error))
-        except ValueError as error:
-            return tool_failure(
-                "invalid_tool_result" if "return" in str(error) else "invalid_arguments",
-                str(error),
-            )
-        except Exception as error:
-            return tool_failure("tool_execution_error", str(error))
+        result = await self._registry.dispatch(context, arguments, allowed_tools)
+        return _validated_tool_result(context.tool_name, result)
 
 
 def _tool_display_payload(registry: Any, tool_name: str, arguments: Any) -> JsonObject:
@@ -1507,11 +1479,6 @@ def _visible_message_payload(message: ChatMessage) -> JsonObject:
 
 def _emit_tool_context_event(run: Run, event_type: str, payload: JsonObject) -> None:
     run.emit(event_type, payload)
-
-
-def _looks_like_legacy_dispatch_type_error(error: TypeError) -> bool:
-    message = str(error)
-    return "positional" in message or "argument" in message
 
 
 def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:

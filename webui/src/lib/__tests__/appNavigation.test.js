@@ -28,17 +28,7 @@ describe('app navigation surface', () => {
 
   it('keeps existing live navigation labels translated', () => {
     for (const item of NAVIGATION_ITEMS) {
-      if (item.id === 'logs') {
-        continue;
-      }
-
       expect(englishCatalog[item.labelKey], item.labelKey).toBeTruthy();
-      if (item.descriptionKey) {
-        expect(
-          englishCatalog[item.descriptionKey],
-          item.descriptionKey,
-        ).toBeTruthy();
-      }
     }
   });
 
@@ -52,13 +42,9 @@ describe('app navigation surface', () => {
         }),
       ]),
     );
-    expect(NAVIGATION_ITEMS).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'logs',
-          descriptionKey: expect.any(String),
-        }),
-      ]),
-    );
+    for (const item of NAVIGATION_ITEMS) {
+      expect(item).not.toHaveProperty('descriptionKey');
+      expect(item).not.toHaveProperty('descriptionFallback');
+    }
   });
 });
