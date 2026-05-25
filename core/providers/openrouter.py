@@ -16,7 +16,7 @@ from core.providers.openai_compatible import (
 )
 from core.providers.reasoning import closest_supported_effort
 
-OPENROUTER_REASONING_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):

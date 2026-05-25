@@ -552,6 +552,24 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_omits_explicit_none_for_generic_compatible_provider(self):
+        """Generic OpenAI-compatible gateways do not inherit OpenAI-only none support."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = OpenAICompatibleAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _openai_test_model(model_id, reasoning=True),
+        )
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="deepseek-v4-flash", thinking_effort="none")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert "reasoning_effort" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_normalizes_explicit_reasoning_effort_kwarg(self, openai_adapter):
         """Raw reasoning_effort kwargs follow the same nearest-effort mapping."""
         route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
