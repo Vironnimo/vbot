@@ -16,7 +16,12 @@ from typing import Any
 import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._http_shared import (
+    classify_http_status,
+    iter_sse_data,
+    parse_sse_json_data,
+    wrap_network_error,
+)
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
@@ -27,7 +32,6 @@ from core.utils.retry import retry_async
 # SSE parsing constants
 # ---------------------------------------------------------------------------
 
-SSE_DATA_PREFIX = "data: "
 SSE_DONE_MARKER = "[DONE]"
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
@@ -337,14 +341,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         seen_done_marker = False
 
         try:
-            async for line in response.aiter_lines():
-                if not line.startswith(SSE_DATA_PREFIX):
-                    continue
-                data = line[len(SSE_DATA_PREFIX) :]
+            async for data in iter_sse_data(response):
                 if data.strip() == SSE_DONE_MARKER:
                     seen_done_marker = True
                     break
-                raw_chunk = json.loads(data)
+                raw_chunk = parse_sse_json_data(
+                    data,
+                    context="OpenAI-compatible provider",
+                )
+                if not isinstance(raw_chunk, dict):
+                    raise ProviderError(
+                        "OpenAI-compatible provider sent non-object JSON in stream",
+                        retryable=False,
+                    )
                 for normalized_delta in self._normalize_stream_chunk(
                     raw_chunk,
                     tool_call_ids_by_index,

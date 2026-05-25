@@ -42,6 +42,7 @@ from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
     StreamingChunkTimeoutError,
+    StreamingDeltaError,
     iter_with_chunk_timeout,
 )
 from core.extensions import ExtensionRegistry, HookContext
@@ -1540,9 +1541,15 @@ class ChatLoop:
             _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
 
+        try:
+            assistant_fields = accumulator.finalize_assistant_fields()
+        except BaseException:
+            _maybe_persist_partial_thinking(accumulator, note_hook)
+            raise
+
         assistant_message = _assistant_message_from_response(
             agent.model,
-            accumulator.finalize_assistant_fields().to_response_dict(),
+            assistant_fields.to_response_dict(),
         )
         _emit_streaming_assistant_events(run, assistant_message)
         return assistant_message
@@ -1839,6 +1846,8 @@ def _exception_to_error_kind(exc: Exception) -> str:
         return ERROR_KIND_TIMEOUT
     if isinstance(exc, StreamingChunkTimeoutError):
         return ERROR_KIND_TIMEOUT
+    if isinstance(exc, StreamingDeltaError):
+        return ERROR_KIND_PROVIDER_ERROR
     if isinstance(exc, NetworkError):
         return ERROR_KIND_NETWORK
     if isinstance(exc, ProviderAuthError):

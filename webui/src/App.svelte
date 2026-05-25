@@ -67,6 +67,13 @@
 
   const navigationItems = NAVIGATION_ITEMS;
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
+  const RUN_SERVER_EVENT_TYPES = new Set([
+    'run_started',
+    'run_output',
+    'run_completed',
+    'run_cancelled',
+    'run_failed',
+  ]);
 
   const readStoredSelectedAgentId = () => {
     try {
@@ -87,6 +94,7 @@
   let toastState = $state(createToastState());
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
+  let runServerEvent = $state(null);
 
   $effect(() => {
     try {
@@ -162,6 +170,11 @@
       return;
     }
 
+    if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
+      runServerEvent = event;
+      return;
+    }
+
     const agentEventTypes = ['agent.created', 'agent.updated', 'agent.deleted'];
     if (!agentEventTypes.includes(event.type)) {
       return;
@@ -195,6 +208,7 @@
       onAgentSelected={selectAgent}
       {navigateToSubAgent}
       {pendingSubAgentNavigation}
+      {runServerEvent}
     />
   {:else if activeViewId === 'agents'}
     <AgentsView

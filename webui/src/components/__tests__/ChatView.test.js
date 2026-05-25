@@ -18,6 +18,11 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
+  RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
+  RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
+  RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
+  RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
   rpc: (...args) => rpcMock(...args),
   subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
   listSessions: (...args) => listSessionsMock(...args),
@@ -505,6 +510,65 @@ describe('ChatView', () => {
       'Queue this while running',
     ]);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('batches run SSE deltas before updating the rendered timeline', async () => {
+    const closeSubscription = vi.fn();
+    subscribeRunEventsMock.mockReturnValue({
+      close: closeSubscription,
+      source: null,
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          run_id: 'run-batched-deltas',
+          sse_url: '/api/runs/run-batched-deltas/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start batched stream');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'reasoning_delta',
+        run_id: 'run-batched-deltas',
+        sequence: 1,
+        payload: { reasoning_delta: 'Think ' },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'reasoning_delta',
+        run_id: 'run-batched-deltas',
+        sequence: 2,
+        payload: { reasoning_delta: 'fast' },
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).not.toContain('Think fast');
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Think fast'),
+      100,
+    );
   });
 
   it('shows all command and skill suggestions for an empty slash query', async () => {

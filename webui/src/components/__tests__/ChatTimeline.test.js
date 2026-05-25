@@ -2233,6 +2233,54 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('renders streamed tool stdout and stderr inside assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-tool-output',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-tool-output',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'printf hello' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stdout',
+      run_id: 'run-tool-output',
+      sequence: 2,
+      payload: { tool_call_id: 'call-one', data: 'hello\n' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_stderr',
+      run_id: 'run-tool-output',
+      sequence: 3,
+      payload: { tool_call_id: 'call-one', data: 'warn\n' },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).toContain('Stdout');
+    expect(document.body.textContent).toContain('hello');
+    expect(document.body.textContent).toContain('Stderr');
+    expect(document.body.textContent).toContain('warn');
+  });
+
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {
     const sessionState = ensureSessionState(
       createChatState(),

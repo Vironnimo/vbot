@@ -37,7 +37,7 @@ async def test_accumulates_visible_deltas_in_provider_order() -> None:
                 "type": "tool_call_delta",
                 "id": "call_abc",
                 "name_delta": "read",
-                "arguments_delta": '{"path"',
+                "arguments_delta": '{"path":"notes.md"}',
             }
         )
     )
@@ -363,38 +363,42 @@ async def test_tool_argument_merge_preserves_backslash_escape_pair_at_chunk_boun
     ]
 
 
-async def test_malformed_tool_arguments_are_dropped(
-    caplog: pytest.LogCaptureFixture,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+async def test_malformed_tool_arguments_raise_visible_streaming_error() -> None:
     accumulator = StreamingAccumulator()
 
-    with caplog.at_level("WARNING", logger="vbot.chat.streaming"):
-        accumulator.add_delta(
-            {
-                "type": "tool_call_delta",
-                "id": "call_abc",
-                "name_delta": "read_file",
-                "arguments_delta": '{"path":',
-            }
-        )
-        fields = accumulator.finalize_assistant_fields()
-
-    assert fields.tool_calls is None
-    matched_in_log_records = any(
-        record.name == "vbot.chat.streaming"
-        and "dropping streamed tool call 'call_abc'" in record.getMessage()
-        and "malformed arguments JSON fragment: '{\"path\":'" in record.getMessage()
-        for record in caplog.records
-    )
-    stderr_output = capsys.readouterr().err
-    matched_in_stderr = (
-        "dropping streamed tool call 'call_abc'" in stderr_output
-        and "malformed arguments JSON fragment: '{\"path\":'" in stderr_output
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "read_file",
+            "arguments_delta": '{"path":',
+        }
     )
 
-    # Full-suite logging config can route warnings directly to stderr.
-    assert matched_in_log_records or matched_in_stderr
+    with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
+        accumulator.finalize_assistant_fields()
+
+
+async def test_malformed_tool_arguments_error_abbreviates_large_fragments() -> None:
+    accumulator = StreamingAccumulator()
+    huge_fragment = '{"path":"todo.html","content":"' + ("x" * 5000)
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "id": "call_abc",
+            "name_delta": "write",
+            "arguments_delta": huge_fragment,
+        }
+    )
+
+    with pytest.raises(StreamingDeltaError) as exc_info:
+        accumulator.finalize_assistant_fields()
+
+    error_message = str(exc_info.value)
+    assert f"{len(huge_fragment)} chars" in error_message
+    assert "chars omitted" in error_message
+    assert huge_fragment not in error_message
 
 
 async def test_finish_delta_records_reason_without_visible_event() -> None:

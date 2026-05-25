@@ -44,6 +44,7 @@
     onAgentSelected,
     navigateToSubAgent = () => {},
     pendingSubAgentNavigation = null,
+    runServerEvent = null,
   } = $props();
 
   const chatState = $state(createChatState());
@@ -59,8 +60,22 @@
   let viewingSessionReadOnly = $state(false);
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
+  const pendingReconnects = {};
+  const pendingRunEventQueues = {};
+  const pendingRunEventFlushes = {};
   const ACTION_INFO_TIMEOUT_MS = 4000;
+  const SSE_RECONNECT_DELAY_MS = 500;
+  const MAX_SSE_RECONNECT_ATTEMPTS = 3;
+  const RUN_EVENT_FLUSH_DELAY_MS = 33;
+  const RUN_SERVER_EVENT_TYPES = new Set([
+    'run_started',
+    'run_output',
+    'run_completed',
+    'run_cancelled',
+    'run_failed',
+  ]);
   let actionInfoTimeoutId = null;
+  let lastRunServerEventKey = '';
 
   let activeAgent = $derived(selectedAgent(chatState));
   let activeSessionState = $derived(getActiveSessionState());
@@ -173,6 +188,15 @@
     }
   });
 
+  $effect(() => {
+    const eventKey = runServerEventKey(runServerEvent);
+    if (!eventKey || eventKey === lastRunServerEventKey) {
+      return;
+    }
+    lastRunServerEventKey = eventKey;
+    handleRunServerEvent(runServerEvent);
+  });
+
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
     loadCommands();
@@ -184,6 +208,8 @@
       clearTimeout(actionInfoTimeoutId);
       actionInfoTimeoutId = null;
     }
+    clearPendingReconnects();
+    clearPendingRunEventFlushes();
   });
 
   const setActionInfo = (message) => {
@@ -452,25 +478,18 @@
   const subscribeToRun = (sessionState, sseUrl, options = {}) => {
     const existingSubscription = activeSubscriptions[sessionState.key];
     existingSubscription?.close();
+    clearPendingReconnect(sessionState.key);
     const afterSequence =
       options.afterSequence ?? highestRunEventSequence(sessionState);
+    const retryAttempt = options.retryAttempt ?? 0;
     const subscription = subscribeRunEvents(
       sseUrl,
       {
         onEvent: ({ data }) => {
-          const event = appendRunEvent(sessionState, data);
-          if (
-            event?.type === 'compaction_completed' &&
-            event.payload?.message
-          ) {
-            appendCompactionCheckpoint(sessionState, event.payload.message);
-          }
-          if (event && TERMINAL_RUN_EVENTS.has(event.type)) {
-            void syncSessionQueue(sessionState);
-          }
+          queueRunEvent(sessionState, data);
         },
         onError: (error) => {
-          actionError = `${t('errors.streamClosed', 'The live stream closed before the run finished.')} ${error.message ?? ''}`;
+          recoverRunStream(sessionState, sseUrl, retryAttempt, error);
         },
       },
       {
@@ -480,6 +499,185 @@
     activeSubscriptions[sessionState.key] = subscription;
   };
 
+  const queueRunEvent = (sessionState, eventData) => {
+    const sessionKey = sessionState.key;
+    pendingRunEventQueues[sessionKey] ??= [];
+    pendingRunEventQueues[sessionKey].push(eventData);
+    scheduleRunEventFlush(sessionKey);
+  };
+
+  const scheduleRunEventFlush = (sessionKey) => {
+    if (pendingRunEventFlushes[sessionKey] !== undefined) {
+      return;
+    }
+    pendingRunEventFlushes[sessionKey] = setTimeout(() => {
+      delete pendingRunEventFlushes[sessionKey];
+      flushPendingRunEvents(sessionKey);
+    }, RUN_EVENT_FLUSH_DELAY_MS);
+  };
+
+  const flushPendingRunEvents = (sessionKey) => {
+    const pendingEvents = pendingRunEventQueues[sessionKey];
+    if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) {
+      delete pendingRunEventQueues[sessionKey];
+      clearPendingRunEventFlush(sessionKey);
+      return null;
+    }
+
+    delete pendingRunEventQueues[sessionKey];
+    clearPendingRunEventFlush(sessionKey);
+
+    const sessionState = chatState.sessions[sessionKey];
+    if (!sessionState) {
+      return null;
+    }
+
+    let terminalEvent = null;
+    for (const eventData of pendingEvents) {
+      const event = appendRunEvent(sessionState, eventData);
+      handleAppendedRunEvent(sessionState, event);
+      if (event && TERMINAL_RUN_EVENTS.has(event.type)) {
+        terminalEvent = event;
+      }
+    }
+    return terminalEvent;
+  };
+
+  const handleAppendedRunEvent = (sessionState, event) => {
+    if (!event) {
+      return;
+    }
+    if (event.type === 'compaction_completed' && event.payload?.message) {
+      appendCompactionCheckpoint(sessionState, event.payload.message);
+    }
+    if (TERMINAL_RUN_EVENTS.has(event.type)) {
+      clearPendingReconnect(sessionState.key);
+      closeRunSubscription(sessionState.key);
+      if (event.type !== 'run_failed') {
+        actionError = '';
+      }
+      void syncSessionQueue(sessionState);
+    }
+  };
+
+  const recoverRunStream = (sessionState, sseUrl, retryAttempt, error) => {
+    flushPendingRunEvents(sessionState.key);
+    const currentRun = sessionState.currentRun;
+    if (!currentRun || currentRun.status !== 'running') {
+      return;
+    }
+
+    if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
+      actionError = t(
+        'errors.streamReconnecting',
+        'The live stream closed. Reconnecting...',
+      );
+      pendingReconnects[sessionState.key] = setTimeout(() => {
+        delete pendingReconnects[sessionState.key];
+        if (sessionState.currentRun?.runId !== currentRun.runId) {
+          return;
+        }
+        subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
+          afterSequence: highestRunEventSequence(sessionState),
+          retryAttempt: retryAttempt + 1,
+        });
+      }, SSE_RECONNECT_DELAY_MS);
+      return;
+    }
+
+    actionError = `${t('errors.streamClosed', 'The live stream closed before the run finished. Waiting for server status.')} ${error?.message ?? ''}`;
+    closeRunSubscription(sessionState.key);
+  };
+
+  const handleRunServerEvent = (serverEvent) => {
+    const event = runEventFromServerEvent(serverEvent);
+    if (!event?.agent_id || !event?.session_id) {
+      return;
+    }
+
+    const sessionState = ensureSessionState(
+      chatState,
+      event.agent_id,
+      event.session_id,
+    );
+    flushPendingRunEvents(sessionState.key);
+    const appended = appendRunEvent(sessionState, event);
+    handleAppendedRunEvent(sessionState, appended);
+  };
+
+  const runEventFromServerEvent = (serverEvent) => {
+    const payload = serverEvent?.payload ?? {};
+    const runEventType = payload.run_event_type;
+    if (!RUN_SERVER_EVENT_TYPES.has(serverEvent?.type) || !runEventType) {
+      return null;
+    }
+
+    const runPayload = { ...(payload.output ?? {}) };
+    if (payload.status) {
+      runPayload.status = payload.status;
+    }
+    if (payload.usage) {
+      runPayload.usage = payload.usage;
+    }
+
+    return {
+      type: runEventType,
+      run_id: payload.run_id,
+      agent_id: payload.agent_id,
+      session_id: payload.session_id,
+      sequence: payload.run_event_sequence,
+      timestamp: payload.run_event_timestamp,
+      payload: runPayload,
+    };
+  };
+
+  const runServerEventKey = (serverEvent) => {
+    const payload = serverEvent?.payload;
+    if (
+      !payload?.run_id ||
+      (payload.run_event_sequence !== 0 && !payload.run_event_sequence)
+    ) {
+      return '';
+    }
+    return `${payload.run_id}:${payload.run_event_sequence}:${serverEvent.type}`;
+  };
+
+  const closeRunSubscription = (sessionKey) => {
+    activeSubscriptions[sessionKey]?.close();
+    delete activeSubscriptions[sessionKey];
+  };
+
+  const clearPendingReconnect = (sessionKey) => {
+    const timeoutId = pendingReconnects[sessionKey];
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+      delete pendingReconnects[sessionKey];
+    }
+  };
+
+  const clearPendingReconnects = () => {
+    for (const key of Object.keys(pendingReconnects)) {
+      clearPendingReconnect(key);
+    }
+  };
+
+  const clearPendingRunEventFlush = (sessionKey) => {
+    const timeoutId = pendingRunEventFlushes[sessionKey];
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+      delete pendingRunEventFlushes[sessionKey];
+    }
+  };
+
+  const clearPendingRunEventFlushes = () => {
+    for (const key of Object.keys(pendingRunEventFlushes)) {
+      clearPendingRunEventFlush(key);
+    }
+    for (const key of Object.keys(pendingRunEventQueues)) {
+      delete pendingRunEventQueues[key];
+    }
+  };
+
   const closeSubscriptions = () => {
     for (const subscription of Object.values(activeSubscriptions)) {
       subscription.close();
@@ -487,6 +685,8 @@
     for (const key of Object.keys(activeSubscriptions)) {
       delete activeSubscriptions[key];
     }
+    clearPendingReconnects();
+    clearPendingRunEventFlushes();
   };
 
   const handleCancelRun = async () => {

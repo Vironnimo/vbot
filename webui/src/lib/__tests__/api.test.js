@@ -10,6 +10,8 @@ import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
+  RUN_EVENT_TOOL_CALL_STDERR,
+  RUN_EVENT_TOOL_CALL_STDOUT,
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   createRpcEnvelope,
@@ -352,6 +354,11 @@ describe('subscribeRunEvents()', () => {
     expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_ASSISTANT_OUTPUT_DELTA);
     expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_REASONING_DELTA);
     expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_TOOL_CALL_DELTA);
+    expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_TOOL_CALL_STDOUT);
+    expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_TOOL_CALL_STDERR);
+    expect(RUN_EVENT_TYPES).toContain('model_fallback_activated');
+    expect(RUN_EVENT_TYPES).toContain('error_message_persisted');
+    expect(RUN_EVENT_TYPES).toContain('compaction_completed');
   });
 
   it('subscribes to named SSE run events and closes on terminal events', () => {

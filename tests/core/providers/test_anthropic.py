@@ -1524,6 +1524,66 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_accepts_multiline_sse_data_frames(self, anthropic_adapter):
+        """SSE data fields may be split across multiple data lines."""
+        # Arrange
+        sse_body = (
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,\n'
+            'data: "delta":{"type":"text_delta","text":"Hello"}}\n'
+            "\n"
+            "event: message_delta\n"
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "content_delta", "text": "Hello"},
+            {"type": "finish", "reason": "stop"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_raises_provider_error_on_malformed_sse_json(self, anthropic_adapter):
+        """Malformed SSE JSON is classified as a non-retryable provider error."""
+        # Arrange
+        sse_body = 'event: content_block_delta\ndata: {"type":\n\n'
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act / Assert
+        with pytest.raises(ProviderError, match="malformed JSON") as exc_info:
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+            ):
+                pass
+        assert exc_info.value.retryable is False
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_yields_reasoning_deltas_and_opaque_metadata(self, anthropic_adapter):
         """Thinking text streams visibly while supported thinking metadata stays opaque."""
         # Arrange

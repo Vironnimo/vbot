@@ -19,14 +19,21 @@ export const WEBSOCKET_ERROR_RESPONSE = 'invalid_websocket_event';
 export const RUN_EVENT_ASSISTANT_OUTPUT_DELTA = 'assistant_output_delta';
 export const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
 export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
+export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
+export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
 
 export const RUN_EVENT_TYPES = [
   'run_started',
   'user_message_persisted',
+  'model_fallback_activated',
+  'error_message_persisted',
+  'compaction_completed',
   RUN_EVENT_REASONING_DELTA,
   'reasoning',
   RUN_EVENT_TOOL_CALL_DELTA,
   'tool_call_started',
+  RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_EVENT_TOOL_CALL_STDERR,
   'tool_call_result',
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   'assistant_output',

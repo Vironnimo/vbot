@@ -25,7 +25,12 @@ from typing import Any
 
 import httpx
 
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._http_shared import (
+    classify_http_status,
+    iter_sse_data,
+    parse_sse_json_data,
+    wrap_network_error,
+)
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
@@ -40,8 +45,6 @@ from core.utils.retry import retry_async
 _HTTP_OVERLOADED = 529
 
 # SSE / API constants
-SSE_DATA_PREFIX = "data: "
-SSE_EVENT_PREFIX = "event: "
 MESSAGES_ENDPOINT = "/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 ANTHROPIC_EFFORTS = {"minimal", "low", "medium", "high", "xhigh", "max"}
@@ -356,19 +359,10 @@ class AnthropicAdapter(ProviderAdapter):
         seen_message_stop = False
 
         try:
-            async for line in response.aiter_lines():
-                if line.startswith(SSE_EVENT_PREFIX):
-                    # Anthropic sends event type lines (e.g. "event: message_start")
-                    # before data lines.  We use the data's own "type" field for
-                    # classification, so we just skip the event line here.
-                    continue
-                if not line.startswith(SSE_DATA_PREFIX):
-                    # Skip blank lines, comments, and unknown prefixes
-                    continue
-                data = line[len(SSE_DATA_PREFIX) :]
+            async for data in iter_sse_data(response):
                 if not data.strip():
                     continue
-                parsed = json.loads(data)
+                parsed = parse_sse_json_data(data, context="Anthropic provider")
                 if not isinstance(parsed, dict):
                     continue
                 for normalized_delta in _normalize_anthropic_stream_event(
