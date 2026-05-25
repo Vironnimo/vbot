@@ -235,17 +235,24 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         response = await self._connect_stream(RESPONSES_ENDPOINT, payload)
         state = ResponsesStreamState()
         event_lines: list[str] = []
+        seen_finish_delta = False
         try:
             async for line in response.aiter_lines():
                 if line:
                     event_lines.append(line)
                     continue
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if delta.get("type") == "finish":
+                        seen_finish_delta = True
                     yield delta
                 event_lines = []
             if event_lines:
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if delta.get("type") == "finish":
+                        seen_finish_delta = True
                     yield delta
+            if not seen_finish_delta:
+                raise NetworkError("Stream ended without response completion event")
         except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
@@ -256,10 +263,15 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     async def _stream_messages(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_stream(MESSAGES_ENDPOINT, payload)
         state = CopilotMessagesStreamState()
+        seen_finish_delta = False
         try:
             async for line in response.aiter_lines():
                 for delta in normalize_copilot_messages_sse_line(line, state):
+                    if delta.get("type") == "finish":
+                        seen_finish_delta = True
                     yield delta
+            if not seen_finish_delta:
+                raise NetworkError("Stream ended without message stop reason")
         except httpx.ReadError as exc:
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:

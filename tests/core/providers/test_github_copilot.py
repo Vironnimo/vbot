@@ -786,6 +786,26 @@ async def test_stream_responses_raises_network_error_on_mid_stream_read_error(
     assert broken_response.closed is True
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_responses_raises_network_error_on_eof_without_completion(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"Partial"}\n\n'
+    )
+    respx.post(RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with pytest.raises(NetworkError, match="response completion event"):
+        async for _ in metadata_copilot_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5-mini"):
+            pass
+
+
 @pytest.mark.asyncio
 async def test_stream_responses_raises_provider_timeout_error_on_mid_stream_timeout(
     metadata_copilot_adapter: GitHubCopilotAdapter,
@@ -1746,6 +1766,31 @@ async def test_stream_messages_raises_network_error_on_mid_stream_read_error(
             pass
 
     assert broken_response.closed is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_messages_raises_network_error_on_eof_without_stop_reason(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        'data: {"type":"content_block_start","index":0,'
+        '"content_block":{"type":"text","text":""}}\n\n'
+        'data: {"type":"content_block_delta","index":0,'
+        '"delta":{"type":"text_delta","text":"Partial"}}\n\n'
+    )
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with pytest.raises(NetworkError, match="message stop reason"):
+        async for _ in metadata_copilot_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4.6",
+        ):
+            pass
 
 
 @pytest.mark.asyncio
