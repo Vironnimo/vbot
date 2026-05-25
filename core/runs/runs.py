@@ -1,4 +1,4 @@
-"""Run coordination primitives for chat execution."""
+"""Run coordination primitives for session execution."""
 
 from __future__ import annotations
 

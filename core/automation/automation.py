@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.chat import ActiveRunError, ChatLoop, ChatRunManager, Run
+from core.chat import ChatLoop
 from core.chat.content_blocks import ContentBlock
+from core.runs import ActiveRunError, ChatRunManager, Run
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime

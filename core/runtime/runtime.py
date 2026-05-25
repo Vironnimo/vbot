@@ -14,7 +14,7 @@ from core.agents.agents import AgentStore, SkillPromptRegistry, SystemPromptMana
 from core.attachments import AttachmentStore
 from core.automation import CronService, TriggerService
 from core.channels import ChannelService
-from core.chat import ChatLoop, ChatRunManager, CommandDispatcher
+from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.extensions import ExtensionRegistry
 from core.models.models import Model, ModelRegistry
@@ -29,6 +29,7 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
+from core.runs import ChatRunManager
 from core.runtime.interfaces import (
     ConfigProtocol,
     LoggerProtocol,

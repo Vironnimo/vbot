@@ -17,11 +17,12 @@ from typing import Any, cast
 import pytest
 
 import server.delegates as delegates
-from core.chat import ChatLoop, ChatMessage, ChatRunManager, ChatSessionManager
+from core.chat import ChatLoop, ChatMessage, ChatSessionManager
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
+from core.runs import ChatRunManager
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
@@ -3388,7 +3389,7 @@ class TestServerEventFromRunEvent:
         sequence: int = 1,
     ) -> Any:
         """Create a minimal RunEvent for testing."""
-        from core.chat.runs import RunEvent
+        from core.runs import RunEvent
 
         return RunEvent(
             sequence=sequence,

@@ -11,15 +11,13 @@ import pytest
 from core.agents.agents import Agent, AgentNotFoundError, AgentStore
 from core.chat import (
     ChatMessage,
-    ChatRunManager,
     CommandDispatcher,
     CommandHandled,
     NotACommand,
-    Run,
-    RunCancelledError,
 )
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
 
 

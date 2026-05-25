@@ -1,18 +1,19 @@
 # Chat
 
-Canonical backend chat messages and the chat run execution model exposed through
-the server layer.
+Canonical backend chat messages and chat-loop execution exposed through the
+server layer.
 
 ## Overview
 
 `core/chat/` owns the provider-agnostic conversation representation used between
-the chat layer and provider adapters, plus the Run execution model. Session
-persistence lives in `core/sessions/`; compaction/context management lives in
-`core/compaction/`; chat should interact with both through their public APIs
-rather than knowing storage paths or compaction internals. Provider-specific wire
-details stay in `core/providers/`; chat should assemble canonical history and
-request options only. A Session is the persisted chat container; a Run is one
-active execution inside that session.
+the chat layer and provider adapters, plus the chat loop that executes provider
+and tool turns. Run lifecycle and queue coordination live in `core/runs/`;
+Session persistence lives in `core/sessions/`; compaction/context management
+lives in `core/compaction/`; chat should interact with those domains through
+their public APIs rather than knowing storage paths or lifecycle internals.
+Provider-specific wire details stay in `core/providers/`; chat should assemble
+canonical history and request options only. A Session is the persisted chat
+container; a Run is one active execution inside that session.
 
 ## Data Model
 
@@ -35,11 +36,12 @@ active execution inside that session.
 - `ChatMessage.to_dict()` / `ChatMessage.from_dict(data)` — canonical JSON-compatible conversion.
 - `error_kind_llm_visible(kind)` — returns whether a persisted error should be embedded into the next provider request.
 - Session persistence interfaces live in `.vorch/specs/sessions.md` and are exported from `core.sessions`.
+- Run lifecycle types (`Run`, `RunEvent`, `ChatRunManager`, queue items, and Run errors) live in `.vorch/specs/runs.md` and are exported from `core.runs`.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `compaction_completed` is a visible Run event carrying `{ message }` after auto-compaction appends a `compaction_checkpoint` during a Run.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
-- `Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
-- `ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, allows parallel Runs in different Sessions, and owns the in-memory FIFO queue of pending `QueuedRunItem`s per Session with enqueue/list/remove/update plus automatic drain when the active Run finishes.
+- `core.runs.Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
+- `core.runs.ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, allows parallel Runs in different Sessions, and owns the in-memory FIFO queue of pending `QueuedRunItem`s per Session with enqueue/list/remove/update plus automatic drain when the active Run finishes.
 - `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins return a handled result with optional reply text; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins include `/stop` and `/compact`.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.

@@ -4,7 +4,7 @@ Programmatic run-triggering primitives and scheduling services in `core/automati
 
 ## Overview
 
-Automation owns kernel-level primitives for starting Runs without going through the normal WebUI send flow plus lightweight scheduling that decides when to fire those triggers. `TriggerService` starts a Run immediately when the target Session is idle and delegates busy-session queueing to `ChatLoop.queue_run(...)` / `ChatRunManager`, which owns the shared in-memory FIFO per Session. `CronService` persists scheduled jobs under `<data_dir>/cron/jobs.json`, manages per-job asyncio tasks, and fires `TriggerService.trigger_run(...)` when jobs become due.
+Automation owns kernel-level primitives for starting Runs without going through the normal WebUI send flow plus lightweight scheduling that decides when to fire those triggers. `TriggerService` starts a Run immediately when the target Session is idle and delegates busy-session queueing to `ChatLoop.queue_run(...)` / `core.runs.ChatRunManager`, which owns the shared in-memory FIFO per Session. `CronService` persists scheduled jobs under `<data_dir>/cron/jobs.json`, manages per-job asyncio tasks, and fires `TriggerService.trigger_run(...)` when jobs become due.
 
 ## Interfaces
 

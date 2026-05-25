@@ -9,20 +9,17 @@ from typing import Any
 
 import pytest
 
-from core.chat import (
+from core.chat import ChatLoop, ChatSessionManager
+from core.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
-    ChatLoop,
     ChatRunManager,
-    ChatSessionManager,
     Run,
     RunCancelledError,
     RunNotFoundError,
     RunStatus,
-)
-from core.chat.runs import (
-    ASSISTANT_OUTPUT_DELTA_EVENT,
-    REASONING_DELTA_EVENT,
-    TOOL_CALL_DELTA_EVENT,
 )
 
 pytestmark = pytest.mark.asyncio

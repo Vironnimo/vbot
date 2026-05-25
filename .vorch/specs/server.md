@@ -108,7 +108,7 @@ Clients call the vBot server contract; provider wire details stay behind
   through the shared `ChatLoop.start_run()` execution model. `content` may be a
   string or a JSON array of canonical content-block dicts. When the target
   Session already has an active Run, these methods enqueue through the shared
-  `ChatRunManager` queue and return `{ queued: true, item }` instead of an
+  `core.runs.ChatRunManager` queue and return `{ queued: true, item }` instead of an
   `active_run` RPC error.
 - Recognized built-in slash commands are intercepted before Run start only when
   `content` resolves to pure text. In that case `chat.send` and `chat.stream`

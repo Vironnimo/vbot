@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import TriggerService
-from core.chat import ActiveRunError, Run
+from core.runs import ActiveRunError, Run
 
 pytestmark = pytest.mark.asyncio
 

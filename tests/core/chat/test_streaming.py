@@ -7,17 +7,17 @@ from typing import Any
 
 import pytest
 
-from core.chat.runs import (
-    ASSISTANT_OUTPUT_DELTA_EVENT,
-    REASONING_DELTA_EVENT,
-    TOOL_CALL_DELTA_EVENT,
-)
 from core.chat.streaming import (
     StreamingAccumulator,
     StreamingAssistantFields,
     StreamingChunkTimeoutError,
     StreamingDeltaError,
     iter_with_chunk_timeout,
+)
+from core.runs import (
+    ASSISTANT_OUTPUT_DELTA_EVENT,
+    REASONING_DELTA_EVENT,
+    TOOL_CALL_DELTA_EVENT,
 )
 
 JsonObject = dict[str, Any]

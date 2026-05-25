@@ -8,7 +8,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.attachments import AttachmentStore
-from core.chat import ChatRunManager
+from core.runs import ChatRunManager
 from server.app import create_app
 
 MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
