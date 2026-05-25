@@ -10,7 +10,14 @@ from core.tools.process_manager import (
     SessionNotFoundError,
     SessionStillRunningError,
 )
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
@@ -269,6 +276,7 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_DESCRIPTION,
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
+        display=ToolDisplay(summary_fields=("action", "session_id")),
     )
 
 

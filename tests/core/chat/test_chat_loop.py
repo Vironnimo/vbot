@@ -39,6 +39,7 @@ from core.runs import (
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
+    ToolDisplay,
     ToolRegistry,
     register_glob_tool,
     register_grep_tool,
@@ -1537,6 +1538,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "Get weather.",
         {"type": "object"},
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+        display=ToolDisplay(summary_fields=("city",)),
     )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
@@ -1645,6 +1647,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         "Get weather.",
         {"type": "object"},
         lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+        display=ToolDisplay(summary_fields=("city",)),
     )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
@@ -1677,6 +1680,10 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     ]
     tool_started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
     assert tool_started.payload["tool_call"]["arguments"] == {"city": "Berlin"}
+    assert tool_started.payload["display"] == {
+        "summary": "Berlin",
+        "hidden_argument_keys": [],
+    }
     assert tool_started.payload["tool_call"] == {
         "id": "call_abc",
         "index": 0,

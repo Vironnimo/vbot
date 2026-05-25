@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from core.tools.process_manager import ProcessManager, SessionNotFoundError
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 from core.utils.logging import get_logger
 
 BASH_TOOL_NAME = "bash"
@@ -163,6 +170,7 @@ def register_bash_tool(
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         handler,
+        display=ToolDisplay(summary_fields=("command",)),
     )
 
 

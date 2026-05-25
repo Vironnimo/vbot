@@ -1278,6 +1278,7 @@ function mergeToolStarted(assistantRun, event) {
   tool.index = toolCall.index ?? tool.index;
   tool.name = toolCall.name ?? tool.name;
   tool.arguments = toolCall.arguments;
+  tool.display = event.payload?.display ?? toolCall.display ?? null;
   tool.partialArgumentsText = null;
   tool.startedEvent = event;
   tool.status = tool.resultEvent ? tool.status : CHAT_STATUS_RUNNING;
@@ -1347,6 +1348,7 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     status: CHAT_STATUS_RUNNING,
     name: '',
     arguments: undefined,
+    display: null,
     partialArgumentsText: null,
     result: undefined,
     toolCall: null,

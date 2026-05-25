@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from core.skills.skills import FRONT_MATTER_DELIMITER, SkillRegistry, _scan_skill_resources
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
@@ -80,6 +87,7 @@ def register_skill_tool(registry: ToolRegistry, skill_registry: SkillRegistry) -
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(skill_registry),
         internal=True,
+        display=ToolDisplay(summary_fields=("name",)),
     )
 
 

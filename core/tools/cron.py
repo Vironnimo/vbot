@@ -9,7 +9,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -127,6 +134,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
+        display=ToolDisplay(summary_fields=("action", "id", "agent_id", "schedule_type")),
     )
 
 

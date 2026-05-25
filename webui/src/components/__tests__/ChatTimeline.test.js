@@ -990,7 +990,7 @@ describe('ChatTimeline', () => {
     expect(document.body.textContent).not.toContain(newString);
   });
 
-  it('prefers description argument over path/command in tool summary', () => {
+  it('prefers backend display summary over command arguments', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -1008,8 +1008,11 @@ describe('ChatTimeline', () => {
           name: 'bash',
           arguments: {
             command: 'git status',
-            description: 'checking repo status',
           },
+        },
+        display: {
+          summary: 'checking repo status',
+          hidden_argument_keys: [],
         },
       },
     });
@@ -1045,7 +1048,51 @@ describe('ChatTimeline', () => {
     expect(summaryLine.textContent).toContain('checking repo status');
     expect(summaryLine.textContent).not.toContain('git status');
 
-    // description key should not appear in the detail panel (it's hidden)
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    expect(argsRow.querySelector('.teb-code').textContent).toContain(
+      'git status',
+    );
+  });
+
+  it('falls back to bash command and ignores unsupported description arguments', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-bash-command',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-bash-command',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-bash-command',
+          index: 0,
+          name: 'bash',
+          arguments: {
+            command: 'git status',
+            description: 'checking repo status',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('git status');
+    expect(summaryLine.textContent).not.toContain('checking repo status');
+
     const tebRows = document.querySelectorAll('.teb-row');
     const argsRow = Array.from(tebRows).find(
       (el) => el.querySelector('.teb-label')?.textContent === 'Args',
@@ -1166,7 +1213,47 @@ describe('ChatTimeline', () => {
     expect(document.body.textContent).toContain('build');
   });
 
-  it('skips empty or whitespace-only description and falls back to per-tool arg', () => {
+  it('does not render empty object arguments as a status summary', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-status-summary',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-status-summary',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-status-summary',
+          index: 0,
+          name: 'status',
+          arguments: {},
+        },
+        display: {
+          summary: '',
+          hidden_argument_keys: [],
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    expect(summaryLine.textContent).toContain('status');
+    expect(summaryLine.textContent).not.toContain('({})');
+    expect(summaryLine.textContent).not.toContain('{}');
+  });
+
+  it('skips empty backend display summary and falls back to per-tool arg', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -1182,7 +1269,11 @@ describe('ChatTimeline', () => {
           id: 'call-empty-desc',
           index: 0,
           name: 'read',
-          arguments: { path: 'config.yaml', description: '   ' },
+          arguments: { path: 'config.yaml' },
+        },
+        display: {
+          summary: '   ',
+          hidden_argument_keys: [],
         },
       },
     });
@@ -1527,7 +1618,7 @@ describe('ChatTimeline', () => {
     });
   });
 
-  it('shows JSON fallback for tools with non-string argument values', () => {
+  it('omits summary fallback for tools with non-string argument values', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -1572,7 +1663,12 @@ describe('ChatTimeline', () => {
 
     const summaryLine = document.querySelector('.tool-event-line');
     expect(summaryLine.textContent).toContain('compute');
-    expect(summaryLine.textContent).toContain('count');
+    expect(summaryLine.textContent).not.toContain('count');
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    expect(argsRow.querySelector('.teb-code').textContent).toContain('count');
   });
 
   it('keeps thinking above later tool rows after subsequent reasoning updates', () => {

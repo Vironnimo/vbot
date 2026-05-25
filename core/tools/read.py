@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 MAX_FILE_BYTES = 50 * 1024
 DEFAULT_LINE_LIMIT = 2000
@@ -211,6 +218,7 @@ def register_read_tool(registry: ToolRegistry) -> None:
         READ_TOOL_DESCRIPTION,
         READ_TOOL_PARAMETERS,
         read_handler,
+        display=ToolDisplay(summary_fields=("path",)),
     )
 
 

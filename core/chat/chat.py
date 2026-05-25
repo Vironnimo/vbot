@@ -383,7 +383,12 @@ class _EmittingToolRegistry(ToolRegistry):
                     "index": context.tool_call_index,
                     "name": context.tool_name,
                     "arguments": original_arguments,
-                }
+                },
+                "display": _tool_display_payload(
+                    self._registry,
+                    context.tool_name,
+                    original_arguments,
+                ),
             },
         )
         result: JsonObject | None = None
@@ -533,6 +538,25 @@ class _EmittingToolRegistry(ToolRegistry):
             )
         except Exception as error:
             return tool_failure("tool_execution_error", str(error))
+
+
+def _tool_display_payload(registry: Any, tool_name: str, arguments: Any) -> JsonObject:
+    display_for_call = getattr(registry, "display_for_call", None)
+    if not callable(display_for_call):
+        return _empty_tool_display_payload()
+
+    try:
+        payload = display_for_call(tool_name, arguments)
+    except ToolNotFoundError:
+        return _empty_tool_display_payload()
+
+    if not isinstance(payload, dict):
+        return _empty_tool_display_payload()
+    return payload
+
+
+def _empty_tool_display_payload() -> JsonObject:
+    return {"summary": "", "hidden_argument_keys": []}
 
 
 class ChatLoop:

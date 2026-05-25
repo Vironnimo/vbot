@@ -5,7 +5,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 WRITE_TOOL_NAME = "write"
 WRITE_TOOL_DESCRIPTION = (
@@ -85,6 +92,7 @@ def register_write_tool(registry: ToolRegistry) -> None:
         WRITE_TOOL_DESCRIPTION,
         WRITE_TOOL_PARAMETERS,
         _write_handler_async,
+        display=ToolDisplay(summary_fields=("path",), hidden_argument_keys=("content",)),
     )
 
 

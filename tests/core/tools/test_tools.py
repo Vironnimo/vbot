@@ -13,6 +13,7 @@ from core.tools import (
     Tool,
     ToolCall,
     ToolContext,
+    ToolDisplay,
     ToolExecutionConfig,
     ToolExecutor,
     ToolNoteHook,
@@ -210,6 +211,29 @@ class TestTool:
         assert tool.description == "Read a UTF-8 text file from the workspace."
         assert tool.parameters == READ_FILE_SCHEMA
         assert tool.handler is read_file_handler
+        assert tool.display == ToolDisplay()
+
+    def test_display_builds_payload_from_summary_fields(self) -> None:
+        display = ToolDisplay(
+            summary_fields=("pattern", "path"),
+            hidden_argument_keys=("content",),
+        )
+
+        payload = display.to_payload({"pattern": "TODO", "path": "src", "content": "large body"})
+
+        assert payload == {
+            "summary": "TODO · src",
+            "hidden_argument_keys": ["content"],
+        }
+
+    def test_display_omits_empty_argument_summary(self) -> None:
+        display = ToolDisplay(summary_fields=("path",))
+
+        assert display.to_payload({}) == {"summary": "", "hidden_argument_keys": []}
+
+    def test_display_rejects_bare_string_summary_fields(self) -> None:
+        with pytest.raises(ValueError, match="summary_fields"):
+            ToolDisplay(summary_fields="path")  # type: ignore[arg-type]
 
     def test_frozen_raises_on_attribute_assignment(self) -> None:
         tool = Tool(
@@ -286,6 +310,18 @@ class TestToolRegistryRegister:
                 None,  # type: ignore[arg-type]
             )
 
+    def test_non_display_metadata_raises_value_error(self) -> None:
+        registry = ToolRegistry()
+
+        with pytest.raises(ValueError, match="display"):
+            registry.register(
+                "read_file",
+                "Read a UTF-8 text file from the workspace.",
+                READ_FILE_SCHEMA,
+                read_file_handler,
+                display=object(),  # type: ignore[arg-type]
+            )
+
 
 class TestToolRegistryAllowlistFiltering:
     def test_empty_registry_lists_no_tools(self) -> None:
@@ -353,7 +389,13 @@ class TestToolRegistryDefinitions:
 
     def test_provider_definitions_do_not_expose_handler_or_context(self) -> None:
         registry = ToolRegistry()
-        register_read_file(registry)
+        registry.register(
+            name="read_file",
+            description="Read a UTF-8 text file from the workspace.",
+            parameters=READ_FILE_SCHEMA,
+            handler=read_file_handler,
+            display=ToolDisplay(summary_fields=("path",)),
+        )
 
         definition = registry.provider_definitions(["read_file"])[0]
 
@@ -390,6 +432,26 @@ class TestToolRegistryDefinitions:
 
 
 class TestToolRegistryDispatch:
+    def test_display_for_call_uses_registered_tool_display(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="write_file",
+            description="Write UTF-8 text to a workspace file.",
+            parameters=WRITE_FILE_SCHEMA,
+            handler=write_file_handler,
+            display=ToolDisplay(summary_fields=("path",), hidden_argument_keys=("content",)),
+        )
+
+        payload = registry.display_for_call(
+            "write_file",
+            {"path": "notes.md", "content": "large body"},
+        )
+
+        assert payload == {
+            "summary": "notes.md",
+            "hidden_argument_keys": ["content"],
+        }
+
     @pytest.mark.asyncio
     async def test_dispatch_passes_context_to_sync_handler(self) -> None:
         registry = ToolRegistry()

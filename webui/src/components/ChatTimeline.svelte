@@ -282,12 +282,23 @@
     if (!toolCall) {
       return '';
     }
+    const displaySummary = trimmedString(toolDisplayFromEvent(event)?.summary);
+    if (displaySummary) {
+      return `(${displaySummary})`;
+    }
     const label = humanReadableToolLabel(
       toolCall?.name ?? '',
       toolCall.arguments ?? {},
     );
     return label ? `(${label})` : '';
   };
+
+  const toolRowFromEvent = (event) => ({
+    name: toolNameForEvent(event),
+    toolCall: toolCallFromEvent(event),
+    display: toolDisplayFromEvent(event),
+    startedEvent: event,
+  });
 
   const visibleRunChildren = (assistantRun) =>
     (assistantRun.items ?? []).filter((child) => {
@@ -376,10 +387,10 @@
 
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
-  const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
+  const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
   const TOOL_ARGUMENT_HIDDEN_KEYS = {
-    edit: new Set(['newString', 'new_string', 'oldString', 'old_string']),
-    write: new Set(['content']),
+    edit: ['newString', 'new_string', 'oldString', 'old_string'],
+    write: ['content'],
   };
   const TOOL_DISPLAY_ARGS = {
     read: ['path'],
@@ -390,7 +401,14 @@
     grep: ['pattern', 'path'],
     subagent: ['agent_id', 'content'],
     subagent_result: ['agent_id', 'session_id'],
+    web_fetch: ['url'],
+    web_search: ['query'],
+    process: ['action', 'session_id'],
+    cron: ['action', 'id', 'agent_id', 'schedule_type'],
+    channel_send: ['channel_id', 'message'],
+    skill: ['name'],
   };
+  const TOOL_NO_SUMMARY_NAMES = new Set(['status']);
   const MAX_TOOL_LABEL_LENGTH = 80;
   const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
   const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
@@ -403,8 +421,36 @@
     'type',
   ];
 
-  const hiddenArgumentKeysForTool = (toolName) =>
-    TOOL_ARGUMENT_HIDDEN_KEYS[toolName] ?? null;
+  const toolDisplay = (tool) => {
+    const display =
+      tool?.display ??
+      tool?.toolCall?.display ??
+      tool?.startedEvent?.payload?.display;
+    return isPlainObject(display) ? display : null;
+  };
+
+  const toolDisplayFromEvent = (event) => {
+    const display = event?.payload?.display;
+    return isPlainObject(display) ? display : null;
+  };
+
+  const hiddenArgumentKeysForTool = (toolOrName, fallbackName = '') => {
+    const toolName =
+      typeof toolOrName === 'string'
+        ? toolOrName
+        : fallbackName || toolNameForRunTool(toolOrName);
+    const keys = [...(TOOL_ARGUMENT_HIDDEN_KEYS[toolName] ?? [])];
+
+    if (typeof toolOrName !== 'string') {
+      for (const key of toolDisplay(toolOrName)?.hidden_argument_keys ?? []) {
+        if (typeof key === 'string' && key && !keys.includes(key)) {
+          keys.push(key);
+        }
+      }
+    }
+
+    return keys.length > 0 ? keys : null;
+  };
 
   const humanReadableToolLabel = (toolName, argumentsValue) => {
     let args = argumentsValue;
@@ -417,26 +463,23 @@
     }
 
     if (!args || typeof args !== 'object' || Array.isArray(args)) {
-      return formatJson(argumentsValue);
+      return typeof argumentsValue === 'string' ? argumentsValue.trim() : '';
+    }
+
+    if (TOOL_NO_SUMMARY_NAMES.has(toolName) || Object.keys(args).length === 0) {
+      return '';
     }
 
     if (toolName === 'glob') {
-      return searchToolLabel(args, false) ?? formatJson(argumentsValue);
+      return searchToolLabel(args, false) ?? '';
     }
 
     if (toolName === 'grep') {
-      return searchToolLabel(args, true) ?? formatJson(argumentsValue);
+      return searchToolLabel(args, true) ?? '';
     }
 
     if (SUBAGENT_TOOL_NAMES.has(toolName)) {
-      return subAgentToolLabel(toolName, args) ?? formatJson(argumentsValue);
-    }
-
-    if (
-      typeof args.description === 'string' &&
-      args.description.trim() !== ''
-    ) {
-      return args.description;
+      return subAgentToolLabel(toolName, args) ?? '';
     }
 
     const displayArgs = TOOL_DISPLAY_ARGS[toolName];
@@ -463,7 +506,7 @@
       return firstStringEntry;
     }
 
-    return formatJson(argumentsValue);
+    return '';
   };
 
   const searchToolLabel = (args, includePath) => {
@@ -484,6 +527,11 @@
   };
 
   const toolArgumentSummary = (tool) => {
+    const displaySummary = trimmedString(toolDisplay(tool)?.summary);
+    if (displaySummary) {
+      return `(${displaySummary})`;
+    }
+
     const argumentsValue = toolArguments(tool);
     if (argumentsValue === undefined || argumentsValue === null) {
       return '';
@@ -624,8 +672,8 @@
     return Object.fromEntries(
       Object.entries(parsedValue).flatMap(([key, entryValue]) => {
         if (
-          TOOL_DETAIL_HIDDEN_KEYS.has(key) ||
-          additionalHiddenKeys?.has(key) ||
+          TOOL_DETAIL_HIDDEN_KEYS.includes(key) ||
+          additionalHiddenKeys?.includes(key) ||
           entryValue === undefined
         ) {
           return [];
@@ -751,11 +799,16 @@
 
   const compactToolValue = (
     value,
-    { preferPayload = false, toolName = '' } = {},
+    { preferPayload = false, toolName = '', tool = null } = {},
   ) => {
     const processed = preferPayload
       ? preferredToolResultValue(value, toolName)
-      : sanitizeToolDetailNode(value, hiddenArgumentKeysForTool(toolName));
+      : sanitizeToolDetailNode(
+          value,
+          tool
+            ? hiddenArgumentKeysForTool(tool, toolName)
+            : hiddenArgumentKeysForTool(toolName),
+        );
 
     if (!hasMeaningfulToolDetail(processed)) {
       return t('chat.toolNoData', '—');
@@ -810,17 +863,6 @@
     event.payload?.result ??
     event.payload?.error ??
     messageFromEvent(event)?.content;
-
-  function formatJson(value) {
-    if (typeof value === 'string') {
-      return value;
-    }
-    try {
-      return JSON.stringify(value ?? {});
-    } catch {
-      return String(value);
-    }
-  }
 
   const formatTime = (timestamp) => {
     if (!timestamp) {
@@ -972,11 +1014,12 @@
   isError = false,
   preferPayload = false,
   toolName = '',
+  tool = null,
 )}
   <div class="teb-row">
     <span class="teb-label">{label}</span>
     <span class:error={isError} class="teb-code"
-      >{compactToolValue(value, { preferPayload, toolName })}</span
+      >{compactToolValue(value, { preferPayload, toolName, tool })}</span
     >
   </div>
 {/snippet}
@@ -1233,6 +1276,7 @@
                           false,
                           false,
                           toolNameForRunTool(child),
+                          child,
                         )}
                         {#if child.stdout}
                           {@render toolDetailSection(
@@ -1253,6 +1297,7 @@
                           toolStatus(child) === 'failed',
                           true,
                           toolNameForRunTool(child),
+                          child,
                         )}
                       </div>
                     </details>
@@ -1285,6 +1330,7 @@
                           false,
                           false,
                           toolNameForRunTool(child),
+                          child,
                         )}
                         {#if child.stdout}
                           {@render toolDetailSection(
@@ -1305,6 +1351,7 @@
                           toolStatus(child) === 'failed',
                           true,
                           toolNameForRunTool(child),
+                          child,
                         )}
                       </div>
                     </details>
@@ -1427,6 +1474,7 @@
                       false,
                       false,
                       toolNameForEvent(item.event),
+                      toolRowFromEvent(item.event),
                     )}
                     {#if toolResultValueForEvent(item.event)}
                       {@render toolDetailSection(
@@ -1435,6 +1483,7 @@
                         isFailedToolEvent(item.event),
                         true,
                         toolNameForEvent(item.event),
+                        toolRowFromEvent(item.event),
                       )}
                     {/if}
                   </div>

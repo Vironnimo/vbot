@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 from core.attachments.attachments import _sniff_mime
 from core.channels.adapter import FileData
 from core.channels.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 if TYPE_CHECKING:
     from core.channels.channels import ChannelService
@@ -71,6 +78,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
+        display=ToolDisplay(summary_fields=("channel_id", "message")),
     )
 
 

@@ -13,7 +13,14 @@ from core.tools.search import (
     relative_forward_path,
     resolve_search_path,
 )
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 
 DEFAULT_LIMIT = 100
 MAX_LINE_CHARS = 500
@@ -482,6 +489,7 @@ def register_grep_tool(registry: ToolRegistry) -> None:
         GREP_TOOL_DESCRIPTION,
         GREP_TOOL_PARAMETERS,
         grep_handler,
+        display=ToolDisplay(summary_fields=("pattern", "path")),
     )
 
 

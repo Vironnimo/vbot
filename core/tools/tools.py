@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import weakref
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -21,6 +21,8 @@ ToolCancellationHook = Callable[[], bool]
 ToolNoteHook = Callable[[str], None]
 ToolSkillActivationHook = Callable[[str, JsonObject], JsonObject]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
+ToolSummaryBuilder = Callable[[JsonObject], str | None]
+MAX_TOOL_DISPLAY_SUMMARY_LENGTH = 120
 
 
 class ToolError(VBotError):
@@ -37,6 +39,48 @@ class ToolNotAllowedError(ToolError):
 
 class DuplicateToolError(ToolError):
     """Raised when registering a tool name more than once."""
+
+
+@dataclass(frozen=True)
+class ToolDisplay:
+    """Presentation metadata for one tool invocation."""
+
+    summary_fields: Sequence[str] = ()
+    hidden_argument_keys: Sequence[str] = field(default_factory=tuple)
+    summary_builder: ToolSummaryBuilder | None = None
+    summary_separator: str = " · "
+
+    def __post_init__(self) -> None:
+        _validate_display_strings(self.summary_fields, "summary_fields")
+        _validate_display_strings(self.hidden_argument_keys, "hidden_argument_keys")
+        if self.summary_builder is not None and not callable(self.summary_builder):
+            raise ValueError("Tool display summary_builder must be callable")
+        object.__setattr__(self, "summary_fields", tuple(self.summary_fields))
+        object.__setattr__(self, "hidden_argument_keys", tuple(self.hidden_argument_keys))
+
+    def to_payload(self, arguments: Any) -> JsonObject:
+        """Return the UI-safe display payload for one concrete invocation."""
+        return {
+            "summary": self.summary(arguments),
+            "hidden_argument_keys": sorted(self.hidden_argument_keys),
+        }
+
+    def summary(self, arguments: Any) -> str:
+        """Return a compact display summary, or an empty string when none applies."""
+        if not isinstance(arguments, dict):
+            return ""
+
+        if self.summary_builder is not None:
+            built_summary = _normalize_display_summary(self.summary_builder(arguments))
+            if built_summary:
+                return built_summary
+
+        parts = [
+            value.strip()
+            for field_name in self.summary_fields
+            if isinstance((value := arguments.get(field_name)), str) and value.strip()
+        ]
+        return _normalize_display_summary(self.summary_separator.join(parts))
 
 
 @dataclass(frozen=True)
@@ -127,6 +171,7 @@ class Tool:
     parameters: JsonObject
     handler: ToolHandler
     internal: bool = False
+    display: ToolDisplay = field(default_factory=ToolDisplay)
 
 
 def tool_success(data: JsonObject, artifacts: list[JsonObject] | None = None) -> JsonObject:
@@ -190,9 +235,10 @@ class ToolRegistry:
         handler: ToolHandler,
         *,
         internal: bool = False,
+        display: ToolDisplay | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition."""
-        self._validate_tool(name, description, parameters, handler)
+        self._validate_tool(name, description, parameters, handler, display)
         if name in self._tools:
             raise DuplicateToolError(f"Tool already registered: {name}")
 
@@ -202,9 +248,14 @@ class ToolRegistry:
             parameters=dict(parameters),
             handler=handler,
             internal=internal,
+            display=display or ToolDisplay(),
         )
         self._tools[name] = tool
         return tool
+
+    def display_for_call(self, name: str, arguments: Any) -> JsonObject:
+        """Return display metadata for a concrete tool invocation."""
+        return self.get(name).display.to_payload(arguments)
 
     def get(self, name: str) -> Tool:
         """Return a registered tool by name."""
@@ -289,6 +340,7 @@ class ToolRegistry:
         description: str,
         parameters: JsonObject,
         handler: ToolHandler,
+        display: ToolDisplay | None = None,
     ) -> None:
         if not name:
             raise ValueError("Tool name is required")
@@ -298,6 +350,8 @@ class ToolRegistry:
             raise ValueError("Tool parameters must be a JSON Schema object")
         if not callable(handler):
             raise ValueError("Tool handler must be callable")
+        if display is not None and not isinstance(display, ToolDisplay):
+            raise ValueError("Tool display must be a ToolDisplay instance")
 
     @staticmethod
     def _is_allowed(
@@ -431,6 +485,22 @@ def _copy_artifacts(artifacts: list[JsonObject] | None) -> list[JsonObject]:
         raise ValueError("Tool result artifacts must contain JSON objects")
 
     return [dict(artifact) for artifact in artifacts]
+
+
+def _validate_display_strings(values: Sequence[str], field_name: str) -> None:
+    if isinstance(values, str) or not all(isinstance(value, str) and value for value in values):
+        raise ValueError(f"Tool display {field_name} must contain non-empty strings")
+
+
+def _normalize_display_summary(value: str | None) -> str:
+    if not isinstance(value, str):
+        return ""
+
+    text = value.strip()
+    if len(text) <= MAX_TOOL_DISPLAY_SUMMARY_LENGTH:
+        return text
+
+    return f"{text[: MAX_TOOL_DISPLAY_SUMMARY_LENGTH - 3]}..."
 
 
 def _is_error_object(error: Any) -> bool:

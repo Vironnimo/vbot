@@ -8,9 +8,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 ## Data Model
 
-- `Tool`: `name`, `description`, `parameters`, `handler`, and `internal`.
+- `Tool`: `name`, `description`, `parameters`, `handler`, `internal`, and
+  `display`.
 - `parameters` is a JSON Schema object for provider tool definitions.
 - `handler` receives `(ToolContext, arguments)` and returns a JSON result envelope, synchronously or asynchronously.
+- `ToolDisplay`: per-invocation presentation metadata owned by the tool domain.
+  It can build a compact summary from `summary_fields` or `summary_builder`,
+  carries `hidden_argument_keys` for UI detail rendering, and returns an empty
+  summary for calls with no meaningful display field.
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, plus small runtime hooks.
 - Tool runtime hooks include lifecycle event emission, cancellation checks, and an optional note hook for adding kernel-internal background reminders to the current chat Session without exposing the Session object to tools.
 - Tool runtime hooks also include an optional skill activation hook plus `allowed_skills` for the internal `skill` tool.
@@ -95,8 +100,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 ## Interfaces
 
-- `ToolRegistry.register(name, description, parameters, handler, internal=False) -> Tool`
+- `ToolRegistry.register(name, description, parameters, handler, internal=False, display=None) -> Tool`
 - `get(name) -> Tool`
+- `display_for_call(name, arguments) -> dict` — returns `{ summary,
+  hidden_argument_keys }` for one concrete invocation.
 - `unregister(name) -> None` — removes a registered tool when present; used for replacing internal tool handlers after runtime skill reloads.
 - `list_tools(allowed_tools=None, include_internal=False) -> list[Tool]`
 - `provider_definitions(allowed_tools=None, include_internal=False) -> list[dict]` — name, description, JSON Schema.
@@ -144,7 +151,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `allowed_tools=None` and `['*']` mean all registered tools.
 - `allowed_tools=[]` means no tools.
 - Explicit allowlists match exact tool names; unknown names are ignored for listing and fail if dispatched.
-- Provider-visible definitions include only `name`, `description`, and `parameters`; handlers and runtime context are internal.
+- Provider-visible definitions include only `name`, `description`, and
+  `parameters`; handlers, runtime context, and display metadata are internal.
+- Display labels are not provider/tool parameters. Do not add generic arguments
+  such as `description` only to affect UI chrome; use `ToolDisplay` instead.
 - Internal tools are hidden from normal `list_tools()`, `prompt_definitions()`, and `provider_definitions()` unless `include_internal=True` is explicitly requested by the system prompt manager.
 - The internal `skill` tool is governed by `allowed_skills`, not `allowed_tools`; normal tool allowlists must not block it. Normal tools remain blocked by `allowed_tools=[]`.
 - The internal `skill` tool result must not include the full `<skill_content>` payload or raw skill body. The session-scoped skill note is the single source of full instructions for the next provider request.
