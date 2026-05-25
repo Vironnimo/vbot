@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
@@ -85,6 +86,7 @@ from server.events import (
 )
 
 JsonObject = dict[str, Any]
+_LOGGER = logging.getLogger("vbot.server.delegates")
 
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
@@ -2134,7 +2136,17 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     event_bus = getattr(state, "event_bus", None)
     if event_bus is None:
         return
-    asyncio.create_task(_publish_run_events(event_bus, run))
+    task = asyncio.create_task(_publish_run_events(event_bus, run))
+    task.add_done_callback(_on_run_event_bridge_done)
+
+
+def _on_run_event_bridge_done(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        _LOGGER.warning("Run event bridge failed", exc_info=True)
 
 
 def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:
