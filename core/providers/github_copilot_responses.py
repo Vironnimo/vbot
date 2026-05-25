@@ -440,9 +440,19 @@ def _flush_sse_event(
     data = "\n".join(data_parts).strip()
     if not data or data == RESPONSES_DONE_MARKER:
         return
-    parsed = json.loads(data)
-    if isinstance(parsed, Mapping):
-        yield event_name, parsed
+    try:
+        parsed = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"GitHub Copilot Responses provider sent malformed JSON in stream: {exc.msg}",
+            retryable=False,
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise ProviderError(
+            "GitHub Copilot Responses provider sent non-object JSON in stream",
+            retryable=False,
+        )
+    yield event_name, parsed
 
 
 def _event_type(event_name: str, event_data: Mapping[str, Any]) -> str:

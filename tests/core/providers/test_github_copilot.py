@@ -14,7 +14,7 @@ import respx
 from core.chat.chat import _assistant_message_from_response
 from core.chat.streaming import StreamingAccumulator
 from core.models.models import Model
-from core.providers.errors import NetworkError, ProviderTimeoutError
+from core.providers.errors import NetworkError, ProviderError, ProviderTimeoutError
 from core.providers.github_copilot import (
     GitHubCopilotAdapter,
 )
@@ -1786,6 +1786,28 @@ async def test_stream_messages_raises_network_error_on_eof_without_stop_reason(
     )
 
     with pytest.raises(NetworkError, match="message stop reason"):
+        async for _ in metadata_copilot_adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4.6",
+        ):
+            pass
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_messages_raises_provider_error_on_malformed_json(
+    metadata_copilot_adapter: GitHubCopilotAdapter,
+) -> None:
+    sse_body = (
+        'data: not-json\n\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n'
+    )
+    respx.post(MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200, text=sse_body, headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    with pytest.raises(ProviderError, match="malformed JSON"):
         async for _ in metadata_copilot_adapter.stream(
             SAMPLE_MESSAGES,
             model_id="claude-sonnet-4.6",
