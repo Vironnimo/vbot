@@ -53,7 +53,7 @@ container; a Run is one active execution inside that session.
 - `core/chat/content_blocks.py` owns `TextBlock`, `MediaBlock`, `FileBlock`, plus dict round-trip helpers for persisted JSONL content lists.
 - `core/chat/block_resolver.py` owns last-mile attachment resolution from persisted content blocks to provider-ready dicts just before adapter calls.
 
-## Phase 3 Server Contract Alignment
+## Server Contract Alignment
 
 - Sessions remain the canonical persisted history. The current storage format is
   append-only JSONL owned by `core/sessions/`.

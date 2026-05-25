@@ -88,7 +88,7 @@ contract rather than reading or mutating files directly.
   rather than treating startup as failed.
 - On Windows, graceful shutdown may fall back to abrupt termination after the
   timeout. In-flight Runs may be interrupted.
-- Phase 5 does not require separate stale PID or launch-metadata recovery rules;
+- The CLI does not require separate stale PID or launch-metadata recovery rules;
   live reachability and `/health` detection are the authority.
 - CLI-managed background server startup must not bypass the managed
   application logger.

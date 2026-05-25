@@ -135,8 +135,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders a flat combined command/skill name/description list for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
-  displayed from Agent data but omitted from public create/update payloads in
-  Phase 4.
+  displayed from Agent data but omitted from public create/update payloads.
   - In edit mode it builds sparse update payloads: unchanged fields are omitted
     so inherited resolved defaults are not written back as explicit overrides.
     Clearing `temperature` or `thinking_effort` sends `null`; clearing model
@@ -302,12 +301,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 
 - The Toasted `Components` showcase is a design/reference artifact only. It
   must not ship as a live WebUI tab or appear in normal navigation.
-- Reload recovery for in-flight Runs and accessor-local last-selected-Agent
-  restore are out of scope for Phase 4.
+- Reload recovery for in-flight Runs is out of scope. The accessor-local
+  last-selected Agent is restored through `localStorage` when available.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
-- `System Prompt` is functional — it renders four fragment editors (`system.md`, `runtime.md`, `tools.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search

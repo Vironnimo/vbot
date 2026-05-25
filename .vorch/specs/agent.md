@@ -18,10 +18,10 @@ Persisted agent configuration and workspace lifecycle management.
 - `fallback_model` is an optional secondary `<provider>/<model-id>` with the same optional `::<connection-local-id>` suffix support. It is used when a retryable provider error escapes the primary adapter's built-in retries during a Run. Once activated, it stays active only for the rest of that Run; the next turn starts from `model` again.
 - Persisted `temperature` and `thinking_effort` may be `null` in `agent.json` to mean "no explicit per-agent override". `AgentStore` applies `settings.json` `defaults.agent` values at read time for `get()`, `list()`, and returned create/update results; raw disk state remains unresolved.
 - `workspace` defaults to `<data_dir>/workspace-<id>/` and is stored as an absolute path.
-  Public WebUI/RPC create/update does not accept workspace mutation in Phase 4;
+  Public WebUI/RPC create/update does not accept workspace mutation;
   this avoids archiving arbitrary user paths if an Agent is later deleted.
 - `current_session_id` stores the agent's active Session. Every new Agent gets
-  an initial empty Session immediately; legacy configs without this field are
+  an initial empty Session immediately; configs without this field are
   normalized to a valid Session when loaded.
 - `allowed_tools` and `allowed_skills` default to `['*']`.
 

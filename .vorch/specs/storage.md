@@ -4,13 +4,13 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Overview
 
-`core/storage/` owns Phase 2 data-directory creation and simple JSON/settings storage. It also mediates raw prompt fragment file access so prompt bodies live in files rather than hardcoded code strings. The default data directory is `~/.vbot` unless supplied directly or through config. Public Settings update payload validation lives in `core/settings/`; storage validates and normalizes persisted subsets after that public schema has been accepted. System Prompt assembly and editable prompt-fragment rules live in `core/prompts/`.
+`core/storage/` owns data-directory creation and simple JSON/settings storage. It also mediates raw prompt fragment file access so prompt bodies live in files rather than hardcoded code strings. The default data directory is `~/.vbot` unless supplied directly or through config. Public Settings update payload validation lives in `core/settings/`; storage validates and normalizes persisted subsets after that public schema has been accepted. System Prompt assembly and editable prompt-fragment rules live in `core/prompts/`.
 
 ## Data Model
 
-Phase 2 creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
+Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
 
-Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
+Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
 `<data_dir>/.env` stores user-owned secrets such as provider API keys and acts
 as a read-only fallback credential source.
@@ -28,7 +28,7 @@ as a read-only fallback credential source.
 
 - `core/storage/__init__.py` exports `StorageManager`, `StorageError`, data-dir constants, and the storage config protocol.
 - `StorageManager(data_dir=None, config=None, resources_dir=None)`
-- `ensure_directories()` — creates the Phase 2 directory structure.
+- `ensure_directories()` — creates the current data-directory structure.
 - `load_environment() -> dict[str, str]` — returns a read-only snapshot of
   credentials from `<data_dir>/.env` without mutating `os.environ`.
 - `load_data_dir_credentials() -> dict[str, str]` — reads `<data_dir>/.env`

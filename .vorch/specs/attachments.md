@@ -18,7 +18,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
   - `text_content: str | None` — populated only for `text/*`
 - Blob path: `<data_dir>/attachments/<uuid>`
 - Sidecar path: `<data_dir>/attachments/<uuid>.json`
-- There is no global index, no DB, and no cleanup pass in V1.
+- There is no global index, no DB, and no cleanup pass.
 
 ## Interfaces
 
@@ -42,7 +42,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 
 ## Constraints & Gotchas
 
-- V1 keeps `MediaBlock` generic at the chat layer, but attachment storage itself does not decide product scope; the chat layer currently uses image media only.
+- `MediaBlock` stays generic at the chat layer, but attachment storage itself does not decide product scope; the chat layer currently uses image media only.
 - Text files are fully embedded later as `TextBlock`s; non-text files remain file references unless the chat layer has a specific binary-resolution path.
 - `file_path` is intentionally surfaced to the chat layer for `FileBlock` notes so agents can use the existing `read` tool. This is by design, not a leak.
-- Cleanup of orphaned or deleted-session attachments is explicitly out of scope for V1.
+- Cleanup of orphaned or deleted-session attachments is explicitly out of scope.

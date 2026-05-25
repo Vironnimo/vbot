@@ -57,7 +57,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `agents` — `AgentStore` for agent CRUD/workspaces. Runtime wires it to
   `settings.json` `defaults.agent` so resolved Agent reads always use the latest
   persisted defaults without rewriting agent files.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `edit`, `glob`, `grep`, `process`, `read`, `subagent`, `subagent_result`, `write`) plus the internal `skill` tool when skills are loaded.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `cron`, `edit`, `glob`, `grep`, `process`, `read`, `status`, `subagent`, `subagent_result`, `web_fetch`, `web_search`, `write`) plus the internal `skill` tool. `channel_send` is registered dynamically while at least one channel is active.
 - `process_manager` — shared in-memory `ProcessManager` service used by `bash`
   and `process` tools. It owns process sessions, output buffers, TTL sweeping,
   and Run-scoped cancellation.
