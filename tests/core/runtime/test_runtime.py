@@ -20,8 +20,8 @@ from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
+from core.subagents import SubAgentCoordinator
 from core.tools.process_manager import ProcessManager
-from core.tools.subagent import SubAgentBatchTracker
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
 
@@ -512,13 +512,13 @@ def test_runtime_registers_bash_and_process_tools(config: Config) -> None:
 
 
 def test_runtime_registers_subagent_tools(config: Config) -> None:
-    """Runtime.start() registers sub-agent tools and owns their batch tracker."""
+    """Runtime.start() registers sub-agent tools and owns their coordinator."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
-    assert isinstance(runtime._subagent_batch_tracker, SubAgentBatchTracker)  # noqa: SLF001
+    assert isinstance(runtime._subagent_coordinator, SubAgentCoordinator)  # noqa: SLF001
     assert runtime.tools.get("subagent").name == "subagent"
     assert runtime.tools.get("subagent_result").name == "subagent_result"
 

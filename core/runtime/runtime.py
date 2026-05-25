@@ -39,6 +39,7 @@ from core.runtime.interfaces import (
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
 from core.storage.storage import StorageManager
+from core.subagents import SubAgentCoordinator
 from core.tools import (
     register_bash_tool,
     register_edit_tool,
@@ -54,7 +55,7 @@ from core.tools import (
 from core.tools.cron import register_cron_tool
 from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
-from core.tools.subagent import SubAgentBatchTracker, register_subagent_tools
+from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolRegistry
 from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
@@ -140,7 +141,7 @@ class Runtime:
         self._trigger_service: TriggerService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
-        self._subagent_batch_tracker: SubAgentBatchTracker | None = None
+        self._subagent_coordinator: SubAgentCoordinator | None = None
         self._system_prompts: SystemPromptManager | None = None
 
     def start(self) -> None:
@@ -251,13 +252,8 @@ class Runtime:
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
         register_bash_tool(self._tools, self._process_manager, self._trigger_service)
-        self._subagent_batch_tracker = SubAgentBatchTracker(self._trigger_service)
-        register_subagent_tools(
-            self._tools,
-            self,
-            self._trigger_service,
-            self._subagent_batch_tracker,
-        )
+        self._subagent_coordinator = SubAgentCoordinator(self, self._trigger_service)
+        register_subagent_tools(self._tools, self._subagent_coordinator)
         register_status_tool(
             self._tools,
             self._agents,
@@ -311,7 +307,7 @@ class Runtime:
             self._cron_service.stop()
         self._cron_service = None
         self._trigger_service = None
-        self._subagent_batch_tracker = None
+        self._subagent_coordinator = None
         self._chat_loop = None
         self._streaming_chat_loop = None
         self._command_dispatcher = None

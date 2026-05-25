@@ -1,70 +1,79 @@
 # Handoff
 
-## Current Architecture Candidates
+## Subagent Improvement Candidates
 
-The old handoff content was stale. This file now tracks the current candidates for future domain extraction work.
+Current status: first-pass `SubAgentCoordinator` is implemented in `core/subagents/`; the remaining candidates below are the next subagent improvement options.
 
-### 1. Compaction / Context Management
+### 1. UI Visibility
 
-Status: extracted to `core/compaction/`.
-
-Compaction already spans a service/strategy, chat-loop control flow, manual `/compact` command handling, persisted settings, bundled prompt fragments, Run events, and WebUI settings/timeline rendering.
-
-Candidate shape: `core/compaction/` with a dedicated `.vorch/specs/compaction.md` spec.
+Show child run state directly in the parent timeline instead of only offering a session link. Useful details include queued/running/done/failed status, latest answer preview, and important child tool-call activity.
 
 Why it matters:
-- Compaction has product-specific semantics, not just chat helper code.
-- It must preserve Session append-only history, safe tool-cycle boundaries, summary model resolution, and visible transparency events.
-- Current summary-adapter resolution exists both in the chat loop and server manual compact path.
+- Subagents are otherwise a black box from the parent conversation.
+- Better visibility makes delegation easier to trust and debug.
 
-### 2. Runs / Queue / Lifecycle
+Tradeoff:
+- The timeline can become noisy when many subagents run.
+- The UI needs careful summarization so nested activity stays readable.
 
-Status: extracted to `core/runs/`.
+### 2. SubAgentCoordinator
 
-Large candidate. `ChatRunManager` owns active Runs, Run events, cancellation, replay/subscription, and the busy-session FIFO queue. Automation, subagents, server RPC, channels, and WebUI queue state all depend on it.
+Status: first pass implemented. `core/tools/subagent.py` is now a registration/schema wrapper, while `core/subagents/` owns coordination and batch tracking.
 
-Candidate shape: `core/runs/` or a stricter run/queue subdomain split out of `core/chat/`.
-
-Why it matters:
-- Run lifecycle is broader than the provider-facing chat loop.
-- Cancellation, SSE replay, queue draining, and UI queue projection are tightly coupled today.
-- This is higher blast radius than compaction and should come after a focused smaller extraction.
-
-### 3. Settings / Configuration
-
-Status: extracted first pass to `core/settings/` for public update-schema validation.
-
-Medium-strong candidate. Settings are still partly storage, partly runtime side effects, and partly WebUI normalization.
-
-Candidate shape: `core/settings/` owning schemas, defaults, validation, update services, and normalized public payloads.
+Move sub-agent orchestration out of `core/tools/subagent.py` into a typed service. The tool wrapper should stay limited to schema, display metadata, and registration.
 
 Why it matters:
-- `StorageManager` is carrying product settings behavior in addition to file I/O.
-- Settings updates can trigger runtime side effects such as skill reloads.
-- Frontend and backend duplicate some default/normalization knowledge.
+- The tool module currently owns validation, queueing, cancellation, batch tracking, result lookup, and ChatLoop startup details.
+- A coordinator gives subagents a real domain boundary and makes future UI, persistence, and testing work easier.
 
-### 4. Prompts / System Prompt
+Tradeoff:
+- This is mostly structural at first, so it has little immediate user-visible payoff.
+- It touches a sensitive path near Runs, queues, ChatLoop, and compaction behavior, so the refactor must stay narrow.
 
-Status: extracted first pass to `core/prompts/` for System Prompt assembly and editable fragment rules.
+### 3. Durable Parent-Child Tracking
 
-Medium candidate. Prompt fragment file I/O still lives under Storage, prompt RPC transport remains in Server delegates, and the editor remains in WebUI.
-
-Candidate shape: `core/prompts/` owning fragment manifests, variables, read/write/reset, preview assembly, and prompt-specific storage rules.
-
-Why it matters:
-- Prompt editing is product surface area now, not just storage plumbing.
-- Compaction also uses prompt fragments, so a later prompt-domain split may become useful after compaction is isolated.
-
-### 5. Logs
-
-Small/mechanical candidate. The subsystem already has a spec, but backend code lives under `core/utils/` even though it is a product-visible Logs subsystem.
-
-Candidate shape: `core/logs/` moving `LogViewer` and log parsing/watching contracts out of utilities.
+Persist or reconstruct parent-child links: parent run, child agent, child session, child run, queued state, and result state.
 
 Why it matters:
-- The boundary is already clean and read-only.
-- Low urgency unless logs gain write/actions/retention settings.
+- The current `SubAgentBatchTracker` is process-local; restart loses batch state.
+- Durable links make subagent history, UI, and debugging more reliable.
 
-## Current Priority
+Tradeoff:
+- Adds storage state and cleanup rules.
+- Needs careful schema/design work before implementation.
 
-Current work is Prompts / System Prompt. The first extraction pass moved System Prompt assembly and editable fragment rules into `core/prompts/`; future work can consider prompt preview/editor service expansion if the surface grows.
+### 4. Blocking Mode Policy
+
+Decide whether `blocking: true` should remain a normal tool option, get tighter timeout guidance, or be discouraged in favor of non-blocking plus `subagent_result`.
+
+Why it matters:
+- Blocking can tie up the parent run for a long time.
+- Non-blocking delegation is usually a better fit for parallel work.
+
+Tradeoff:
+- Some workflows genuinely want an immediate child result.
+- Over-restricting blocking mode can make simple delegation less convenient.
+
+### 5. Prompt And Tool Contract
+
+Clarify agent guidance for when to use blocking, what `queued` means, when to call `subagent_result`, and how many subagents are reasonable.
+
+Why it matters:
+- Tool behavior is only useful if models use it correctly.
+- A clearer contract can improve behavior without large code changes.
+
+Tradeoff:
+- Prompt changes can have broad behavioral side effects.
+- Too much guidance can reduce useful flexibility.
+
+### 6. Observability And Status
+
+Expose active and queued subagents through a debug/status surface or API.
+
+Why it matters:
+- Developers need to see what subagent work is alive, queued, done, or stuck.
+- This helps diagnose long-running or cancelled delegation chains.
+
+Tradeoff:
+- Adds another API/UI surface to maintain.
+- Less urgent if parent timeline visibility becomes good enough.

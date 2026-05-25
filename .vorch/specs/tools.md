@@ -39,7 +39,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/process.md` - `process` and `ProcessManager`
 - `tools/status.md` - `status`
 - `tools/skill.md` - internal `skill`
-- `tools/subagent.md` - `subagent`, `subagent_result`, and batch tracking
+- `tools/subagent.md` - `subagent` and `subagent_result` registration wrapper
 - `tools/cron.md` - `cron`
 - `tools/channel_send.md` - `channel_send`
 
