@@ -13,6 +13,7 @@
   import { t } from '$lib/i18n.js';
 
   const EMPTY_VALUE = '—';
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const WILDCARD_ACCESS = '*';
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
@@ -50,6 +51,7 @@
   let invalidSkills = $state([]);
   let modelSelectValue = $state('');
   let fallbackModelSelectValue = $state('');
+  let agentAutoSaveTimer = null;
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -116,6 +118,26 @@
   onMount(() => {
     loadCatalogs();
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
+
+    return () => {
+      clearAgentAutoSaveTimer();
+    };
+  });
+
+  $effect(() => {
+    if (!shouldAutoSaveAgent()) {
+      clearAgentAutoSaveTimer();
+      return;
+    }
+
+    agentAutoSaveTimer = setTimeout(() => {
+      agentAutoSaveTimer = null;
+      void saveAgent(null, { source: 'auto' });
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearAgentAutoSaveTimer();
+    };
   });
 
   async function loadCatalogs() {
@@ -174,6 +196,7 @@
   }
 
   function selectAgent(agentId) {
+    clearAgentAutoSaveTimer();
     selectedAgentId = agentId;
     const agent = agents.find((item) => item.id === agentId) ?? null;
 
@@ -190,6 +213,7 @@
   }
 
   function startCreate() {
+    clearAgentAutoSaveTimer();
     selectedAgentId = '';
     formMode = AGENT_FORM_MODE_CREATE;
     formValues = createAgentFormValues();
@@ -198,26 +222,54 @@
     statusMessage = '';
   }
 
-  async function saveAgent(event) {
-    event.preventDefault();
+  async function saveAgent(event = null, options = {}) {
+    event?.preventDefault?.();
+
+    const source = options.source ?? 'manual';
+    if (source === 'manual') {
+      clearAgentAutoSaveTimer();
+    }
+
+    if (isSaving || isDeleting) {
+      return;
+    }
+
     const result = normalizeAgentForm(formValues, {
       mode: formMode,
       initialValues:
         formMode === AGENT_FORM_MODE_EDIT ? editBaselineValues : null,
     });
-    formErrors = result.errors;
-    statusMessage = '';
-    errorMessage = '';
+
+    if (source === 'manual') {
+      formErrors = result.errors;
+      statusMessage = '';
+      errorMessage = '';
+    }
 
     if (!result.isValid) {
-      errorMessage = t(
-        'errors.validation',
-        'Check the highlighted fields and try again.',
-      );
+      if (source === 'manual') {
+        errorMessage = t(
+          'errors.validation',
+          'Check the highlighted fields and try again.',
+        );
+      }
+      return;
+    }
+
+    if (
+      formMode === AGENT_FORM_MODE_EDIT &&
+      !agentPayloadHasChanges(result.payload)
+    ) {
+      if (source === 'manual') {
+        statusMessage = t('common.alreadySaved', 'Already saved');
+      }
       return;
     }
 
     isSaving = true;
+    const draftValues = cloneAgentFormValues(formValues);
+    errorMessage = '';
+
     try {
       const method =
         formMode === AGENT_FORM_MODE_CREATE ? 'agent.create' : 'agent.update';
@@ -226,14 +278,88 @@
         formMode === AGENT_FORM_MODE_CREATE
           ? t('agents.created', 'Agent created.')
           : t('agents.updated', 'Agent updated.');
-      await loadAgents({
-        preferredAgentId: savedAgent.id ?? result.payload.id,
-      });
+      if (formMode === AGENT_FORM_MODE_CREATE) {
+        await loadAgents({
+          preferredAgentId: savedAgent.id ?? result.payload.id,
+        });
+      } else {
+        applySavedAgentUpdate(savedAgent, result.payload, draftValues);
+      }
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.saveError'));
     } finally {
       isSaving = false;
     }
+  }
+
+  function shouldAutoSaveAgent() {
+    if (
+      formMode !== AGENT_FORM_MODE_EDIT ||
+      isLoading ||
+      isSaving ||
+      isDeleting
+    ) {
+      return false;
+    }
+
+    const result = normalizeAgentForm(formValues, {
+      mode: AGENT_FORM_MODE_EDIT,
+      initialValues: editBaselineValues,
+    });
+
+    return result.isValid && agentPayloadHasChanges(result.payload);
+  }
+
+  function agentPayloadHasChanges(payload) {
+    return Object.keys(payload).some((fieldName) => fieldName !== 'id');
+  }
+
+  function clearAgentAutoSaveTimer() {
+    if (!agentAutoSaveTimer) {
+      return;
+    }
+
+    clearTimeout(agentAutoSaveTimer);
+    agentAutoSaveTimer = null;
+  }
+
+  function cloneAgentFormValues(values) {
+    return {
+      ...values,
+      allowed_skills: Array.isArray(values.allowed_skills)
+        ? [...values.allowed_skills]
+        : [],
+      allowed_tools: Array.isArray(values.allowed_tools)
+        ? [...values.allowed_tools]
+        : [],
+    };
+  }
+
+  function applySavedAgentUpdate(savedAgent, payload, draftValues) {
+    const existingAgent =
+      agents.find((agent) => agent.id === payload.id) ?? selectedAgent ?? {};
+    const nextAgent = {
+      ...existingAgent,
+      ...payload,
+      ...(savedAgent ?? {}),
+      id: savedAgent?.id ?? payload.id ?? existingAgent.id,
+    };
+
+    agents = agents.map((agent) =>
+      agent.id === nextAgent.id ? nextAgent : agent,
+    );
+    editBaselineValues = createAgentFormValues(nextAgent);
+
+    if (formValuesMatch(formValues, draftValues)) {
+      formValues = createAgentFormValues(nextAgent);
+    }
+
+    notifyAgentsChanged();
+    onAgentSelected?.(nextAgent);
+  }
+
+  function formValuesMatch(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 
   async function deleteSelectedAgent() {
