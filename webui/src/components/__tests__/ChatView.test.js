@@ -571,6 +571,56 @@ describe('ChatView', () => {
     );
   });
 
+  it('coalesces repeated run stream errors into one reconnect', async () => {
+    const firstCloseSubscription = vi.fn();
+    const secondCloseSubscription = vi.fn();
+    subscribeRunEventsMock
+      .mockReturnValueOnce({ close: firstCloseSubscription, source: null })
+      .mockReturnValueOnce({ close: secondCloseSubscription, source: null });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          run_id: 'run-reconnect-once',
+          sse_url: '/api/runs/run-reconnect-once/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start reconnecting stream');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+
+    vi.useFakeTimers();
+    try {
+      handlers.onError(new Error('first disconnect'));
+      handlers.onError(new Error('second disconnect'));
+
+      await vi.advanceTimersByTimeAsync(500);
+      flushSync();
+
+      expect(subscribeRunEventsMock).toHaveBeenCalledTimes(2);
+      expect(firstCloseSubscription).toHaveBeenCalledTimes(1);
+      expect(secondCloseSubscription).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows all command and skill suggestions for an empty slash query', async () => {
     const commandItems = [
       { name: 'stop', description: 'Cancel the active run.', type: 'command' },
