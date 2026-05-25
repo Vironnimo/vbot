@@ -6,7 +6,7 @@ pywebview-based desktop accessor that embeds the normal WebUI and talks only to 
 
 `desktop/` owns the native window shell around the existing WebUI. It does not
 import core/server business logic and it does not manage vBot server processes.
-Phase 6 keeps Desktop intentionally thin: it loads the same server-served WebUI
+Desktop stays intentionally thin: it loads the same server-served WebUI
 that a browser would load from `/`, but inside a pywebview window.
 
 ## Interfaces
@@ -35,12 +35,12 @@ that a browser would load from `/`, but inside a pywebview window.
 - Desktop is an accessor only, not a server manager.
 - Desktop may connect to localhost or LAN vBot servers over normal HTTP.
 - The loaded UI is the normal WebUI root path `/`; no separate desktop-only
-  frontend build or route is part of Phase 6.
+  frontend build or route is part of the current contract.
 - The Desktop window title is `vBot`.
 - A custom `desktop/icon.png` is optional; when absent, pywebview's platform
   default icon is used.
 - Closing the window ends only the Desktop process, never the target server.
-- No Python↔JavaScript bridge is part of the Phase 6 contract.
+- No Python↔JavaScript bridge is part of the current contract.
 - If the server is unreachable or has no WebUI, Desktop stays open and shows an
   in-window message instead of crashing.
 - Hosts are plain host names or IP addresses only; schemes, paths, whitespace,
@@ -56,7 +56,7 @@ that a browser would load from `/`, but inside a pywebview window.
   must show a user-facing in-window message that the target server has no WebUI.
 - Desktop-local preferences must not be written into the shared server
   `data_dir`, because that directory belongs to the selected vBot instance.
-- Phase 6 assumes a source-run Desktop shell, so settings live beside
+- Desktop currently assumes a source-run shell, so settings live beside
   `desktop/main.py` rather than in a later packaging-specific app directory.
 - pywebview is imported lazily so backend tests and non-desktop development
   workflows do not require the optional GUI package.

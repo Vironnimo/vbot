@@ -85,5 +85,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Only the final assistant text from a completed Run is forwarded to the platform. Tool results, reasoning, and intermediate events stay in the JSONL/SSE flow.
 - Sidecar metadata is owned by `ChatSessionManager`; channel code consumes it but does not define a separate storage path or format.
 - Adapter restart on failure should use bounded retry with backoff; a broken adapter must not silently disappear.
-- WebUI session browsing and retroactive linking are required for meaningful docking but may land after the kernel/server/CLI slice if phased separately.
+- WebUI session browsing and retroactive channel linking are implemented through
+  the session drawer and `session.link_channel`; keep the sidecar metadata
+  contract stable for those accessors.
 - Text documents received from Telegram are embedded immediately as `TextBlock`s using stored `text_content`; only non-text documents become `FileBlock` references.

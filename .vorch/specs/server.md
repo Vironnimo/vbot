@@ -16,12 +16,13 @@ Clients call the vBot server contract; provider wire details stay behind
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional
   `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false,
   "error": { "code": ..., "message": ... } }`.
-- WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `tool.list`, `skill.list`, `agent.list`,
-  `agent.create`, `agent.update`, `agent.delete`, `session.create`,
+- WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `provider.connect`, `provider.disconnect`,
+  `provider.connection_status`, `tool.list`, `skill.list`, `agent.list`,
+  `agent.get`, `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `session.list`, `session.link_channel`, `chat.history`, `chat.send`,
   `chat.commands`,
-  `chat.stream`, `chat.cancel`, `chat.queue_list`, `chat.queue_remove`,
-  `chat.queue_update`, `channel.list`, `channel.create`,
+  `chat.stream`, `chat.retry_last_turn`, `chat.cancel`, `chat.queue_list`,
+  `chat.queue_remove`, `chat.queue_update`, `channel.list`, `channel.create`,
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
   `channel.status`, `prompt.list`, `prompt.update`, `prompt.reset`,
   `prompt.preview`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
@@ -88,7 +89,7 @@ Clients call the vBot server contract; provider wire details stay behind
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
   fields. `temperature` and `thinking_effort` accept `null` to clear an explicit
-  override back to inherited defaults. `workspace` is intentionally not accepted through public RPC in Phase 4.
+  override back to inherited defaults. `workspace` is intentionally not accepted through public RPC.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each
@@ -125,6 +126,9 @@ Clients call the vBot server contract; provider wire details stay behind
   does not append a checkpoint.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
+- `chat.retry_last_turn` accepts `{ agent_id, session_id }`, retries the latest
+  persisted user turn through the streaming ChatLoop without appending a new
+  user message, and returns the same Run/SSE payload shape as `chat.stream`.
 - `chat.cancel` targets a Run ID, not a Session.
 - `chat.queue_list` accepts `{ agent_id, session_id }` and returns
   `{ items }`, where each item is a server-safe queued-message dict with
@@ -238,7 +242,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - The server optional dependency group provides FastAPI, uvicorn, websockets,
   and `python-multipart` for upload endpoint parsing.
   Server code should fail clearly if these extras are not installed.
-- Exact long-term payload schemas remain intentionally lightweight in Phase 3;
+- Exact long-term payload schemas remain intentionally lightweight;
   keep schema decisions isolated in `server/delegates.py` and transport files.
 - WebUI static serving is optional at runtime. If `webui/dist/index.html` is
   absent, `/` remains unmounted/404 rather than failing server startup.

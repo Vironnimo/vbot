@@ -196,7 +196,8 @@ Overrides are intentionally narrow:
   verified externally.
 
 Current provider files include `openai.json`, `openrouter.json`,
-`anthropic.json`, and `github-copilot.json`. Generated catalogs may be marked
+`anthropic.json`, `github-copilot.json`, `mistral.json`, and
+`opencode-go.json`. Generated catalogs may be marked
 with top-level `"source": "discovery"`; bundled/static catalogs may use other
 source labels. Model refresh can replace generated provider catalogs.
 
