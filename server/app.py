@@ -18,7 +18,7 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
 )
 from core.chat import ChatLoop, ChatRunManager, CommandDispatcher, RunNotFoundError
-from core.chat.compaction import CompactionService, SummarizationStrategy
+from core.compaction import CompactionService, SummarizationStrategy
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc

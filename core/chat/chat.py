@@ -74,7 +74,7 @@ from core.utils.tokens import estimate_tokens
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
-    from core.chat.compaction import CompactionService
+    from core.compaction import CompactionService
 
 MessageRole = Literal[
     "system",
@@ -1046,7 +1046,7 @@ class ChatLoop:
         if not callable(load_compaction_settings):
             return messages
 
-        from core.chat.compaction import CompactionSettings
+        from core.compaction import CompactionSettings
 
         raw_settings = load_compaction_settings()
         settings = CompactionSettings(
