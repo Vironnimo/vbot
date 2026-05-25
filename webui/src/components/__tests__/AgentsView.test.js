@@ -492,6 +492,58 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()).toHaveLength(1);
   });
 
+  it('does not apply an in-flight autosave to a newly selected agent', async () => {
+    let resolveAgentUpdate;
+    const agentUpdateReleased = new Promise((resolve) => {
+      resolveAgentUpdate = resolve;
+    });
+
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          baseAgent(),
+          {
+            ...baseAgent(),
+            id: 'bravo',
+            name: 'Bravo',
+            model: 'anthropic/claude-sonnet-4-20250219::api-key',
+          },
+        ],
+        agentUpdate: async (params) => {
+          await agentUpdateReleased;
+          return { ...baseAgent(), ...params };
+        },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+
+    vi.useFakeTimers();
+
+    setTextInputValue(1, 'Alpha Autosaved');
+
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+
+    getAgentButton('Bravo').click();
+    flushSync();
+
+    expect(document.body.textContent).toContain('id: bravo');
+    expect(textInputValue(1)).toBe('Bravo');
+
+    resolveAgentUpdate();
+    await flushAsyncUpdates();
+
+    expect(document.body.textContent).toContain('id: bravo');
+    expect(textInputValue(1)).toBe('Bravo');
+    expect(document.body.textContent).not.toContain('Agent updated.');
+  });
+
   it('sends null for cleared temperature and thinking effort', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -1141,6 +1193,14 @@ function getButtonByAriaLabel(label) {
   return button;
 }
 
+function getAgentButton(label) {
+  const button = Array.from(
+    document.body.querySelectorAll('button.agent-item'),
+  ).find((item) => item.textContent.includes(label));
+  expect(button).toBeTruthy();
+  return button;
+}
+
 function submitAgentForm() {
   document.body
     .querySelector('form')
@@ -1196,6 +1256,10 @@ function createAgentsRpcMock(options = {}) {
     }
 
     if (method === 'agent.create' || method === 'agent.update') {
+      if (typeof options.agentUpdate === 'function') {
+        return options.agentUpdate(params, method);
+      }
+
       return { ...params, current_session_id: 'session-saved' };
     }
 

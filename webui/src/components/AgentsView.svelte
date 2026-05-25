@@ -267,26 +267,37 @@
     }
 
     isSaving = true;
+    const saveMode = formMode;
+    const saveAgentId = result.payload.id;
     const draftValues = cloneAgentFormValues(formValues);
     errorMessage = '';
 
     try {
       const method =
-        formMode === AGENT_FORM_MODE_CREATE ? 'agent.create' : 'agent.update';
+        saveMode === AGENT_FORM_MODE_CREATE ? 'agent.create' : 'agent.update';
       const savedAgent = await rpc(method, result.payload);
-      statusMessage =
-        formMode === AGENT_FORM_MODE_CREATE
-          ? t('agents.created', 'Agent created.')
-          : t('agents.updated', 'Agent updated.');
-      if (formMode === AGENT_FORM_MODE_CREATE) {
+      if (saveMode === AGENT_FORM_MODE_CREATE) {
+        statusMessage = t('agents.created', 'Agent created.');
         await loadAgents({
           preferredAgentId: savedAgent.id ?? result.payload.id,
         });
       } else {
-        applySavedAgentUpdate(savedAgent, result.payload, draftValues);
+        const updatedSelectedAgent = applySavedAgentUpdate(
+          savedAgent,
+          result.payload,
+          draftValues,
+        );
+        if (updatedSelectedAgent) {
+          statusMessage = t('agents.updated', 'Agent updated.');
+        }
       }
     } catch (error) {
-      errorMessage = viewErrorMessage(error, t('agents.saveError'));
+      if (
+        saveMode === AGENT_FORM_MODE_CREATE ||
+        selectedAgentId === saveAgentId
+      ) {
+        errorMessage = viewErrorMessage(error, t('agents.saveError'));
+      }
     } finally {
       isSaving = false;
     }
@@ -348,14 +359,21 @@
     agents = agents.map((agent) =>
       agent.id === nextAgent.id ? nextAgent : agent,
     );
+
+    notifyAgentsChanged();
+
+    if (formMode !== AGENT_FORM_MODE_EDIT || selectedAgentId !== nextAgent.id) {
+      return false;
+    }
+
     editBaselineValues = createAgentFormValues(nextAgent);
 
     if (formValuesMatch(formValues, draftValues)) {
       formValues = createAgentFormValues(nextAgent);
     }
 
-    notifyAgentsChanged();
     onAgentSelected?.(nextAgent);
+    return true;
   }
 
   function formValuesMatch(left, right) {

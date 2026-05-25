@@ -25,6 +25,7 @@ RESET_EVENT = "reset"
 UNKNOWN_LEVEL = "unknown"
 UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
+MAX_READ_HANDOFFS = 32
 
 LOG_LINE_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "
@@ -350,7 +351,15 @@ class LogViewer:
         cursor = uuid4().hex
         self._read_handoffs[cursor] = _ReadHandoff(file_name=file_name, snapshot=snapshot)
         self._latest_read_cursor_by_file[file_name] = cursor
+        self._prune_read_handoffs()
         return cursor
+
+    def _prune_read_handoffs(self) -> None:
+        while len(self._read_handoffs) > MAX_READ_HANDOFFS:
+            oldest_cursor = next(iter(self._read_handoffs))
+            handoff = self._read_handoffs.pop(oldest_cursor)
+            if self._latest_read_cursor_by_file.get(handoff.file_name) == oldest_cursor:
+                self._latest_read_cursor_by_file.pop(handoff.file_name, None)
 
     def _take_read_handoff(
         self,
