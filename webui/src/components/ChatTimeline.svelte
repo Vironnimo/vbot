@@ -367,6 +367,10 @@
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
 
   const TOOL_DETAIL_HIDDEN_KEYS = new Set(['artifacts', 'description']);
+  const TOOL_ARGUMENT_HIDDEN_KEYS = {
+    edit: new Set(['newString', 'new_string', 'oldString', 'old_string']),
+    write: new Set(['content']),
+  };
   const TOOL_DISPLAY_ARGS = {
     read: ['path'],
     write: ['path'],
@@ -388,6 +392,9 @@
     'status',
     'type',
   ];
+
+  const hiddenArgumentKeysForTool = (toolName) =>
+    TOOL_ARGUMENT_HIDDEN_KEYS[toolName] ?? null;
 
   const humanReadableToolLabel = (toolName, argumentsValue) => {
     let args = argumentsValue;
@@ -430,6 +437,10 @@
           return value;
         }
       }
+    }
+
+    if (hiddenArgumentKeysForTool(toolName)) {
+      return '';
     }
 
     const firstStringEntry = Object.values(args).find(
@@ -587,12 +598,12 @@
     }
   };
 
-  const sanitizeToolDetailNode = (value) => {
+  const sanitizeToolDetailNode = (value, additionalHiddenKeys = null) => {
     const parsedValue = parseJsonValue(value);
 
     if (Array.isArray(parsedValue)) {
       return parsedValue
-        .map((entry) => sanitizeToolDetailNode(entry))
+        .map((entry) => sanitizeToolDetailNode(entry, additionalHiddenKeys))
         .filter((entry) => entry !== undefined);
     }
 
@@ -602,10 +613,16 @@
 
     return Object.fromEntries(
       Object.entries(parsedValue).flatMap(([key, entryValue]) => {
-        if (TOOL_DETAIL_HIDDEN_KEYS.has(key) || entryValue === undefined) {
+        if (
+          TOOL_DETAIL_HIDDEN_KEYS.has(key) ||
+          additionalHiddenKeys?.has(key) ||
+          entryValue === undefined
+        ) {
           return [];
         }
-        return [[key, sanitizeToolDetailNode(entryValue)]];
+        return [
+          [key, sanitizeToolDetailNode(entryValue, additionalHiddenKeys)],
+        ];
       }),
     );
   };
@@ -728,7 +745,7 @@
   ) => {
     const processed = preferPayload
       ? preferredToolResultValue(value, toolName)
-      : sanitizeToolDetailNode(value);
+      : sanitizeToolDetailNode(value, hiddenArgumentKeysForTool(toolName));
 
     if (!hasMeaningfulToolDetail(processed)) {
       return t('chat.toolNoData', '—');
@@ -1202,6 +1219,9 @@
                         {@render toolDetailSection(
                           t('chat.toolArgs', 'Args'),
                           toolArguments(child),
+                          false,
+                          false,
+                          toolNameForRunTool(child),
                         )}
                         {#if child.stdout}
                           {@render toolDetailSection(
@@ -1245,6 +1265,9 @@
                         {@render toolDetailSection(
                           t('chat.toolArgs', 'Args'),
                           toolArguments(child),
+                          false,
+                          false,
+                          toolNameForRunTool(child),
                         )}
                         {#if child.stdout}
                           {@render toolDetailSection(
@@ -1384,6 +1407,9 @@
                     {@render toolDetailSection(
                       t('chat.toolArgs', 'Args'),
                       toolCallFromEvent(item.event)?.arguments,
+                      false,
+                      false,
+                      toolNameForEvent(item.event),
                     )}
                     {#if toolResultValueForEvent(item.event)}
                       {@render toolDetailSection(
