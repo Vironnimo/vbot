@@ -41,7 +41,15 @@ Clients call the vBot server contract; provider wire details stay behind
   API-key refresh keeps using the central static credential resolver.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
-  `<provider>/<model-id-at-provider>` format.
+  `<provider>/<model-id-at-provider>` format. `capabilities` includes the
+  boolean chat-era fields (`vision`, `tools`, `json_mode`, `reasoning`) plus
+  `input_modalities`, `output_modalities`, `supported_parameters`, and
+  `task_types`. Optional filters are accepted as `provider_id`,
+  `capability`/`capabilities`, `task`/`tasks`/`task_type`/`task_types`,
+  `input_modality`/`input_modalities`, `output_modality`/`output_modalities`,
+  and `min_context_window`. These filters are strict catalog filters; accessors
+  should not use them for Agent model visibility when sparse local provider
+  catalogs should remain selectable.
 - `model.refresh_db` accepts optional `{ provider_id }`. With a provider ID it
   refreshes that provider only and returns `{ provider_id, model_count,
   fetched_at }`. With no params or `{}` it refreshes every provider that has a

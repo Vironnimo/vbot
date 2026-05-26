@@ -32,6 +32,17 @@ Direct OpenAI provider configuration and the generic OpenAI-compatible adapter b
 - Tool-call argument JSON that is malformed normalizes to an empty argument object instead of leaking parser exceptions.
 - Usage chunks are requested with `stream_options: { include_usage: true }` during streaming.
 
+## Catalog Normalization
+
+- Generic OpenAI-compatible `/models` entries may expose modality data through
+  `architecture.input_modalities`, `architecture.output_modalities`, or similar
+  OpenRouter-style fields. When present, normalize these into
+  `Model.capabilities.input_modalities`, `output_modalities`,
+  `supported_parameters`, and derived `task_types`.
+- Sparse OpenAI-compatible catalogs that provide only IDs remain usable as
+  text-in/text-out chat catalogs. Missing optional capability facts should not
+  make local providers disappear from Agent model selection.
+
 ## Error Classification
 
 - 401/403 -> `ProviderAuthError`

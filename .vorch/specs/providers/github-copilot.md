@@ -44,6 +44,8 @@ Endpoint selection uses model metadata first:
 
 - `normalize_catalog_entry()` reads Copilot `capabilities.limits.max_context_window_tokens`, `capabilities.limits.max_output_tokens`, and `capabilities.supports`.
 - Reasoning is supported when Copilot advertises reasoning effort or thinking-budget support.
+- Normalized `Model.capabilities` includes chat-oriented modality/task defaults
+  plus Copilot-advertised vision/tools/structured-output/reasoning facts.
 - Sanitized runtime metadata only is stored under `metadata.github_copilot`; raw provider data, policy terms, and credentials are not stored.
 
 ## Constraints & Gotchas
