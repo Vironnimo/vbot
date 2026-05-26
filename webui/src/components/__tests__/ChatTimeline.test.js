@@ -153,8 +153,8 @@ describe('ChatTimeline', () => {
         },
       });
       flushSync();
-      await tick();
-      await tick();
+
+      await waitForCondition(() => scrollIntoView.mock.calls.length > 0);
 
       expect(scrollIntoView).toHaveBeenCalledWith({
         block: 'start',
@@ -164,6 +164,9 @@ describe('ChatTimeline', () => {
       expect(scrollIntoView.mock.contexts[0].textContent).toContain(
         'Fresh turn should start the viewport',
       );
+      expect(
+        document.querySelector('.submitted-turn-scroll-spacer'),
+      ).toBeTruthy();
     } finally {
       if (originalScrollIntoView) {
         Element.prototype.scrollIntoView = originalScrollIntoView;
@@ -207,6 +210,9 @@ describe('ChatTimeline', () => {
       await tick();
 
       expect(scrollIntoView).not.toHaveBeenCalled();
+      expect(
+        document.querySelector('.submitted-turn-scroll-spacer'),
+      ).toBeNull();
     } finally {
       if (originalScrollIntoView) {
         Element.prototype.scrollIntoView = originalScrollIntoView;
@@ -2961,6 +2967,20 @@ describe('ChatTimeline', () => {
     });
   });
 });
+
+async function waitForCondition(check, attempts = 20) {
+  for (let index = 0; index < attempts; index += 1) {
+    await tick();
+    await Promise.resolve();
+    flushSync();
+
+    if (check()) {
+      return;
+    }
+  }
+
+  throw new Error('Timed out waiting for condition.');
+}
 
 function reportedMultiStepMessages() {
   return [

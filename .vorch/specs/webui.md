@@ -207,7 +207,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     separator and the current local day is labeled with `chat.today` (`Today`).
   - When the user submits a message that starts a new Run, the Timeline anchors
     the submitted user message at the top of the chat scrollport so the agent
-    response begins below it instead of starting pinned to the bottom edge.
+    response begins below it instead of starting pinned to the bottom edge. The
+    Timeline keeps bottom scroll space for that submitted Run so the browser can
+    actually align the user message at the top even before the assistant output
+    has filled the viewport.
   - Renders tool-call summary text from
     `tool_call_started.payload.display.summary` when available. Legacy
     argument-label fallbacks exist only for history or old events without a
