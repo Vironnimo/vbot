@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import server.delegates as delegates
 from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import OAuthToken, TokenStore
@@ -61,6 +62,29 @@ class StubDeviceFlowEngine:
 
     def cancel_flow(self, provider_id: str, local_connection_id: str) -> None:
         self.cancelled.append((provider_id, local_connection_id))
+
+
+class FailingPollDeviceFlowEngine(StubDeviceFlowEngine):
+    async def _poll_for_token(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        oauth_config: OAuthConfig,
+        device_code: str,
+        interval: int,
+        expires_in: int,
+        on_complete: Any,
+    ) -> None:
+        await super()._poll_for_token(
+            provider_id,
+            local_connection_id,
+            oauth_config,
+            device_code,
+            interval,
+            expires_in,
+            on_complete,
+        )
+        raise RuntimeError("poll crashed")
 
 
 class StubProviderRegistry:
@@ -201,6 +225,41 @@ async def test_provider_connect_starts_device_flow_and_polling(tmp_path: Any) ->
     assert len(engine.polls) == 1
     poll = engine.polls[0]
     assert poll[:6] == ("github-copilot", "oauth", oauth_config(), "device-code", 5, 900)
+
+
+@pytest.mark.asyncio
+async def test_provider_connect_logs_polling_task_crashes(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, make_provider(connection=make_oauth_connection()))
+    engine = FailingPollDeviceFlowEngine()
+    state.device_flow_engine = engine
+    warnings: list[str] = []
+
+    def record_warning(message: str, *args: Any, **kwargs: Any) -> None:
+        warnings.append(message)
+
+    monkeypatch.setattr(delegates._LOGGER, "warning", record_warning)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.connect",
+            "params": {
+                "provider_id": "github-copilot",
+                "connection_id": "github-copilot:oauth",
+            },
+        },
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if warnings:
+            break
+
+    assert response["ok"] is True
+    assert engine.polls
+    assert "OAuth device flow polling task failed" in warnings
 
 
 @pytest.mark.asyncio
