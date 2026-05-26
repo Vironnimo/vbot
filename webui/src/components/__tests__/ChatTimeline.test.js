@@ -149,6 +149,7 @@ describe('ChatTimeline', () => {
           sessionState,
           agentName: 'Alpha',
           submittedTurnScrollKey: 1,
+          submittedTurnScrollRunId: 'run-submitted-turn-scroll',
         },
       });
       flushSync();
@@ -163,6 +164,49 @@ describe('ChatTimeline', () => {
       expect(scrollIntoView.mock.contexts[0].textContent).toContain(
         'Fresh turn should start the viewport',
       );
+    } finally {
+      if (originalScrollIntoView) {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+      } else {
+        delete Element.prototype.scrollIntoView;
+      }
+    }
+  });
+
+  it('waits for the submitted run user event instead of scrolling the previous user message', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-submitted-turn-waits-for-run-user',
+      );
+      sessionState.messages = [
+        {
+          id: 'previous-user-message',
+          role: 'user',
+          content: 'Previous user message',
+          timestamp: '2026-05-10T08:00:00',
+        },
+      ];
+
+      mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: {
+          sessionState,
+          agentName: 'Alpha',
+          submittedTurnScrollKey: 1,
+          submittedTurnScrollRunId: 'run-new-turn-not-rendered-yet',
+        },
+      });
+      flushSync();
+      await tick();
+      await tick();
+
+      expect(scrollIntoView).not.toHaveBeenCalled();
     } finally {
       if (originalScrollIntoView) {
         Element.prototype.scrollIntoView = originalScrollIntoView;

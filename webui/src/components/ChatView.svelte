@@ -59,6 +59,7 @@
   let viewingSessionId = $state('');
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
+  let submittedTurnScrollRunId = $state('');
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
   const pendingReconnects = {};
@@ -472,6 +473,7 @@
       }
 
       startRun(sessionState, run);
+      submittedTurnScrollRunId = run.run_id ?? '';
       submittedTurnScrollKey += 1;
       subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
       return true;
@@ -984,6 +986,7 @@
             sessionState={activeSessionState}
             agentName={activeAgent.name}
             {submittedTurnScrollKey}
+            {submittedTurnScrollRunId}
             onNavigateToSubAgent={navigateToSubAgent}
             onRetry={handleRetry}
           />
