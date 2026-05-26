@@ -115,6 +115,7 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
         "input_modalities",
         "output_modality",
         "output_modalities",
+        "min_context_window",
     )
 )
 BOOLEAN_MODEL_CAPABILITIES = frozenset(("vision", "tools", "json_mode", "reasoning"))
@@ -322,7 +323,7 @@ def _list_models(state: Any, params: JsonObject) -> JsonObject:
     return {"models": models}
 
 
-def _model_list_filters(params: JsonObject) -> dict[str, tuple[str, ...] | str]:
+def _model_list_filters(params: JsonObject) -> dict[str, tuple[str, ...] | str | int]:
     return {
         "provider_id": _optional_model_filter_string(params, "provider_id"),
         "capabilities": _string_filter_values(params, ("capability", "capabilities")),
@@ -335,6 +336,7 @@ def _model_list_filters(params: JsonObject) -> dict[str, tuple[str, ...] | str]:
             params,
             ("output_modality", "output_modalities"),
         ),
+        "min_context_window": _optional_non_negative_int(params, "min_context_window"),
     }
 
 
@@ -365,6 +367,15 @@ def _string_filter_values(params: JsonObject, field_names: tuple[str, ...]) -> t
     return _normalized_filter_values(values)
 
 
+def _optional_non_negative_int(params: JsonObject, field_name: str) -> int:
+    value = params.get(field_name)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{field_name} must be a non-negative integer")
+    return value
+
+
 def _normalized_filter_values(values: list[str]) -> tuple[str, ...]:
     normalized_values: list[str] = []
     seen: set[str] = set()
@@ -379,7 +390,7 @@ def _normalized_filter_values(values: list[str]) -> tuple[str, ...]:
 
 def _provider_matches_model_filter(
     provider_id: str,
-    filters: dict[str, tuple[str, ...] | str],
+    filters: dict[str, tuple[str, ...] | str | int],
 ) -> bool:
     filtered_provider_id = filters["provider_id"]
     if not isinstance(filtered_provider_id, str) or not filtered_provider_id:
@@ -387,7 +398,7 @@ def _provider_matches_model_filter(
     return provider_id.lower() == filtered_provider_id
 
 
-def _model_matches_filters(model: Any, filters: dict[str, tuple[str, ...] | str]) -> bool:
+def _model_matches_filters(model: Any, filters: dict[str, tuple[str, ...] | str | int]) -> bool:
     capabilities = model.capabilities
     task_types = set(capabilities.task_types)
     input_modalities = set(capabilities.input_modalities)
@@ -410,6 +421,10 @@ def _model_matches_filters(model: Any, filters: dict[str, tuple[str, ...] | str]
     if isinstance(required_inputs, tuple) and any(
         modality not in input_modalities for modality in required_inputs
     ):
+        return False
+
+    min_context_window = filters["min_context_window"]
+    if isinstance(min_context_window, int) and model.context_window < min_context_window:
         return False
 
     required_outputs = filters["output_modalities"]

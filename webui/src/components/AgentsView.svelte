@@ -14,7 +14,13 @@
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const MIN_CHAT_MODEL_CONTEXT_WINDOW = 64000;
   const WILDCARD_ACCESS = '*';
+  const CHAT_MODEL_LIST_PARAMS = Object.freeze({
+    task: 'chat',
+    capability: 'tools',
+    min_context_window: MIN_CHAT_MODEL_CONTEXT_WINDOW,
+  });
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
     'none',
@@ -144,7 +150,7 @@
     try {
       const [modelsResult, connectionsResult, toolsResult, skillsResult] =
         await Promise.all([
-          rpc('model.list'),
+          rpc('model.list', CHAT_MODEL_LIST_PARAMS),
           rpc('connection.list'),
           rpc('tool.list'),
           rpc('skill.list'),
