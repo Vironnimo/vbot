@@ -52,13 +52,18 @@ def openrouter_adapter(openrouter_config: ProviderConfig) -> OpenRouterAdapter:
 def raw_openrouter_model(
     *,
     input_modalities: list[str] | None = None,
+    output_modalities: list[str] | None = None,
     supported_parameters: list[str] | None = None,
     max_completion_tokens: int | None = 64000,
 ) -> dict:
     return {
         "id": "anthropic/claude-sonnet-4",
         "name": "Anthropic: Claude Sonnet 4",
-        "architecture": {"input_modalities": input_modalities or ["text", "image"]},
+        "architecture": {
+            "input_modalities": input_modalities or ["text", "image"],
+            "output_modalities": output_modalities or ["text"],
+            "modality": "text+image->text",
+        },
         "supported_parameters": (
             supported_parameters
             if supported_parameters is not None
@@ -197,10 +202,35 @@ def test_normalize_catalog_entry_maps_all_openrouter_fields() -> None:
             tools=True,
             json_mode=True,
             reasoning=ReasoningCapabilities(supported=True),
+            input_modalities=("text", "image"),
+            output_modalities=("text",),
+            supported_parameters=("reasoning", "response_format", "tools"),
+            task_types=(
+                "chat",
+                "text_output",
+                "image_input",
+                "image_understanding",
+            ),
         ),
         context_window=128000,
         max_output_tokens=64000,
+        metadata={"openrouter": {"modality": "text+image->text"}},
     )
+
+
+def test_normalize_catalog_entry_preserves_non_text_outputs() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(
+        raw_openrouter_model(
+            input_modalities=["text", "image", "file"],
+            output_modalities=["text", "image"],
+        ),
+        {},
+    )
+
+    assert model.capabilities.input_modalities == ("text", "image", "file")
+    assert model.capabilities.output_modalities == ("text", "image")
+    assert "image_generation" in model.capabilities.task_types
+    assert "file_input" in model.capabilities.task_types
 
 
 def test_normalize_catalog_entry_uses_provider_default_for_null_max_tokens() -> None:

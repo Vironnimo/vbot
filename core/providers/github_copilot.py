@@ -301,15 +301,29 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         capabilities = _read_mapping(raw, "capabilities")
         limits = _read_optional_mapping(capabilities, "limits")
         supports = _read_optional_mapping(capabilities, "supports")
+        vision_supported = supports.get("vision") is True
+        tools_supported = supports.get("tool_calls") is True
+        json_mode_supported = supports.get("structured_outputs") is True
+        reasoning_supported = _copilot_supports_reasoning(supports)
 
         return Model(
             model_id=_read_non_empty_string(raw, "id"),
             name=_read_string(raw, "name"),
             capabilities=Capabilities(
-                vision=supports.get("vision") is True,
-                tools=supports.get("tool_calls") is True,
-                json_mode=supports.get("structured_outputs") is True,
-                reasoning=ReasoningCapabilities(supported=_copilot_supports_reasoning(supports)),
+                vision=vision_supported,
+                tools=tools_supported,
+                json_mode=json_mode_supported,
+                reasoning=ReasoningCapabilities(supported=reasoning_supported),
+                input_modalities=("text", "image") if vision_supported else ("text",),
+                output_modalities=("text",),
+                supported_parameters=tuple(
+                    _copilot_supported_parameters(
+                        supports,
+                        tools_supported,
+                        json_mode_supported,
+                        reasoning_supported,
+                    )
+                ),
             ),
             context_window=_read_optional_token_limit(
                 limits,
@@ -330,6 +344,24 @@ def _copilot_supports_reasoning(supports: Mapping[str, Any]) -> bool:
     if isinstance(reasoning_effort, list) and reasoning_effort:
         return True
     return "min_thinking_budget" in supports or "max_thinking_budget" in supports
+
+
+def _copilot_supported_parameters(
+    supports: Mapping[str, Any],
+    tools_supported: bool,
+    json_mode_supported: bool,
+    reasoning_supported: bool,
+) -> list[str]:
+    supported_parameters: list[str] = []
+    if tools_supported:
+        supported_parameters.append("tool_calls")
+    if json_mode_supported:
+        supported_parameters.append("structured_outputs")
+    if reasoning_supported:
+        supported_parameters.append("reasoning_effort")
+    if supports.get("parallel_tool_calls") is True:
+        supported_parameters.append("parallel_tool_calls")
+    return supported_parameters
 
 
 def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:

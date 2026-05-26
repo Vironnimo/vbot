@@ -222,6 +222,10 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
                 "tools": model.capabilities.tools,
                 "json_mode": model.capabilities.json_mode,
                 "reasoning": {"supported": model.capabilities.reasoning.supported},
+                "input_modalities": list(model.capabilities.input_modalities),
+                "output_modalities": list(model.capabilities.output_modalities),
+                "supported_parameters": list(model.capabilities.supported_parameters),
+                "task_types": list(model.capabilities.task_types),
             },
             "context_window": model.context_window,
             "max_output_tokens": model.max_output_tokens,
@@ -266,6 +270,10 @@ def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
     _read_bool(caps, "tools")
     _read_bool(caps, "json_mode")
     _read_bool(reasoning, "supported")
+    _read_string_list(caps, "input_modalities")
+    _read_string_list(caps, "output_modalities")
+    _read_string_list(caps, "supported_parameters")
+    _read_string_list(caps, "task_types")
     _read_int(model_data, "context_window")
     _read_int(model_data, "max_output_tokens")
     if not model_id:
@@ -304,6 +312,13 @@ def _read_bool(data: Mapping[str, Any], key: str) -> bool:
     value = data.get(key)
     if not isinstance(value, bool):
         raise ValueError(f"Expected '{key}' to be a boolean")
+    return value
+
+
+def _read_string_list(data: Mapping[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"Expected '{key}' to be a list of strings")
     return value
 
 

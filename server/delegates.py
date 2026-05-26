@@ -102,6 +102,22 @@ CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
 CRON_JOB_STATUSES = frozenset(("active", "paused", "completed"))
 CHANNEL_PLATFORMS = frozenset(("telegram",))
 CHANNEL_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
+MODEL_LIST_FILTER_FIELDS = frozenset(
+    (
+        "provider_id",
+        "capability",
+        "capabilities",
+        "task",
+        "tasks",
+        "task_type",
+        "task_types",
+        "input_modality",
+        "input_modalities",
+        "output_modality",
+        "output_modalities",
+    )
+)
+BOOLEAN_MODEL_CAPABILITIES = frozenset(("vision", "tools", "json_mode", "reasoning"))
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
@@ -280,22 +296,133 @@ def _get_agent(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _list_models(state: Any, params: JsonObject) -> JsonObject:
-    if params:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "model.list does not accept params")
+    unsupported_fields = sorted(set(params) - MODEL_LIST_FILTER_FIELDS)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported model.list fields: {', '.join(unsupported_fields)}",
+        )
+
+    filters = _model_list_filters(params)
     try:
         runtime = state.runtime
         models = sorted(
             (
                 _model_response(provider_id, model)
                 for provider_id in runtime.providers.list_ids()
+                if _provider_matches_model_filter(provider_id, filters)
                 if _provider_has_credentials(runtime, provider_id)
                 for model in runtime.models.list_for_provider(provider_id)
+                if _model_matches_filters(model, filters)
             ),
             key=lambda model: (model["provider_id"], model["model_id"]),
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"models": models}
+
+
+def _model_list_filters(params: JsonObject) -> dict[str, tuple[str, ...] | str]:
+    return {
+        "provider_id": _optional_model_filter_string(params, "provider_id"),
+        "capabilities": _string_filter_values(params, ("capability", "capabilities")),
+        "tasks": _string_filter_values(params, ("task", "tasks", "task_type", "task_types")),
+        "input_modalities": _string_filter_values(
+            params,
+            ("input_modality", "input_modalities"),
+        ),
+        "output_modalities": _string_filter_values(
+            params,
+            ("output_modality", "output_modalities"),
+        ),
+    }
+
+
+def _optional_model_filter_string(params: JsonObject, field_name: str) -> str:
+    value = params.get(field_name)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{field_name} must be a string")
+    return value.strip().lower()
+
+
+def _string_filter_values(params: JsonObject, field_names: tuple[str, ...]) -> tuple[str, ...]:
+    values: list[str] = []
+    for field_name in field_names:
+        if field_name not in params:
+            continue
+        value = params[field_name]
+        if isinstance(value, str):
+            values.append(value)
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            values.extend(value)
+        else:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"{field_name} must be a string or list of strings",
+            )
+    return _normalized_filter_values(values)
+
+
+def _normalized_filter_values(values: list[str]) -> tuple[str, ...]:
+    normalized_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized_value = value.strip().lower()
+        if not normalized_value or normalized_value in seen:
+            continue
+        seen.add(normalized_value)
+        normalized_values.append(normalized_value)
+    return tuple(normalized_values)
+
+
+def _provider_matches_model_filter(
+    provider_id: str,
+    filters: dict[str, tuple[str, ...] | str],
+) -> bool:
+    filtered_provider_id = filters["provider_id"]
+    if not isinstance(filtered_provider_id, str) or not filtered_provider_id:
+        return True
+    return provider_id.lower() == filtered_provider_id
+
+
+def _model_matches_filters(model: Any, filters: dict[str, tuple[str, ...] | str]) -> bool:
+    capabilities = model.capabilities
+    task_types = set(capabilities.task_types)
+    input_modalities = set(capabilities.input_modalities)
+    output_modalities = set(capabilities.output_modalities)
+
+    required_capabilities = filters["capabilities"]
+    if isinstance(required_capabilities, tuple):
+        for capability in required_capabilities:
+            if capability in BOOLEAN_MODEL_CAPABILITIES:
+                if not _boolean_model_capability(capabilities, capability):
+                    return False
+            elif capability not in task_types:
+                return False
+
+    required_tasks = filters["tasks"]
+    if isinstance(required_tasks, tuple) and any(task not in task_types for task in required_tasks):
+        return False
+
+    required_inputs = filters["input_modalities"]
+    if isinstance(required_inputs, tuple) and any(
+        modality not in input_modalities for modality in required_inputs
+    ):
+        return False
+
+    required_outputs = filters["output_modalities"]
+    return not (
+        isinstance(required_outputs, tuple)
+        and any(modality not in output_modalities for modality in required_outputs)
+    )
+
+
+def _boolean_model_capability(capabilities: Any, capability: str) -> bool:
+    if capability == "reasoning":
+        return bool(capabilities.reasoning.supported)
+    return bool(getattr(capabilities, capability))
 
 
 def _list_connections(state: Any, params: JsonObject) -> JsonObject:
@@ -2218,6 +2345,10 @@ def _model_response(provider_id: str, model: Any) -> JsonObject:
             "reasoning": {
                 "supported": model.capabilities.reasoning.supported,
             },
+            "input_modalities": list(model.capabilities.input_modalities),
+            "output_modalities": list(model.capabilities.output_modalities),
+            "supported_parameters": list(model.capabilities.supported_parameters),
+            "task_types": list(model.capabilities.task_types),
         },
         "context_window": model.context_window,
         "max_output_tokens": model.max_output_tokens,

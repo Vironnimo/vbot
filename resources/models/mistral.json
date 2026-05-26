@@ -3,10 +3,24 @@
   "models": {
     "codestral-2508": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -16,10 +30,24 @@
     },
     "codestral-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -29,10 +57,24 @@
     },
     "devstral-2512": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -42,10 +84,24 @@
     },
     "devstral-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -55,10 +111,24 @@
     },
     "devstral-medium-2507": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -68,10 +138,24 @@
     },
     "devstral-medium-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -81,10 +165,24 @@
     },
     "devstral-small-2507": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -94,10 +192,28 @@
     },
     "labs-leanstral-2603": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -107,10 +223,28 @@
     },
     "magistral-medium-2509": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -120,10 +254,28 @@
     },
     "magistral-medium-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -133,10 +285,28 @@
     },
     "magistral-small-2509": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -146,10 +316,28 @@
     },
     "magistral-small-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -159,10 +347,27 @@
     },
     "ministral-14b-2512": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -172,10 +377,27 @@
     },
     "ministral-14b-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -185,10 +407,27 @@
     },
     "ministral-3b-2512": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -198,10 +437,27 @@
     },
     "ministral-3b-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -211,10 +467,27 @@
     },
     "ministral-8b-2512": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -224,10 +497,27 @@
     },
     "ministral-8b-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -237,10 +527,24 @@
     },
     "mistral-large-2411": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -250,10 +554,27 @@
     },
     "mistral-large-2512": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -263,10 +584,27 @@
     },
     "mistral-large-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -276,10 +614,27 @@
     },
     "mistral-large-pixtral-2411": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -289,10 +644,27 @@
     },
     "mistral-medium": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -302,10 +674,27 @@
     },
     "mistral-medium-2505": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -315,10 +704,27 @@
     },
     "mistral-medium-2508": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -328,10 +734,28 @@
     },
     "mistral-medium-2604": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -341,10 +765,28 @@
     },
     "mistral-medium-3": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -354,10 +796,28 @@
     },
     "mistral-medium-3-5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -367,10 +827,28 @@
     },
     "mistral-medium-3.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -380,10 +858,28 @@
     },
     "mistral-medium-c21211-r0-75": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -393,10 +889,27 @@
     },
     "mistral-medium-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -406,10 +919,27 @@
     },
     "mistral-small-2506": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -419,10 +949,28 @@
     },
     "mistral-small-2603": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -432,10 +980,28 @@
     },
     "mistral-small-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -445,10 +1011,24 @@
     },
     "mistral-tiny-2407": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -458,10 +1038,24 @@
     },
     "mistral-tiny-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -471,10 +1065,28 @@
     },
     "mistral-vibe-cli-fast": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -484,10 +1096,28 @@
     },
     "mistral-vibe-cli-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -497,10 +1127,27 @@
     },
     "mistral-vibe-cli-with-tools": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -510,10 +1157,24 @@
     },
     "open-mistral-nemo": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -523,10 +1184,24 @@
     },
     "open-mistral-nemo-2407": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -536,10 +1211,27 @@
     },
     "pixtral-large-2411": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -549,10 +1241,27 @@
     },
     "pixtral-large-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -562,10 +1271,23 @@
     },
     "voxtral-mini-2507": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": false,
         "vision": false
       },
@@ -575,10 +1297,23 @@
     },
     "voxtral-mini-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": false,
         "vision": false
       },
@@ -588,10 +1323,24 @@
     },
     "voxtral-small-2507": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -601,10 +1350,24 @@
     },
     "voxtral-small-latest": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },

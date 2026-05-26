@@ -1324,6 +1324,15 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "tools": True,
                         "json_mode": False,
                         "reasoning": {"supported": True},
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": [
+                            "chat",
+                            "text_output",
+                            "image_input",
+                            "image_understanding",
+                        ],
                     },
                     "context_window": 200000,
                     "max_output_tokens": 64000,
@@ -1338,6 +1347,10 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "tools": True,
                         "json_mode": False,
                         "reasoning": {"supported": False},
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
                     "max_output_tokens": 8192,
@@ -1352,6 +1365,10 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "tools": True,
                         "json_mode": True,
                         "reasoning": {"supported": False},
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
@@ -1366,6 +1383,15 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                         "tools": True,
                         "json_mode": True,
                         "reasoning": {"supported": True},
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": [
+                            "chat",
+                            "text_output",
+                            "image_input",
+                            "image_understanding",
+                        ],
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
@@ -1402,6 +1428,10 @@ async def test_model_list_filters_by_connection_usability(
                         "tools": True,
                         "json_mode": True,
                         "reasoning": {"supported": False},
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": ["chat", "text_output"],
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
@@ -1416,6 +1446,15 @@ async def test_model_list_filters_by_connection_usability(
                         "tools": True,
                         "json_mode": True,
                         "reasoning": {"supported": True},
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": [],
+                        "task_types": [
+                            "chat",
+                            "text_output",
+                            "image_input",
+                            "image_understanding",
+                        ],
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
@@ -1423,6 +1462,43 @@ async def test_model_list_filters_by_connection_usability(
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_model_list_filters_by_task_and_modality(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.models._models["openai"].append(
+        Model(
+            model_id="gpt-image",
+            name="GPT Image",
+            capabilities=Capabilities(
+                vision=True,
+                tools=False,
+                json_mode=False,
+                reasoning=ReasoningCapabilities(supported=False),
+                input_modalities=("text", "image"),
+                output_modalities=("text", "image"),
+            ),
+            context_window=128000,
+            max_output_tokens=32000,
+        )
+    )
+
+    image_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"task": "image_generation"}},
+    )
+    audio_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"output_modality": "audio"}},
+    )
+
+    assert [model["id"] for model in image_response["result"]["models"]] == ["openai/gpt-image"]
+    assert audio_response["result"]["models"] == []
 
 
 @pytest.mark.asyncio

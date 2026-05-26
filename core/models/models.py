@@ -13,11 +13,29 @@ lookup.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar
+
+MODEL_TASK_ORDER = (
+    "chat",
+    "text_output",
+    "image_input",
+    "image_understanding",
+    "file_input",
+    "file_understanding",
+    "audio_input",
+    "speech_to_text",
+    "video_input",
+    "video_understanding",
+    "image_generation",
+    "image_edit",
+    "audio_generation",
+    "text_to_speech",
+    "video_generation",
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +53,73 @@ class Capabilities:
     tools: bool
     json_mode: bool
     reasoning: ReasoningCapabilities
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
+    supported_parameters: tuple[str, ...] = ()
+    task_types: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        input_modalities = _normalize_string_tuple(self.input_modalities)
+        if not input_modalities:
+            input_modalities = ("text", "image") if self.vision else ("text",)
+
+        output_modalities = _normalize_string_tuple(self.output_modalities)
+        if not output_modalities:
+            output_modalities = ("text",)
+
+        supported_parameters = _normalize_string_tuple(self.supported_parameters, sort=True)
+        task_types = _normalize_string_tuple(self.task_types)
+        if not task_types:
+            task_types = derive_model_task_types(input_modalities, output_modalities)
+
+        object.__setattr__(self, "input_modalities", input_modalities)
+        object.__setattr__(self, "output_modalities", output_modalities)
+        object.__setattr__(self, "supported_parameters", supported_parameters)
+        object.__setattr__(self, "task_types", task_types)
+
+
+def derive_model_task_types(
+    input_modalities: Iterable[str],
+    output_modalities: Iterable[str],
+) -> tuple[str, ...]:
+    """Derive coarse task filters from provider-reported model modalities."""
+
+    inputs = set(_normalize_string_tuple(tuple(input_modalities)))
+    outputs = set(_normalize_string_tuple(tuple(output_modalities)))
+    tasks: set[str] = set()
+
+    if "text" in outputs:
+        tasks.add("text_output")
+    if "text" in inputs and "text" in outputs:
+        tasks.add("chat")
+    if "image" in inputs:
+        tasks.add("image_input")
+        if "text" in outputs:
+            tasks.add("image_understanding")
+    if "file" in inputs:
+        tasks.add("file_input")
+        if "text" in outputs:
+            tasks.add("file_understanding")
+    if "audio" in inputs:
+        tasks.add("audio_input")
+        if "text" in outputs:
+            tasks.add("speech_to_text")
+    if "video" in inputs:
+        tasks.add("video_input")
+        if "text" in outputs:
+            tasks.add("video_understanding")
+    if "image" in outputs:
+        tasks.add("image_generation")
+        if "image" in inputs:
+            tasks.add("image_edit")
+    if "audio" in outputs:
+        tasks.add("audio_generation")
+        if "text" in inputs:
+            tasks.add("text_to_speech")
+    if "video" in outputs:
+        tasks.add("video_generation")
+
+    return tuple(task for task in MODEL_TASK_ORDER if task in tasks)
 
 
 @dataclass(frozen=True)
@@ -103,6 +188,10 @@ class ModelRegistry:
                     tools=caps["tools"],
                     json_mode=caps["json_mode"],
                     reasoning=reasoning,
+                    input_modalities=tuple(caps.get("input_modalities", ())),
+                    output_modalities=tuple(caps.get("output_modalities", ())),
+                    supported_parameters=tuple(caps.get("supported_parameters", ())),
+                    task_types=tuple(caps.get("task_types", ())),
                 )
                 model = Model(
                     model_id=model_id,
@@ -166,3 +255,20 @@ def _freeze_metadata_value(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return tuple(_freeze_metadata_value(item) for item in value)
     return value
+
+
+def _normalize_string_tuple(values: Iterable[str], *, sort: bool = False) -> tuple[str, ...]:
+    normalized_items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        normalized_value = value.strip().lower()
+        if not normalized_value or normalized_value in seen:
+            continue
+        seen.add(normalized_value)
+        normalized_items.append(normalized_value)
+
+    if sort:
+        normalized_items.sort()
+    return tuple(normalized_items)

@@ -49,15 +49,33 @@ class MistralAdapter(OpenAICompatibleAdapter):
 
         context_window = _parse_optional_int(raw.get("max_context_length")) or 0
         reasoning_supported = capabilities_raw.get("reasoning", False) is True
+        vision_supported = capabilities_raw.get("vision", False) is True
+        tools_supported = capabilities_raw.get("function_calling", False) is True
+        audio_transcription_supported = capabilities_raw.get("audio_transcription", False) is True
+        input_modalities = ["text"]
+        if vision_supported:
+            input_modalities.append("image")
+        if audio_transcription_supported:
+            input_modalities.append("audio")
+        supported_parameters = ["response_format"]
+        if tools_supported:
+            supported_parameters.append("tools")
+        if reasoning_supported:
+            supported_parameters.append("reasoning")
+        if audio_transcription_supported:
+            supported_parameters.append("audio_transcription")
 
         return Model(
             model_id=model_id,
             name=name,
             capabilities=Capabilities(
-                vision=capabilities_raw.get("vision", False) is True,
-                tools=capabilities_raw.get("function_calling", False) is True,
+                vision=vision_supported,
+                tools=tools_supported,
                 json_mode=True,
                 reasoning=ReasoningCapabilities(supported=reasoning_supported),
+                input_modalities=tuple(input_modalities),
+                output_modalities=("text",),
+                supported_parameters=tuple(supported_parameters),
             ),
             context_window=context_window,
             max_output_tokens=_provider_default_max_tokens(defaults),
