@@ -108,6 +108,7 @@ RPC_ERROR_ACTIVE_RUN = "active_run"
 RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
 RPC_ERROR_LAST_AGENT = "last_agent"
+RPC_ERROR_AGENT_BUSY = "agent_busy"
 RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
 RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
 RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
@@ -584,6 +585,11 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             ]
             if not remaining_agents:
                 raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
+            if _state_chat_runs(state).has_activity_for_agent(agent_id):
+                raise RpcError(
+                    RPC_ERROR_AGENT_BUSY,
+                    f"cannot delete agent with active or queued runs: {agent_id}",
+                )
             state.runtime.agents.delete(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

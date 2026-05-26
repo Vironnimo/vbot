@@ -22,7 +22,7 @@ from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, Run
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.storage import StorageError
 from core.tools import ToolRegistry, register_read_tool
@@ -2383,6 +2383,33 @@ async def test_agent_delete_rejects_last_agent(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "last_agent"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    release = asyncio.Event()
+    coder = state.runtime.agents.get("coder")
+
+    async def hold_run(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id=coder.current_session_id,
+        executor=hold_run,
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_busy"
+    assert state.runtime.agents.get("coder").id == "coder"
+
+    release.set()
+    assert await run.wait() == "done"
 
 
 @pytest.mark.asyncio

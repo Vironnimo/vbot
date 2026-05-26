@@ -382,6 +382,16 @@ class ChatRunManager:
             return None
         return run
 
+    def has_activity_for_agent(self, agent_id: str) -> bool:
+        """Return whether an agent owns any running run or queued run item."""
+        for (active_agent_id, _session_id), run in self._active_by_session.items():
+            if active_agent_id == agent_id and run.status == RunStatus.RUNNING:
+                return True
+        return any(
+            queued_agent_id == agent_id and bool(queue)
+            for (queued_agent_id, _session_id), queue in self._queues.items()
+        )
+
     async def _execute(
         self,
         run: Run,

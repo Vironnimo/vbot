@@ -327,6 +327,41 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     assert await queued_run.wait() == "queued"
 
 
+async def test_has_activity_for_agent_reports_active_and_queued_work() -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_execute,
+    )
+    queued_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="Queued next",
+    )
+
+    assert manager.has_activity_for_agent("coder") is True
+    assert manager.has_activity_for_agent("writer") is False
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    queued_run = await queued_item.future
+    assert manager.has_activity_for_agent("coder") is True
+    assert await queued_run.wait() == "queued"
+
+    assert manager.has_activity_for_agent("coder") is False
+
+
 async def test_multiple_enqueued_items_drain_in_fifo_order() -> None:
     manager = ChatRunManager()
     active_release = asyncio.Event()
