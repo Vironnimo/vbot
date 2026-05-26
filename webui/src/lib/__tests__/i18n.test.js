@@ -95,6 +95,7 @@ describe('i18n t()', () => {
       'chat.subagentSessionNotice',
       'chat.subagentSessionHint',
       'chat.returnToCurrentSession',
+      'sessions.subagent_parent',
       'status.connected',
       'status.activeRun',
       'status.notReachable',

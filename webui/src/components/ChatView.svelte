@@ -143,6 +143,16 @@
     return currentSessionState(chatState);
   }
 
+  function displayedSessionKey() {
+    const agent = selectedAgent(chatState);
+    const sessionId = viewingSessionId || agent?.current_session_id;
+    return agent?.id && sessionId ? `${agent.id}::${sessionId}` : '';
+  }
+
+  function isDisplayedSession(agentId, sessionId) {
+    return displayedSessionKey() === `${agentId}::${sessionId}`;
+  }
+
   $effect(() => {
     if (sharedAgents.length > 0 && sharedAgents !== lastSharedAgents) {
       lastSharedAgents = sharedAgents;
@@ -324,12 +334,14 @@
     loadingHistory = true;
     historyError = '';
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
+    closeSubscriptionsExcept(sessionState.key);
     try {
       const history = await rpc('chat.history', {
         agent_id: agentId,
         session_id: sessionId,
       });
       loadHistory(sessionState, history.messages ?? []);
+      attachRunStream(sessionState, history.active_run);
       await syncSessionQueue(sessionState);
     } catch (error) {
       historyError = error.message;
@@ -469,6 +481,12 @@
   };
 
   const subscribeToRun = (sessionState, sseUrl, options = {}) => {
+    if (!sseUrl) {
+      return;
+    }
+    if (sessionState.currentRun) {
+      sessionState.currentRun.sseUrl = sseUrl;
+    }
     const existingSubscription = activeSubscriptions[sessionState.key];
     existingSubscription?.close();
     clearPendingReconnect(sessionState.key);
@@ -490,6 +508,38 @@
       },
     );
     activeSubscriptions[sessionState.key] = subscription;
+  };
+
+  const attachRunStream = (sessionState, run, options = {}) => {
+    if (!sessionState || !run?.run_id) {
+      return false;
+    }
+
+    const sseUrl =
+      typeof run.sse_url === 'string' && run.sse_url
+        ? run.sse_url
+        : sseUrlForRun(run.run_id);
+    const currentRun = sessionState.currentRun;
+    const alreadySubscribed =
+      Boolean(activeSubscriptions[sessionState.key]) &&
+      currentRun?.runId === run.run_id &&
+      currentRun?.sseUrl === sseUrl;
+
+    if (currentRun?.runId !== run.run_id) {
+      startRun(sessionState, { ...run, sse_url: sseUrl });
+    } else {
+      currentRun.status = run.status ?? currentRun.status;
+      currentRun.sseUrl = sseUrl;
+    }
+
+    if (!alreadySubscribed) {
+      subscribeToRun(sessionState, sseUrl, {
+        afterSequence:
+          options.afterSequence ?? highestRunEventSequence(sessionState),
+      });
+    }
+
+    return true;
   };
 
   const queueRunEvent = (sessionState, eventData) => {
@@ -601,6 +651,21 @@
     flushPendingRunEvents(sessionState.key);
     const appended = appendRunEvent(sessionState, event);
     handleAppendedRunEvent(sessionState, appended);
+    if (
+      event.type === 'run_started' &&
+      isDisplayedSession(event.agent_id, event.session_id)
+    ) {
+      attachRunStream(
+        sessionState,
+        {
+          run_id: event.run_id,
+          status: 'running',
+          sse_url: sseUrlForRun(event.run_id),
+          events: [],
+        },
+        { afterSequence: highestRunEventSequence(sessionState) },
+      );
+    }
   };
 
   const runEventFromServerEvent = (serverEvent) => {
@@ -644,6 +709,19 @@
     activeSubscriptions[sessionKey]?.close();
     delete activeSubscriptions[sessionKey];
   };
+
+  const closeSubscriptionsExcept = (sessionKey) => {
+    for (const key of Object.keys(activeSubscriptions)) {
+      if (key === sessionKey) {
+        continue;
+      }
+      closeRunSubscription(key);
+      clearPendingReconnect(key);
+    }
+  };
+
+  const sseUrlForRun = (runId) =>
+    `/api/runs/${encodeURIComponent(String(runId))}/events`;
 
   const clearPendingReconnect = (sessionKey) => {
     const timeoutId = pendingReconnects[sessionKey];

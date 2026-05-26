@@ -57,6 +57,34 @@ describe('sessionListView helpers', () => {
     });
   });
 
+  it('normalizes sub-agent session metadata', () => {
+    const next = applySessionList(createSessionListState(), [
+      {
+        id: 'child-session',
+        is_subagent_session: true,
+        subagent_parent: {
+          agent_id: 'orchestrator',
+          session_id: 'parent-session',
+          run_id: 'parent-run',
+          tool_call_id: 'tool-call-one',
+          tool_call_index: 2,
+        },
+      },
+    ]);
+
+    expect(next.sessions[0]).toMatchObject({
+      id: 'child-session',
+      is_subagent_session: true,
+      subagent_parent: {
+        agent_id: 'orchestrator',
+        session_id: 'parent-session',
+        run_id: 'parent-run',
+        tool_call_id: 'tool-call-one',
+        tool_call_index: 2,
+      },
+    });
+  });
+
   it('clears selected session when the session list no longer contains it', () => {
     const state = {
       ...createSessionListState(),

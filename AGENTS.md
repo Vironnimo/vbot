@@ -3,6 +3,16 @@
 These rules apply to every agent, every task, unconditionally.
 **Read this before starting any work. These are YOUR rules.**
 
+## Hard Stop: Required Final Tool Call
+
+Before ending any assistant turn, call `vscode_askQuestions`.
+
+This is mandatory even if the user only asked for an explanation, analysis, review, wording suggestion, or status update.
+
+The assistant's last action in the turn must be the `vscode_askQuestions` tool call. A prose answer without that tool call violates this repository's rules.
+
+The question must offer concrete next-step choices relevant to the just-completed work.
+
 ## Session Start
 
 Every session begins by reading these files — immediately, before anything else:

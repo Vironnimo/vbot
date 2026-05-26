@@ -74,6 +74,9 @@ function normalizeSession(session) {
 
   const platform = asOptionalText(session?.platform);
   const platformConvId = asOptionalText(session?.platform_conv_id);
+  const subagentParent = normalizeSubagentParent(session?.subagent_parent);
+  const isSubagentSession =
+    session?.is_subagent_session === true || subagentParent !== null;
 
   const normalizedSession = {
     id,
@@ -83,11 +86,35 @@ function normalizeSession(session) {
     platform,
     platform_conv_id: platformConvId,
     is_channel_session: platform !== null && platformConvId !== null,
+    is_subagent_session: isSubagentSession,
+    subagent_parent: subagentParent,
   };
 
   normalizedSession.display_name = sessionDisplayName(normalizedSession);
 
   return normalizedSession;
+}
+
+function normalizeSubagentParent(parent) {
+  if (!isPlainObject(parent)) {
+    return null;
+  }
+
+  const agentId = asOptionalText(parent.agent_id);
+  const sessionId = asOptionalText(parent.session_id);
+  if (agentId === null || sessionId === null) {
+    return null;
+  }
+
+  return {
+    agent_id: agentId,
+    session_id: sessionId,
+    run_id: asOptionalText(parent.run_id),
+    tool_call_id: asOptionalText(parent.tool_call_id),
+    tool_call_index: Number.isSafeInteger(parent.tool_call_index)
+      ? parent.tool_call_index
+      : null,
+  };
 }
 
 function compareSessions(left, right) {

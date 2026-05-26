@@ -36,6 +36,8 @@ RESULT_PREVIEW_LIMIT = 300
 SESSION_RESULT_RETRY_ATTEMPTS = 3
 SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
 SUBAGENT_STATUS_QUEUED = "queued"
+SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
+SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 
 _LOGGER = get_logger("subagents")
 
@@ -384,6 +386,8 @@ async def _handle_subagent(
                 session = runtime.chat_sessions.get(target_agent_id, session_id)
             except ChatSessionError:
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
+
+        _mark_subagent_session(runtime, target_agent_id, session.id, context)
 
         try:
             sub_run = await _start_subagent_run(
@@ -818,6 +822,30 @@ def _validate_target_agent(runtime: Any, target_agent_id: str) -> JsonObject | N
     except (AgentNotFoundError, InvalidAgentIdError) as error:
         return tool_failure("agent_not_found", str(error))
     return None
+
+
+def _mark_subagent_session(
+    runtime: Any,
+    sub_agent_id: str,
+    sub_session_id: str,
+    context: ToolContext,
+) -> None:
+    session_manager = getattr(runtime, "chat_sessions", None)
+    get_metadata = getattr(session_manager, "get_metadata", None)
+    set_metadata = getattr(session_manager, "set_metadata", None)
+    if not callable(get_metadata) or not callable(set_metadata):
+        return
+
+    metadata = dict(get_metadata(sub_agent_id, sub_session_id))
+    metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
+    metadata[SUBAGENT_PARENT_METADATA_KEY] = {
+        "agent_id": context.agent_id,
+        "session_id": context.session_id,
+        "run_id": context.run_id,
+        "tool_call_id": context.tool_call_id,
+        "tool_call_index": context.tool_call_index,
+    }
+    set_metadata(sub_agent_id, sub_session_id, metadata)
 
 
 def _started_run_from_queue_item(item: Any) -> Run | None:

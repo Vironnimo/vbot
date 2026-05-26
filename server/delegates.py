@@ -666,9 +666,17 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             for message in session.load()
             if _is_visible_history_message(message)
         ]
+        active_run = _active_run_response(state, agent_id, active_session_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"agent_id": agent_id, "session_id": active_session_id, "messages": messages}
+    response: JsonObject = {
+        "agent_id": agent_id,
+        "session_id": active_session_id,
+        "messages": messages,
+    }
+    if active_run is not None:
+        response["active_run"] = active_run
+    return response
 
 
 def _extract_command_text(content: str | list[ContentBlock]) -> str | None:
@@ -2034,6 +2042,13 @@ def _run_response(
     if sse_url is not None:
         response["sse_url"] = sse_url
     return response
+
+
+def _active_run_response(state: Any, agent_id: str, session_id: str) -> JsonObject | None:
+    run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+    if run is None:
+        return None
+    return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
 
 
 def _queued_response(item: QueuedRunItem) -> JsonObject:
