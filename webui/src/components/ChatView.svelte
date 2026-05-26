@@ -58,6 +58,7 @@
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
   let viewingSubAgentSession = $state(false);
+  let submittedTurnScrollKey = $state(0);
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
   const pendingReconnects = {};
@@ -471,6 +472,7 @@
       }
 
       startRun(sessionState, run);
+      submittedTurnScrollKey += 1;
       subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
       return true;
     } catch (error) {
@@ -981,6 +983,7 @@
           <ChatTimeline
             sessionState={activeSessionState}
             agentName={activeAgent.name}
+            {submittedTurnScrollKey}
             onNavigateToSubAgent={navigateToSubAgent}
             onRetry={handleRetry}
           />

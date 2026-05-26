@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { flushSync, mount, tick, unmount } from 'svelte';
 
 import {
   appendRunEvent,
@@ -116,6 +116,60 @@ describe('ChatTimeline', () => {
     expect(dateSeparators).toHaveLength(2);
     expect(dateSeparators[0].textContent.trim()).not.toBe('Today');
     expect(dateSeparators[1].textContent.trim()).toBe('Today');
+  });
+
+  it('scrolls the submitted user turn to the top when requested', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      const sessionState = ensureSessionState(
+        createChatState(),
+        'alpha',
+        'session-submitted-turn-scroll',
+      );
+      appendRunEvent(sessionState, {
+        type: 'user_message_persisted',
+        run_id: 'run-submitted-turn-scroll',
+        sequence: 1,
+        payload: {
+          message: {
+            id: 'user-submitted-turn',
+            role: 'user',
+            content: 'Fresh turn should start the viewport',
+            timestamp: '2026-05-11T08:00:00',
+          },
+        },
+      });
+
+      mountedComponent = mount(ChatTimeline, {
+        target: document.body,
+        props: {
+          sessionState,
+          agentName: 'Alpha',
+          submittedTurnScrollKey: 1,
+        },
+      });
+      flushSync();
+      await tick();
+      await tick();
+
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: 'start',
+        inline: 'nearest',
+        behavior: 'smooth',
+      });
+      expect(scrollIntoView.mock.contexts[0].textContent).toContain(
+        'Fresh turn should start the viewport',
+      );
+    } finally {
+      if (originalScrollIntoView) {
+        Element.prototype.scrollIntoView = originalScrollIntoView;
+      } else {
+        delete Element.prototype.scrollIntoView;
+      }
+    }
   });
 
   it('renders brace-free tool details and hides internal result fields', () => {

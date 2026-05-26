@@ -205,6 +205,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Shows day separators only when the visible Session timeline spans more than
     one local calendar day. In multi-day histories, each day group gets its own
     separator and the current local day is labeled with `chat.today` (`Today`).
+  - When the user submits a message that starts a new Run, the Timeline anchors
+    the submitted user message at the top of the chat scrollport so the agent
+    response begins below it instead of starting pinned to the bottom edge.
   - Renders tool-call summary text from
     `tool_call_started.payload.display.summary` when available. Legacy
     argument-label fallbacks exist only for history or old events without a
