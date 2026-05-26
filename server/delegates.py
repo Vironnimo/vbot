@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter  # type: ignore[import-untyped]
 
 from core.agents import AgentError
+from core.automation.cron import CronJobValidationError
 from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError
 from core.chat import (
     ChatError,
@@ -109,6 +110,7 @@ RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
 RPC_ERROR_CANCELLED = "run_cancelled"
 RPC_ERROR_LAST_AGENT = "last_agent"
 RPC_ERROR_AGENT_BUSY = "agent_busy"
+RPC_ERROR_AGENT_IN_USE = "agent_in_use"
 RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
 RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
 RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
@@ -127,6 +129,17 @@ class RpcError(Exception):
     def to_dict(self) -> JsonObject:
         """Return the provider-agnostic error envelope payload."""
         return {"code": self.code, "message": self.message}
+
+
+class _NoopAsyncContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        return None
+
+
+_NOOP_ASYNC_CONTEXT = _NoopAsyncContext()
 
 
 async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
@@ -194,9 +207,9 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
         case "channel.list":
             return _list_channels(state, params)
         case "channel.create":
-            return _create_channel(state, params)
+            return await _create_channel(state, params)
         case "channel.update":
-            return _update_channel(state, params)
+            return await _update_channel(state, params)
         case "channel.delete":
             return _delete_channel(state, params)
         case "channel.enable":
@@ -206,11 +219,11 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
         case "channel.status":
             return _channel_status(state, params)
         case "cron.create":
-            return _cron_create(state, params)
+            return await _cron_create(state, params)
         case "cron.list":
             return _cron_list(state, params)
         case "cron.update":
-            return _cron_update(state, params)
+            return await _cron_update(state, params)
         case "cron.delete":
             return _cron_delete(state, params)
         case "cron.enable":
@@ -579,7 +592,7 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
-        async with state.agent_delete_lock:
+        async with _agent_reference_lock(state):
             remaining_agents = [
                 agent for agent in state.runtime.agents.list() if agent.id != agent_id
             ]
@@ -590,6 +603,12 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
                     RPC_ERROR_AGENT_BUSY,
                     f"cannot delete agent with active or queued runs: {agent_id}",
                 )
+            references = _agent_reference_ids(state, agent_id)
+            if references:
+                raise RpcError(
+                    RPC_ERROR_AGENT_IN_USE,
+                    f"cannot delete agent referenced by {', '.join(references)}: {agent_id}",
+                )
             state.runtime.agents.delete(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -599,6 +618,31 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
     }
     _publish_agent_event(state, AGENT_DELETED_EVENT, result)
     return result
+
+
+def _agent_reference_lock(state: Any) -> Any:
+    return getattr(state, "agent_delete_lock", _NOOP_ASYNC_CONTEXT)
+
+
+def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
+    runtime = state.runtime
+    references: list[str] = []
+
+    channel_service = getattr(runtime, "channel_service", None)
+    if channel_service is not None:
+        references.extend(
+            f"channel:{channel.id}"
+            for channel in channel_service.list_channels()
+            if channel.agent_id == agent_id
+        )
+
+    cron_service = getattr(runtime, "cron_service", None)
+    if cron_service is not None:
+        references.extend(
+            f"cron:{job.id}" for job in cron_service.list_jobs() if job.agent_id == agent_id
+        )
+
+    return sorted(references)
 
 
 def _create_session(state: Any, params: JsonObject) -> JsonObject:
@@ -1036,7 +1080,7 @@ def _list_channels(state: Any, params: JsonObject) -> JsonObject:
     return {"channels": channels}
 
 
-def _create_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
         "platform",
@@ -1064,15 +1108,16 @@ def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     )
 
     try:
-        _validate_channel_agent_exists(state, config.agent_id)
-        state.runtime.channel_service.create_channel(config)
-        state.runtime.reload_channel_tool()
+        async with _agent_reference_lock(state):
+            _validate_channel_agent_exists(state, config.agent_id)
+            state.runtime.channel_service.create_channel(config)
+            state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"id": config.id}
 
 
-def _update_channel(state: Any, params: JsonObject) -> JsonObject:
+async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
         "platform",
@@ -1104,9 +1149,17 @@ def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     if "enabled" in params:
         updates["enabled"] = _required_bool(params, "enabled")
 
+    if "agent_id" in updates:
+        try:
+            async with _agent_reference_lock(state):
+                _validate_channel_agent_exists(state, updates["agent_id"])
+                state.runtime.channel_service.update_channel(channel_id, **updates)
+                state.runtime.reload_channel_tool()
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return {"ok": True}
+
     try:
-        if "agent_id" in updates:
-            _validate_channel_agent_exists(state, updates["agent_id"])
         state.runtime.channel_service.update_channel(channel_id, **updates)
         state.runtime.reload_channel_tool()
     except Exception as exc:
@@ -1194,7 +1247,17 @@ def _validate_channel_agent_exists(state: Any, agent_id: str) -> None:
         raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
 
 
-def _cron_create(state: Any, params: JsonObject) -> JsonObject:
+def _validate_cron_agent_exists(state: Any, agent_id: str) -> None:
+    agents = getattr(state.runtime, "agents", None)
+    if agents is None:
+        return
+    try:
+        agents.get(agent_id)
+    except Exception as error:
+        raise CronJobValidationError(f"Unknown agent_id: {agent_id}") from error
+
+
+async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "agent_id",
         "prompt",
@@ -1242,15 +1305,17 @@ def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         cron_expression = None
 
     try:
-        job = state.runtime.cron_service.create_job(
-            agent_id=agent_id,
-            prompt=prompt,
-            schedule_type=schedule_type,
-            cron_expression=cron_expression,
-            run_at=run_at,
-            timezone=timezone,
-            session_id=session_id,
-        )
+        async with _agent_reference_lock(state):
+            _validate_cron_agent_exists(state, agent_id)
+            job = state.runtime.cron_service.create_job(
+                agent_id=agent_id,
+                prompt=prompt,
+                schedule_type=schedule_type,
+                cron_expression=cron_expression,
+                run_at=run_at,
+                timezone=timezone,
+                session_id=session_id,
+            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"id": job.id}
@@ -1267,7 +1332,7 @@ def _cron_list(state: Any, params: JsonObject) -> JsonObject:
     return {"jobs": [_cron_job_response(job) for job in jobs]}
 
 
-def _cron_update(state: Any, params: JsonObject) -> JsonObject:
+async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
         "agent_id",
@@ -1319,6 +1384,15 @@ def _cron_update(state: Any, params: JsonObject) -> JsonObject:
                 f"params.status must be one of: {options}",
             )
         updates["status"] = status
+
+    if "agent_id" in updates:
+        try:
+            async with _agent_reference_lock(state):
+                _validate_cron_agent_exists(state, updates["agent_id"])
+                state.runtime.cron_service.update_job(job_id, **updates)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
+        return {"ok": True}
 
     try:
         state.runtime.cron_service.update_job(job_id, **updates)

@@ -14,8 +14,15 @@ from core.automation.cron import CronServiceError
 from server.delegates import dispatch_rpc
 
 
-def _state_with_cron_service(cron_service: Any) -> SimpleNamespace:
-    return SimpleNamespace(runtime=SimpleNamespace(cron_service=cron_service))
+def _state_with_cron_service(
+    cron_service: Any,
+    *,
+    agents: object | None = None,
+) -> SimpleNamespace:
+    agent_store = agents if agents is not None else Mock()
+    if isinstance(agent_store, Mock):
+        agent_store.get.return_value = SimpleNamespace(id="main")
+    return SimpleNamespace(runtime=SimpleNamespace(cron_service=cron_service, agents=agent_store))
 
 
 @pytest.mark.asyncio
@@ -139,6 +146,27 @@ async def test_cron_update_happy_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cron_update_validates_agent_when_agent_id_is_present() -> None:
+    cron_service = Mock()
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.update",
+            "params": {
+                "id": "job-1",
+                "agent_id": "main",
+            },
+        },
+    )
+
+    assert response == {"ok": True, "result": {"ok": True}}
+    state.runtime.agents.get.assert_called_once_with("main")
+    cron_service.update_job.assert_called_once_with("job-1", agent_id="main")
+
+
+@pytest.mark.asyncio
 async def test_cron_delete_happy_path() -> None:
     cron_service = Mock()
     state = _state_with_cron_service(cron_service)
@@ -241,3 +269,29 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
         "ok": False,
         "error": {"code": "domain_error", "message": "bad schedule"},
     }
+
+
+@pytest.mark.asyncio
+async def test_cron_create_rejects_unknown_agent() -> None:
+    cron_service = Mock()
+    state = _state_with_cron_service(cron_service)
+    state.runtime.agents.get.side_effect = KeyError("missing")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.create",
+            "params": {
+                "agent_id": "missing",
+                "prompt": "Run status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {"code": "domain_error", "message": "Unknown agent_id: missing"},
+    }
+    cron_service.create_job.assert_not_called()
