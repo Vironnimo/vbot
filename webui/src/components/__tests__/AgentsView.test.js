@@ -108,11 +108,7 @@ describe('AgentsView', () => {
       100,
     );
 
-    expect(rpcMock).toHaveBeenCalledWith('model.list', {
-      task: 'chat',
-      capability: 'tools',
-      min_context_window: 64000,
-    });
+    expect(rpcMock).toHaveBeenCalledWith('model.list');
 
     await openSearchableDropdown('agent-model');
     const modelOptionLabels = searchableOptionLabels('agent-model');

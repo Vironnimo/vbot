@@ -52,6 +52,11 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Runtime adapter creation injects provider-scoped `model_lookup(model_id) -> Model | None` so adapters can use normalized catalog facts without file I/O.
 - Provider defaults are applied with lower priority than caller kwargs.
 - Streaming adapters yield normalized vBot deltas only, never raw provider chunks.
+- Catalog normalization should preserve discoverable model modalities,
+  supported request parameters, and other small runtime-relevant facts in the
+  sanitized `Model.capabilities`/`Model.metadata` shape. Sparse local or
+  OpenAI-compatible catalogs should remain usable rather than being interpreted
+  as authoritative negatives for every missing capability.
 - Token values and API keys must never be logged.
 
 ## Constraints & Gotchas

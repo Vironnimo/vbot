@@ -143,6 +143,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/AgentsView.svelte`
   - Loads `agent.list` plus the backend catalogs from `model.list`,
     `connection.list`, `tool.list`, and `skill.list` on mount.
+  - Calls `model.list` without capability/context filters so all models from
+    usable configured providers remain visible. Local OpenAI-compatible
+    providers such as future Ollama or LM Studio integrations may expose sparse
+    or user-tuned catalog facts, and the Agent selector must not hide them based
+    on missing tool/context metadata.
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
   - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.

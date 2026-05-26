@@ -23,9 +23,23 @@ class Capabilities:
     tools: bool
     json_mode: bool
     reasoning: ReasoningCapabilities
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
+    supported_parameters: tuple[str, ...] = ()
+    task_types: tuple[str, ...] = ()
 ```
 
 Provider-specific truths. The same underlying model can have different capabilities depending on the provider. For example, Claude Sonnet 4 through OpenRouter may have a 128k context window without reasoning, while through Anthropic directly it has 200k with reasoning. Both are correct — they describe reality at that provider.
+
+`input_modalities`, `output_modalities`, and `supported_parameters` preserve
+sanitized facts from provider catalogs when available. `task_types` is a coarse
+filtering projection derived from modalities when not provided explicitly. Known
+task values include `chat`, `text_output`, `image_input`,
+`image_understanding`, `file_input`, `file_understanding`, `audio_input`,
+`speech_to_text`, `video_input`, `video_understanding`, `image_generation`,
+`image_edit`, `audio_generation`, `text_to_speech`, and `video_generation`.
+Missing modality data defaults to text-in/text-out so sparse OpenAI-compatible
+catalogs remain usable as chat model catalogs.
 
 ### Model
 
@@ -102,6 +116,10 @@ The app-facing catalog remains one JSON file per provider at
         "vision": true,
         "tools": true,
         "json_mode": true,
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "supported_parameters": ["tools", "response_format", "reasoning"],
+        "task_types": ["chat", "text_output", "image_input", "image_understanding"],
         "reasoning": {
           "supported": true
         }
@@ -127,6 +145,10 @@ The app-facing catalog remains one JSON file per provider at
 - Keys in `models` are the exact model IDs sent in API requests
 - `capabilities` are provider-specific — not canonical claims
 - `reasoning.supported` is a boolean: can this model reason through this provider, yes or no
+- `input_modalities`, `output_modalities`, `supported_parameters`, and
+  `task_types` are persisted under `capabilities` when normalized. The registry
+  tolerates older/sparse catalogs by deriving missing task types and defaulting
+  missing modalities to text-in/text-out.
 - Generated files may include top-level `source` and `fetched_at` metadata.
   `ModelRegistry.load()` ignores those fields and reads only `provider_id` and
   `models`.
@@ -205,14 +227,25 @@ source labels. Model refresh can replace generated provider catalogs.
 
 ```
 Capabilities
-├── vision: bool          # Can the model process images?
-├── tools: bool           # Can the model use tool calls?
-├── json_mode: bool        # Does the model support JSON output mode?
-└── reasoning: ReasoningCapabilities
-    └── supported: bool   # Can the model perform reasoning?
+├── vision: bool                       # Can the model process images in chat?
+├── tools: bool                        # Can the model use tool calls?
+├── json_mode: bool                    # Does the model support JSON output mode?
+├── reasoning: ReasoningCapabilities
+│   └── supported: bool                # Can the model perform reasoning?
+├── input_modalities: tuple[str, ...]  # Provider-reported accepted inputs
+├── output_modalities: tuple[str, ...] # Provider-reported outputs
+├── supported_parameters: tuple[str, ...]
+│                                      # Sanitized provider request controls
+└── task_types: tuple[str, ...]        # Coarse derived filters
 ```
 
 All are provider-specific. A model through OpenRouter may have `reasoning.supported: true` while the same underlying model through a different provider might not support reasoning in the same way, or might have it disabled.
+
+`task_types` is for filtering and routing affordances, not for provider request
+shaping. Adapter runtime behavior must still decide the exact wire parameters.
+Accessors should not hide user-configured local models merely because optional
+capability facts such as `tools` or large `context_window` are missing or
+conservative; local OpenAI-compatible catalogs can be sparse or user-tuned.
 
 **`reasoning.supported` is a boolean only.** It does not store effort levels, budget, or thinking mode configuration. Those are the adapter's responsibility — each provider has a different wire protocol for reasoning:
 - Anthropic: `thinking.type`, `thinking.budget_tokens`, `output_config.effort`, `thinking.display`
@@ -271,6 +304,11 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   normalization lives in `OpenRouterAdapter`; GitHub Copilot catalog
   normalization lives in `GitHubCopilotAdapter`. Discovery should not branch on
   provider IDs or contain provider-specific normalizer functions.
+- **Modalities and task filters come from adapter normalization.** If a provider
+  exposes input/output modalities or supported request parameters, normalize
+  those facts into `Capabilities` instead of leaving them only in raw catalogs.
+  When a provider exposes only model IDs, preserve a usable text chat default
+  rather than treating every missing fact as a hard negative.
 - **Overrides are not a second discovery layer.** If a value can be obtained by
   inspecting provider catalog responses or by sending a probe request to the
   real inference endpoint, put that knowledge in the adapter family rather than
