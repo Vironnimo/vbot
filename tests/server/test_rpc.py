@@ -1496,9 +1496,17 @@ async def test_model_list_filters_by_task_and_modality(
         state,
         {"method": "model.list", "params": {"output_modality": "audio"}},
     )
+    context_response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.list",
+            "params": {"capability": "tools", "min_context_window": 200000},
+        },
+    )
 
     assert [model["id"] for model in image_response["result"]["models"]] == ["openai/gpt-image"]
     assert audio_response["result"]["models"] == []
+    assert [model["id"] for model in context_response["result"]["models"]] == ["openai/gpt-5.2"]
 
 
 @pytest.mark.asyncio
