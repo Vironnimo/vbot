@@ -108,6 +108,10 @@ def create_app(
         finally:
             server_logger.info("Server application stopping")
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
+            await _shutdown_device_flow_engine(
+                getattr(app.state, "device_flow_engine", None),
+                server_logger,
+            )
             await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
@@ -475,6 +479,18 @@ async def _shutdown_runtime(runtime: Any) -> None:
         await aclose()
         return
     runtime.stop()
+
+
+async def _shutdown_device_flow_engine(engine: Any, logger: logging.Logger) -> None:
+    if engine is None:
+        return
+    aclose = getattr(engine, "aclose", None)
+    if not callable(aclose):
+        return
+    try:
+        await asyncio.wait_for(aclose(), timeout=1)
+    except TimeoutError:
+        logger.warning("Timed out while shutting down OAuth device flow engine")
 
 
 async def _close_log_stream(stream: Any) -> None:

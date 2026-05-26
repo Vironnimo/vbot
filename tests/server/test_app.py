@@ -154,6 +154,17 @@ def test_create_app_lifecycle_prefers_async_runtime_shutdown(tmp_path: Path) -> 
     assert runtime.stop_called is False
 
 
+def test_create_app_lifecycle_closes_device_flow_engine(tmp_path: Path) -> None:
+    runtime = _LazyChatRunRuntime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
+    engine = _AsyncCloseDeviceFlowEngine()
+
+    with TestClient(app):
+        app.state.device_flow_engine = engine
+
+    assert engine.aclose_called is True
+
+
 def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:
     import server.app as server_app
 
@@ -233,6 +244,14 @@ class _AsyncCloseRuntime(_LazyChatRunRuntime):
 
     def stop(self) -> None:
         self.stop_called = True
+
+
+class _AsyncCloseDeviceFlowEngine:
+    def __init__(self) -> None:
+        self.aclose_called = False
+
+    async def aclose(self) -> None:
+        self.aclose_called = True
 
 
 class _UnavailableChatRunRuntime:

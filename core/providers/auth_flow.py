@@ -150,6 +150,18 @@ class DeviceFlowEngine:
         if task is not None and not task.done():
             task.cancel()
 
+    async def aclose(self) -> None:
+        """Cancel and await all active Device Flow polling tasks."""
+        tasks = list(self._active_flows.values())
+        self._active_flows.clear()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        pending_tasks = [task for task in tasks if not task.done()]
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
     async def _poll_until_complete(
         self,
         provider_id: str,
