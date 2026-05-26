@@ -2413,6 +2413,38 @@ async def test_agent_delete_rejects_agent_with_active_run(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_agent_delete_rejects_agent_with_channel_reference(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    state.runtime.channel_service = SimpleNamespace(
+        list_channels=lambda: [SimpleNamespace(id="tg-coder", agent_id="coder")]
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_in_use"
+    assert "channel:tg-coder" in response["error"]["message"]
+    assert state.runtime.agents.get("coder").id == "coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_rejects_agent_with_cron_reference(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    state.runtime.cron_service = SimpleNamespace(
+        list_jobs=lambda: [SimpleNamespace(id="job-coder", agent_id="coder")]
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_in_use"
+    assert "cron:job-coder" in response["error"]["message"]
+    assert state.runtime.agents.get("coder").id == "coder"
+
+
+@pytest.mark.asyncio
 async def test_agent_delete_serializes_minimum_one_check_and_delete(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
