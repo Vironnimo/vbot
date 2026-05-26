@@ -2085,6 +2085,49 @@ async def test_settings_update_rejects_compaction_threshold_out_of_range(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_settings_update_rolls_back_partial_writes_on_storage_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    original_settings = {
+        "appearance": {"language": "en", "theme": "legacy"},
+        "server_port": 8500,
+    }
+    state.runtime.storage.save_settings(original_settings)
+
+    def fail_compaction_update(_compaction: object) -> JsonObject:
+        raise StorageError("compaction write failed")
+
+    monkeypatch.setattr(
+        state.runtime.storage,
+        "update_compaction_settings",
+        fail_compaction_update,
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "appearance": {"language": "en"},
+                "compaction": {
+                    "auto": False,
+                    "threshold": 0.9,
+                    "tail_tokens": 12000,
+                    "summary_model": None,
+                },
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert response["error"]["message"] == "compaction write failed"
+    assert state.runtime.storage.load_settings() == original_settings
+
+
+@pytest.mark.asyncio
 async def test_session_create_creates_explicit_session(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
