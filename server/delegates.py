@@ -344,7 +344,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 success=success,
             )
 
-        asyncio.create_task(
+        poll_task = asyncio.create_task(
             engine._poll_for_token(
                 provider_id,
                 connection.id,
@@ -355,6 +355,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 on_complete,
             )
         )
+        poll_task.add_done_callback(_on_device_flow_poll_done)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -363,6 +364,15 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
         "verification_uri": session.verification_uri,
         "expires_in": session.expires_in,
     }
+
+
+def _on_device_flow_poll_done(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        _LOGGER.warning("OAuth device flow polling task failed", exc_info=True)
 
 
 def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
