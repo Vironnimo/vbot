@@ -3,10 +3,24 @@
   "models": {
     "accounts/msft/routers/f185i3v4": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -29,10 +43,24 @@
     },
     "accounts/msft/routers/fmfeto88": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -55,10 +83,24 @@
     },
     "accounts/msft/routers/gdjv4v2v": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -81,10 +123,28 @@
     },
     "claude-haiku-4.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -110,10 +170,28 @@
     },
     "claude-opus-4.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -139,10 +217,29 @@
     },
     "claude-opus-4.7": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -173,10 +270,28 @@
     },
     "claude-sonnet-4.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -202,10 +317,29 @@
     },
     "claude-sonnet-4.6": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -238,10 +372,28 @@
     },
     "gemini-2.5-pro": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -263,10 +415,28 @@
     },
     "gemini-3-flash-preview": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -293,10 +463,28 @@
     },
     "gemini-3.1-pro-preview": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -326,10 +514,28 @@
     },
     "gemini-3.5-flash": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -359,10 +565,23 @@
     },
     "gpt-3.5-turbo": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -381,10 +600,23 @@
     },
     "gpt-3.5-turbo-0613": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -403,10 +635,23 @@
     },
     "gpt-4": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -425,10 +670,24 @@
     },
     "gpt-4-0125-preview": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -448,10 +707,23 @@
     },
     "gpt-4-0613": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -470,10 +742,24 @@
     },
     "gpt-4-o-preview": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -493,10 +779,28 @@
     },
     "gpt-4.1": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -517,10 +821,28 @@
     },
     "gpt-4.1-2025-04-14": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -541,10 +863,27 @@
     },
     "gpt-4o": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -564,10 +903,27 @@
     },
     "gpt-4o-2024-05-13": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -587,10 +943,24 @@
     },
     "gpt-4o-2024-08-06": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -610,10 +980,27 @@
     },
     "gpt-4o-2024-11-20": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -633,10 +1020,24 @@
     },
     "gpt-4o-mini": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -656,10 +1057,24 @@
     },
     "gpt-4o-mini-2024-07-18": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -679,10 +1094,29 @@
     },
     "gpt-5-mini": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -713,10 +1147,29 @@
     },
     "gpt-5.2": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -748,10 +1201,29 @@
     },
     "gpt-5.2-codex": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -782,10 +1254,29 @@
     },
     "gpt-5.3-codex": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -816,10 +1307,29 @@
     },
     "gpt-5.4": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -851,10 +1361,29 @@
     },
     "gpt-5.4-mini": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -886,10 +1415,29 @@
     },
     "gpt-5.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -921,10 +1469,28 @@
     },
     "oswe-vscode-prime": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -949,10 +1515,21 @@
     },
     "text-embedding-3-small": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": false,
         "vision": false
       },
@@ -969,10 +1546,21 @@
     },
     "text-embedding-3-small-inference": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": false,
         "vision": false
       },
@@ -989,10 +1577,21 @@
     },
     "text-embedding-ada-002": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": false
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": false,
         "vision": false
       },

@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ModelRegistry,
+    ReasoningCapabilities,
+    derive_model_task_types,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
@@ -54,11 +60,51 @@ class TestCapabilities:
             tools=False,
             json_mode=True,
             reasoning=reasoning,
+            input_modalities=("Text", "Image", "image"),
+            output_modalities=("Text", "Audio"),
+            supported_parameters=("response_format", "tools", "tools"),
         )
         assert caps.vision is True
         assert caps.tools is False
         assert caps.json_mode is True
         assert caps.reasoning is reasoning
+        assert caps.input_modalities == ("text", "image")
+        assert caps.output_modalities == ("text", "audio")
+        assert caps.supported_parameters == ("response_format", "tools")
+        assert caps.task_types == (
+            "chat",
+            "text_output",
+            "image_input",
+            "image_understanding",
+            "audio_generation",
+            "text_to_speech",
+        )
+
+    def test_legacy_vision_derives_text_image_input(self):
+        caps = Capabilities(
+            vision=True,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        )
+
+        assert caps.input_modalities == ("text", "image")
+        assert caps.output_modalities == ("text",)
+        assert "image_understanding" in caps.task_types
+
+    def test_derives_generation_task_types(self):
+        assert derive_model_task_types(("text", "image"), ("text", "image")) == (
+            "chat",
+            "text_output",
+            "image_input",
+            "image_understanding",
+            "image_generation",
+            "image_edit",
+        )
+        assert derive_model_task_types(("text",), ("audio",)) == (
+            "audio_generation",
+            "text_to_speech",
+        )
 
     def test_frozen(self):
         reasoning = ReasoningCapabilities(supported=False)
@@ -189,6 +235,9 @@ class TestModelRegistryLoad:
         assert alpha.capabilities.tools is False
         assert alpha.capabilities.json_mode is True
         assert alpha.capabilities.reasoning.supported is False
+        assert alpha.capabilities.input_modalities == ("text", "image")
+        assert alpha.capabilities.output_modalities == ("text",)
+        assert "image_understanding" in alpha.capabilities.task_types
         assert alpha.context_window == 32000
         assert alpha.max_output_tokens == 4096
 
@@ -485,6 +534,10 @@ class TestModelRegistryRealResources:
             assert isinstance(model.capabilities.tools, bool)
             assert isinstance(model.capabilities.json_mode, bool)
             assert isinstance(model.capabilities.reasoning.supported, bool)
+            assert isinstance(model.capabilities.input_modalities, tuple)
+            assert isinstance(model.capabilities.output_modalities, tuple)
+            assert isinstance(model.capabilities.supported_parameters, tuple)
+            assert isinstance(model.capabilities.task_types, tuple)
             assert isinstance(model.context_window, int)
             assert model.context_window >= 0
             assert isinstance(model.max_output_tokens, int)

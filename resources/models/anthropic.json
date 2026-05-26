@@ -1,31 +1,59 @@
 {
-  "provider_id": "anthropic",
   "models": {
-    "claude-sonnet-4-20250219": {
-      "name": "Claude Sonnet 4",
-      "capabilities": {
-        "vision": true,
-        "tools": true,
-        "json_mode": true,
-        "reasoning": {
-          "supported": true
-        }
-      },
-      "context_window": 200000,
-      "max_output_tokens": 64000
-    },
     "claude-opus-4-20250219": {
-      "name": "Claude Opus 4",
       "capabilities": {
-        "vision": true,
-        "tools": true,
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
-        }
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
       },
       "context_window": 200000,
-      "max_output_tokens": 32000
+      "max_output_tokens": 32000,
+      "name": "Claude Opus 4"
+    },
+    "claude-sonnet-4-20250219": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4"
     }
-  }
+  },
+  "provider_id": "anthropic"
 }

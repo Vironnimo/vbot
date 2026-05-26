@@ -120,6 +120,14 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         architecture = _read_optional_mapping(raw, "architecture")
         top_provider = _read_optional_mapping(raw, "top_provider")
         supported_parameters = _read_optional_string_set(raw, "supported_parameters")
+        input_modalities = _read_first_optional_string_tuple(
+            (architecture, raw),
+            ("input_modalities", "inputModalities", "modalities"),
+        )
+        output_modalities = _read_first_optional_string_tuple(
+            (architecture, raw),
+            ("output_modalities", "outputModalities"),
+        )
 
         model_id = _read_non_empty_string(raw, "id")
         name = _read_optional_non_empty_string(raw, "name") or model_id
@@ -144,6 +152,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                         supported_parameters,
                     ),
                 ),
+                input_modalities=input_modalities,
+                output_modalities=output_modalities or ("text",),
+                supported_parameters=tuple(supported_parameters),
             ),
             context_window=_read_first_optional_int(raw, CONTEXT_WINDOW_KEYS)
             or _read_first_optional_int(architecture, CONTEXT_WINDOW_KEYS)
@@ -830,6 +841,18 @@ def _read_optional_string_set(data: Mapping[str, Any], key: str) -> set[str]:
     if not isinstance(value, list):
         return set()
     return {item for item in value if isinstance(item, str)}
+
+
+def _read_first_optional_string_tuple(
+    metadata_sources: tuple[Mapping[str, Any], ...],
+    keys: tuple[str, ...],
+) -> tuple[str, ...]:
+    for source in metadata_sources:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                return tuple(value)
+    return ()
 
 
 def _read_int(data: Mapping[str, Any], key: str) -> int:

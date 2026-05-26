@@ -34,6 +34,11 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         top_provider = _read_mapping(raw, "top_provider")
         supported_parameters = _read_string_list(raw, "supported_parameters")
         input_modalities = _read_string_list(architecture, "input_modalities")
+        output_modalities = (
+            _read_string_list(architecture, "output_modalities")
+            if "output_modalities" in architecture
+            else ["text"]
+        )
 
         max_completion_tokens = top_provider.get("max_completion_tokens")
         if max_completion_tokens is None:
@@ -55,9 +60,13 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                         or "include_reasoning" in supported_parameters
                     ),
                 ),
+                input_modalities=tuple(input_modalities),
+                output_modalities=tuple(output_modalities),
+                supported_parameters=tuple(supported_parameters),
             ),
             context_window=_read_int(raw, "context_length"),
             max_output_tokens=int(max_completion_tokens),
+            metadata=_openrouter_runtime_metadata(architecture),
         )
 
     def _build_payload(
@@ -84,3 +93,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             payload["reasoning"] = {"effort": supported_effort}
             payload["include_reasoning"] = True
         return payload
+
+
+def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:
+    modality = architecture.get("modality")
+    if isinstance(modality, str) and modality:
+        return {"openrouter": {"modality": modality}}
+    return {}

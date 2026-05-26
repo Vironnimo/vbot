@@ -3,10 +3,21 @@
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -16,10 +27,21 @@
     },
     "deepseek-v4-pro": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -29,10 +51,21 @@
     },
     "glm-5": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -42,10 +75,21 @@
     },
     "glm-5.1": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -55,10 +99,21 @@
     },
     "hy3-preview": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -68,10 +123,24 @@
     },
     "kimi-k2.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -81,10 +150,24 @@
     },
     "kimi-k2.6": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -94,10 +177,24 @@
     },
     "mimo-v2-omni": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -107,10 +204,21 @@
     },
     "mimo-v2-pro": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -120,10 +228,24 @@
     },
     "mimo-v2.5": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -133,10 +255,21 @@
     },
     "mimo-v2.5-pro": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -146,10 +279,21 @@
     },
     "minimax-m2.5": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -159,10 +303,21 @@
     },
     "minimax-m2.7": {
       "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
         "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
         "tools": true,
         "vision": false
       },
@@ -172,10 +327,24 @@
     },
     "qwen3.5-plus": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },
@@ -185,10 +354,24 @@
     },
     "qwen3.6-plus": {
       "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
         "reasoning": {
           "supported": true
         },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
         "tools": true,
         "vision": true
       },

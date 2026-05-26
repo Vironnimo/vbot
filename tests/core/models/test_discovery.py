@@ -115,6 +115,7 @@ def raw_openrouter_model(
     model_id: str = "anthropic/claude-sonnet-4",
     name: str = "Anthropic: Claude Sonnet 4",
     input_modalities: list[str] | None = None,
+    output_modalities: list[str] | None = None,
     supported_parameters: list[str] | None = None,
     context_length: int = 128000,
     max_completion_tokens: int | None = 64000,
@@ -122,7 +123,11 @@ def raw_openrouter_model(
     return {
         "id": model_id,
         "name": name,
-        "architecture": {"input_modalities": input_modalities or ["text", "image"]},
+        "architecture": {
+            "input_modalities": input_modalities or ["text", "image"],
+            "output_modalities": output_modalities or ["text"],
+            "modality": "text+image->text",
+        },
         "supported_parameters": (
             supported_parameters
             if supported_parameters is not None
@@ -141,6 +146,10 @@ def model_data(name: str = "Model Name") -> dict:
             "tools": True,
             "json_mode": True,
             "reasoning": {"supported": False},
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+            "supported_parameters": ["response_format", "tools"],
+            "task_types": ["chat", "text_output"],
         },
         "context_window": 32000,
         "max_output_tokens": 4096,

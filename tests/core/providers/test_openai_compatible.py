@@ -2073,6 +2073,7 @@ class TestNormalizeCatalogEntry:
             "max_output_tokens": 32768,
             "supported_parameters": ["response_format", "reasoning_effort"],
             "input_modalities": ["text", "image"],
+            "output_modalities": ["text", "image"],
         }
 
         model = OpenAICompatibleAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
@@ -2085,6 +2086,13 @@ class TestNormalizeCatalogEntry:
         assert model.capabilities.tools is True
         assert model.capabilities.json_mode is True
         assert model.capabilities.reasoning.supported is True
+        assert model.capabilities.input_modalities == ("text", "image")
+        assert model.capabilities.output_modalities == ("text", "image")
+        assert model.capabilities.supported_parameters == (
+            "reasoning_effort",
+            "response_format",
+        )
+        assert "image_generation" in model.capabilities.task_types
 
     def test_missing_optional_fields_use_defaults(self):
         raw_model = {"id": "minimal-model"}
@@ -2097,3 +2105,6 @@ class TestNormalizeCatalogEntry:
         assert model.capabilities.tools is True
         assert model.capabilities.json_mode is False
         assert model.capabilities.reasoning.supported is False
+        assert model.capabilities.input_modalities == ("text",)
+        assert model.capabilities.output_modalities == ("text",)
+        assert model.capabilities.task_types == ("chat", "text_output")
