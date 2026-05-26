@@ -268,7 +268,12 @@ class AgentStore:
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
         data = json.loads(agent_path.read_text(encoding="utf-8"))
-        agent = _agent_from_dict(data)
+        agent_id = _validate_string_field("id", data["id"], allow_empty=False)
+        workspace_missing = _is_missing_workspace(data.get("workspace"))
+        agent = _agent_from_dict(data, default_workspace=self._default_workspace(agent_id))
+        self._seed_workspace(Path(agent.workspace))
+        if workspace_missing:
+            self._write_agent(agent)
         return self._ensure_current_session(agent)
 
     def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
@@ -382,15 +387,16 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _agent_from_dict(data: dict[str, Any]) -> Agent:
+def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | None = None) -> Agent:
+    agent_id = _validate_string_field("id", data["id"], allow_empty=False)
     return Agent(
-        id=_validate_string_field("id", data["id"], allow_empty=False),
+        id=agent_id,
         name=_validate_string_field("name", data["name"], allow_empty=False),
         model=_validate_string_field("model", data["model"], allow_empty=True),
         fallback_model=_validate_string_field(
             "fallback_model", data["fallback_model"], allow_empty=True
         ),
-        workspace=str(_validate_workspace(data["workspace"])),
+        workspace=str(_workspace_from_data(data.get("workspace"), default_workspace)),
         temperature=_validate_temperature(data.get("temperature")),
         thinking_effort=_validate_thinking_effort(data.get("thinking_effort")),
         allowed_tools=_validate_allowed_items("allowed_tools", data["allowed_tools"]),
@@ -401,3 +407,15 @@ def _agent_from_dict(data: dict[str, Any]) -> Agent:
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
+
+
+def _workspace_from_data(workspace: Any, default_workspace: str | Path | None) -> Path:
+    if _is_missing_workspace(workspace):
+        if default_workspace is None:
+            raise AgentError("workspace must be a path string")
+        return Path(default_workspace).resolve()
+    return _validate_workspace(workspace)
+
+
+def _is_missing_workspace(workspace: Any) -> bool:
+    return workspace is None or workspace == ""
