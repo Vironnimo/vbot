@@ -685,14 +685,6 @@
     return 'running';
   };
 
-  const subAgentStatusLabel = (tool, assistantRun = null) => {
-    const status = subAgentLifecycleStatus(tool, assistantRun);
-    if (status === 'running') {
-      return t('chat.subagent.running', 'running');
-    }
-    return t('chat.subagent.resultStatus', 'Status: {status}', { status });
-  };
-
   const subAgentNavigationTarget = (tool) => {
     const data = subAgentResultData(tool);
     const agentId = trimmedString(data.agent_id);
@@ -1338,9 +1330,6 @@
                             {subAgentPreview(child)}
                           </span>
                         {/if}
-                        <span class="te-time subagent-status">
-                          {subAgentStatusLabel(child, item)}
-                        </span>
                         {#if subAgentNavigationTarget(child)}
                           <button
                             type="button"
@@ -1845,14 +1834,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .subagent-status {
-    color: var(--text-lo);
-  }
-
-  .subagent-tool-event .te-dot.running + .te-fn ~ .subagent-status {
-    color: var(--amber);
   }
 
   .subagent-link {

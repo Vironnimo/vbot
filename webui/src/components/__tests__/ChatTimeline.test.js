@@ -2708,7 +2708,8 @@ describe('ChatTimeline', () => {
     );
 
     expect(subagentRows).toHaveLength(2);
-    expect(subagentRows[0].textContent).toContain('Status: completed');
+    expect(subagentRows[0].textContent).not.toContain('Status: completed');
+    expect(subagentRows[0].querySelector('.subagent-status')).toBeNull();
     expect(subagentRows[0].querySelector('.te-dot.done')).not.toBeNull();
     expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
   });

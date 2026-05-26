@@ -137,8 +137,6 @@ export const englishCatalog = Object.freeze({
   'chat.tokenBadgeNoUsage': '— / {context} tok',
   'chat.subagent.label': 'Sub-agent',
   'chat.subagent.viewSession': 'view session',
-  'chat.subagent.running': 'running',
-  'chat.subagent.resultStatus': 'Status: {status}',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
   'chat.subagentSessionHint':
     'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
