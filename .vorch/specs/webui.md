@@ -208,9 +208,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - When the user submits a message that starts a new Run, the Timeline anchors
     the submitted user message at the top of the chat scrollport so the agent
     response begins below it instead of starting pinned to the bottom edge. The
-    Timeline keeps bottom scroll space for that submitted Run so the browser can
-    actually align the user message at the top even before the assistant output
-    has filled the viewport.
+    Timeline keeps only the dynamic bottom scroll space still needed for that
+    alignment, shrinking it as assistant/reasoning/tool output fills the
+    viewport so the user message can remain at the top without a fixed blank
+    scroll tail.
   - Renders tool-call summary text from
     `tool_call_started.payload.display.summary` when available. Legacy
     argument-label fallbacks exist only for history or old events without a

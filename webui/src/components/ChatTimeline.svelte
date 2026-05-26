@@ -117,16 +117,31 @@
       if (!hasPendingSubmittedTurnScroll()) {
         return;
       }
-      if (!submittedTurnScrollTarget(userMessageElements())) {
+      const target = submittedTurnScrollTarget(userMessageElements());
+      if (!target) {
         return;
       }
-      syncSubmittedTurnSpacerHeight();
+      syncSubmittedTurnSpacerHeight(target);
       await tick();
       if (!hasPendingSubmittedTurnScroll()) {
         return;
       }
       if (scrollSubmittedTurnIntoView()) {
         handledSubmittedTurnScrollKey = pendingSubmittedTurnScrollKey;
+      }
+    });
+  });
+
+  $effect(() => {
+    timelineSignature;
+    if (!shouldRenderSubmittedTurnScrollSpacer) {
+      return;
+    }
+
+    tick().then(() => {
+      const target = submittedTurnScrollTarget(userMessageElements());
+      if (target) {
+        syncSubmittedTurnSpacerHeight(target);
       }
     });
   });
@@ -1133,10 +1148,29 @@
     return '';
   }
 
-  function syncSubmittedTurnSpacerHeight() {
+  function syncSubmittedTurnSpacerHeight(target = null) {
+    const containerHeight = scrollContainer?.clientHeight ?? 0;
+    if (!scrollContainer || containerHeight <= 0 || !target) {
+      submittedTurnSpacerHeight = Math.max(
+        containerHeight,
+        MIN_SUBMITTED_TURN_SPACER_HEIGHT,
+      );
+      return;
+    }
+
+    const spacer = scrollContainer.querySelector(
+      '.submitted-turn-scroll-spacer',
+    );
+    const currentSpacerHeight = spacer?.getBoundingClientRect().height ?? 0;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const targetTop =
+      targetRect.top - containerRect.top + scrollContainer.scrollTop;
+    const contentHeightWithoutSpacer =
+      scrollContainer.scrollHeight - currentSpacerHeight;
     submittedTurnSpacerHeight = Math.max(
-      scrollContainer?.clientHeight ?? 0,
-      MIN_SUBMITTED_TURN_SPACER_HEIGHT,
+      0,
+      Math.ceil(targetTop + containerHeight - contentHeightWithoutSpacer),
     );
   }
 
