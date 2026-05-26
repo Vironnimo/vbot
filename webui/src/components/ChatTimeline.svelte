@@ -13,9 +13,16 @@
   let {
     sessionState,
     agentName = '',
+    submittedTurnScrollKey = 0,
     onNavigateToSubAgent = () => {},
     onRetry = () => {},
   } = $props();
+
+  const SUBMITTED_TURN_SCROLL_OPTIONS = Object.freeze({
+    block: 'start',
+    inline: 'nearest',
+    behavior: 'smooth',
+  });
 
   function isNearBottom(container) {
     return (
@@ -33,6 +40,8 @@
   );
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
+  let pendingSubmittedTurnScrollKey = $state(0);
+  let handledSubmittedTurnScrollKey = $state(0);
   let latestTerminalState = $derived.by(() => {
     for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
       const item = timelineItems[index];
@@ -69,14 +78,40 @@
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
 
+  $effect(() => {
+    if (
+      submittedTurnScrollKey > handledSubmittedTurnScrollKey &&
+      submittedTurnScrollKey > pendingSubmittedTurnScrollKey
+    ) {
+      pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
+    }
+  });
+
   $effect.pre(() => {
     timelineSignature;
-    const shouldAutoscroll = isNearBottom(scrollContainer);
+    const shouldAutoscroll =
+      !hasPendingSubmittedTurnScroll() && isNearBottom(scrollContainer);
     if (shouldAutoscroll) {
       tick().then(() => {
         scrollContainer?.scrollTo?.(0, scrollContainer.scrollHeight);
       });
     }
+  });
+
+  $effect(() => {
+    timelineSignature;
+    if (!hasPendingSubmittedTurnScroll()) {
+      return;
+    }
+
+    tick().then(() => {
+      if (!hasPendingSubmittedTurnScroll()) {
+        return;
+      }
+      if (scrollSubmittedTurnIntoView()) {
+        handledSubmittedTurnScrollKey = pendingSubmittedTurnScrollKey;
+      }
+    });
   });
 
   function timelineItemSignature(item) {
@@ -1012,6 +1047,26 @@
     return Boolean(
       currentDateKey && currentDateKey !== timelineDateKeys[itemIndex - 1],
     );
+  }
+
+  function hasPendingSubmittedTurnScroll() {
+    return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
+  }
+
+  function scrollSubmittedTurnIntoView() {
+    const userMessages = scrollContainer?.querySelectorAll?.('.msg.user') ?? [];
+    const target = userMessages[userMessages.length - 1];
+    if (!target) {
+      return false;
+    }
+
+    if (typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView(SUBMITTED_TURN_SCROLL_OPTIONS);
+      return true;
+    }
+
+    scrollContainer?.scrollTo?.(0, target.offsetTop ?? 0);
+    return true;
   }
 
   function timestampForItem(item) {
