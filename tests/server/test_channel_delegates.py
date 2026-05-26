@@ -276,6 +276,38 @@ async def test_session_link_channel_sets_metadata_and_writes_system_reminder() -
 
 
 @pytest.mark.asyncio
+async def test_session_link_channel_rejects_channel_from_other_agent() -> None:
+    config = _channel_config()
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    chat_sessions = Mock()
+    state = _state(channel_service=channel_service, chat_sessions=chat_sessions)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "session.link_channel",
+            "params": {
+                "agent_id": "writer",
+                "session_id": "session-1",
+                "channel_id": "tg-assistant",
+                "platform_conv_id": "12345",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {
+            "code": "channel_config_error",
+            "message": "Channel tg-assistant belongs to agent assistant, not writer",
+        },
+    }
+    chat_sessions.get.assert_not_called()
+    chat_sessions.set_metadata.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_channel_create_maps_duplicate_error_to_channel_already_exists() -> None:
     channel_service = Mock()
     channel_service.create_channel.side_effect = ChannelConfigError(
