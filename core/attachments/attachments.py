@@ -7,7 +7,7 @@ import json
 import os
 import re
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -122,10 +122,10 @@ class AttachmentStore:
     def get(self, attachment_id: str) -> AttachmentRecord:
         """Load one attachment record by id from sidecar metadata."""
 
-        _validate_attachment_id(attachment_id)
-        sidecar_path = self._sidecar_path(attachment_id)
+        normalized_id = _normalize_attachment_id(attachment_id)
+        sidecar_path = self._sidecar_path(normalized_id)
         if not sidecar_path.exists():
-            raise AttachmentNotFoundError(f"Attachment not found: {attachment_id}")
+            raise AttachmentNotFoundError(f"Attachment not found: {normalized_id}")
 
         try:
             data = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -137,13 +137,23 @@ class AttachmentStore:
         if not isinstance(data, dict):
             raise AttachmentError(f"Attachment metadata must be an object: {sidecar_path}")
 
-        return _record_from_dict(data)
+        record = _record_from_dict(data)
+        if record.id.lower() != normalized_id:
+            raise AttachmentError(
+                f"Attachment metadata id mismatch: expected {normalized_id}, got {record.id}"
+            )
+
+        blob_path = self._blob_path(normalized_id)
+        if not blob_path.is_file():
+            raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
+
+        return replace(record, id=normalized_id, file_path=str(blob_path))
 
     def delete(self, attachment_id: str) -> None:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
-        _validate_attachment_id(attachment_id)
-        for target_path in (self._blob_path(attachment_id), self._sidecar_path(attachment_id)):
+        normalized_id = _normalize_attachment_id(attachment_id)
+        for target_path in (self._blob_path(normalized_id), self._sidecar_path(normalized_id)):
             try:
                 target_path.unlink()
             except FileNotFoundError:
@@ -215,9 +225,10 @@ def _sniff_mime(data: bytes, filename: str) -> str:
     return "application/octet-stream"
 
 
-def _validate_attachment_id(attachment_id: str) -> None:
-    if not _UUID4_RE.match(attachment_id.lower()):
+def _normalize_attachment_id(attachment_id: str) -> str:
+    if not isinstance(attachment_id, str) or not _UUID4_RE.match(attachment_id.lower()):
         raise AttachmentNotFoundError(f"Invalid attachment id: {attachment_id}")
+    return attachment_id.lower()
 
 
 def _sniff_ooxml_media_type(data: bytes) -> str | None:
