@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from contextlib import suppress
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import Any, cast
@@ -1540,26 +1541,34 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     except SettingsValidationError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
+    storage = state.runtime.storage
+    original_settings: JsonObject | None = None
+    should_reload_skills = False
+
     try:
+        original_settings = dict(storage.load_settings())
         if "appearance" in settings_update:
-            state.runtime.storage.update_appearance_settings(settings_update["appearance"])
+            storage.update_appearance_settings(settings_update["appearance"])
         if "skills" in settings_update:
-            state.runtime.storage.update_skill_directory_settings(
-                settings_update["skills"]["directories"]
-            )
-            reload_skills = getattr(state.runtime, "reload_skills", None)
-            if callable(reload_skills):
-                reload_skills()
+            storage.update_skill_directory_settings(settings_update["skills"]["directories"])
+            should_reload_skills = True
         if "subagents" in settings_update:
-            _update_subagent_settings(state.runtime.storage, settings_update["subagents"])
+            _update_subagent_settings(storage, settings_update["subagents"])
         if "compaction" in settings_update:
-            state.runtime.storage.update_compaction_settings(settings_update["compaction"])
+            storage.update_compaction_settings(settings_update["compaction"])
         if "defaults" in settings_update:
             defaults_update = cast(JsonObject, settings_update["defaults"])
             if "agent" in defaults_update:
-                state.runtime.storage.update_defaults("agent", defaults_update["agent"])
+                storage.update_defaults("agent", defaults_update["agent"])
+        if should_reload_skills:
+            reload_skills = getattr(state.runtime, "reload_skills", None)
+            if callable(reload_skills):
+                reload_skills()
         return _settings_response(state)
     except Exception as exc:
+        if original_settings is not None:
+            with suppress(Exception):
+                storage.save_settings(original_settings)
         raise _map_expected_error(exc) from exc
 
 
