@@ -693,6 +693,10 @@ def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
     try:
         channel_service = state.runtime.channel_service
         channel_config = _channel_config_by_id(channel_service, channel_id)
+        if channel_config.agent_id != agent_id:
+            raise ChannelConfigError(
+                f"Channel {channel_id} belongs to agent {channel_config.agent_id}, not {agent_id}"
+            )
         session = state.runtime.chat_sessions.get(agent_id, session_id)
         metadata = dict(state.runtime.chat_sessions.get_metadata(agent_id, session_id))
         metadata.update(
