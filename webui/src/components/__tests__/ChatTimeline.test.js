@@ -34,6 +34,88 @@ describe('ChatTimeline', () => {
     }
 
     document.body.innerHTML = '';
+    vi.useRealTimers();
+  });
+
+  it('does not show a date separator for a single-day history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-single-day-history',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-one',
+        role: 'user',
+        content: 'Morning note',
+        timestamp: '2026-05-10T09:00:00',
+      },
+      {
+        id: 'assistant-one',
+        role: 'assistant',
+        content: 'Same day reply',
+        timestamp: '2026-05-10T09:01:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.date-sep:not(.compaction-sep)')).toBeNull();
+  });
+
+  it('groups multi-day history with Today for the current day', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T12:00:00'));
+
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-multi-day-history',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-yesterday',
+        role: 'user',
+        content: 'Yesterday question',
+        timestamp: '2026-05-10T15:00:00',
+      },
+      {
+        id: 'assistant-yesterday',
+        role: 'assistant',
+        content: 'Yesterday answer',
+        timestamp: '2026-05-10T15:01:00',
+      },
+      {
+        id: 'user-today',
+        role: 'user',
+        content: 'Continue today',
+        timestamp: '2026-05-11T08:00:00',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const dateSeparators = Array.from(
+      document.querySelectorAll('.date-sep:not(.compaction-sep)'),
+    );
+
+    expect(dateSeparators).toHaveLength(2);
+    expect(dateSeparators[0].textContent.trim()).not.toBe('Today');
+    expect(dateSeparators[1].textContent.trim()).toBe('Today');
   });
 
   it('renders brace-free tool details and hides internal result fields', () => {
