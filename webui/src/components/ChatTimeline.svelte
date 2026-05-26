@@ -14,6 +14,7 @@
     sessionState,
     agentName = '',
     submittedTurnScrollKey = 0,
+    submittedTurnScrollRunId = '',
     onNavigateToSubAgent = () => {},
     onRetry = () => {},
   } = $props();
@@ -41,6 +42,7 @@
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
   let pendingSubmittedTurnScrollKey = $state(0);
+  let pendingSubmittedTurnScrollRunId = $state('');
   let handledSubmittedTurnScrollKey = $state(0);
   let latestTerminalState = $derived.by(() => {
     for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
@@ -84,6 +86,7 @@
       submittedTurnScrollKey > pendingSubmittedTurnScrollKey
     ) {
       pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
+      pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
     }
   });
 
@@ -1054,8 +1057,10 @@
   }
 
   function scrollSubmittedTurnIntoView() {
-    const userMessages = scrollContainer?.querySelectorAll?.('.msg.user') ?? [];
-    const target = userMessages[userMessages.length - 1];
+    const userMessages = Array.from(
+      scrollContainer?.querySelectorAll?.('.msg.user') ?? [],
+    );
+    const target = submittedTurnScrollTarget(userMessages);
     if (!target) {
       return false;
     }
@@ -1067,6 +1072,18 @@
 
     scrollContainer?.scrollTo?.(0, target.offsetTop ?? 0);
     return true;
+  }
+
+  function submittedTurnScrollTarget(userMessages) {
+    if (pendingSubmittedTurnScrollRunId) {
+      return (
+        userMessages.find(
+          (element) =>
+            element.dataset.runId === pendingSubmittedTurnScrollRunId,
+        ) ?? null
+      );
+    }
+    return userMessages[userMessages.length - 1] ?? null;
   }
 
   function timestampForItem(item) {
@@ -1564,6 +1581,7 @@
             class:assistant={item.message.role === 'assistant'}
             class:user={item.message.role === 'user'}
             class:error={item.message.role === 'error'}
+            data-run-id={item.message.run_id ?? ''}
             class="msg"
           >
             <div class="msg-header">
@@ -1685,6 +1703,7 @@
             <article
               class:assistant={isAssistantItem(item)}
               class:user={isUserItem(item)}
+              data-run-id={item.event.run_id ?? ''}
               class="msg"
             >
               <div class="msg-header">
