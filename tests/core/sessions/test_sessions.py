@@ -158,11 +158,13 @@ class TestChatSession:
 
     def test_delete_removes_file_and_is_idempotent(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
+        session.sidecar_path.write_text('{"source_channel_id":"tg"}', encoding="utf-8")
 
         session.delete()
         session.delete()
 
         assert not session.path.exists()
+        assert not session.sidecar_path.exists()
 
 
 class TestChatSessionManager:
@@ -360,10 +362,22 @@ class TestChatSessionManager:
     def test_delete_removes_session_file(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
+        manager.set_metadata("coder", "session-one", {"is_subagent_session": True})
 
         manager.delete("coder", "session-one")
 
         assert not session.path.exists()
+        assert not session.sidecar_path.exists()
+
+    def test_delete_recreated_session_does_not_inherit_metadata(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_metadata("coder", "session-one", {"is_subagent_session": True})
+
+        manager.delete("coder", "session-one")
+        manager.create("coder", session_id="session-one")
+
+        assert manager.get_metadata("coder", "session-one") == {}
 
     def test_delete_rejects_unsafe_session_id(self, tmp_path):
         manager = ChatSessionManager(tmp_path)

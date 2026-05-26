@@ -281,10 +281,39 @@ class Runtime:
 
         Logs the shutdown event and performs cleanup.
         """
+        self._log_shutdown()
+        self._started = False
+
+        if self._channel_service is not None:
+            self._channel_service.stop()
+        if self._cron_service is not None:
+            self._cron_service.stop()
+        if self._process_manager is not None:
+            self._process_manager.stop()
+
+        self._clear_service_references()
+        self._log_manager.close()
+
+    async def aclose(self) -> None:
+        """Gracefully shut down the runtime and await async service cleanup."""
+        self._log_shutdown()
+        self._started = False
+
+        if self._channel_service is not None:
+            await self._channel_service.aclose()
+        if self._cron_service is not None:
+            await self._cron_service.aclose()
+        if self._process_manager is not None:
+            await self._process_manager.aclose()
+
+        self._clear_service_references()
+        self._log_manager.close()
+
+    def _log_shutdown(self) -> None:
         if self.logger is not None:
             self.logger.info("Runtime stopped")
-        self._log_manager.close()
-        self._started = False
+
+    def _clear_service_references(self) -> None:
         self._providers = None
         self._provider_credentials = None
         self._token_store = None
@@ -294,17 +323,11 @@ class Runtime:
         self._attachment_store = None
         self._agents = None
         self._tools = None
-        if self._process_manager is not None:
-            self._process_manager.stop()
         self._process_manager = None
         self._skills = None
         self._extensions = None
         self._chat_sessions = None
-        if self._channel_service is not None:
-            self._channel_service.stop()
         self._channel_service = None
-        if self._cron_service is not None:
-            self._cron_service.stop()
         self._cron_service = None
         self._trigger_service = None
         self._subagent_coordinator = None

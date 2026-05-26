@@ -108,7 +108,7 @@ def create_app(
         finally:
             server_logger.info("Server application stopping")
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
-            app_runtime.stop()
+            await _shutdown_runtime(app_runtime)
 
     app = FastAPI(lifespan=lifespan)
 
@@ -467,6 +467,14 @@ async def _shutdown_log_viewer(log_viewer: LogViewer, logger: logging.Logger) ->
         await asyncio.wait_for(log_viewer.aclose(), timeout=1)
     except TimeoutError:
         logger.warning("Timed out while shutting down log viewer")
+
+
+async def _shutdown_runtime(runtime: Any) -> None:
+    aclose = getattr(runtime, "aclose", None)
+    if callable(aclose):
+        await aclose()
+        return
+    runtime.stop()
 
 
 async def _close_log_stream(stream: Any) -> None:

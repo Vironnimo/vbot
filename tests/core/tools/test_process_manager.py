@@ -139,6 +139,46 @@ async def test_cancel_scope_kills_active_sessions(manager: ProcessManager) -> No
 
 
 @pytest.mark.asyncio
+async def test_stop_kills_active_sessions(manager: ProcessManager) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+    session = manager.get_session(session_id, AGENT_A)
+
+    manager.stop()
+    assert session.wait_task is not None
+    await asyncio.wait_for(session.wait_task, timeout=5)
+    result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
+
+    assert result["status"] == "killed"
+    assert session.proc.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_aclose_awaits_process_cleanup(manager: ProcessManager) -> None:
+    manager.start()
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env=None,
+        cwd=None,
+    )
+    session = manager.get_session(session_id, AGENT_A)
+
+    await manager.aclose()
+
+    assert manager._sweeper_task is None
+    assert session.status == "killed"
+    assert session.proc.returncode is not None
+    assert session.wait_task is not None and session.wait_task.done()
+
+
+@pytest.mark.asyncio
 async def test_kill_terminates_child_process_tree(manager: ProcessManager, tmp_path) -> None:
     child_started_path = tmp_path / "child-started.txt"
     child_survived_path = tmp_path / "child-survived.txt"

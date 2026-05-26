@@ -115,10 +115,30 @@ class ProcessManager:
         self._sweeper_task = asyncio.create_task(self._sweep_loop(), name="process-manager-sweep")
 
     def stop(self) -> None:
-        """Stop the TTL sweeper task."""
+        """Stop the TTL sweeper task and kill active process sessions."""
         if self._sweeper_task is not None:
             self._sweeper_task.cancel()
             self._sweeper_task = None
+
+        for session in list(self._sessions.values()):
+            if session.status == "running":
+                self._kill_session_now(session)
+
+    async def aclose(self) -> None:
+        """Stop the manager and await tracked task cleanup."""
+        sweeper_task = self._sweeper_task
+        self.stop()
+
+        tasks: list[asyncio.Task[None]] = []
+        if sweeper_task is not None and not sweeper_task.done():
+            tasks.append(sweeper_task)
+        for session in list(self._sessions.values()):
+            for task in (session.wait_task, session.stdout_task, session.stderr_task):
+                if task is not None and not task.done():
+                    tasks.append(task)
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def spawn(
         self,
