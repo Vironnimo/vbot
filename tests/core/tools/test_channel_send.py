@@ -29,6 +29,19 @@ def make_context(workspace: Path, tool_name: str = CHANNEL_SEND_TOOL_NAME) -> To
     )
 
 
+def make_channel_config(
+    *,
+    channel_id: str = "tg-assistant",
+    agent_id: str = "agent-1",
+    allowed_chat_ids: list[int] | None = None,
+) -> Mock:
+    return Mock(
+        id=channel_id,
+        agent_id=agent_id,
+        allowed_chat_ids=allowed_chat_ids or [],
+    )
+
+
 async def dispatch(
     registry: ToolRegistry,
     workspace: Path,
@@ -55,7 +68,7 @@ def assert_success_envelope(result: dict[str, object]) -> dict[str, object]:
 def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = Mock()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
@@ -81,13 +94,13 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
         files=None,
     )
     chat_sessions.get_metadata.assert_not_called()
-    channel_service.list_channels.assert_not_called()
+    channel_service.list_channels.assert_called_once_with()
 
 
 def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = Mock()
     chat_sessions.get_metadata.return_value = {
         "last_reply_target": {
@@ -118,14 +131,51 @@ def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: P
         "12345",
         files=None,
     )
-    channel_service.list_channels.assert_not_called()
+    channel_service.list_channels.assert_called_once_with()
+
+
+def test_channel_send_ignores_session_metadata_for_other_channel(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [
+        make_channel_config(channel_id="tg-private", allowed_chat_ids=[8506476339])
+    ]
+    chat_sessions = Mock()
+    chat_sessions.get_metadata.return_value = {
+        "last_reply_target": {
+            "channel_id": "tg-other",
+            "platform_target": "12345",
+        }
+    }
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-private",
+                "message": "Task finished",
+            },
+        )
+    )
+
+    data = assert_success_envelope(result)
+    assert data == {"channel_id": "tg-private", "platform_target": "8506476339"}
+    channel_service.send.assert_awaited_once_with(
+        "tg-private",
+        "Task finished",
+        "8506476339",
+        files=None,
+    )
 
 
 def test_channel_send_resolves_platform_target_from_unique_allowed_chat_id(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [
-        Mock(id="tg-private", allowed_chat_ids=[8506476339]),
+        make_channel_config(channel_id="tg-private", allowed_chat_ids=[8506476339]),
     ]
     chat_sessions = Mock()
     chat_sessions.get_metadata.return_value = {}
@@ -187,7 +237,7 @@ def test_channel_send_file_paths_only_forwards_files(tmp_path: Path) -> None:
 
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = Mock()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
@@ -223,7 +273,7 @@ def test_channel_send_message_and_file_paths_forwarded(tmp_path: Path) -> None:
 
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = Mock()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)
@@ -282,7 +332,7 @@ def test_channel_send_nonexistent_file_path_returns_failure(tmp_path: Path) -> N
 def test_channel_send_fails_when_platform_target_is_missing_everywhere(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config()]
     chat_sessions = Mock()
     chat_sessions.get_metadata.return_value = {}
     registry = ToolRegistry()
@@ -311,7 +361,6 @@ def test_channel_send_fails_when_platform_target_is_missing_everywhere(tmp_path:
 def test_channel_send_unknown_channel_returns_failure_envelope(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
-    channel_service.send.side_effect = ChannelNotFoundError("Channel not active: tg-missing")
     channel_service.list_channels.return_value = []
     chat_sessions = Mock()
     registry = ToolRegistry()
@@ -329,7 +378,35 @@ def test_channel_send_unknown_channel_returns_failure_envelope(tmp_path: Path) -
         )
     )
 
-    assert result == tool_failure("channel_not_found", "Channel not active: tg-missing")
+    assert result == tool_failure("channel_not_found", "Channel not found: tg-missing")
+    chat_sessions.get_metadata.assert_not_called()
+
+
+def test_channel_send_rejects_channel_owned_by_other_agent(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config(agent_id="agent-2")]
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "Channel tg-assistant belongs to agent agent-2, not agent-1",
+    )
+    channel_service.send.assert_not_called()
     chat_sessions.get_metadata.assert_not_called()
 
 
@@ -337,7 +414,7 @@ def test_channel_send_disabled_channel_returns_failure_envelope(tmp_path: Path) 
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.send.side_effect = ChannelNotFoundError("Channel not active: tg-disabled")
-    channel_service.list_channels.return_value = []
+    channel_service.list_channels.return_value = [make_channel_config(channel_id="tg-disabled")]
     chat_sessions = Mock()
     registry = ToolRegistry()
     register_channel_send_tool(registry, channel_service, chat_sessions)

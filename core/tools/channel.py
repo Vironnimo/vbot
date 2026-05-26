@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 
 from core.attachments.attachments import _sniff_mime
 from core.channels.adapter import FileData
-from core.channels.channels import ChannelConfigError, ChannelError, ChannelNotFoundError
+from core.channels.channels import (
+    ChannelConfig,
+    ChannelConfigError,
+    ChannelError,
+    ChannelNotFoundError,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -105,12 +110,13 @@ async def _handle_channel_send_tool(
                 "at least one of message or file_paths must be provided",
             )
 
+        channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
         platform_target = _platform_target_from_arguments_or_context(
             arguments,
-            channel_service,
             chat_sessions,
             context,
             channel_id,
+            channel_config,
         )
         await channel_service.send(channel_id, message, platform_target, files=files or None)
     except ValueError as error:
@@ -127,20 +133,24 @@ async def _handle_channel_send_tool(
 
 def _platform_target_from_arguments_or_context(
     arguments: JsonObject,
-    channel_service: ChannelService,
     chat_sessions: ChatSessionManager,
     context: ToolContext,
     channel_id: str,
+    channel_config: ChannelConfig,
 ) -> str:
     platform_target_value = arguments.get("platform_target")
     if platform_target_value is not None:
         return _required_non_empty_string(platform_target_value, field_name="platform_target")
 
-    metadata_platform_target = _platform_target_from_session_metadata(chat_sessions, context)
+    metadata_platform_target = _platform_target_from_session_metadata(
+        chat_sessions,
+        context,
+        channel_id,
+    )
     if metadata_platform_target is not None:
         return metadata_platform_target
 
-    config_platform_target = _platform_target_from_channel_config(channel_service, channel_id)
+    config_platform_target = _platform_target_from_channel_config(channel_config)
     if config_platform_target is not None:
         return config_platform_target
 
@@ -153,10 +163,14 @@ def _platform_target_from_arguments_or_context(
 def _platform_target_from_session_metadata(
     chat_sessions: ChatSessionManager,
     context: ToolContext,
+    channel_id: str,
 ) -> str | None:
     metadata = chat_sessions.get_metadata(context.agent_id, context.session_id)
     last_reply_target = metadata.get("last_reply_target")
     if not isinstance(last_reply_target, dict):
+        return None
+
+    if last_reply_target.get("channel_id") != channel_id:
         return None
 
     metadata_platform_target = last_reply_target.get("platform_target")
@@ -168,17 +182,26 @@ def _platform_target_from_session_metadata(
     )
 
 
-def _platform_target_from_channel_config(
+def _channel_config_for_agent(
     channel_service: ChannelService,
     channel_id: str,
-) -> str | None:
+    agent_id: str,
+) -> ChannelConfig:
     for config in channel_service.list_channels():
         if config.id != channel_id:
             continue
-        if len(config.allowed_chat_ids) != 1:
-            return None
-        return str(config.allowed_chat_ids[0])
-    return None
+        if config.agent_id != agent_id:
+            raise ChannelConfigError(
+                f"Channel {channel_id} belongs to agent {config.agent_id}, not {agent_id}"
+            )
+        return config
+    raise ChannelNotFoundError(f"Channel not found: {channel_id}")
+
+
+def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str | None:
+    if len(channel_config.allowed_chat_ids) != 1:
+        return None
+    return str(channel_config.allowed_chat_ids[0])
 
 
 def _required_non_empty_string(value: object, *, field_name: str) -> str:
