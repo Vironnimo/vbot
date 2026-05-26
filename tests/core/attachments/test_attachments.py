@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from core.attachments.attachments import (
+    AttachmentError,
     AttachmentNotFoundError,
     AttachmentStore,
     AttachmentTooLargeError,
@@ -116,6 +117,49 @@ def test_get_rejects_non_uuid_attachment_id(tmp_path: Path) -> None:
     # Act / Assert
     with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
         store.get("not-a-uuid")
+
+
+def test_get_uses_canonical_blob_path_when_sidecar_path_is_stale(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"canonical path")
+    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload["file_path"] = str(tmp_path / "outside.txt")
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = store.get(record.id)
+
+    assert loaded.file_path == record.file_path
+
+
+def test_get_rejects_sidecar_id_mismatch(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"mismatch")
+    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    payload["id"] = "00000000-0000-4000-8000-000000000000"
+    sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AttachmentError, match="metadata id mismatch"):
+        store.get(record.id)
+
+
+def test_get_rejects_missing_blob_with_existing_sidecar(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"missing blob")
+    Path(record.file_path).unlink()
+
+    with pytest.raises(AttachmentNotFoundError, match="Attachment blob not found"):
+        store.get(record.id)
+
+
+def test_get_accepts_uppercase_attachment_id(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+    record = store.store("notes.txt", b"uppercase")
+
+    loaded = store.get(record.id.upper())
+
+    assert loaded == record
 
 
 def test_delete_removes_blob_and_sidecar_and_missing_is_noop(tmp_path: Path) -> None:
