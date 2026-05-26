@@ -267,6 +267,15 @@ class CronService:
             self._cancel_job_task(job_id)
         self._started = False
 
+    async def aclose(self) -> None:
+        """Stop cron scheduling and await canceled job tasks."""
+        tasks = list(self._job_tasks.values())
+        self.stop()
+
+        pending_tasks = [task for task in tasks if not task.done()]
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
     def _load_jobs(self) -> dict[str, CronJob]:
         """Load cron jobs from <data_root>/cron/jobs.json."""
         self._ensure_storage_exists()

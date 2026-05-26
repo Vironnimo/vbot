@@ -500,6 +500,30 @@ async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) 
     assert process_manager._sweeper_task is None
 
 
+@pytest.mark.asyncio
+async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    process_manager = runtime.process_manager
+    session_id = await process_manager.spawn(
+        "run-one",
+        "agent-one",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        env={},
+        cwd=config.data_dir,
+    )
+    session = process_manager.get_session(session_id, "agent-one")
+
+    await runtime.aclose()
+
+    assert session.status == "killed"
+    assert session.proc.returncode is not None
+    assert session.wait_task is not None and session.wait_task.done()
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.process_manager
+
+
 def test_runtime_registers_bash_and_process_tools(config: Config) -> None:
     """Runtime.start() registers host process tools backed by ProcessManager."""
     logging.getLogger("vbot").handlers = []

@@ -143,6 +143,17 @@ def test_create_app_lifecycle_stops_runtime_on_shutdown(tmp_path: Path) -> None:
     assert runtime.chat_runs is None
 
 
+def test_create_app_lifecycle_prefers_async_runtime_shutdown(tmp_path: Path) -> None:
+    runtime = _AsyncCloseRuntime(tmp_path)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app):
+        pass
+
+    assert runtime.aclose_called is True
+    assert runtime.stop_called is False
+
+
 def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) -> None:
     import server.app as server_app
 
@@ -209,6 +220,19 @@ class _LazyChatRunRuntime:
 
     def stop(self) -> None:
         return None
+
+
+class _AsyncCloseRuntime(_LazyChatRunRuntime):
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.aclose_called = False
+        self.stop_called = False
+
+    async def aclose(self) -> None:
+        self.aclose_called = True
+
+    def stop(self) -> None:
+        self.stop_called = True
 
 
 class _UnavailableChatRunRuntime:

@@ -304,6 +304,35 @@ async def test_channel_service_start_and_stop_manage_enabled_adapters(
 
 
 @pytest.mark.asyncio
+async def test_channel_service_aclose_awaits_adapter_shutdown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config("tg-enabled", enabled=True)
+    storage.save(config)
+    stop_gate = asyncio.Event()
+    lifecycle_events: list[str] = []
+    adapter = DelayedStopAdapter(label="first", stop_gate=stop_gate, events=lifecycle_events)
+    service = make_service(tmp_path)
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start()
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+    close_task = asyncio.create_task(service.aclose())
+    await wait_until(lambda: "stop:first:begin" in lifecycle_events)
+
+    assert not close_task.done()
+
+    stop_gate.set()
+    await asyncio.wait_for(close_task, timeout=1)
+
+    assert adapter.stopped.is_set()
+    assert service._adapter_tasks == {}
+    assert service._adapter_stop_tasks == {}
+
+
+@pytest.mark.asyncio
 async def test_channel_service_enable_disable_updates_runtime_and_hook(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

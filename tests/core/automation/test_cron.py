@@ -159,6 +159,43 @@ async def test_start_creates_active_tasks_and_completes_missed_once_jobs(
 
 
 @pytest.mark.asyncio
+async def test_cron_service_aclose_awaits_cancelled_job_tasks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Cron active",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        timezone="UTC",
+    )
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hold_cron_task(_job: cron_module.CronJob) -> None:
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(service, "_run_cron_job", hold_cron_task)
+
+    service.start()
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await service.aclose()
+
+    assert cancelled.is_set()
+    assert service._job_tasks == {}
+    assert service._started is False
+    assert service.get_job(job.id).status == "active"
+
+
+@pytest.mark.asyncio
 async def test_run_once_job_fires_and_marks_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

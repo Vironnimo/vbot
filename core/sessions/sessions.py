@@ -162,8 +162,9 @@ class ChatSession:
         return messages
 
     def delete(self) -> None:
-        """Delete the session file if it exists."""
+        """Delete the session file and metadata sidecar if they exist."""
         self.path.unlink(missing_ok=True)
+        self.sidecar_path.unlink(missing_ok=True)
 
     @staticmethod
     def _parse_line(line: str, line_number: int) -> ChatMessage:

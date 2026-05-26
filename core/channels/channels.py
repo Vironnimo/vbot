@@ -287,8 +287,6 @@ class ChannelService:
             return
 
         self._pending_start_requests.clear()
-        for channel_id in list(self._adapter_stop_tasks):
-            self._cancel_stop_task(channel_id)
         for channel_id in list(self._adapter_restart_tasks):
             self._cancel_restart_task(channel_id)
         for channel_id in list(self._adapter_tasks):
@@ -296,6 +294,16 @@ class ChannelService:
         self._adapter_restart_attempts.clear()
         self._failed_channels.clear()
         self._started = False
+
+    async def aclose(self) -> None:
+        """Stop all channel tasks and await their cancellation/shutdown paths."""
+        tasks = [*self._adapter_stop_tasks.values(), *self._adapter_restart_tasks.values()]
+        self.stop()
+        tasks.extend(self._adapter_stop_tasks.values())
+
+        pending_tasks = _unique_pending_tasks(tasks)
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def start_channel(
         self,
@@ -887,6 +895,17 @@ def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:
         return asyncio.get_running_loop()
     except RuntimeError:
         return None
+
+
+def _unique_pending_tasks(tasks: list[asyncio.Task[None]]) -> list[asyncio.Task[None]]:
+    seen: set[asyncio.Task[None]] = set()
+    pending_tasks: list[asyncio.Task[None]] = []
+    for task in tasks:
+        if task.done() or task in seen:
+            continue
+        seen.add(task)
+        pending_tasks.append(task)
+    return pending_tasks
 
 
 __all__ = [
