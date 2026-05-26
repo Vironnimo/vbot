@@ -199,43 +199,6 @@ describe('AgentsView', () => {
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
   });
 
-  it('filters model options by capability controls', async () => {
-    rpcMock.mockImplementation(
-      createAgentsRpcMock({
-        agents: [],
-        models: [openaiModel(), anthropicModel(), imageModel(), audioModel()],
-        connections: [
-          usableConnection('openai:api-key', 'openai', 'API Key'),
-          usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
-        ],
-      }),
-    );
-
-    mountedComponent = mount(AgentsView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(() => searchableOptionCountReady(), 100);
-
-    getModelFilterButton('Image').click();
-    flushSync();
-    await openSearchableDropdown('agent-model');
-    expect(searchableOptionLabels('agent-model')).toContain('openai/gpt-image');
-    expect(searchableOptionLabels('agent-model')).not.toContain(
-      'openai/gpt-5.2',
-    );
-
-    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    flushSync();
-
-    getModelFilterButton('TTS').click();
-    flushSync();
-    await openSearchableDropdown('agent-model');
-    expect(searchableOptionLabels('agent-model')).toContain('openai/gpt-audio');
-    expect(searchableOptionLabels('agent-model')).not.toContain(
-      'openai/gpt-image',
-    );
-  });
-
   it('keeps a saved unsuffixed model available while omitting unchanged fields on save', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -1230,14 +1193,6 @@ function getButtonByAriaLabel(label) {
   return button;
 }
 
-function getModelFilterButton(label) {
-  const button = Array.from(
-    document.body.querySelectorAll('.agents-view__model-filter button'),
-  ).find((item) => item.textContent.trim() === label);
-  expect(button).toBeTruthy();
-  return button;
-}
-
 function getAgentButton(label) {
   const button = Array.from(
     document.body.querySelectorAll('button.agent-item'),
@@ -1355,7 +1310,6 @@ function openaiModel() {
     provider_id: 'openai',
     model_id: 'gpt-5.2',
     name: 'GPT-5.2',
-    capabilities: modelCapabilities(),
   };
 }
 
@@ -1365,58 +1319,6 @@ function anthropicModel() {
     provider_id: 'anthropic',
     model_id: 'claude-sonnet-4-20250219',
     name: 'Claude Sonnet 4',
-    capabilities: modelCapabilities({
-      input_modalities: ['text', 'image'],
-      task_types: ['chat', 'text_output', 'image_input', 'image_understanding'],
-    }),
-  };
-}
-
-function imageModel() {
-  return {
-    id: 'openai/gpt-image',
-    provider_id: 'openai',
-    model_id: 'gpt-image',
-    name: 'GPT Image',
-    capabilities: modelCapabilities({
-      input_modalities: ['text', 'image'],
-      output_modalities: ['text', 'image'],
-      task_types: [
-        'chat',
-        'text_output',
-        'image_input',
-        'image_understanding',
-        'image_generation',
-        'image_edit',
-      ],
-    }),
-  };
-}
-
-function audioModel() {
-  return {
-    id: 'openai/gpt-audio',
-    provider_id: 'openai',
-    model_id: 'gpt-audio',
-    name: 'GPT Audio',
-    capabilities: modelCapabilities({
-      output_modalities: ['text', 'audio'],
-      task_types: ['chat', 'text_output', 'audio_generation', 'text_to_speech'],
-    }),
-  };
-}
-
-function modelCapabilities(overrides = {}) {
-  return {
-    vision: false,
-    tools: true,
-    json_mode: true,
-    reasoning: { supported: false },
-    input_modalities: ['text'],
-    output_modalities: ['text'],
-    supported_parameters: [],
-    task_types: ['chat', 'text_output'],
-    ...overrides,
   };
 }
 

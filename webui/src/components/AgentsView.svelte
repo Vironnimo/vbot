@@ -25,45 +25,6 @@
     'xhigh',
     'max',
   ]);
-  const MODEL_FILTER_OPTIONS = Object.freeze([
-    { id: 'all', labelKey: 'agents.modelFilters.all', fallback: 'All' },
-    {
-      id: 'chat',
-      labelKey: 'agents.modelFilters.chat',
-      fallback: 'Chat',
-      task: 'chat',
-    },
-    {
-      id: 'vision',
-      labelKey: 'agents.modelFilters.vision',
-      fallback: 'Vision',
-      inputModality: 'image',
-    },
-    {
-      id: 'image_generation',
-      labelKey: 'agents.modelFilters.imageGeneration',
-      fallback: 'Image',
-      task: 'image_generation',
-    },
-    {
-      id: 'speech_to_text',
-      labelKey: 'agents.modelFilters.speechToText',
-      fallback: 'STT',
-      task: 'speech_to_text',
-    },
-    {
-      id: 'text_to_speech',
-      labelKey: 'agents.modelFilters.textToSpeech',
-      fallback: 'TTS',
-      task: 'text_to_speech',
-    },
-    {
-      id: 'video',
-      labelKey: 'agents.modelFilters.video',
-      fallback: 'Video',
-      inputModality: 'video',
-    },
-  ]);
 
   let {
     sharedSelectedAgentId = '',
@@ -88,7 +49,6 @@
   let availableTools = $state([]);
   let availableSkills = $state([]);
   let invalidSkills = $state([]);
-  let activeModelFilter = $state('all');
   let modelSelectValue = $state('');
   let fallbackModelSelectValue = $state('');
   let agentAutoSaveTimer = null;
@@ -113,7 +73,6 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
-  let visibleModels = $derived(filteredModelCatalog());
   let modelOptions = $derived(
     selectModelOptions(
       formValues.model,
@@ -599,15 +558,8 @@
       selectedModel.model,
       selectedModel.connectionLocalId,
     );
-    const selectedCatalogModel = availableModels.find(
+    const modelExistsInCatalog = availableModels.some(
       (model) => model.id === selectedModel.model,
-    );
-    const modelExistsInCatalog = Boolean(selectedCatalogModel);
-    const selectedProviderConnections = selectedCatalogModel
-      ? (connectionsByProvider[selectedCatalogModel.provider_id] ?? [])
-      : [];
-    const selectedConnection = selectedProviderConnections.find(
-      (connection) => connection.id === selectedConnectionId,
     );
     const selectedModelOption =
       selectedModel.model &&
@@ -619,33 +571,12 @@
             isUnavailable: false,
           }
         : null;
-    const selectedFilteredOption =
-      selectedValue &&
-      selectedCatalogModel &&
-      selectedConnection &&
-      !selectedModelOption &&
-      !visibleModels.some((model) => model.id === selectedCatalogModel.id)
-        ? {
-            value: selectedValue,
-            label: modelOptionLabel(
-              selectedCatalogModel,
-              selectedConnection,
-              selectedProviderConnections.length,
-            ),
-            searchText: modelOptionSearchText(
-              selectedCatalogModel,
-              selectedConnection,
-            ),
-            isUnavailable: false,
-          }
-        : null;
-    const selectedVisibleOption = selectedModelOption ?? selectedFilteredOption;
     const emptyOption = {
       value: '',
       label: emptyLabel,
       isUnavailable: false,
     };
-    const catalogOptions = visibleModels.flatMap((model) => {
+    const catalogOptions = availableModels.flatMap((model) => {
       const providerConnections =
         connectionsByProvider[model.provider_id] ?? [];
 
@@ -655,7 +586,6 @@
           connectionLocalIdFromConnectionId(connection.id),
         ),
         label: modelOptionLabel(model, connection, providerConnections.length),
-        searchText: modelOptionSearchText(model, connection),
         isUnavailable: false,
       }));
     });
@@ -663,10 +593,10 @@
     if (
       !selectedValue ||
       catalogOptions.some((option) => option.value === selectedValue) ||
-      selectedVisibleOption
+      selectedModelOption
     ) {
-      return selectedVisibleOption
-        ? [emptyOption, selectedVisibleOption, ...catalogOptions]
+      return selectedModelOption
+        ? [emptyOption, selectedModelOption, ...catalogOptions]
         : [emptyOption, ...catalogOptions];
     }
 
@@ -702,86 +632,12 @@
     return connectionsByProvider;
   }
 
-  function filteredModelCatalog() {
-    const activeFilter = MODEL_FILTER_OPTIONS.find(
-      (option) => option.id === activeModelFilter,
-    );
-
-    if (!activeFilter || activeFilter.id === 'all') {
-      return availableModels;
-    }
-
-    return availableModels.filter((model) =>
-      modelMatchesCapabilityFilter(model, activeFilter),
-    );
-  }
-
-  function modelMatchesCapabilityFilter(model, filter) {
-    const capabilities = model?.capabilities ?? {};
-    const taskTypes = Array.isArray(capabilities.task_types)
-      ? capabilities.task_types
-      : [];
-    const inputModalities = Array.isArray(capabilities.input_modalities)
-      ? capabilities.input_modalities
-      : [];
-    const outputModalities = Array.isArray(capabilities.output_modalities)
-      ? capabilities.output_modalities
-      : [];
-
-    if (filter.task && !taskTypes.includes(filter.task)) {
-      return false;
-    }
-    if (
-      filter.inputModality &&
-      !inputModalities.includes(filter.inputModality)
-    ) {
-      return false;
-    }
-    if (
-      filter.outputModality &&
-      !outputModalities.includes(filter.outputModality)
-    ) {
-      return false;
-    }
-    return true;
-  }
-
-  function setModelFilter(filterId) {
-    activeModelFilter = filterId;
-  }
-
   function modelOptionLabel(model, connection, providerConnectionCount) {
     if (providerConnectionCount <= 1) {
       return model.id;
     }
 
     return `${model.id} (${connection.label})`;
-  }
-
-  function modelOptionSearchText(model, connection) {
-    return [
-      model.id,
-      model.name,
-      connection.label,
-      ...modelCapabilitySearchTerms(model),
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
-
-  function modelCapabilitySearchTerms(model) {
-    const capabilities = model?.capabilities ?? {};
-    return [
-      ...(Array.isArray(capabilities.input_modalities)
-        ? capabilities.input_modalities
-        : []),
-      ...(Array.isArray(capabilities.output_modalities)
-        ? capabilities.output_modalities
-        : []),
-      ...(Array.isArray(capabilities.task_types)
-        ? capabilities.task_types
-        : []),
-    ];
   }
 
   function unavailableModelOptionLabel(model, connection) {
@@ -1128,22 +984,6 @@
         <div class="detail-group agents-view__model-group">
           <div class="detail-group-title">
             {t('agents.detail.model', 'Model')}
-          </div>
-          <div
-            class="agents-view__model-filter"
-            role="group"
-            aria-label={t('agents.modelFilters.label', 'Model filter')}
-          >
-            {#each MODEL_FILTER_OPTIONS as filterOption (filterOption.id)}
-              <button
-                class:active={activeModelFilter === filterOption.id}
-                type="button"
-                aria-pressed={activeModelFilter === filterOption.id}
-                onclick={() => setModelFilter(filterOption.id)}
-              >
-                {t(filterOption.labelKey, filterOption.fallback)}
-              </button>
-            {/each}
           </div>
           <div class="detail-fields agents-view__model-fields">
             <label class="f wide">
@@ -1719,32 +1559,6 @@
   .agents-view__model-group {
     overflow: visible;
     z-index: 1;
-  }
-
-  .agents-view__model-filter {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 12px 16px 0;
-  }
-
-  .agents-view__model-filter button {
-    min-height: 28px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    padding: 0 10px;
-    background: var(--surface-2);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .agents-view__model-filter button.active {
-    border-color: var(--accent);
-    background: var(--accent-dim);
-    color: var(--accent);
   }
 
   .detail-group-title {
