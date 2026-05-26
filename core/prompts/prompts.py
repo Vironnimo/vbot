@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
@@ -56,6 +57,7 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     ],
 }
 INCLUDE_PATTERN = re.compile(r"\{include:([^{}]+)\}")
+_LOGGER = get_logger("prompts")
 
 
 class PromptError(VBotError, ValueError):
@@ -368,6 +370,9 @@ class SystemPromptManager:
             include_path = workspace_path / filename
             try:
                 content = include_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                _LOGGER.warning("Skipping missing workspace include: %s", include_path)
+                return ""
             except OSError as exc:
                 raise PromptError(f"Cannot read workspace include {filename}: {exc}") from exc
             return f'<file name="{filename}">\n{content}\n</file>'

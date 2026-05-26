@@ -456,6 +456,26 @@ def test_workspace_include_wraps_content_in_xml_file_tag(
     assert prompt == '<file name="SOUL.md">\nSoul text\n</file>'
 
 
+def test_missing_workspace_include_is_omitted(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    fragments["system.md"] = "Before\n{include:MISSING.md}\nAfter"
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(_agent(workspace))
+
+    assert prompt == "Before\n\nAfter"
+
+
 def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: Path) -> None:
     storage = EditableStubStorage(tmp_path)
     storage.write_prompt_fragment("runtime.md", "custom runtime")

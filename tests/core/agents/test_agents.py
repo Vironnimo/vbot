@@ -1,6 +1,7 @@
 """Tests for agent persistence and workspace lifecycle."""
 
 import json
+import shutil
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
@@ -456,6 +457,36 @@ def test_legacy_agent_without_current_session_id_is_normalized(store: AgentStore
     ).is_file()
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert normalized_data["current_session_id"] == loaded.current_session_id
+
+
+def test_agent_without_workspace_is_normalized_to_default_workspace(store: AgentStore) -> None:
+    store.create("missing_workspace", "Missing Workspace Agent")
+    agent_path = store.data_dir / "agents" / "missing_workspace" / "agent.json"
+    workspace_path = store.data_dir / "workspace-missing_workspace"
+    shutil.rmtree(workspace_path)
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    data.pop("workspace")
+    agent_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = store.get("missing_workspace")
+
+    assert loaded.workspace == str(workspace_path.resolve())
+    assert workspace_path.is_dir()
+    assert (workspace_path / "SOUL.md").exists()
+    normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert normalized_data["workspace"] == str(workspace_path.resolve())
+
+
+def test_agent_with_missing_workspace_directory_recreates_workspace(store: AgentStore) -> None:
+    agent = store.create("recreate_workspace", "Recreate Workspace Agent")
+    workspace_path = Path(agent.workspace)
+    shutil.rmtree(workspace_path)
+
+    loaded = store.get("recreate_workspace")
+
+    assert loaded.workspace == agent.workspace
+    assert workspace_path.is_dir()
+    assert (workspace_path / "SOUL.md").exists()
 
 
 def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
