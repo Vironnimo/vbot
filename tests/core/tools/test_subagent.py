@@ -427,6 +427,38 @@ async def test_subagent_tool_creates_new_session_when_no_session_id_provided(
     assert len(runtime.chat_sessions.list(context.agent_id)) == len(existing_sessions) + 1
 
 
+async def test_subagent_tool_marks_created_session_with_parent_metadata(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    # Act
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    metadata = runtime.chat_sessions.get_metadata(
+        result["data"]["agent_id"], result["data"]["session_id"]
+    )
+    assert metadata["is_subagent_session"] is True
+    assert metadata["subagent_parent"] == {
+        "agent_id": context.agent_id,
+        "session_id": context.session_id,
+        "run_id": context.run_id,
+        "tool_call_id": context.tool_call_id,
+        "tool_call_index": context.tool_call_index,
+    }
+
+
 async def test_subagent_tool_routes_into_existing_session_when_session_id_provided(
     tmp_path: Path,
 ) -> None:
@@ -436,6 +468,11 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
     runtime.chat_sessions.create(context.agent_id, session_id="existing-sub-session")
+    runtime.chat_sessions.set_metadata(
+        context.agent_id,
+        "existing-sub-session",
+        {"platform": "telegram"},
+    )
     existing_session_ids = [session.id for session in runtime.chat_sessions.list(context.agent_id)]
 
     # Act
@@ -453,6 +490,10 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     assert [
         session.id for session in runtime.chat_sessions.list(context.agent_id)
     ] == existing_session_ids
+    metadata = runtime.chat_sessions.get_metadata(context.agent_id, "existing-sub-session")
+    assert metadata["platform"] == "telegram"
+    assert metadata["is_subagent_session"] is True
+    assert metadata["subagent_parent"]["session_id"] == context.session_id
 
 
 async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> None:

@@ -158,6 +158,7 @@ export const englishCatalog = Object.freeze({
   'sessions.link_success': 'Session linked to channel.',
   'sessions.platform_telegram': 'Telegram',
   'sessions.source_channel': 'Source channel',
+  'sessions.subagent_parent': 'Parent',
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',

@@ -186,6 +186,11 @@
                   <span>{resolvePlatformLabel(session.platform)}</span>
                 </span>
               {/if}
+              {#if session.is_subagent_session}
+                <span class="session-row__badge session-row__badge--subagent">
+                  {t('chat.subagent.label', 'Sub-agent')}
+                </span>
+              {/if}
             </div>
             <p class="session-row__meta">
               {t('sessions.last_active', 'Last active')}:
@@ -195,6 +200,13 @@
               <p class="session-row__meta session-row__meta--mono">
                 {t('sessions.source_channel', 'Source channel')}:
                 {session.source_channel_id}
+              </p>
+            {/if}
+            {#if session.subagent_parent}
+              <p class="session-row__meta session-row__meta--mono">
+                {t('sessions.subagent_parent', 'Parent')}:
+                {session.subagent_parent.agent_id}/{session.subagent_parent
+                  .session_id}
               </p>
             {/if}
           </button>
@@ -330,6 +342,12 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1;
+  }
+
+  .session-row__badge--subagent {
+    border-color: rgba(91, 141, 239, 0.32);
+    background: rgba(91, 141, 239, 0.14);
+    color: #8fb4ff;
   }
 
   .session-row__badge svg {

@@ -737,6 +737,90 @@ describe('ChatView', () => {
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
+  it('subscribes to an active run returned with opened session history', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        activeRuns: {
+          'sub-session-1': {
+            run_id: 'active-sub-run',
+            sse_url: '/api/runs/active-sub-run/events',
+            status: 'running',
+            events: [
+              {
+                type: 'run_started',
+                run_id: 'active-sub-run',
+                agent_id: 'alpha',
+                session_id: 'sub-session-1',
+                sequence: 1,
+                payload: { status: 'running' },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'alpha',
+          sessionId: 'sub-session-1',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/active-sub-run/events',
+      expect.any(Object),
+      { afterSequence: 1 },
+    );
+  });
+
+  it('attaches to SSE when a run starts for the displayed session', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        runServerEvent: {
+          type: 'run_started',
+          payload: {
+            run_id: 'pushed-run',
+            agent_id: 'alpha',
+            session_id: 'session-1',
+            run_event_type: 'run_started',
+            run_event_sequence: 1,
+            run_event_timestamp: '2026-05-26T00:00:00+00:00',
+            status: 'running',
+          },
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/pushed-run/events',
+      expect.any(Object),
+      { afterSequence: 1 },
+    );
+  });
+
   it('returns from a sub-agent session override to the current session', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
@@ -990,12 +1074,51 @@ describe('ChatView', () => {
     expect(document.querySelector('input[name="channel-id"]')).toBeNull();
     expect(linkSessionToChannelMock).not.toHaveBeenCalled();
   });
+
+  it('renders sub-agent session metadata in the sessions drawer', async () => {
+    rpcMock.mockImplementation(createChatRpcMock());
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'child-session',
+          is_subagent_session: true,
+          subagent_parent: {
+            agent_id: 'orchestrator',
+            session_id: 'parent-session',
+          },
+          last_active_at: '2026-05-09T01:00:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const sessionsButton = findButtonByText('Sessions');
+    expect(sessionsButton).toBeTruthy();
+    sessionsButton.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('child-session'),
+      100,
+    );
+
+    expect(document.body.textContent).toContain('Sub-agent');
+    expect(document.body.textContent).toContain('Parent:');
+    expect(document.body.textContent).toContain('orchestrator/parent-session');
+  });
 });
 
 function createChatRpcMock({
   usage,
   contextWindow = 262144,
   sessionMessages,
+  activeRuns,
   retryRunResponse,
   streamResponse,
   streamHandler,
@@ -1029,10 +1152,14 @@ function createChatRpcMock({
     if (method === 'chat.history') {
       const messages = resolvedSessionMessages[params.session_id];
       if (messages) {
-        return {
+        const response = {
           session_id: params.session_id,
           messages,
         };
+        if (activeRuns?.[params.session_id]) {
+          response.active_run = activeRuns[params.session_id];
+        }
+        return response;
       }
 
       throw new Error(`Unexpected session id: ${params.session_id}`);

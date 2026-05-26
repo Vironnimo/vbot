@@ -2451,6 +2451,45 @@ async def test_chat_history_loads_current_session_and_strips_reasoning_meta(tmp_
 
 
 @pytest.mark.asyncio
+async def test_chat_history_includes_active_run_descriptor(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="active-session")
+    state.runtime.agents.update("coder", current_session_id="active-session")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_executor(_run: Any) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    active_run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id="active-session",
+        executor=_blocking_executor,
+    )
+    await started.wait()
+
+    try:
+        response = await dispatch_rpc(
+            state,
+            {"method": "chat.history", "params": {"agent_id": "coder"}},
+        )
+    finally:
+        release.set()
+        await active_run.wait()
+
+    assert response["ok"] is True
+    active_run_payload = response["result"]["active_run"]
+    assert active_run_payload["run_id"] == active_run.id
+    assert active_run_payload["agent_id"] == "coder"
+    assert active_run_payload["session_id"] == "active-session"
+    assert active_run_payload["status"] == "running"
+    assert active_run_payload["sse_url"] == f"/api/runs/{active_run.id}/events"
+    assert [event["type"] for event in active_run_payload["events"]] == ["run_started"]
+
+
+@pytest.mark.asyncio
 async def test_chat_history_filters_internal_notes(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     session = state.runtime.chat_sessions.create("coder", session_id="note-session")
