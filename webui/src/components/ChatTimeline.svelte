@@ -24,6 +24,7 @@
     inline: 'nearest',
     behavior: 'smooth',
   });
+  const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
 
   function isNearBottom(container) {
     return (
@@ -44,6 +45,7 @@
   let pendingSubmittedTurnScrollKey = $state(0);
   let pendingSubmittedTurnScrollRunId = $state('');
   let handledSubmittedTurnScrollKey = $state(0);
+  let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
   let latestTerminalState = $derived.by(() => {
     for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
       const item = timelineItems[index];
@@ -79,6 +81,9 @@
   let timelineSignature = $derived(
     timelineItems.map((item) => timelineItemSignature(item)).join('|'),
   );
+  let shouldRenderSubmittedTurnScrollSpacer = $derived(
+    hasSubmittedTurnUserItem(),
+  );
 
   $effect(() => {
     if (
@@ -87,6 +92,7 @@
     ) {
       pendingSubmittedTurnScrollKey = submittedTurnScrollKey;
       pendingSubmittedTurnScrollRunId = submittedTurnScrollRunId;
+      syncSubmittedTurnSpacerHeight();
     }
   });
 
@@ -107,7 +113,15 @@
       return;
     }
 
-    tick().then(() => {
+    tick().then(async () => {
+      if (!hasPendingSubmittedTurnScroll()) {
+        return;
+      }
+      if (!submittedTurnScrollTarget(userMessageElements())) {
+        return;
+      }
+      syncSubmittedTurnSpacerHeight();
+      await tick();
       if (!hasPendingSubmittedTurnScroll()) {
         return;
       }
@@ -1057,10 +1071,7 @@
   }
 
   function scrollSubmittedTurnIntoView() {
-    const userMessages = Array.from(
-      scrollContainer?.querySelectorAll?.('.msg.user') ?? [],
-    );
-    const target = submittedTurnScrollTarget(userMessages);
+    const target = submittedTurnScrollTarget(userMessageElements());
     if (!target) {
       return false;
     }
@@ -1074,6 +1085,10 @@
     return true;
   }
 
+  function userMessageElements() {
+    return Array.from(scrollContainer?.querySelectorAll?.('.msg.user') ?? []);
+  }
+
   function submittedTurnScrollTarget(userMessages) {
     if (pendingSubmittedTurnScrollRunId) {
       return (
@@ -1084,6 +1099,45 @@
       );
     }
     return userMessages[userMessages.length - 1] ?? null;
+  }
+
+  function hasSubmittedTurnUserItem() {
+    if (!pendingSubmittedTurnScrollKey) {
+      return false;
+    }
+    if (!pendingSubmittedTurnScrollRunId) {
+      return hasAnyUserTimelineItem();
+    }
+    return timelineItems.some(
+      (item) =>
+        userRunIdForTimelineItem(item) === pendingSubmittedTurnScrollRunId,
+    );
+  }
+
+  function hasAnyUserTimelineItem() {
+    return timelineItems.some(
+      (item) => item.type === 'message' && item.message.role === 'user',
+    );
+  }
+
+  function userRunIdForTimelineItem(item) {
+    if (item?.type === 'message' && item.message.role === 'user') {
+      return item.message.run_id ?? '';
+    }
+    if (
+      item?.type === 'event' &&
+      item.event.type === 'user_message_persisted'
+    ) {
+      return item.event.run_id ?? '';
+    }
+    return '';
+  }
+
+  function syncSubmittedTurnSpacerHeight() {
+    submittedTurnSpacerHeight = Math.max(
+      scrollContainer?.clientHeight ?? 0,
+      MIN_SUBMITTED_TURN_SPACER_HEIGHT,
+    );
   }
 
   function timestampForItem(item) {
@@ -1742,6 +1796,13 @@
           {/if}
         {/if}
       {/each}
+      {#if shouldRenderSubmittedTurnScrollSpacer}
+        <div
+          class="submitted-turn-scroll-spacer"
+          style={`height: ${submittedTurnSpacerHeight}px`}
+          aria-hidden="true"
+        ></div>
+      {/if}
     {/if}
   </div>
 </section>
@@ -1767,6 +1828,11 @@
   .chat-empty-state {
     min-height: 100%;
     flex: 1;
+  }
+
+  .submitted-turn-scroll-spacer {
+    flex: 0 0 auto;
+    pointer-events: none;
   }
 
   .empty-state-icon {
