@@ -25,6 +25,12 @@
   }
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
+  let timelineDateKeys = $derived(
+    timelineItems.map((item) => dateKeyForItem(item)),
+  );
+  let shouldShowTimelineDateSeparators = $derived(
+    new Set(timelineDateKeys.filter(Boolean)).size > 1,
+  );
   let scrollContainer = $state();
   let reasoningDisclosureState = $state({});
   let latestTerminalState = $derived.by(() => {
@@ -950,9 +956,11 @@
   };
 
   const formatDate = (timestamp) => {
-    if (!timestamp) {
+    const dateKey = dateKeyForTimestamp(timestamp);
+    if (isTodayDateKey(dateKey)) {
       return t('chat.today', 'Today');
     }
+
     const date = new Date(timestamp);
     if (Number.isNaN(date.getTime())) {
       return t('chat.today', 'Today');
@@ -964,7 +972,49 @@
     }).format(date);
   };
 
-  const timestampForItem = (item) => {
+  function dateKeyForDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  function todayDateKey() {
+    return dateKeyForDate(new Date());
+  }
+
+  function dateKeyForTimestamp(timestamp) {
+    if (!timestamp) {
+      return todayDateKey();
+    }
+
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return todayDateKey();
+    }
+    return dateKeyForDate(date);
+  }
+
+  function isTodayDateKey(dateKey) {
+    return dateKey === todayDateKey();
+  }
+
+  function dateKeyForItem(item) {
+    return dateKeyForTimestamp(timestampForItem(item));
+  }
+
+  function shouldRenderTimelineDateSeparator(itemIndex) {
+    if (!shouldShowTimelineDateSeparators) {
+      return false;
+    }
+
+    const currentDateKey = timelineDateKeys[itemIndex];
+    return Boolean(
+      currentDateKey && currentDateKey !== timelineDateKeys[itemIndex - 1],
+    );
+  }
+
+  function timestampForItem(item) {
     if (item.type === 'message') {
       return item.message.timestamp;
     }
@@ -978,7 +1028,7 @@
       return item.timestamp;
     }
     return item.event?.timestamp;
-  };
+  }
 
   const avatarForItem = (item) => {
     if (isUserItem(item)) {
@@ -1200,10 +1250,12 @@
         </p>
       </div>
     {:else}
-      <div class="date-sep">
-        {formatDate(timestampForItem(timelineItems[0]))}
-      </div>
-      {#each timelineItems as item (item.id)}
+      {#each timelineItems as item, itemIndex (item.id)}
+        {#if shouldRenderTimelineDateSeparator(itemIndex)}
+          <div class="date-sep">
+            {formatDate(timestampForItem(item))}
+          </div>
+        {/if}
         {#if item.type === 'streaming' && shouldRenderStreamingItem(item.streamingItem)}
           <article class="msg assistant streaming-message">
             <div class="msg-header">
