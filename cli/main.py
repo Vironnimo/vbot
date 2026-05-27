@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cli.agent_management import (
+    agent_create,
+    agent_delete,
+    agent_list,
+    agent_show,
+    agent_update,
+)
 from cli.channel_management import (
     channel_add,
     channel_disable,
@@ -33,10 +40,12 @@ from server.main import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
 CHANNEL_COMMANDS = ("add", "list", "remove", "enable", "disable", "status")
+AGENT_COMMANDS = ("list", "show", "create", "update", "delete")
 PROVIDER_COMMANDS = ("list",)
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
+THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
 CHANNEL_PLATFORMS = ("telegram",)
 CHANNEL_DM_SCOPES = (
     "per_conversation",
@@ -73,6 +82,31 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     for command in SERVER_COMMANDS:
         command_parser = server_subparsers.add_parser(command)
         _add_target_arguments(command_parser)
+
+    agent_parser = subparsers.add_parser("agent", description="Manage vBot agents")
+    agent_subparsers = agent_parser.add_subparsers(dest="command", required=True)
+
+    agent_list_parser = agent_subparsers.add_parser("list")
+    _add_target_arguments(agent_list_parser)
+
+    agent_show_parser = agent_subparsers.add_parser("show")
+    _add_target_arguments(agent_show_parser)
+    agent_show_parser.add_argument("--id", required=True)
+
+    agent_create_parser = agent_subparsers.add_parser("create")
+    _add_target_arguments(agent_create_parser)
+    agent_create_parser.add_argument("--id", required=True)
+    agent_create_parser.add_argument("--name", required=True)
+    _add_agent_change_arguments(agent_create_parser, include_name=False, include_session=False)
+
+    agent_update_parser = agent_subparsers.add_parser("update")
+    _add_target_arguments(agent_update_parser)
+    agent_update_parser.add_argument("--id", required=True)
+    _add_agent_change_arguments(agent_update_parser, include_name=True, include_session=True)
+
+    agent_delete_parser = agent_subparsers.add_parser("delete")
+    _add_target_arguments(agent_delete_parser)
+    agent_delete_parser.add_argument("--id", required=True)
 
     channel_parser = subparsers.add_parser("channel", description="Manage vBot channels")
     channel_subparsers = channel_parser.add_subparsers(dest="command", required=True)
@@ -147,6 +181,26 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-dir")
 
 
+def _add_agent_change_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    include_name: bool,
+    include_session: bool,
+) -> None:
+    if include_name:
+        parser.add_argument("--name")
+    parser.add_argument("--model")
+    parser.add_argument("--fallback-model")
+    parser.add_argument("--temperature", type=float)
+    parser.add_argument("--clear-temperature", action="store_true")
+    parser.add_argument("--thinking-effort", choices=THINKING_EFFORTS)
+    parser.add_argument("--clear-thinking-effort", action="store_true")
+    parser.add_argument("--allowed-tools", nargs="*")
+    parser.add_argument("--allowed-skills", nargs="*")
+    if include_session:
+        parser.add_argument("--current-session-id")
+
+
 def run(
     argv: Sequence[str] | None = None,
     *,
@@ -154,6 +208,11 @@ def run(
     start: Callable[[ServerInstance], CommandResult] = start_server,
     stop: Callable[[ServerInstance], CommandResult] = stop_server,
     status: Callable[[ServerInstance], CommandResult] = get_status,
+    list_agents: Callable[[ServerInstance], CommandResult] = agent_list,
+    show_agent: Callable[[ServerInstance, str], CommandResult] = agent_show,
+    create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult] = agent_create,
+    update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
+    delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
     add_channel: Callable[
         [ServerInstance, str, str, str, str, str, Sequence[int]], CommandResult
     ] = channel_add,
@@ -187,6 +246,20 @@ def run(
         result = dispatch_server_command(context)
         print_command_result(context.command, result)
         return exit_code_for(context.command, result)
+
+    if args.area == "agent":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_agent_command(
+            args,
+            instance,
+            list_agents=list_agents,
+            show_agent=show_agent,
+            create_agent=create_agent,
+            update_agent=update_agent,
+            delete_agent=delete_agent,
+        )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "channel":
         instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
@@ -239,6 +312,56 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     raise ValueError(f"Unsupported command area: {args.area}")
+
+
+def dispatch_agent_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_agents: Callable[[ServerInstance], CommandResult],
+    show_agent: Callable[[ServerInstance, str], CommandResult],
+    create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult],
+    update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
+    delete_agent: Callable[[ServerInstance, str], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed agent command against the server RPC client."""
+
+    if args.command == "list":
+        return list_agents(instance)
+    if args.command == "show":
+        return show_agent(instance, args.id)
+    if args.command == "create":
+        return create_agent(instance, args.id, args.name, _agent_changes_from_args(args))
+    if args.command == "update":
+        return update_agent(instance, args.id, _agent_changes_from_args(args))
+    if args.command == "delete":
+        return delete_agent(instance, args.id)
+    raise ValueError(f"Unsupported agent command: {args.command}")
+
+
+def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    if getattr(args, "name", None) is not None and args.command == "update":
+        changes["name"] = args.name
+    if args.model is not None:
+        changes["model"] = args.model
+    if args.fallback_model is not None:
+        changes["fallback_model"] = args.fallback_model
+    if args.clear_temperature:
+        changes["temperature"] = None
+    elif args.temperature is not None:
+        changes["temperature"] = args.temperature
+    if args.clear_thinking_effort:
+        changes["thinking_effort"] = None
+    elif args.thinking_effort is not None:
+        changes["thinking_effort"] = args.thinking_effort
+    if args.allowed_tools is not None:
+        changes["allowed_tools"] = list(args.allowed_tools)
+    if args.allowed_skills is not None:
+        changes["allowed_skills"] = list(args.allowed_skills)
+    if getattr(args, "current_session_id", None) is not None:
+        changes["current_session_id"] = args.current_session_id
+    return changes
 
 
 def dispatch_channel_command(

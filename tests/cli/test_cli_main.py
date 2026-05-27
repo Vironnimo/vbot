@@ -66,6 +66,43 @@ def test_each_server_command_accepts_target_options(command: str) -> None:
     assert args.data_dir == "data"
 
 
+def test_parse_args_supports_agent_update_fields() -> None:
+    args = cli_main.parse_args(
+        [
+            "agent",
+            "update",
+            "--id",
+            "coder",
+            "--name",
+            "Coder Two",
+            "--model",
+            "openai/gpt-5.2",
+            "--clear-temperature",
+            "--thinking-effort",
+            "none",
+            "--allowed-tools",
+            "read_file",
+            "edit_file",
+            "--allowed-skills",
+            "debugging",
+            "vbot-cli",
+            "--current-session-id",
+            "session-one",
+        ]
+    )
+
+    assert args.area == "agent"
+    assert args.command == "update"
+    assert args.id == "coder"
+    assert args.name == "Coder Two"
+    assert args.model == "openai/gpt-5.2"
+    assert args.clear_temperature is True
+    assert args.thinking_effort == "none"
+    assert args.allowed_tools == ["read_file", "edit_file"]
+    assert args.allowed_skills == ["debugging", "vbot-cli"]
+    assert args.current_session_id == "session-one"
+
+
 @pytest.mark.parametrize(
     ("command", "called_service"),
     [("start", "start"), ("stop", "stop"), ("status", "status")],
@@ -153,6 +190,70 @@ def test_run_provider_list_dispatches_and_prints_plain_output(
         "connections:",
         "- id: openai:default  provider_id: openai  type: api_key  label: OpenAI  usable: yes",
     ]
+
+
+def test_run_agent_update_dispatches_changes_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path, port=8765)
+    result = CommandResult(ok=True, message="updated coder", instance=instance)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_update_agent(
+        resolved_instance: ServerInstance,
+        agent_id: str,
+        changes: dict[str, Any],
+    ) -> CommandResult:
+        calls.append(("agent.update", (resolved_instance, agent_id, changes)))
+        return result
+
+    exit_code = cli_main.run(
+        [
+            "agent",
+            "update",
+            "--id",
+            "coder",
+            "--name",
+            "Coder Two",
+            "--clear-temperature",
+            "--allowed-tools",
+            "read_file",
+            "--allowed-skills",
+            "debugging",
+            "--host",
+            "localhost",
+            "--port",
+            "8765",
+            "--data-dir",
+            "data",
+        ],
+        resolve=fake_resolve,
+        update_agent=fake_update_agent,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        (
+            "agent.update",
+            (
+                instance,
+                "coder",
+                {
+                    "name": "Coder Two",
+                    "temperature": None,
+                    "allowed_tools": ["read_file"],
+                    "allowed_skills": ["debugging"],
+                },
+            ),
+        ),
+    ]
+    assert capsys.readouterr().out.splitlines() == ["updated coder"]
 
 
 def test_run_model_list_dispatches_and_prints_plain_output(

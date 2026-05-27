@@ -195,6 +195,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   `server stop`, `server restart`, and `server status` act locally. Every other
   CLI area must require a reachable vBot server and go through the server RPC
   contract rather than reading or mutating files directly.
+- **Agent CLI management is RPC-backed.** `agent list/show/create/update/delete`
+  commands are an accessor over public Agent RPCs. They may change mutable Agent
+  config fields, allowlists, and current session pointers, but must not mutate
+  workspaces directly or bypass server-side last-agent/reference/busy checks.
 
 - **Raw model catalog files are kept alongside sanitized files.** After a
   model-db refresh, `resources/models/<provider>.raw.json` stores the full
