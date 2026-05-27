@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import inspect
 import sys
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 import pytest
+import pytest_asyncio
 
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler, register_process_tool
 from core.tools.process_manager import ProcessManager
@@ -19,9 +21,13 @@ AGENT_B = "agent-b"
 RUN_A = "run-a"
 
 
-@pytest.fixture
-def manager() -> ProcessManager:
-    return ProcessManager(sweep_interval_seconds=3600)
+@pytest_asyncio.fixture
+async def manager() -> AsyncIterator[ProcessManager]:
+    manager = ProcessManager(sweep_interval_seconds=3600)
+    try:
+        yield manager
+    finally:
+        await manager.aclose()
 
 
 @pytest.fixture

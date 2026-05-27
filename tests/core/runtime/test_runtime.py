@@ -562,19 +562,22 @@ async def test_runtime_process_manager_cancels_run_scoped_sessions(config: Confi
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
     runtime.start()
-    process_manager = runtime.process_manager
-    session_id = await process_manager.spawn(
-        "run-one",
-        "agent-one",
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env={},
-        cwd=config.data_dir,
-    )
+    try:
+        process_manager = runtime.process_manager
+        session_id = await process_manager.spawn(
+            "run-one",
+            "agent-one",
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env={},
+            cwd=config.data_dir,
+        )
 
-    process_manager.cancel_scope("run-one")
-    poll_result = await process_manager.poll(session_id, "agent-one", timeout_ms=1000)
+        process_manager.cancel_scope("run-one")
+        poll_result = await process_manager.poll(session_id, "agent-one", timeout_ms=1000)
 
-    assert poll_result["status"] == "killed"
+        assert poll_result["status"] == "killed"
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.asyncio
