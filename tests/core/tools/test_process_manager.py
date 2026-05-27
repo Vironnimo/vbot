@@ -6,10 +6,12 @@ import asyncio
 import subprocess
 import sys
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
@@ -25,9 +27,13 @@ AGENT_B = "agent-b"
 SCOPE_A = "run-a"
 
 
-@pytest.fixture
-def manager() -> ProcessManager:
-    return ProcessManager(sweep_interval_seconds=3600)
+@pytest_asyncio.fixture
+async def manager() -> AsyncIterator[ProcessManager]:
+    manager = ProcessManager(sweep_interval_seconds=3600)
+    try:
+        yield manager
+    finally:
+        await manager.aclose()
 
 
 async def poll_until_terminal(
@@ -86,21 +92,24 @@ async def test_spawn_captures_stdout_and_stderr(manager: ProcessManager) -> None
 @pytest.mark.asyncio
 async def test_buffer_cap_drops_oldest_bytes_and_marks_truncated(tmp_path) -> None:
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
-    script = "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"
-    session_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", script],
-        env=None,
-        cwd=tmp_path,
-    )
+    try:
+        script = "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", script],
+            env=None,
+            cwd=tmp_path,
+        )
 
-    result = await poll_until_terminal(manager, session_id)
-    log_result = await manager.log(session_id, AGENT_A)
+        result = await poll_until_terminal(manager, session_id)
+        log_result = await manager.log(session_id, AGENT_A)
 
-    assert result["status"] == "completed"
-    assert log_result["truncated"] is True
-    assert log_result["output"] == "a" * 32
+        assert result["status"] == "completed"
+        assert log_result["truncated"] is True
+        assert log_result["output"] == "a" * 32
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -334,6 +343,28 @@ async def test_write_with_eof_closes_stdin(manager: ProcessManager) -> None:
 
 
 @pytest.mark.asyncio
+async def test_completed_process_closes_stdin_writer(manager: ProcessManager) -> None:
+    session_id = await manager.spawn(
+        SCOPE_A,
+        AGENT_A,
+        [sys.executable, "-c", "print('done')"],
+        env=None,
+        cwd=None,
+    )
+
+    result = await poll_until_terminal(manager, session_id)
+    session = manager.get_session(session_id, AGENT_A)
+
+    assert result["status"] == "completed"
+    assert session.proc.stdin is not None
+    assert session.proc.stdin.is_closing() is True
+    transport = getattr(session.proc, "_transport", None)
+    pipes = getattr(transport, "_pipes", None)
+    if isinstance(pipes, dict):
+        assert pipes == {}
+
+
+@pytest.mark.asyncio
 async def test_kill_stops_process_and_clear_removes_it(manager: ProcessManager) -> None:
     session_id = await manager.spawn(
         SCOPE_A,
@@ -436,19 +467,22 @@ async def test_foreground_capture_can_be_stopped(manager: ProcessManager) -> Non
 @pytest.mark.asyncio
 async def test_foreground_capture_is_bounded_by_buffer_cap(tmp_path) -> None:
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
-    session_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"],
-        env=None,
-        cwd=tmp_path,
-    )
-    await poll_until_terminal(manager, session_id)
-    session = manager.get_session(session_id, AGENT_A)
+    try:
+        session_id = await manager.spawn(
+            SCOPE_A,
+            AGENT_A,
+            [sys.executable, "-c", "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"],
+            env=None,
+            cwd=tmp_path,
+        )
+        await poll_until_terminal(manager, session_id)
+        session = manager.get_session(session_id, AGENT_A)
 
-    assert len(b"".join(session.stdout_lines)) == 32
-    assert b"".join(session.stderr_lines) == b""
-    assert session.truncated is True
+        assert len(b"".join(session.stdout_lines)) == 32
+        assert b"".join(session.stderr_lines) == b""
+        assert session.truncated is True
+    finally:
+        await manager.aclose()
 
 
 def test_buffer_cap_default_is_500_kb() -> None:

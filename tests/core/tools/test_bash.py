@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 import core.tools.bash as bash_module
 from core.tools.bash import BASH_TOOL_PARAMETERS, bash_handler, register_bash_tool
@@ -23,9 +25,13 @@ def shell_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bash_module, "_cached_shell_env", {"PATH": "original-path"})
 
 
-@pytest.fixture
-def manager() -> ProcessManager:
-    return ProcessManager(sweep_interval_seconds=3600)
+@pytest_asyncio.fixture
+async def manager() -> AsyncIterator[ProcessManager]:
+    manager = ProcessManager(sweep_interval_seconds=3600)
+    try:
+        yield manager
+    finally:
+        await manager.aclose()
 
 
 def make_context(
@@ -457,19 +463,22 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager = ProcessManager(buffer_cap_bytes=32, sweep_interval_seconds=3600)
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    context = make_context(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        context = make_context(tmp_path)
 
-    result = await bash_handler(
-        context,
-        {"command": "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"},
-        manager,
-    )
+        result = await bash_handler(
+            context,
+            {"command": "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"},
+            manager,
+        )
 
-    assert result["ok"] is True
-    assert result["data"]["stdout"] == "a" * 32
-    assert result["data"]["output"] == "a" * 32
-    assert result["data"]["truncated"] is True
+        assert result["ok"] is True
+        assert result["data"]["stdout"] == "a" * 32
+        assert result["data"]["output"] == "a" * 32
+        assert result["data"]["truncated"] is True
+    finally:
+        await manager.aclose()
 
 
 @pytest.mark.asyncio

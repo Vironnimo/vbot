@@ -292,7 +292,7 @@ class ProcessManager:
             stdin.write(data.encode("utf-8"))
             await stdin.drain()
         if eof:
-            self._close_stdin(session)
+            await self._close_stdin(session)
 
     async def submit(self, session_id: str, agent_id: str) -> None:
         """Submit the current stdin line with CRLF."""
@@ -384,7 +384,9 @@ class ProcessManager:
 
     async def _watch_process(self, session: ProcessSession) -> None:
         return_code = await session.proc.wait()
+        await self._close_stdin(session)
         await self._await_reader_tasks(session)
+        self._release_process_pipe_references(session)
         async with session.lock:
             session.exit_code = return_code
             if session.status == "running":
@@ -492,7 +494,7 @@ class ProcessManager:
             return
 
         session.status = "killed"
-        self._close_stdin(session)
+        self._close_stdin_now(session)
         try:
             self._kill_process_tree(session.proc)
         except ProcessLookupError:
@@ -529,20 +531,38 @@ class ProcessManager:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
 
+    @classmethod
+    async def _close_stdin(cls, session: ProcessSession) -> None:
+        cls._close_stdin_now(session)
+        stdin = session.proc.stdin
+        if stdin is None:
+            return
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
+            await stdin.wait_closed()
+
     @staticmethod
-    def _close_stdin(session: ProcessSession) -> None:
+    def _close_stdin_now(session: ProcessSession) -> None:
         stdin = session.proc.stdin
         if stdin is None or not session.stdin_open:
+            session.stdin_open = False
             return
 
         try:
             if stdin.can_write_eof():
                 stdin.write_eof()
-            else:
-                stdin.close()
         except (BrokenPipeError, ConnectionResetError, RuntimeError):
+            pass
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
             stdin.close()
         session.stdin_open = False
+
+    @staticmethod
+    def _release_process_pipe_references(session: ProcessSession) -> None:
+        transport = getattr(session.proc, "_transport", None)
+        pipes = getattr(transport, "_pipes", None)
+        if not isinstance(pipes, dict):
+            return
+        pipes.clear()
 
     def _session_for_agent(self, session_id: str, agent_id: str) -> ProcessSession:
         session = self._sessions.get(session_id)
