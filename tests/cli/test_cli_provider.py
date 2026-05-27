@@ -48,6 +48,7 @@ def test_parse_args_supports_provider_set_key_options() -> None:
             "openrouter:api-key",
             "--value",
             "sk-or-test",
+            "--refresh-models",
             "--host",
             "localhost",
             "--port",
@@ -62,9 +63,28 @@ def test_parse_args_supports_provider_set_key_options() -> None:
     assert args.provider == "openrouter"
     assert args.connection == "openrouter:api-key"
     assert args.value == "sk-or-test"
+    assert args.refresh_models is True
     assert args.host == "localhost"
     assert args.port == 8700
     assert args.data_dir == "dev"
+
+
+def test_parse_args_supports_provider_status_options() -> None:
+    args = cli_main.parse_args(
+        [
+            "provider",
+            "status",
+            "--provider",
+            "openrouter",
+            "--connection",
+            "openrouter:api-key",
+        ]
+    )
+
+    assert args.area == "provider"
+    assert args.command == "status"
+    assert args.provider == "openrouter"
+    assert args.connection == "openrouter:api-key"
 
 
 def test_provider_list_posts_connection_list_rpc(
@@ -180,6 +200,68 @@ def test_provider_list_returns_error_on_rpc_failure(
     assert result == CommandResult(ok=False, message="provider_error: boom", instance=instance)
 
 
+def test_provider_status_filters_provider_connections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        assert json == {"method": "connection.list", "params": {}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "connections": [
+                        {
+                            "id": "openai:api-key",
+                            "provider_id": "openai",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "usable": True,
+                        },
+                        {
+                            "id": "openrouter:api-key",
+                            "provider_id": "openrouter",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "usable": False,
+                        },
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_status(instance, "openrouter")
+
+    assert result.ok is True
+    assert "openrouter:api-key" in result.message
+    assert "openai:api-key" not in result.message
+
+
+def test_provider_status_returns_not_found_for_missing_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"connections": []}})
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_status(instance, "openrouter", "openrouter:api-key")
+
+    assert result == CommandResult(
+        ok=False,
+        message="provider status not found: openrouter:api-key",
+        instance=instance,
+    )
+
+
 def test_provider_set_key_posts_set_key_rpc_without_echoing_secret(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -233,6 +315,56 @@ def test_provider_set_key_posts_set_key_rpc_without_echoing_secret(
     ]
 
 
+def test_provider_set_key_can_refresh_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        if json["method"] == "provider.set_key":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "connection_id": "openrouter:api-key",
+                        "credential_key": "OPENROUTER_API_KEY",
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"provider_id": "openrouter", "model_count": 42}},
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_key(
+        instance,
+        provider_id="openrouter",
+        value="sk-or-test",
+        refresh_models=True,
+    )
+
+    assert result == CommandResult(
+        ok=True,
+        message=(
+            "set openrouter:api-key credential OPENROUTER_API_KEY\nrefreshed openrouter (42 models)"
+        ),
+        instance=instance,
+    )
+    assert calls == [
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "sk-or-test"},
+        },
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    ]
+
+
 def test_run_provider_set_key_dispatches_and_prints_plain_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -249,6 +381,7 @@ def test_run_provider_set_key_dispatches_and_prints_plain_output(
         provider_id: str,
         value: str,
         connection_id: str | None,
+        refresh_models: bool,
     ) -> CommandResult:
         calls.append(
             (
@@ -258,6 +391,7 @@ def test_run_provider_set_key_dispatches_and_prints_plain_output(
                     "provider_id": provider_id,
                     "value": value,
                     "connection_id": connection_id,
+                    "refresh_models": refresh_models,
                 },
             )
         )
@@ -298,6 +432,7 @@ def test_run_provider_set_key_dispatches_and_prints_plain_output(
                 "provider_id": "openrouter",
                 "value": "sk-or-test",
                 "connection_id": "openrouter:api-key",
+                "refresh_models": False,
             },
         ),
     ]

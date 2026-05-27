@@ -56,8 +56,11 @@ contract rather than reading or mutating files directly.
   - calls `channel.status` over server RPC
 - `python cli/main.py provider list`
   - calls `connection.list` over server RPC and prints configured connections
-- `python cli/main.py provider set-key --provider <id> [--connection <provider:connection-id>] --value <api-key>`
+- `python cli/main.py provider status --provider <id> [--connection <provider:connection-id>]`
+  - calls `connection.list` over server RPC and prints only the matching provider or connection rows
+- `python cli/main.py provider set-key --provider <id> [--connection <provider:connection-id>] --value <api-key> [--refresh-models]`
   - calls `provider.set_key` over server RPC, writes the API-key connection's configured credential key to the data-dir `.env`, reloads runtime provider credentials, and never echoes the API key in output
+  - when `--refresh-models` is present, also calls `model.refresh_db` for the same provider and reports refresh outcome after the set-key line
 - `python cli/main.py model list`
   - calls `model.list` over server RPC and prints available models
 - `python cli/main.py model refresh [--provider <id>]`

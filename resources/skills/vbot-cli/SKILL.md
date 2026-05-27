@@ -81,13 +81,14 @@ Use these commands to inspect configured provider connections and model catalogs
 
 ```bash
 vbot provider list
-vbot provider set-key --provider openrouter --value <api-key>
+vbot provider status --provider openrouter
+vbot provider set-key --provider openrouter --value <api-key> --refresh-models
 vbot model list
 vbot model refresh
 vbot model refresh --provider openrouter
 ```
 
-Use `provider set-key` when the user gives you an API key and asks you to activate a provider. The command writes the correct provider credential key into the target data-dir `.env`; it does not print the API key back. OAuth/browser login setup is not part of this CLI flow yet.
+Use `provider set-key` when the user gives you an API key and asks you to activate a provider. Add `--refresh-models` when the provider has a refreshable model catalog and the user wants it usable right away. Verify with `provider status --provider <id>` and `model list`. OAuth/browser login setup is not part of this CLI flow yet.
 
 ### Skills
 
