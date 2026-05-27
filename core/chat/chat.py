@@ -1336,7 +1336,7 @@ class ChatLoop:
         allowed_skills = getattr(agent, "allowed_skills", None)
         if allowed_skills is None:
             allowed_skills = ["*"]
-        allowed_by_name = {skill.name: skill for skill in filter_allowed(allowed_skills)}
+        allowed_by_name = _allowed_loadable_skills(skill_registry, allowed_skills, filter_allowed)
         for skill_name in _triggered_skill_names(content):
             skill = allowed_by_name.get(skill_name)
             if skill is None:
@@ -1349,6 +1349,24 @@ class ChatLoop:
                 )
                 session.add_note(
                     f"Skill trigger '{skill_name}' did not match an allowed loadable skill."
+                )
+                continue
+            unavailable_reason = _unavailable_skill_reason(
+                skill_registry,
+                skill_name,
+                allowed_skills,
+            )
+            if unavailable_reason is not None:
+                _LOGGER.warning(
+                    "Ignored skill trigger '%s' for agent=%s session=%s because it is unavailable: %s",
+                    skill_name,
+                    agent.id,
+                    session.id,
+                    unavailable_reason,
+                )
+                session.add_note(
+                    f"Skill trigger '{skill_name}' matched a skill, but it is unavailable: "
+                    f"{unavailable_reason}"
                 )
                 continue
             try:
@@ -1389,6 +1407,38 @@ def _runtime_run_manager(runtime: Any) -> ChatRunManager:
     run_manager = ChatRunManager()
     runtime.chat_runs = run_manager
     return run_manager
+
+
+def _allowed_loadable_skills(
+    skill_registry: Any,
+    allowed_skills: list[str],
+    filter_allowed: Any,
+) -> dict[str, Any]:
+    list_all = getattr(skill_registry, "list_all", None)
+    is_allowed = getattr(skill_registry, "is_allowed", None)
+    if callable(list_all) and callable(is_allowed):
+        return {
+            skill.name: skill
+            for skill in list_all()
+            if is_allowed(skill.name, allowed_skills)
+        }
+    return {skill.name: skill for skill in filter_allowed(allowed_skills)}
+
+
+def _unavailable_skill_reason(
+    skill_registry: Any,
+    skill_name: str,
+    allowed_skills: list[str],
+) -> str | None:
+    availability_for = getattr(skill_registry, "availability_for", None)
+    if not callable(availability_for):
+        return None
+
+    availability = availability_for(skill_name, allowed_skills)
+    if getattr(availability, "state", "available") == "available":
+        return None
+    missing = list(getattr(availability, "missing", ()))
+    return "; ".join(missing) if missing else str(getattr(availability, "state", "unavailable"))
 
 
 def _runtime_extensions(runtime: Any) -> ExtensionRegistry | None:

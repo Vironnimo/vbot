@@ -68,9 +68,36 @@ def test_skill_tool_unknown_skill_fails(tmp_path: Path) -> None:
 
     result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "missing"}))
 
+    assert result == tool_failure("skill_not_found", "Skill not found: missing")
+
+
+def test_skill_tool_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "openai-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: openai-helper
+description: Use OpenAI.
+metadata:
+  vbot:
+    requirements:
+      env: OPENAI_API_KEY
+---
+
+# OpenAI Helper
+""",
+        encoding="utf-8",
+    )
+    tools = ToolRegistry()
+    register_skill_tool(tools, SkillRegistry.load(skills_dir, environment={}))
+
+    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "openai-helper"}))
+
     assert result == tool_failure(
-        "skill_not_found",
-        "Skill not found or not allowed for this agent: missing",
+        "skill_unavailable",
+        "Skill 'openai-helper' is unavailable: "
+        "missing environment variable 'OPENAI_API_KEY'",
     )
 
 

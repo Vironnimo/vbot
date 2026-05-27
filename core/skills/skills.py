@@ -8,6 +8,9 @@ Markdown front matter for prompt metadata and filters it through an agent's
 
 from __future__ import annotations
 
+import os
+import shutil
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,17 @@ from core.skills.skill_validator import (
     ValidationResult,
     repair_colon_scalars,
     validate_skill_metadata,
+)
+from core.skills.requirements import (
+    AVAILABLE,
+    RequirementCheck,
+    RequirementEvaluation,
+    RequirementGroup,
+    RequirementNode,
+    RequirementParseError,
+    SkillAvailability,
+    SkillRequirements,
+    parse_vbot_requirements,
 )
 from core.utils.logging import get_logger
 
@@ -41,6 +55,7 @@ class SkillMetadata:
     compatibility: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
     allowed_tools: list[str] = field(default_factory=list)
+    requirements: SkillRequirements = field(default_factory=SkillRequirements)
 
 
 @dataclass(frozen=True)
@@ -61,12 +76,19 @@ class SkillRegistry:
         self,
         skills: dict[str, SkillMetadata],
         diagnostics: list[SkillDiagnostic] | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         self._skills = skills
         self._diagnostics = list(diagnostics or [])
+        self._environment = dict(os.environ if environment is None else environment)
 
     @classmethod
-    def load(cls, skills_dir: Path, extra_dirs: list[Path] | None = None) -> SkillRegistry:
+    def load(
+        cls,
+        skills_dir: Path,
+        extra_dirs: list[Path] | None = None,
+        environment: Mapping[str, str] | None = None,
+    ) -> SkillRegistry:
         """Load all valid skills from immediate subdirectories of scan roots.
 
         Missing skill roots are treated as empty.  A directory is a skill only
@@ -80,7 +102,7 @@ class SkillRegistry:
         for scan_root in scan_roots:
             _load_skill_root(scan_root, skills, diagnostics)
 
-        return cls(skills, diagnostics)
+        return cls(skills, diagnostics, environment=environment)
 
     def get(self, name: str) -> SkillMetadata:
         """Return one skill by name.
@@ -117,17 +139,141 @@ class SkillRegistry:
         ]
 
     def filter_allowed(self, allowed_skills: list[str]) -> list[SkillMetadata]:
-        """Return skills visible to an agent's ``allowed_skills`` setting.
+        """Return available skills visible to an agent's ``allowed_skills`` setting.
 
         ``["*"]`` exposes every skill, ``[]`` exposes none, and any other list
         exposes only exact skill-name matches.  Unknown allowlist entries are
         ignored because skills are prompt metadata, not hard execution gates.
+        Skills with unmet vBot requirements remain loadable but are not returned
+        for prompt/tool visibility.
         """
-        if WILDCARD_ALLOWLIST in allowed_skills:
-            return self.list_all()
+        allowed_names = self._allowed_names(allowed_skills)
+        return [
+            skill
+            for skill in self.list_all()
+            if skill.name in allowed_names
+            and self.availability_for(skill.name, allowed_skills).state == "available"
+        ]
 
-        allowed = set(allowed_skills)
-        return [skill for skill in self.list_all() if skill.name in allowed]
+    def is_allowed(self, name: str, allowed_skills: Sequence[str] | None) -> bool:
+        """Return whether a loaded skill is visible through an allowlist."""
+
+        return name in self._allowed_names(allowed_skills)
+
+    def availability_for(
+        self,
+        name: str,
+        allowed_skills: Sequence[str] | None = None,
+    ) -> SkillAvailability:
+        """Return the runtime availability of a loadable skill."""
+
+        skill = self._skills.get(name)
+        if skill is None:
+            return SkillAvailability("invalid", (f"skill '{name}' is not loadable",), ())
+
+        allowed_names = self._allowed_names(allowed_skills)
+        return self._availability_for_skill(skill, allowed_names, stack=())
+
+    def _allowed_names(self, allowed_skills: Sequence[str] | None) -> set[str]:
+        if allowed_skills is None or WILDCARD_ALLOWLIST in allowed_skills:
+            return set(self._skills)
+        return {name for name in allowed_skills if name in self._skills}
+
+    def _availability_for_skill(
+        self,
+        skill: SkillMetadata,
+        allowed_names: set[str],
+        *,
+        stack: tuple[str, ...],
+    ) -> SkillAvailability:
+        if skill.name in stack:
+            cycle = " -> ".join((*stack, skill.name))
+            return SkillAvailability("unavailable", (f"skill dependency cycle: {cycle}",), ())
+
+        next_stack = (*stack, skill.name)
+        missing: tuple[str, ...] = ()
+        if skill.requirements.required is not None:
+            required = self._evaluate_requirement(skill.requirements.required, allowed_names, next_stack)
+            missing = required.missing
+
+        optional_missing = tuple(
+            missing_requirement
+            for optional in skill.requirements.optional
+            for missing_requirement in self._evaluate_requirement(
+                optional,
+                allowed_names,
+                next_stack,
+            ).missing
+        )
+        if missing:
+            return SkillAvailability("unavailable", missing, optional_missing)
+        if optional_missing:
+            return SkillAvailability("available", (), optional_missing)
+        return AVAILABLE
+
+    def _evaluate_requirement(
+        self,
+        requirement: RequirementNode,
+        allowed_names: set[str],
+        stack: tuple[str, ...],
+    ) -> RequirementEvaluation:
+        if isinstance(requirement, RequirementCheck):
+            return self._evaluate_requirement_check(requirement, allowed_names, stack)
+        return self._evaluate_requirement_group(requirement, allowed_names, stack)
+
+    def _evaluate_requirement_check(
+        self,
+        requirement: RequirementCheck,
+        allowed_names: set[str],
+        stack: tuple[str, ...],
+    ) -> RequirementEvaluation:
+        if requirement.kind == "binary":
+            search_path = self._environment.get("PATH")
+            if shutil.which(requirement.name, path=search_path) is not None:
+                return RequirementEvaluation(True)
+            return RequirementEvaluation(False, (f"missing binary '{requirement.name}'",))
+
+        if requirement.kind == "env":
+            if self._environment.get(requirement.name):
+                return RequirementEvaluation(True)
+            return RequirementEvaluation(
+                False,
+                (f"missing environment variable '{requirement.name}'",),
+            )
+
+        dependency = self._skills.get(requirement.name)
+        if dependency is None:
+            return RequirementEvaluation(False, (f"missing skill '{requirement.name}'",))
+        if requirement.name not in allowed_names:
+            return RequirementEvaluation(
+                False,
+                (f"skill '{requirement.name}' is not allowed for this agent",),
+            )
+        availability = self._availability_for_skill(dependency, allowed_names, stack=stack)
+        if availability.state == "available":
+            return RequirementEvaluation(True)
+        details = "; ".join(availability.missing) or availability.state
+        return RequirementEvaluation(False, (f"skill '{requirement.name}' is unavailable: {details}",))
+
+    def _evaluate_requirement_group(
+        self,
+        requirement: RequirementGroup,
+        allowed_names: set[str],
+        stack: tuple[str, ...],
+    ) -> RequirementEvaluation:
+        evaluations = [
+            self._evaluate_requirement(child, allowed_names, stack) for child in requirement.children
+        ]
+        if requirement.operator == "all":
+            missing = tuple(
+                missing for evaluation in evaluations for missing in evaluation.missing
+            )
+            return RequirementEvaluation(not missing, missing)
+
+        if any(evaluation.satisfied for evaluation in evaluations):
+            return RequirementEvaluation(True)
+        alternatives = ", ".join(child.describe() for child in requirement.children)
+        return RequirementEvaluation(False, (f"requires one of: {alternatives}",))
 
 
 def _load_skill_root(
@@ -236,6 +382,11 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
 
     name = _field_to_string(fields.get("name"))
     description = _field_to_string(fields.get("description"))
+    metadata = _optional_mapping(fields.get("metadata"))
+    try:
+        requirements = parse_vbot_requirements(metadata)
+    except RequirementParseError as exc:
+        return None, ValidationResult(valid=False, warnings=[str(exc)])
 
     return (
         SkillMetadata(
@@ -244,8 +395,9 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
             path=skill_file.resolve(),
             license=_optional_string(fields.get("license")),
             compatibility=fields.get("compatibility"),
-            metadata=_optional_mapping(fields.get("metadata")),
+            metadata=metadata,
             allowed_tools=_optional_string_list(fields.get("allowed-tools")),
+            requirements=requirements,
         ),
         result,
     )

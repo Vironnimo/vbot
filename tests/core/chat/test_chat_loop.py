@@ -36,6 +36,7 @@ from core.runs import (
     RunCancelledError,
     RunStatus,
 )
+from core.skills.skills import SkillRegistry
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
     ToolContext,
@@ -1167,6 +1168,45 @@ async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
     assert '<skill_content name="debugging">' not in request_text
     assert request_messages[1]["content"] == message
     assert "Skill trigger 'debugging' did not match" in request_messages[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_skill_trigger_does_not_activate_unavailable_skill(tmp_path: Path) -> None:
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "openai-helper"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+                """---
+name: openai-helper
+description: Use OpenAI.
+metadata:
+    vbot:
+        requirements:
+            env: OPENAI_API_KEY
+---
+
+# OpenAI Helper
+""",
+                encoding="utf-8",
+        )
+        agent = StubAgent(
+                id="coder",
+                model="openai/gpt-5.2",
+                allowed_tools=["*"],
+                allowed_skills=["openai-helper"],
+        )
+        adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+        runtime.skills = SkillRegistry.load(skills_dir, environment={})
+
+        await ChatLoop(runtime).send("coder", "/openai-helper help", session_id="session-one")
+
+        request_messages = adapter.requests[0]["messages"]
+        request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+        assert '<skill_content name="openai-helper">' not in request_text
+        assert request_messages[1]["content"] == "/openai-helper help"
+        assert "Skill trigger 'openai-helper' matched a skill, but it is unavailable" in request_text
+        assert "missing environment variable 'OPENAI_API_KEY'" in request_text
 
 
 @pytest.mark.asyncio

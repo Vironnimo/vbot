@@ -122,6 +122,46 @@ def test_skill_list_returns_empty_message(tmp_path: Path, monkeypatch: pytest.Mo
     assert result == CommandResult(ok=True, message="no skills configured", instance=instance)
 
 
+def test_skill_list_formats_requirement_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "skills": [
+                        {
+                            "name": "native-build",
+                            "description": "Build native projects",
+                            "state": "unavailable",
+                            "requirements": {
+                                "missing": ["missing binary 'gcc'"],
+                                "optional_missing": ["missing binary 'jq'"],
+                            },
+                        }
+                    ],
+                    "invalid_skills": [],
+                },
+            },
+        )
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    result = skill_management.skill_list(instance)
+
+    assert result.ok is True
+    assert result.message.splitlines() == [
+        "skills:",
+        "- native-build  Build native projects "
+        "(unavailable: missing binary 'gcc'; optional missing: missing binary 'jq')",
+    ]
+
+
 def test_skill_list_includes_invalid_section_when_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

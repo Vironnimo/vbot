@@ -49,17 +49,24 @@ def make_skill_handler(skill_registry: SkillRegistry) -> Any:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
-        allowed = _allowed_skill_names(skill_registry, context.allowed_skills)
-        if skill_name not in allowed:
+        try:
+            skill = skill_registry.get(skill_name)
+        except KeyError:
+            return tool_failure("skill_not_found", f"Skill not found: {skill_name}")
+
+        if not _is_skill_allowed(skill_registry, skill_name, context.allowed_skills):
             return tool_failure(
                 "skill_not_found",
                 f"Skill not found or not allowed for this agent: {skill_name}",
             )
 
-        try:
-            skill = skill_registry.get(skill_name)
-        except KeyError:
-            return tool_failure("skill_not_found", f"Skill not found: {skill_name}")
+        unavailable_message = _unavailable_skill_message(
+            skill_registry,
+            skill_name,
+            context.allowed_skills,
+        )
+        if unavailable_message is not None:
+            return tool_failure("skill_unavailable", unavailable_message)
 
         try:
             data = load_skill_content(skill_name, skill.path)
@@ -143,6 +150,34 @@ def _allowed_skill_names(
 ) -> set[str]:
     allowed = ["*"] if allowed_skills is None else list(allowed_skills)
     return {skill.name for skill in skill_registry.filter_allowed(allowed)}
+
+
+def _is_skill_allowed(
+    skill_registry: SkillRegistry,
+    skill_name: str,
+    allowed_skills: Sequence[str] | None,
+) -> bool:
+    is_allowed = getattr(skill_registry, "is_allowed", None)
+    if callable(is_allowed):
+        return bool(is_allowed(skill_name, allowed_skills))
+    return skill_name in _allowed_skill_names(skill_registry, allowed_skills)
+
+
+def _unavailable_skill_message(
+    skill_registry: SkillRegistry,
+    skill_name: str,
+    allowed_skills: Sequence[str] | None,
+) -> str | None:
+    availability_for = getattr(skill_registry, "availability_for", None)
+    if not callable(availability_for):
+        return None
+
+    availability = availability_for(skill_name, allowed_skills)
+    if getattr(availability, "state", "available") == "available":
+        return None
+    missing = list(getattr(availability, "missing", ()))
+    detail = "; ".join(missing) if missing else str(getattr(availability, "state", "unavailable"))
+    return f"Skill '{skill_name}' is unavailable: {detail}"
 
 
 def _read_skill_body(skill_file: Path) -> str:

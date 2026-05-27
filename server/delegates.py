@@ -690,7 +690,12 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
             }
             for name, description in sorted(CommandDispatcher.BUILT_IN_COMMANDS.items())
         ]
-        skills = sorted(state.runtime.skills.list_all(), key=lambda skill: skill.name)
+        skill_registry = state.runtime.skills
+        filter_allowed = getattr(skill_registry, "filter_allowed", None)
+        if callable(filter_allowed):
+            skills = sorted(filter_allowed(["*"]), key=lambda skill: skill.name)
+        else:
+            skills = sorted(skill_registry.list_all(), key=lambda skill: skill.name)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     skill_items = [
@@ -2379,11 +2384,30 @@ def _tool_response(tool: Any) -> JsonObject:
 
 def _skill_response(skill_registry: Any, skill: Any) -> JsonObject:
     warnings = skill_registry.warnings_for(skill.name)
+    availability = _skill_availability(skill_registry, skill.name)
     return {
         "name": skill.name,
         "description": skill.description,
         "valid": len(warnings) == 0,
         "warnings": warnings,
+        "state": availability["state"],
+        "requirements": {
+            "missing": availability["missing"],
+            "optional_missing": availability["optional_missing"],
+        },
+    }
+
+
+def _skill_availability(skill_registry: Any, skill_name: str) -> JsonObject:
+    availability_for = getattr(skill_registry, "availability_for", None)
+    if not callable(availability_for):
+        return {"state": "available", "missing": [], "optional_missing": []}
+
+    availability = availability_for(skill_name)
+    return {
+        "state": getattr(availability, "state", "available"),
+        "missing": list(getattr(availability, "missing", ())),
+        "optional_missing": list(getattr(availability, "optional_missing", ())),
     }
 
 

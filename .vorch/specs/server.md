@@ -83,7 +83,7 @@ Clients call the vBot server contract; provider wire details stay behind
   `session_id` for lossless edit round-tripping, plus server-computed
   `next_fire_at` for active cron jobs.
 - `cron.update`, `cron.delete`, `cron.enable`, and `cron.disable` return `{ ok: true }`.
-- `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings }`; `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
+- `skill.list` returns loadable skills and diagnostics as `{ skills, invalid_skills }`. `skills` entries include `{ name, description, valid, warnings, state, requirements }`; `state` is `available` or `unavailable`, and `requirements` contains `{ missing, optional_missing }`. `invalid_skills` entries include `{ name, path, valid: false, warnings }` for non-loadable skill directories.
 - `chat.commands` returns `{ items }`, a flat combined autocomplete list of
   built-in commands and skills. Each item includes `{ name, description, type
   }`, where `type` is `command` or `skill`. Built-in command names are bare
@@ -207,8 +207,8 @@ Clients call the vBot server contract; provider wire details stay behind
   server payloads, including nested SSE/WebSocket event payloads.
 - Session creation is explicit at the server/product boundary.
 - `chat.commands` is the command/skill autocomplete RPC. It must stay flat and
-  type-tagged so accessors can merge built-in commands with skills without
-  changing the underlying skill-trigger behavior.
+  type-tagged so accessors can merge built-in commands with currently available
+  skills without changing the underlying skill-trigger behavior.
 - Queue state is server-owned and in-memory only. Accessors must use the
   `chat.queue_*` RPCs as the source of truth instead of maintaining an
   independent send queue.
