@@ -187,6 +187,15 @@ def test_load_settings_rejects_invalid_json(tmp_path: Path) -> None:
         storage.load_settings()
 
 
+def test_load_settings_rejects_invalid_schema_fields(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    storage.settings_path.write_text('{"compaction": {"auto": "yes"}}', encoding="utf-8")
+
+    with pytest.raises(StorageError, match=r"\$\.compaction\.auto: must be a boolean"):
+        storage.load_settings()
+
+
 def test_load_defaults_returns_empty_when_missing(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
@@ -292,7 +301,7 @@ def test_load_appearance_settings_rejects_non_object_section(tmp_path: Path) -> 
     storage = StorageManager(tmp_path)
     storage.save_settings({"appearance": []})
 
-    with pytest.raises(StorageError, match="Expected settings.appearance to be an object"):
+    with pytest.raises(StorageError, match=r"\$\.appearance: must be an object"):
         storage.load_appearance_settings()
 
 

@@ -20,6 +20,9 @@ Automation owns kernel-level primitives for starting Runs without going through 
 - Queued triggers preserve whether they are internal or visible because that flag is stored on the shared queued Run item.
 - Persisted cron-job timestamps use UTC with explicit offsets in ISO 8601 format.
 - `CronService` stores jobs in `<data_dir>/cron/jobs.json` and creates the directory/file on demand.
+- `cron/jobs.json` is validated through `core/settings/validation.py` before
+	`CronService` constructs `CronJob` objects. Invalid JSON shape or schema
+	errors raise `CronStorageError` with file/path diagnostics.
 - `schedule_type` is either `cron` or `once`; job `status` is `active`, `paused`, or `completed`.
 - Active cron jobs compute their next fire time with `croniter`; paused and completed jobs do not own running tasks.
 - Timezone resolution uses stdlib `zoneinfo`; the project ships `tzdata` so IANA job timezones work on platforms without a system timezone database.

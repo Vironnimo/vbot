@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
 
+from core.settings import SettingsValidationError, load_validated_cron_jobs_json
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -280,19 +281,12 @@ class CronService:
         """Load cron jobs from <data_root>/cron/jobs.json."""
         self._ensure_storage_exists()
         try:
-            raw_payload = json.loads(self._jobs_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as error:
-            raise CronStorageError(f"Invalid JSON in {self._jobs_path}: {error}") from error
-        except OSError as error:
-            raise CronStorageError(f"Cannot read {self._jobs_path}: {error}") from error
-
-        if not isinstance(raw_payload, list):
-            raise CronStorageError(f"Expected list payload in {self._jobs_path}")
+            raw_payload = load_validated_cron_jobs_json(self._jobs_path)
+        except SettingsValidationError as error:
+            raise CronStorageError(str(error)) from error
 
         jobs: dict[str, CronJob] = {}
         for item in raw_payload:
-            if not isinstance(item, dict):
-                raise CronStorageError(f"Expected object entries in {self._jobs_path}")
             job = CronJob.from_dict(item)
             self._validate_job(job)
             jobs[job.id] = job

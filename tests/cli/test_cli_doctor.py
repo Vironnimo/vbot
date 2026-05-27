@@ -33,6 +33,14 @@ def test_parse_args_supports_doctor_settings() -> None:
     assert args.data_dir == "dev-data"
 
 
+def test_parse_args_supports_doctor_config() -> None:
+    args = cli_main.parse_args(["doctor", "config", "--data-dir", "dev-data"])
+
+    assert args.area == "doctor"
+    assert args.command == "config"
+    assert args.data_dir == "dev-data"
+
+
 def test_doctor_settings_reports_missing_file_as_ok(tmp_path: Path) -> None:
     result = doctor_management.doctor_settings(tmp_path)
 
@@ -78,6 +86,42 @@ def test_doctor_settings_reports_errors_and_warnings(tmp_path: Path) -> None:
     ]
 
 
+def test_doctor_config_reports_all_config_files(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text(json.dumps({"server_port": 8500}), encoding="utf-8")
+    agent_dir = tmp_path / "agents" / "broken"
+    agent_dir.mkdir(parents=True)
+    agent_dir.joinpath("agent.json").write_text(
+        json.dumps(
+            {
+                "id": "broken",
+                "name": "Broken Agent",
+                "model": "",
+                "fallback_model": "",
+                "temperature": None,
+                "thinking_effort": None,
+                "allowed_tools": "read_file",
+                "allowed_skills": ["*"],
+                "created_at": "2026-05-03T12:00:00Z",
+                "updated_at": "2026-05-03T12:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = doctor_management.doctor_config(tmp_path)
+
+    assert result.ok is False
+    assert result.message.splitlines() == [
+        "doctor config: failed",
+        f"data_dir: {tmp_path.resolve()}",
+        "files_checked: 2",
+        "errors: 1",
+        "settings.json: valid",
+        "agents/broken/agent.json:",
+        "- error $.allowed_tools: must be a list of strings",
+    ]
+
+
 def test_run_dispatches_doctor_settings(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -97,3 +141,24 @@ def test_run_dispatches_doctor_settings(
     assert exit_code == 0
     assert calls == [str(tmp_path / "data")]
     assert capsys.readouterr().out.splitlines() == ["doctor settings: ok"]
+
+
+def test_run_dispatches_doctor_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[Any] = []
+
+    def fake_doctor_config(data_dir: str | Path | None) -> CommandResult:
+        calls.append(data_dir)
+        return CommandResult(ok=True, message="doctor config: ok", instance=instance)
+
+    exit_code = cli_main.run(
+        ["doctor", "config", "--data-dir", str(tmp_path / "data")],
+        doctor_config_fn=fake_doctor_config,
+    )
+
+    assert exit_code == 0
+    assert calls == [str(tmp_path / "data")]
+    assert capsys.readouterr().out.splitlines() == ["doctor config: ok"]

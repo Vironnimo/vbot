@@ -93,9 +93,16 @@ contract rather than reading or mutating files directly.
   - coerces the CLI value to JSON-native data, then calls `settings.set_key` over server RPC
 - `python cli/main.py doctor settings [--data-dir <path>]`
   - runs locally without requiring a reachable server
-  - validates the target data-dir `settings.json` with the raw settings validator
+  - validates the target data-dir `settings.json` with the central JSON validator
   - reports `ok` for missing files because defaults will be used
   - reports diagnostics as `severity`, JSON path, and message for agent callers
+- `python cli/main.py doctor config [--data-dir <path>]`
+  - runs locally without requiring a reachable server
+  - validates the target data-dir user-editable JSON config bundle:
+    `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and
+    `cron/jobs.json` when present
+  - prints explicit file counts, error/warning counts, and per-file diagnostics
+    for agent callers
 
 ## Conventions
 
@@ -116,7 +123,8 @@ contract rather than reading or mutating files directly.
 - Every CLI command except `server start`, `server stop`, `server restart`,
   `server status`, and local `doctor` commands requires a reachable vBot server
   because the CLI is an accessor and those areas are RPC-backed, not local file
-  mutations.
+  mutations. `doctor config` is the local preflight for manually edited runtime
+  JSON before server/RPC paths consume it.
 - Port resolution follows `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`.
 - Ambient `PORT` and `SERVER_PORT` process environment variables are ignored for
   port resolution; only `VBOT_SERVER_PORT` can override `settings.json` from the

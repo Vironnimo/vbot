@@ -17,6 +17,10 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
   - `token_env_var: str`
   - `enabled: bool`
 - Channel config files live at `<data_dir>/channels/<channel-id>/channel.json`.
+- Channel config reads pass `channel.json` through
+  `core/settings/validation.py` before constructing `ChannelConfig`. Invalid
+  JSON shape or schema errors raise `ChannelConfigError` with file/path
+  diagnostics.
 - Channel session metadata lives in `<data_dir>/agents/<agent-id>/sessions/<session-id>.meta.json` beside the JSONL transcript. Channel-owned fields are:
   - `source_channel_id`
   - `platform`

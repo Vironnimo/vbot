@@ -59,6 +59,11 @@ unset values inherit these defaults at load time without rewriting their
 `agent.json` on disk. Optional built-in tool credentials such as
 `BRAVE_API_KEY` for `web_search` use that same process env → data-dir `.env`
 fallback resolution.
+User-editable JSON configuration is validated through the central
+`core/settings/validation.py` layer before runtime code consumes it:
+`settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and
+`cron/jobs.json` all fail fast with file/path diagnostics on malformed JSON or
+schema errors.
 
 **I18n:** Every user-visible string through the i18n system from day 1. English
 fallback. Backend: `utils/`, Frontend: `webui/src/lib/i18n.js`.
@@ -208,9 +213,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   failure. Help text, success text, errors, and candidate suggestions should be
   explicit enough for an agent to choose the next command without guessing.
 - **Doctor CLI commands are local preflight checks.** `doctor settings` validates
-  the target data-dir `settings.json` without requiring a running server, and
-  prints file/path diagnostics that agents can act on before normal runtime
-  paths consume the file.
+  the target data-dir `settings.json`, and `doctor config` validates the full
+  user-editable config bundle (`settings.json`, agent configs, channel configs,
+  and cron jobs) without requiring a running server. Both print file/path
+  diagnostics that agents can act on before normal runtime paths consume the
+  files.
 - **Provider API-key setup is CLI-supported.** `provider set-key` sends a direct
   API-key value to server RPC, the server writes the configured provider
   connection `credential_key` into the data-dir `.env`, and runtime provider

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 from typing import Any, TypedDict
 
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.logging import build_uvicorn_log_config
 from server.app import create_app
@@ -94,13 +94,10 @@ def _load_settings_for_port(config: Config) -> dict[str, Any]:
     """Load settings.json directly so ambient environment cannot affect ports."""
 
     settings_path = config.data_dir / "settings.json"
-    if not settings_path.exists():
-        return {}
-
-    data = json.loads(settings_path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Expected a JSON object at {settings_path}")
-    return data
+    try:
+        return load_validated_settings_json(settings_path)
+    except SettingsValidationError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -218,6 +219,18 @@ def test_channel_storage_load_all_missing_directory_returns_empty_list(tmp_path:
     storage = ChannelStorage(tmp_path)
 
     assert storage.load_all() == []
+
+
+def test_channel_storage_validates_channel_json_on_read(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    config_dir = tmp_path / "channels" / "tg-assistant"
+    config_dir.mkdir(parents=True)
+    config_dir.joinpath("channel.json").write_text(
+        json.dumps({**make_config().to_dict(), "enabled": "true"}), encoding="utf-8"
+    )
+
+    with pytest.raises(ChannelConfigError, match=r"\$\.enabled: must be a boolean"):
+        storage.get("tg-assistant")
 
 
 def test_channel_service_create_rejects_duplicate_ids(tmp_path: Path) -> None:

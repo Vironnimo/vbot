@@ -11,6 +11,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.errors import ConfigError
 
 _WORKTREE_FILE = Path(__file__).resolve().parent.parent.parent / ".vbot-worktree"
@@ -214,21 +215,10 @@ class Config:
 
     def _load_settings_json(self) -> None:
         """Load key-value pairs from ``settings.json``."""
-        if not self._settings_path.exists():
-            return
-
         try:
-            data = json.loads(self._settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"Invalid JSON in {self._settings_path}: {exc}") from exc
-        except OSError as exc:
-            raise ConfigError(f"Cannot read {self._settings_path}: {exc}") from exc
-
-        if not isinstance(data, dict):
-            raise ConfigError(
-                f"Expected a JSON object at {self._settings_path}, got {type(data).__name__}"
-            )
-
+            data = load_validated_settings_json(self._settings_path)
+        except SettingsValidationError as exc:
+            raise ConfigError(str(exc)) from exc
         self._data.update(data)
 
     def _load_env_file(self) -> None:

@@ -20,6 +20,7 @@ from core.attachments.attachments import (
 from core.chat import ChatLoop, CommandDispatcher
 from core.compaction import CompactionService, SummarizationStrategy
 from core.runs import ChatRunManager, RunNotFoundError
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import dispatch_rpc
@@ -336,10 +337,11 @@ def _resolve_server_bind(
         }
 
     settings_path = config.data_dir / "settings.json"
-    if settings_path.exists():
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"Expected a JSON object at {settings_path}")
+    try:
+        data = load_validated_settings_json(settings_path)
+    except SettingsValidationError as exc:
+        raise ValueError(str(exc)) from exc
+    if data:
         for key in ("server_port", "SERVER_PORT", "port", "PORT"):
             value = data.get(key)
             if value is not None:
