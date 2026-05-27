@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, list providers models or skills, refresh models, update settings, or manage Telegram channels.
+description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, list providers models or skills, refresh models, update settings, or manage Telegram channels.
 ---
 
 # vBot CLI
@@ -17,7 +17,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 
 ## Workflow
 
-1. Identify the requested change: server lifecycle, settings, providers, models, skills, or channels.
+1. Identify the requested change: server lifecycle, agents, settings, providers, models, skills, or channels.
 2. Resolve the target instance. Use defaults unless the user gives a host, port, or data directory. Add `--host`, `--port`, and `--data-dir` to every command that must target a non-default instance.
 3. Check reachability:
 
@@ -38,6 +38,7 @@ vbot config
 vbot provider list
 vbot model list
 vbot skill list
+vbot agent list
 vbot channel list
 ```
 
@@ -90,6 +91,21 @@ Use this to list loadable skills and invalid skill diagnostics:
 vbot skill list
 ```
 
+### Agents
+
+Use agent commands to inspect and manage agent configuration through server RPC:
+
+```bash
+vbot agent list
+vbot agent show --id assistant
+vbot agent create --id coder --name Coder --model openai/gpt-5.2 --allowed-tools '*' --allowed-skills '*'
+vbot agent update --id coder --model openai/gpt-5.2 --temperature 0.4 --thinking-effort high
+vbot agent update --id coder --clear-temperature --clear-thinking-effort
+vbot agent delete --id old-agent
+```
+
+Use `--allowed-tools` and `--allowed-skills` with zero or more values to replace the full allowlist. Quote `*` in shells that expand it.
+
 ### Telegram Channels
 
 Use channel commands to create and operate channel configurations. Pass token environment variable names, not token values:
@@ -108,7 +124,7 @@ vbot channel remove --id tg-main
 - Do not assume the server is running. Check `vbot server status` first for management tasks.
 - Do not edit `settings.json` directly when `vbot config set` can express the change.
 - Do not configure channels with token literals. Store the token in the environment or data-dir `.env`, then pass the variable name with `--token-env`.
-- Do not claim an agent was created or updated through the CLI; current CLI management covers server, config, providers, models, skills, and channels, not agent CRUD.
+- Do not edit agent JSON directly when `vbot agent create`, `vbot agent update`, or `vbot agent delete` can express the change. Workspace paths are not mutable through public agent CLI commands.
 - If a command fails because another process occupies the port, do not kill it manually. Report the conflict or target a different port/data directory.
 
 ## Output Contract
