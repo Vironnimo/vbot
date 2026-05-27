@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,14 @@ def test_parse_args_supports_server_command_options() -> None:
     assert args.host == "0.0.0.0"
     assert args.port == 9000
     assert args.data_dir == "dev-data"
+
+
+def test_project_exposes_vbot_console_script() -> None:
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+    data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    assert data["project"]["scripts"]["vbot"] == "cli.main:main"
 
 
 @pytest.mark.parametrize("command", ["start", "stop", "restart", "status"])
