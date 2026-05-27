@@ -3,16 +3,6 @@
 These rules apply to every agent, every task, unconditionally.
 **Read this before starting any work. These are YOUR rules.**
 
-## Hard Stop: Required Final Tool Call
-
-Before ending any assistant turn, call `vscode_askQuestions`.
-
-This is mandatory even if the user only asked for an explanation, analysis, review, wording suggestion, or status update.
-
-The assistant's last action in the turn must be the `vscode_askQuestions` tool call. A prose answer without that tool call violates this repository's rules.
-
-The question must offer concrete next-step choices relevant to the just-completed work.
-
 ## Session Start
 
 Every session begins by reading these files — immediately, before anything else:
@@ -120,3 +110,22 @@ Do NOT install packages speculatively. Only request what the current task requir
 If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
 
 When working on a domain, read its spec file from `.vorch/specs/`. Your task will list which specs to read — treat that as a starting point, not a ceiling. Read others if you need them.
+
+---
+
+## Hard Stop: Required Final Tool Call
+
+Before ending any assistant turn, call `vscode_askQuestions`.
+
+This is mandatory even if the user only asked for an explanation, analysis, review, wording suggestion, or status update.
+
+The assistant's last action in the turn must be the `vscode_askQuestions` tool call. A prose answer without that tool call violates this repository's rules.
+
+The question must offer concrete next-step choices relevant to the just-completed work.
+
+## Important Notes
+
+Commit your work!
+Commit in this style: feat(chat): tools added
+
+Do NOT use subagents!
