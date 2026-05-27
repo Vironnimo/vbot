@@ -543,6 +543,18 @@ class Runtime:
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
 
+    def reload_provider_credentials(self) -> None:
+        """Reload provider credential fallback values from the data-dir `.env`."""
+
+        self._ensure_started()
+        data_dir_credentials = self.storage.load_environment()
+        self._fallback_environment = dict(data_dir_credentials)
+        self._provider_credentials = ProviderCredentialResolver(
+            self.providers,
+            fallback_credentials=data_dir_credentials,
+            token_store=self.token_store,
+        )
+
     # ------------------------------------------------------------------
     # Read-only registry access
     # ------------------------------------------------------------------

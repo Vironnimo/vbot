@@ -98,6 +98,47 @@ def test_build_environment_snapshot_prefers_process_environment(
     assert snapshot["DATA_ONLY"] == "from-data-dir"
 
 
+def test_set_data_dir_credential_writes_new_env_key(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-test")
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OPENROUTER_API_KEY=sk-or-test\n"
+    assert storage.load_environment() == {"OPENROUTER_API_KEY": "sk-or-test"}
+
+
+def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text(
+        "# Provider keys\nOPENROUTER_API_KEY=old\nOTHER_KEY=value\nOPENROUTER_API_KEY=duplicate\n",
+        encoding="utf-8",
+    )
+
+    storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+        "# Provider keys\nOPENROUTER_API_KEY=new\nOTHER_KEY=value\n"
+    )
+
+
+@pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])
+def test_set_data_dir_credential_rejects_invalid_env_key(tmp_path: Path, key: str) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError):
+        storage.set_data_dir_credential(key, "secret")
+
+
+@pytest.mark.parametrize("value", ["", "line\nbreak", "line\rbreak"])
+def test_set_data_dir_credential_rejects_invalid_value(tmp_path: Path, value: str) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError):
+        storage.set_data_dir_credential("OPENROUTER_API_KEY", value)
+
+
 def test_resolves_data_dir_from_config_attribute(tmp_path: Path) -> None:
     data_dir = tmp_path / "configured"
     storage = StorageManager(config=ConfigWithDataDir(data_dir))

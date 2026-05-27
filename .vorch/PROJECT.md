@@ -204,6 +204,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   contract. Prompt updates may read a local source file for input text, but the
   server remains responsible for validation and persistence; log commands read
   through `log.*` RPCs rather than direct data-dir file access.
+- **Provider API-key setup is CLI-supported.** `provider set-key` sends a direct
+  API-key value to server RPC, the server writes the configured provider
+  connection `credential_key` into the data-dir `.env`, and runtime provider
+  credentials reload immediately. OAuth console login remains a separate scope.
 
 - **Raw model catalog files are kept alongside sanitized files.** After a
   model-db refresh, `resources/models/<provider>.raw.json` stores the full

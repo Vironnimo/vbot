@@ -24,6 +24,9 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `runtime.get_adapter(provider_id, connection_id) -> ProviderAdapter`
 - `ProviderCredentialResolver.has_credentials(provider_id, connection_id=None) -> bool`
 - `ProviderCredentialResolver.get_credentials(provider_id, connection_id=None) -> str`
+- Server RPC `provider.set_key` writes API-key connection credentials into the
+    data-dir `.env` using the connection's configured `credential_key`, then
+    reloads runtime provider credential fallback state.
 - `ProviderAdapter.send(messages, *, model_id, **kwargs) -> dict`
 - `ProviderAdapter.stream(messages, *, model_id, **kwargs) -> AsyncIterator[dict]`
 - `ProviderAdapter.normalize_response(response) -> dict`
@@ -63,6 +66,9 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 - `runtime.get_adapter()` requires an explicit connection id; there is no runtime fallback to the first usable connection.
 - API-key credentials resolve at adapter creation from process env or data-dir `.env`; OAuth credentials come from `TokenStore` and may refresh during requests.
+- API-key provider setup through CLI/RPC is credential-key based: callers name a
+    provider and optional connection, and vBot chooses the configured env key from
+    provider metadata. CLI output must not include credential values.
 - Streaming retry only covers connection establishment. Once an SSE stream is open, mid-stream errors propagate.
 - Provider catalogs under `resources/models/` are refreshable artifacts. Durable behavior belongs in adapter code or policy, not hand-edited generated model files.
 - Network failures use `NetworkError` and are retryable but do not trigger model fallback.

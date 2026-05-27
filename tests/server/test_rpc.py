@@ -394,6 +394,7 @@ class StubStorage:
         self._appearance = {"language": "en"}
         self._skill_directories: list[str] = []
         self._settings: JsonObject = {}
+        self._credentials: dict[str, str] = {}
         self._prompt_fragments: dict[str, str] = {
             "system.md": "# System\nDefault system prompt.",
             "runtime.md": "# Runtime\nDefault runtime info.",
@@ -584,6 +585,12 @@ class StubStorage:
     def save_settings(self, settings: JsonObject) -> None:
         self._settings = dict(settings)
 
+    def load_environment(self) -> dict[str, str]:
+        return dict(self._credentials)
+
+    def set_data_dir_credential(self, key: str, value: str) -> None:
+        self._credentials[key] = value
+
     def read_prompt_fragment(self, name: str) -> str:
         if name not in self._prompt_fragments:
             raise StorageError(f"Unknown prompt fragment: {name}")
@@ -761,9 +768,14 @@ class StubRuntime:
     def has_provider_credentials(self, provider_id: str) -> bool:
         provider = cast(Any, self.providers.get(provider_id))
         return any(
-            bool(os.environ.get(connection.auth.credential_key))
+            bool(self._credential_value(connection.auth.credential_key))
             for connection in provider.connections
         )
+
+    def _credential_value(self, key: str) -> str:
+        if key in os.environ:
+            return os.environ[key]
+        return self.storage.load_environment().get(key, "")
 
     @property
     def provider_credentials(self) -> Any:
@@ -778,13 +790,13 @@ class StubRuntime:
                 connection = next(
                     connection for connection in provider.connections if connection.id == local_id
                 )
-                return bool(os.environ.get(connection.auth.credential_key))
+                return bool(runtime._credential_value(connection.auth.credential_key))
 
             def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
                 provider = cast(Any, runtime.providers.get(provider_id))
                 if connection_id is None:
                     for connection in provider.connections:
-                        credential = os.environ.get(connection.auth.credential_key, "")
+                        credential = runtime._credential_value(connection.auth.credential_key)
                         if credential:
                             return credential
                     raise ConfigError(
@@ -794,7 +806,7 @@ class StubRuntime:
                 connection = next(
                     connection for connection in provider.connections if connection.id == local_id
                 )
-                credential = os.environ.get(connection.auth.credential_key, "")
+                credential = runtime._credential_value(connection.auth.credential_key)
                 if credential:
                     return credential
                 raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
@@ -806,6 +818,9 @@ class StubRuntime:
 
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)
+
+    def reload_provider_credentials(self) -> None:
+        return None
 
 
 def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
@@ -1293,6 +1308,85 @@ async def test_connection_list_rejects_params(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_writes_api_key_credential_and_reloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "sk-or-test"},
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "credential_key": "OPENROUTER_API_KEY",
+            "configured": True,
+        },
+    }
+    assert state.runtime.storage.load_environment() == {"OPENROUTER_API_KEY": "sk-or-test"}
+    assert state.runtime.provider_credentials.has_credentials("openrouter", "openrouter:api-key")
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_rejects_oauth_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider_with_secondary_connection())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {
+                "provider_id": "openrouter",
+                "connection_id": "openrouter:oauth",
+                "value": "secret",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "not an API key connection" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_set_key_rejects_ambiguous_api_key_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    provider = openrouter_provider()
+    provider.connections.append(
+        SimpleNamespace(
+            id="secondary",
+            type="api_key",
+            label="Secondary API Key",
+            auth=SimpleNamespace(credential_key="OPENROUTER_SECONDARY_API_KEY"),
+        )
+    )
+    state.runtime.providers.add(provider)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.set_key",
+            "params": {"provider_id": "openrouter", "value": "secret"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "multiple API key connections" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ from cli.config_management import coerce_config_value, config_get, config_set, c
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
-from cli.provider_management import provider_list
+from cli.provider_management import provider_list, provider_set_key
 from cli.server_management import (
     CommandResult,
     ServerInstance,
@@ -48,7 +48,7 @@ AGENT_COMMANDS = ("list", "show", "create", "update", "delete")
 TOOL_COMMANDS = ("list",)
 PROMPT_COMMANDS = ("list", "update", "reset", "preview")
 LOG_COMMANDS = ("list", "read")
-PROVIDER_COMMANDS = ("list",)
+PROVIDER_COMMANDS = ("list", "set-key")
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
@@ -189,9 +189,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     provider_parser = subparsers.add_parser("provider", description="Manage vBot providers")
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
-    for command in PROVIDER_COMMANDS:
-        command_parser = provider_subparsers.add_parser(command)
-        _add_target_arguments(command_parser)
+    provider_list_parser = provider_subparsers.add_parser("list")
+    _add_target_arguments(provider_list_parser)
+    provider_set_key_parser = provider_subparsers.add_parser("set-key")
+    _add_target_arguments(provider_set_key_parser)
+    provider_set_key_parser.add_argument("--provider", required=True)
+    provider_set_key_parser.add_argument("--connection")
+    provider_set_key_parser.add_argument("--value", required=True)
 
     model_parser = subparsers.add_parser("model", description="Manage vBot models")
     model_subparsers = model_parser.add_subparsers(dest="command", required=True)
@@ -280,6 +284,9 @@ def run(
     list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
     read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
     list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
+    set_provider_key: Callable[
+        [ServerInstance, str, str, str | None], CommandResult
+    ] = provider_set_key,
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
     list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
@@ -367,7 +374,12 @@ def run(
 
     if args.area == "provider":
         instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
-        result = dispatch_provider_command(args, instance, list_providers=list_providers)
+        result = dispatch_provider_command(
+            args,
+            instance,
+            list_providers=list_providers,
+            set_provider_key=set_provider_key,
+        )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -583,11 +595,14 @@ def dispatch_provider_command(
     instance: ServerInstance,
     *,
     list_providers: Callable[[ServerInstance], CommandResult],
+    set_provider_key: Callable[[ServerInstance, str, str, str | None], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
     if args.command == "list":
         return list_providers(instance)
+    if args.command == "set-key":
+        return set_provider_key(instance, args.provider, args.value, args.connection)
     raise ValueError(f"Unsupported provider command: {args.command}")
 
 

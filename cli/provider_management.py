@@ -29,6 +29,31 @@ def provider_list(instance: ServerInstance) -> CommandResult:
     return CommandResult(ok=True, message=_format_connection_rows(connections), instance=instance)
 
 
+def provider_set_key(
+    instance: ServerInstance,
+    provider_id: str,
+    value: str,
+    connection_id: str | None = None,
+) -> CommandResult:
+    """Set an API-key provider credential via `provider.set_key` RPC."""
+
+    params: dict[str, Any] = {"provider_id": provider_id, "value": value}
+    if connection_id is not None:
+        params["connection_id"] = connection_id
+
+    payload = _rpc_call(instance, "provider.set_key", params)
+    if not payload.ok:
+        return payload.to_command_result()
+
+    resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
+    credential_key = _string_or_default(payload.data.get("credential_key"), "?")
+    return CommandResult(
+        ok=True,
+        message=f"set {resolved_connection_id} credential {credential_key}",
+        instance=instance,
+    )
+
+
 class _RpcPayload:
     def __init__(
         self,
