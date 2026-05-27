@@ -52,6 +52,65 @@ PROVIDER_COMMANDS = ("list", "status", "set-key")
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
+AREA_HELP = {
+    "server": "Start, stop, restart, and inspect the local server",
+    "agent": "Inspect and manage agent configs",
+    "channel": "Inspect and manage channel configs",
+    "tool": "Inspect public tool catalog",
+    "prompt": "Inspect and manage prompt fragments",
+    "log": "Inspect parsed server logs",
+    "provider": "Inspect and configure provider connections",
+    "model": "Inspect and refresh model catalogs",
+    "skill": "Inspect skill availability and diagnostics",
+    "config": "Inspect and update raw settings",
+}
+SERVER_HELP = {
+    "start": "Start the local vBot server",
+    "stop": "Stop the local vBot server",
+    "restart": "Restart the local vBot server",
+    "status": "Show local server status",
+}
+AGENT_HELP = {
+    "list": "List configured agents",
+    "show": "Show one agent config",
+    "create": "Create an agent config",
+    "update": "Update an agent config",
+    "delete": "Delete an agent config",
+}
+CHANNEL_HELP = {
+    "add": "Create a channel config",
+    "list": "List channel configs",
+    "remove": "Delete a channel config",
+    "update": "Update a channel config",
+    "enable": "Enable a channel listener",
+    "disable": "Disable a channel listener",
+    "status": "Show one channel listener status",
+}
+PROMPT_HELP = {
+    "list": "List editable prompt fragments",
+    "update": "Replace one prompt fragment",
+    "reset": "Reset one prompt fragment to bundled default",
+    "preview": "Render one agent's complete system prompt",
+}
+LOG_HELP = {
+    "list": "List available daily log files",
+    "read": "Read parsed entries from one daily log file",
+}
+PROVIDER_HELP = {
+    "list": "List provider connections and usability",
+    "status": "Show one provider or connection status",
+    "set-key": "Set an API-key provider credential",
+}
+MODEL_HELP = {
+    "list": "List available models",
+    "refresh": "Refresh model catalogs",
+}
+CONFIG_HELP = {
+    "get": "Show one raw settings key",
+    "set": "Set one raw settings key",
+}
+TOOL_HELP = {"list": "List public registered tools"}
+SKILL_HELP = {"list": "List skills and diagnostics"}
 THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
 CHANNEL_PLATFORMS = ("telegram",)
 CHANNEL_DM_SCOPES = (
@@ -84,41 +143,81 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Manage vBot from the command line")
     subparsers = parser.add_subparsers(dest="area", required=True)
 
-    server_parser = subparsers.add_parser("server", description="Manage the local vBot server")
+    server_parser = subparsers.add_parser(
+        "server",
+        help=AREA_HELP["server"],
+        description=AREA_HELP["server"],
+    )
     server_subparsers = server_parser.add_subparsers(dest="command", required=True)
     for command in SERVER_COMMANDS:
-        command_parser = server_subparsers.add_parser(command)
+        command_parser = server_subparsers.add_parser(
+            command,
+            help=SERVER_HELP[command],
+            description=SERVER_HELP[command],
+        )
         _add_target_arguments(command_parser)
 
-    agent_parser = subparsers.add_parser("agent", description="Manage vBot agents")
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help=AREA_HELP["agent"],
+        description=AREA_HELP["agent"],
+    )
     agent_subparsers = agent_parser.add_subparsers(dest="command", required=True)
 
-    agent_list_parser = agent_subparsers.add_parser("list")
+    agent_list_parser = agent_subparsers.add_parser(
+        "list",
+        help=AGENT_HELP["list"],
+        description=AGENT_HELP["list"],
+    )
     _add_target_arguments(agent_list_parser)
 
-    agent_show_parser = agent_subparsers.add_parser("show")
+    agent_show_parser = agent_subparsers.add_parser(
+        "show",
+        help=AGENT_HELP["show"],
+        description=AGENT_HELP["show"],
+    )
     _add_target_arguments(agent_show_parser)
     agent_show_parser.add_argument("--id", required=True)
 
-    agent_create_parser = agent_subparsers.add_parser("create")
+    agent_create_parser = agent_subparsers.add_parser(
+        "create",
+        help=AGENT_HELP["create"],
+        description=AGENT_HELP["create"],
+    )
     _add_target_arguments(agent_create_parser)
     agent_create_parser.add_argument("--id", required=True)
     agent_create_parser.add_argument("--name", required=True)
     _add_agent_change_arguments(agent_create_parser, include_name=False, include_session=False)
 
-    agent_update_parser = agent_subparsers.add_parser("update")
+    agent_update_parser = agent_subparsers.add_parser(
+        "update",
+        help=AGENT_HELP["update"],
+        description=AGENT_HELP["update"],
+    )
     _add_target_arguments(agent_update_parser)
     agent_update_parser.add_argument("--id", required=True)
     _add_agent_change_arguments(agent_update_parser, include_name=True, include_session=True)
 
-    agent_delete_parser = agent_subparsers.add_parser("delete")
+    agent_delete_parser = agent_subparsers.add_parser(
+        "delete",
+        help=AGENT_HELP["delete"],
+        description=AGENT_HELP["delete"],
+    )
     _add_target_arguments(agent_delete_parser)
     agent_delete_parser.add_argument("--id", required=True)
 
-    channel_parser = subparsers.add_parser("channel", description="Manage vBot channels")
+    channel_parser = subparsers.add_parser(
+        "channel",
+        help=AREA_HELP["channel"],
+        description=AREA_HELP["channel"],
+    )
     channel_subparsers = channel_parser.add_subparsers(dest="command", required=True)
 
-    add_parser = channel_subparsers.add_parser("add")
+    add_parser = channel_subparsers.add_parser(
+        "add",
+        help=CHANNEL_HELP["add"],
+        description=CHANNEL_HELP["add"],
+    )
     _add_target_arguments(add_parser)
     add_parser.add_argument("--id", required=True)
     add_parser.add_argument("--platform", required=True, choices=CHANNEL_PLATFORMS)
@@ -127,14 +226,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
     add_parser.add_argument("--allow", type=int, nargs="*", default=[])
 
-    list_parser = channel_subparsers.add_parser("list")
+    list_parser = channel_subparsers.add_parser(
+        "list",
+        help=CHANNEL_HELP["list"],
+        description=CHANNEL_HELP["list"],
+    )
     _add_target_arguments(list_parser)
 
-    remove_parser = channel_subparsers.add_parser("remove")
+    remove_parser = channel_subparsers.add_parser(
+        "remove",
+        help=CHANNEL_HELP["remove"],
+        description=CHANNEL_HELP["remove"],
+    )
     _add_target_arguments(remove_parser)
     remove_parser.add_argument("--id", required=True)
 
-    update_parser = channel_subparsers.add_parser("update")
+    update_parser = channel_subparsers.add_parser(
+        "update",
+        help=CHANNEL_HELP["update"],
+        description=CHANNEL_HELP["update"],
+    )
     _add_target_arguments(update_parser)
     update_parser.add_argument("--id", required=True)
     update_parser.add_argument("--platform", choices=CHANNEL_PLATFORMS)
@@ -144,51 +255,104 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     update_parser.add_argument("--allow", type=int, nargs="*")
     update_parser.add_argument("--enabled", choices=("true", "false"))
 
-    enable_parser = channel_subparsers.add_parser("enable")
+    enable_parser = channel_subparsers.add_parser(
+        "enable",
+        help=CHANNEL_HELP["enable"],
+        description=CHANNEL_HELP["enable"],
+    )
     _add_target_arguments(enable_parser)
     enable_parser.add_argument("--id", required=True)
 
-    disable_parser = channel_subparsers.add_parser("disable")
+    disable_parser = channel_subparsers.add_parser(
+        "disable",
+        help=CHANNEL_HELP["disable"],
+        description=CHANNEL_HELP["disable"],
+    )
     _add_target_arguments(disable_parser)
     disable_parser.add_argument("--id", required=True)
 
-    status_parser = channel_subparsers.add_parser("status")
+    status_parser = channel_subparsers.add_parser(
+        "status",
+        help=CHANNEL_HELP["status"],
+        description=CHANNEL_HELP["status"],
+    )
     _add_target_arguments(status_parser)
     status_parser.add_argument("--id", required=True)
 
-    tool_parser = subparsers.add_parser("tool", description="Inspect vBot tools")
+    tool_parser = subparsers.add_parser(
+        "tool",
+        help=AREA_HELP["tool"],
+        description=AREA_HELP["tool"],
+    )
     tool_subparsers = tool_parser.add_subparsers(dest="command", required=True)
     for command in TOOL_COMMANDS:
-        command_parser = tool_subparsers.add_parser(command)
+        command_parser = tool_subparsers.add_parser(
+            command,
+            help=TOOL_HELP[command],
+            description=TOOL_HELP[command],
+        )
         _add_target_arguments(command_parser)
 
-    prompt_parser = subparsers.add_parser("prompt", description="Manage vBot prompt fragments")
+    prompt_parser = subparsers.add_parser(
+        "prompt",
+        help=AREA_HELP["prompt"],
+        description=AREA_HELP["prompt"],
+    )
     prompt_subparsers = prompt_parser.add_subparsers(dest="command", required=True)
-    prompt_list_parser = prompt_subparsers.add_parser("list")
+    prompt_list_parser = prompt_subparsers.add_parser(
+        "list",
+        help=PROMPT_HELP["list"],
+        description=PROMPT_HELP["list"],
+    )
     _add_target_arguments(prompt_list_parser)
-    prompt_update_parser = prompt_subparsers.add_parser("update")
+    prompt_update_parser = prompt_subparsers.add_parser(
+        "update",
+        help=PROMPT_HELP["update"],
+        description=PROMPT_HELP["update"],
+    )
     _add_target_arguments(prompt_update_parser)
     prompt_update_parser.add_argument("--name", required=True)
     content_group = prompt_update_parser.add_mutually_exclusive_group(required=True)
     content_group.add_argument("--content")
     content_group.add_argument("--file", dest="content_file")
-    prompt_reset_parser = prompt_subparsers.add_parser("reset")
+    prompt_reset_parser = prompt_subparsers.add_parser(
+        "reset",
+        help=PROMPT_HELP["reset"],
+        description=PROMPT_HELP["reset"],
+    )
     _add_target_arguments(prompt_reset_parser)
     prompt_reset_parser.add_argument("--name", required=True)
-    prompt_preview_parser = prompt_subparsers.add_parser("preview")
+    prompt_preview_parser = prompt_subparsers.add_parser(
+        "preview",
+        help=PROMPT_HELP["preview"],
+        description=PROMPT_HELP["preview"],
+    )
     _add_target_arguments(prompt_preview_parser)
     prompt_preview_parser.add_argument("--agent", required=True)
 
-    log_parser = subparsers.add_parser("log", description="Inspect vBot logs")
+    log_parser = subparsers.add_parser(
+        "log",
+        help=AREA_HELP["log"],
+        description=AREA_HELP["log"],
+    )
     log_subparsers = log_parser.add_subparsers(dest="command", required=True)
-    log_list_parser = log_subparsers.add_parser("list")
+    log_list_parser = log_subparsers.add_parser(
+        "list",
+        help=LOG_HELP["list"],
+        description=LOG_HELP["list"],
+    )
     _add_target_arguments(log_list_parser)
-    log_read_parser = log_subparsers.add_parser("read")
+    log_read_parser = log_subparsers.add_parser(
+        "read",
+        help=LOG_HELP["read"],
+        description=LOG_HELP["read"],
+    )
     _add_target_arguments(log_read_parser)
     log_read_parser.add_argument("--file", required=True)
 
     provider_parser = subparsers.add_parser(
         "provider",
+        help=AREA_HELP["provider"],
         description="Inspect and configure vBot provider connections",
     )
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
@@ -231,29 +395,61 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Refresh this provider's model catalog after setting the key",
     )
 
-    model_parser = subparsers.add_parser("model", description="Manage vBot models")
+    model_parser = subparsers.add_parser(
+        "model",
+        help=AREA_HELP["model"],
+        description=AREA_HELP["model"],
+    )
     model_subparsers = model_parser.add_subparsers(dest="command", required=True)
-    model_list_parser = model_subparsers.add_parser(MODEL_COMMANDS[0])
+    model_list_parser = model_subparsers.add_parser(
+        MODEL_COMMANDS[0],
+        help=MODEL_HELP["list"],
+        description=MODEL_HELP["list"],
+    )
     _add_target_arguments(model_list_parser)
-    model_refresh_parser = model_subparsers.add_parser(MODEL_COMMANDS[1])
+    model_refresh_parser = model_subparsers.add_parser(
+        MODEL_COMMANDS[1],
+        help=MODEL_HELP["refresh"],
+        description=MODEL_HELP["refresh"],
+    )
     _add_target_arguments(model_refresh_parser)
     model_refresh_parser.add_argument("--provider")
 
-    skill_parser = subparsers.add_parser("skill", description="Manage vBot skills")
+    skill_parser = subparsers.add_parser(
+        "skill",
+        help=AREA_HELP["skill"],
+        description=AREA_HELP["skill"],
+    )
     skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
     for command in SKILL_COMMANDS:
-        command_parser = skill_subparsers.add_parser(command)
+        command_parser = skill_subparsers.add_parser(
+            command,
+            help=SKILL_HELP[command],
+            description=SKILL_HELP[command],
+        )
         _add_target_arguments(command_parser)
 
-    config_parser = subparsers.add_parser("config", description="Manage vBot configuration")
+    config_parser = subparsers.add_parser(
+        "config",
+        help=AREA_HELP["config"],
+        description=AREA_HELP["config"],
+    )
     config_subparsers = config_parser.add_subparsers(dest="command")
     _add_target_arguments(config_parser)
 
-    config_get_parser = config_subparsers.add_parser(CONFIG_COMMANDS[0])
+    config_get_parser = config_subparsers.add_parser(
+        CONFIG_COMMANDS[0],
+        help=CONFIG_HELP["get"],
+        description=CONFIG_HELP["get"],
+    )
     _add_target_arguments(config_get_parser)
     config_get_parser.add_argument("key")
 
-    config_set_parser = config_subparsers.add_parser(CONFIG_COMMANDS[1])
+    config_set_parser = config_subparsers.add_parser(
+        CONFIG_COMMANDS[1],
+        help=CONFIG_HELP["set"],
+        description=CONFIG_HELP["set"],
+    )
     _add_target_arguments(config_set_parser)
     config_set_parser.add_argument("key")
     config_set_parser.add_argument("value")
@@ -728,7 +924,7 @@ def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
 def print_command_result(command: str, result: CommandResult) -> None:
     """Print deterministic plain-text server command output."""
 
-    lines = [f"command: server {command}", f"result: {result.message}"]
+    lines = [f"command: server {command}", f"result: {_result_message(result)}"]
     if command in {"start", "restart"}:
         lines.extend(_start_like_output_lines(result))
     elif command == "stop":
@@ -746,7 +942,7 @@ def print_channel_command_result(command: str, result: CommandResult) -> None:
 
     lines = [
         f"command: channel {command}",
-        f"result: {result.message}",
+        f"result: {_result_message(result)}",
         f"url: {result.instance.url}",
         f"data_dir: {result.instance.data_dir}",
     ]
@@ -756,13 +952,22 @@ def print_channel_command_result(command: str, result: CommandResult) -> None:
 def print_management_command_result(result: CommandResult) -> None:
     """Print plain-text output for non-channel RPC management command areas."""
 
-    print(result.message)
+    print(_result_message(result))
 
 
 def print_config_command_result(result: CommandResult) -> None:
     """Print deterministic plain-text config command output."""
 
-    print(result.message)
+    print(_result_message(result))
+
+
+def _result_message(result: CommandResult) -> str:
+    message = result.message.strip()
+    if message:
+        return result.message
+    if result.ok:
+        return "success: command completed without details"
+    return "error: command failed without details"
 
 
 def exit_code_for(command: str, result: CommandResult) -> int:

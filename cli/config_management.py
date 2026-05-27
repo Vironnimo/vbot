@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from difflib import get_close_matches
 from typing import Any
 
 import httpx
@@ -37,7 +38,12 @@ def config_get(instance: ServerInstance, key: str) -> CommandResult:
 
     settings = payload.data.get("settings", {})
     if not isinstance(settings, dict) or key not in settings:
-        return CommandResult(ok=False, message=f"key '{key}' not found", instance=instance)
+        candidates = sorted(settings) if isinstance(settings, dict) else []
+        return CommandResult(
+            ok=False,
+            message=_format_missing_key(key, candidates),
+            instance=instance,
+        )
 
     return CommandResult(ok=True, message=json.dumps(settings[key]), instance=instance)
 
@@ -59,6 +65,16 @@ def coerce_config_value(raw: str) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return raw
+
+
+def _format_missing_key(key: str, candidates: list[str]) -> str:
+    lines = [f"key '{key}' not found"]
+    if candidates:
+        lines.append(f"available keys: {', '.join(candidates)}")
+        suggestions = get_close_matches(key, candidates, n=1)
+        if suggestions:
+            lines.append(f"did you mean: {suggestions[0]}")
+    return "\n".join(lines)
 
 
 class _RpcPayload:

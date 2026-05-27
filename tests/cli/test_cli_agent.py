@@ -178,7 +178,15 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
 
     result = agent_management.agent_update(instance, "coder", {})
 
-    assert result == CommandResult(ok=False, message="no agent fields provided", instance=instance)
+    assert result == CommandResult(
+        ok=False,
+        message=(
+            "no agent fields provided; use one of: --name, --model, --fallback-model, "
+            "--temperature, --clear-temperature, --thinking-effort, --clear-thinking-effort, "
+            "--allowed-tools, --allowed-skills, --current-session-id"
+        ),
+        instance=instance,
+    )
 
 
 def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
