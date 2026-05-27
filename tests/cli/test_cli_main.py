@@ -42,6 +42,65 @@ def make_result(
     )
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["server"],
+        ["server", "start"],
+        ["server", "stop"],
+        ["server", "restart"],
+        ["server", "status"],
+        ["agent"],
+        ["agent", "list"],
+        ["agent", "show"],
+        ["agent", "create"],
+        ["agent", "update"],
+        ["agent", "delete"],
+        ["channel"],
+        ["channel", "add"],
+        ["channel", "list"],
+        ["channel", "remove"],
+        ["channel", "update"],
+        ["channel", "enable"],
+        ["channel", "disable"],
+        ["channel", "status"],
+        ["tool"],
+        ["tool", "list"],
+        ["prompt"],
+        ["prompt", "list"],
+        ["prompt", "update"],
+        ["prompt", "reset"],
+        ["prompt", "preview"],
+        ["log"],
+        ["log", "list"],
+        ["log", "read"],
+        ["provider"],
+        ["provider", "list"],
+        ["provider", "status"],
+        ["provider", "set-key"],
+        ["model"],
+        ["model", "list"],
+        ["model", "refresh"],
+        ["skill"],
+        ["skill", "list"],
+        ["config"],
+        ["config", "get"],
+        ["config", "set"],
+    ],
+)
+def test_cli_area_and_subcommand_help_is_informative(
+    argv: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main.parse_args([*argv, "--help"])
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "usage:" in output
+    assert len(output.strip().splitlines()) >= 3
+
+
 def test_parse_args_supports_server_command_options() -> None:
     args = cli_main.parse_args(
         ["server", "start", "--host", "0.0.0.0", "--port", "9000", "--data-dir", "dev-data"]
@@ -562,6 +621,28 @@ def test_status_conflict_output_reports_not_running_with_note(
         f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
         "conflict: port occupied by non-vBot process",
     ]
+
+
+def test_management_output_never_silent_for_empty_success(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = CommandResult(ok=True, message="", instance=make_instance(tmp_path))
+
+    cli_main.print_management_command_result(result)
+
+    assert capsys.readouterr().out.splitlines() == ["success: command completed without details"]
+
+
+def test_management_output_never_silent_for_empty_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = CommandResult(ok=False, message="", instance=make_instance(tmp_path))
+
+    cli_main.print_management_command_result(result)
+
+    assert capsys.readouterr().out.splitlines() == ["error: command failed without details"]
 
 
 @pytest.mark.parametrize(

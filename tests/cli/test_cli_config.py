@@ -119,14 +119,24 @@ def test_config_get_exits_with_error_when_key_missing(
     instance = make_instance(tmp_path)
 
     def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"settings": {"other": 1}}})
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"settings": {"other": 1, "server_port": 8420}}},
+        )
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
 
-    result = config_management.config_get(instance, "server_port")
+    result = config_management.config_get(instance, "server_por")
 
-    assert result.ok is False
-    assert "not found" in result.message
+    assert result == CommandResult(
+        ok=False,
+        message=(
+            "key 'server_por' not found\n"
+            "available keys: other, server_port\n"
+            "did you mean: server_port"
+        ),
+        instance=instance,
+    )
 
 
 def test_config_set_posts_set_key_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -287,6 +287,21 @@ def test_channel_update_posts_update_rpc(tmp_path: Path, monkeypatch: pytest.Mon
     ]
 
 
+def test_channel_update_rejects_empty_changes(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    result = channel_management.channel_update(instance, "tg-assistant", {})
+
+    assert result == CommandResult(
+        ok=False,
+        message=(
+            "no channel fields provided; use one of: --platform, --agent, --token-env, "
+            "--dm-scope, --allow, --enabled"
+        ),
+        instance=instance,
+    )
+
+
 def test_channel_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
 

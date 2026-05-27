@@ -11,6 +11,14 @@ from cli.server_management import CommandResult, ServerInstance
 
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
+CHANNEL_UPDATE_FLAGS = (
+    "--platform",
+    "--agent",
+    "--token-env",
+    "--dm-scope",
+    "--allow",
+    "--enabled",
+)
 
 
 def channel_add(
@@ -70,7 +78,11 @@ def channel_update(
     """Update a channel configuration via `channel.update` RPC."""
 
     if not changes:
-        return CommandResult(ok=False, message="no channel fields provided", instance=instance)
+        return CommandResult(
+            ok=False,
+            message=f"no channel fields provided; use one of: {', '.join(CHANNEL_UPDATE_FLAGS)}",
+            instance=instance,
+        )
 
     payload = _rpc_call(instance, "channel.update", {"id": channel_id, **dict(changes)})
     if not payload.ok:

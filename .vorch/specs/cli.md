@@ -38,6 +38,7 @@ contract rather than reading or mutating files directly.
   - calls `agent.create` over server RPC and creates a persisted agent config
 - `python cli/main.py agent update --id [--name] [--model] [--fallback-model] [--temperature] [--clear-temperature] [--thinking-effort] [--clear-thinking-effort] [--allowed-tools ...] [--allowed-skills ...] [--current-session-id]`
   - calls `agent.update` over server RPC; clear flags send JSON `null` for inherited defaults, while `--thinking-effort none` sends the literal `"none"` effort
+  - rejects empty updates before RPC and prints the valid update flags
 - `python cli/main.py agent delete --id`
   - calls `agent.delete` over server RPC and relies on server-side last-agent, busy-agent, and reference checks
 - `python cli/main.py channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
@@ -48,6 +49,7 @@ contract rather than reading or mutating files directly.
   - calls `channel.delete` over server RPC
 - `python cli/main.py channel update --id [--platform telegram] [--agent] [--token-env] [--dm-scope] [--allow ...] [--enabled true|false]`
   - calls `channel.update` over server RPC; omitted fields remain unchanged, and `--allow` replaces the full allowed chat-id list
+  - rejects empty updates before RPC and prints the valid update flags
 - `python cli/main.py channel enable --id`
   - calls `channel.enable` over server RPC
 - `python cli/main.py channel disable --id`
@@ -85,6 +87,8 @@ contract rather than reading or mutating files directly.
   - calls `settings.get_raw` over server RPC and prints raw `settings.json`
 - `python cli/main.py config get <key>`
   - calls `settings.get_raw` over server RPC and prints one raw top-level settings key
+  - when the key is missing, prints available top-level keys and a `did you
+    mean` suggestion when a close match exists
 - `python cli/main.py config set <key> <value>`
   - coerces the CLI value to JSON-native data, then calls `settings.set_key` over server RPC
 
@@ -94,14 +98,16 @@ contract rather than reading or mutating files directly.
 - The CLI is primarily agent-operated. Every command and subcommand must have
   useful `--help` text, including purpose and important arguments. Success and
   failure output must be explicit; silent success or silent failure is invalid.
+  Central output printers must emit a fallback success/error line if a command
+  result unexpectedly contains an empty message.
 - Successful mutating commands must name the target and the action performed.
   Read commands must print enough structured state for an agent to decide the
   next command without guessing.
 - Failures must include the server RPC error code/message when available and an
   actionable hint when the CLI has enough local candidates to produce one. For
-  bounded identifiers such as providers, connections, agents, channels, prompt
-  fragments, and log files, prefer `did you mean` suggestions over bare
-  not-found output.
+  bounded identifiers such as providers, connections, settings keys, agents,
+  channels, prompt fragments, and log files, prefer `did you mean` suggestions
+  over bare not-found output.
 - Every CLI command except `server start`, `server stop`, `server restart`, and
   `server status` requires a reachable vBot server because the CLI is an
   accessor and those areas are RPC-backed, not local file mutations.

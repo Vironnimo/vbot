@@ -11,6 +11,18 @@ from cli.server_management import CommandResult, ServerInstance
 
 RPC_PATH = "/api/rpc"
 RPC_TIMEOUT_SECONDS = 10.0
+AGENT_UPDATE_FLAGS = (
+    "--name",
+    "--model",
+    "--fallback-model",
+    "--temperature",
+    "--clear-temperature",
+    "--thinking-effort",
+    "--clear-thinking-effort",
+    "--allowed-tools",
+    "--allowed-skills",
+    "--current-session-id",
+)
 
 
 def agent_list(instance: ServerInstance) -> CommandResult:
@@ -58,7 +70,11 @@ def agent_update(
     """Update an agent via `agent.update` RPC."""
 
     if not changes:
-        return CommandResult(ok=False, message="no agent fields provided", instance=instance)
+        return CommandResult(
+            ok=False,
+            message=f"no agent fields provided; use one of: {', '.join(AGENT_UPDATE_FLAGS)}",
+            instance=instance,
+        )
     params = {"id": agent_id, **dict(changes)}
     payload = _rpc_call(instance, "agent.update", params)
     if not payload.ok:
