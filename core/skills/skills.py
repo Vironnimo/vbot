@@ -17,12 +17,6 @@ from typing import Any
 
 import yaml
 
-from core.skills.skill_validator import (
-    MALFORMED_YAML_FALLBACK_WARNING,
-    ValidationResult,
-    repair_colon_scalars,
-    validate_skill_metadata,
-)
 from core.skills.requirements import (
     AVAILABLE,
     RequirementCheck,
@@ -33,6 +27,12 @@ from core.skills.requirements import (
     SkillAvailability,
     SkillRequirements,
     parse_vbot_requirements,
+)
+from core.skills.skill_validator import (
+    MALFORMED_YAML_FALLBACK_WARNING,
+    ValidationResult,
+    repair_colon_scalars,
+    validate_skill_metadata,
 )
 from core.utils.logging import get_logger
 
@@ -193,7 +193,9 @@ class SkillRegistry:
         next_stack = (*stack, skill.name)
         missing: tuple[str, ...] = ()
         if skill.requirements.required is not None:
-            required = self._evaluate_requirement(skill.requirements.required, allowed_names, next_stack)
+            required = self._evaluate_requirement(
+                skill.requirements.required, allowed_names, next_stack
+            )
             missing = required.missing
 
         optional_missing = tuple(
@@ -253,7 +255,9 @@ class SkillRegistry:
         if availability.state == "available":
             return RequirementEvaluation(True)
         details = "; ".join(availability.missing) or availability.state
-        return RequirementEvaluation(False, (f"skill '{requirement.name}' is unavailable: {details}",))
+        return RequirementEvaluation(
+            False, (f"skill '{requirement.name}' is unavailable: {details}",)
+        )
 
     def _evaluate_requirement_group(
         self,
@@ -262,12 +266,11 @@ class SkillRegistry:
         stack: tuple[str, ...],
     ) -> RequirementEvaluation:
         evaluations = [
-            self._evaluate_requirement(child, allowed_names, stack) for child in requirement.children
+            self._evaluate_requirement(child, allowed_names, stack)
+            for child in requirement.children
         ]
         if requirement.operator == "all":
-            missing = tuple(
-                missing for evaluation in evaluations for missing in evaluation.missing
-            )
+            missing = tuple(missing for evaluation in evaluations for missing in evaluation.missing)
             return RequirementEvaluation(not missing, missing)
 
         if any(evaluation.satisfied for evaluation in evaluations):

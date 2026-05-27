@@ -1358,7 +1358,8 @@ class ChatLoop:
             )
             if unavailable_reason is not None:
                 _LOGGER.warning(
-                    "Ignored skill trigger '%s' for agent=%s session=%s because it is unavailable: %s",
+                    "Ignored skill trigger '%s' for agent=%s session=%s "
+                    "because it is unavailable: %s",
                     skill_name,
                     agent.id,
                     session.id,
@@ -1417,11 +1418,7 @@ def _allowed_loadable_skills(
     list_all = getattr(skill_registry, "list_all", None)
     is_allowed = getattr(skill_registry, "is_allowed", None)
     if callable(list_all) and callable(is_allowed):
-        return {
-            skill.name: skill
-            for skill in list_all()
-            if is_allowed(skill.name, allowed_skills)
-        }
+        return {skill.name: skill for skill in list_all() if is_allowed(skill.name, allowed_skills)}
     return {skill.name: skill for skill in filter_allowed(allowed_skills)}
 
 

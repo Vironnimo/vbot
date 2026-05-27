@@ -1,6 +1,7 @@
 """Tests for the Runtime bootstrap class."""
 
 import asyncio
+import json
 import logging
 import re
 import sys
@@ -177,8 +178,15 @@ def test_runtime_start_logs_inventory_counts(
 def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     """Runtime warnings emitted during startup use the managed logger contract."""
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    extra_skills_dir = config.data_dir / "extra-skills"
+    broken_skill_dir = extra_skills_dir / "broken"
+    broken_skill_dir.mkdir(parents=True)
+    broken_skill_dir.joinpath("SKILL.md").write_text(
+        "---\ndescription: Missing a skill name.\n---\n\n# Broken\n",
+        encoding="utf-8",
+    )
     config.data_dir.joinpath("settings.json").write_text(
-        '{"skill_directories": [null]}\n',
+        json.dumps({"skill_directories": [str(extra_skills_dir)]}),
         encoding="utf-8",
     )
     runtime = Runtime(config)
@@ -189,7 +197,8 @@ def test_runtime_warning_logs_use_shared_manager_format(config: Config) -> None:
     log_file = next((config.data_dir / "logs").iterdir())
     contents = log_file.read_text(encoding="utf-8")
 
-    assert "[WARN] vbot.core - Ignoring invalid skill directory setting: None" in contents
+    assert "[WARN] vbot.core - Loaded skills with " in contents
+    assert " invalid skill directories; see vbot.skills warnings for details" in contents
 
 
 def test_runtime_stop_runs_cleanly(tmp_path: Path):

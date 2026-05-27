@@ -271,7 +271,7 @@ class StubRuntime:
         self.provider_credentials = StubProviderCredentials(
             {f"{agent.model.split('/', 1)[0]}:api-key"}
         )
-        self.skills = StubSkills([])
+        self.skills: Any = StubSkills([])
         self.storage = storage
         self.models = models
         self.adapter = adapter
@@ -1172,11 +1172,11 @@ async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
 
 @pytest.mark.asyncio
 async def test_skill_trigger_does_not_activate_unavailable_skill(tmp_path: Path) -> None:
-        skills_dir = tmp_path / "skills"
-        skill_dir = skills_dir / "openai-helper"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-                """---
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "openai-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
 name: openai-helper
 description: Use OpenAI.
 metadata:
@@ -1187,26 +1187,26 @@ metadata:
 
 # OpenAI Helper
 """,
-                encoding="utf-8",
-        )
-        agent = StubAgent(
-                id="coder",
-                model="openai/gpt-5.2",
-                allowed_tools=["*"],
-                allowed_skills=["openai-helper"],
-        )
-        adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-        runtime.skills = SkillRegistry.load(skills_dir, environment={})
+        encoding="utf-8",
+    )
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=["*"],
+        allowed_skills=["openai-helper"],
+    )
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.skills = SkillRegistry.load(skills_dir, environment={})
 
-        await ChatLoop(runtime).send("coder", "/openai-helper help", session_id="session-one")
+    await ChatLoop(runtime).send("coder", "/openai-helper help", session_id="session-one")
 
-        request_messages = adapter.requests[0]["messages"]
-        request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
-        assert '<skill_content name="openai-helper">' not in request_text
-        assert request_messages[1]["content"] == "/openai-helper help"
-        assert "Skill trigger 'openai-helper' matched a skill, but it is unavailable" in request_text
-        assert "missing environment variable 'OPENAI_API_KEY'" in request_text
+    request_messages = adapter.requests[0]["messages"]
+    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
+    assert '<skill_content name="openai-helper">' not in request_text
+    assert request_messages[1]["content"] == "/openai-helper help"
+    assert "Skill trigger 'openai-helper' matched a skill, but it is unavailable" in request_text
+    assert "missing environment variable 'OPENAI_API_KEY'" in request_text
 
 
 @pytest.mark.asyncio

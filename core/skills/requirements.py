@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 RequirementCheckKind: TypeAlias = Literal["binary", "env", "skill"]
 RequirementGroupKind: TypeAlias = Literal["all", "any"]
@@ -163,8 +163,9 @@ def _parse_requirement_group(key: str, raw_children: Any, *, path: str) -> Requi
         raise RequirementParseError(f"{path} must be a list")
     if not raw_children:
         raise RequirementParseError(f"{path} must not be empty")
+    operator = cast("RequirementGroupKind", key)
     return RequirementGroup(
-        operator=key,
+        operator=operator,
         children=tuple(
             _parse_requirement_node(child, path=f"{path}[{index}]")
             for index, child in enumerate(raw_children)
@@ -177,4 +178,5 @@ def _parse_requirement_check(key: str, raw_name: Any, *, path: str) -> Requireme
         raise RequirementParseError(f"{path} has unsupported requirement check: {key}")
     if not isinstance(raw_name, str) or not raw_name.strip():
         raise RequirementParseError(f"{path} must be a non-empty string")
-    return RequirementCheck(kind=key, name=raw_name.strip())
+    kind = cast("RequirementCheckKind", key)
+    return RequirementCheck(kind=kind, name=raw_name.strip())
