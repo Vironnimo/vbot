@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import aclosing
+from contextlib import aclosing, suppress
 from pathlib import Path
 
 import pytest
 
+from core.utils import log_viewer as log_viewer_module
 from core.utils.log_viewer import (
     MAX_READ_HANDOFFS,
     LogViewer,
     _build_snapshot_event,
+    _cancel_watcher_task,
     _LogSnapshot,
     parse_log_entries,
 )
@@ -376,6 +378,35 @@ async def test_subscribe_rejects_invalid_cursor(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="invalid log cursor"):
         async with aclosing(viewer.subscribe("2026-05-11", cursor="missing")) as stream:
             await stream.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_cancel_watcher_task_returns_when_task_suppresses_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(log_viewer_module, "WATCHER_SHUTDOWN_TIMEOUT_SECONDS", 0.01)
+    started = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def cancellation_resistant_task() -> None:
+        started.set()
+        while not stop.is_set():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                if stop.is_set():
+                    raise
+
+    task = asyncio.create_task(cancellation_resistant_task())
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    await asyncio.wait_for(_cancel_watcher_task(task), timeout=1)
+
+    assert task.done() is False
+    stop.set()
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
 
 
 def test_read_file_rejects_invalid_name(tmp_path: Path) -> None:
