@@ -26,6 +26,7 @@ UNKNOWN_LEVEL = "unknown"
 UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
 MAX_READ_HANDOFFS = 32
+WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
 LOG_LINE_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) "
@@ -217,8 +218,7 @@ class LogViewer:
         for watcher in watchers:
             if watcher.task is None:
                 continue
-            with suppress(asyncio.CancelledError):
-                await watcher.task
+            await _cancel_watcher_task(watcher.task)
 
     @property
     def watcher_count(self) -> int:
@@ -268,9 +268,7 @@ class LogViewer:
             self._watchers.pop(file_name, None)
 
         if task is not None:
-            task.cancel()
-            with suppress(asyncio.CancelledError, UnboundLocalError):
-                await task
+            await _cancel_watcher_task(task)
 
     async def _watch_file(self, watcher: _WatcherState) -> None:
         watched_path = self._logs_dir / watcher.file_name
@@ -383,6 +381,15 @@ class LogViewer:
         if self._latest_read_cursor_by_file.get(file_name) == cursor:
             self._latest_read_cursor_by_file.pop(file_name, None)
         return handoff.snapshot
+
+
+async def _cancel_watcher_task(task: asyncio.Task[None]) -> None:
+    task.cancel()
+    done, _pending = await asyncio.wait({task}, timeout=WATCHER_SHUTDOWN_TIMEOUT_SECONDS)
+    if task not in done:
+        return
+    with suppress(asyncio.CancelledError, UnboundLocalError):
+        task.result()
 
 
 def _includes_path(changes: set[tuple[Any, str]], watched_path: str) -> bool:
