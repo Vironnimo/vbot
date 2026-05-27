@@ -34,6 +34,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - Each `skill` element contains only `name` and `description`.
 - Do not expose `path`, `location`, or other local filesystem details in the prompt catalog.
 - Skill values inserted into the XML block must be XML-escaped.
+- The bundled skills prompt must explain that `/skill-name` and `$skill-name` user tokens are activation hints once matching `<skill_content>` has been injected, so the model follows the loaded skill instructions without echoing the marker as requested output.
 
 ## Interfaces
 
@@ -57,6 +58,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
 - Full skill instructions have a single provider-visible source: the session-scoped injected `<skill_content>` note. Tool-call results for the internal `skill` tool must not include `content`, raw skill Markdown, or a `<skill_content>` block, otherwise the model sees duplicate instructions.
 - `/skill-name` and `$skill-name` triggers preserve the original user message. `allowed_skills=[]` exposes no skills; only a missing/`None` allowlist falls back to wildcard behavior in compatibility test stubs. Unknown or non-loadable triggers become internal system reminders.
+- `$skill-name` is a skill-only mention convention. Surfaces that provide `$` autocomplete must list only loadable skills and must not include built-in slash commands. Slash autocomplete may list both built-in commands and skills because `/` is the shared user-entry affordance; backend command dispatch still handles only recognized built-in commands before the normal skill-trigger path.
 
 ## External Dependencies
 

@@ -78,6 +78,7 @@ describe('i18n t()', () => {
       'chat.skillsLoadError',
       'skillAutocomplete.label',
       'skillAutocomplete.eyebrow.commandsAndSkills',
+      'skillAutocomplete.eyebrow.skills',
       'skillAutocomplete.noDescription',
       'chat.runIterations',
       'chat.runDurationSeconds',

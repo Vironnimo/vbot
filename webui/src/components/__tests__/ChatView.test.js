@@ -702,6 +702,57 @@ describe('ChatView', () => {
     ).toHaveLength(commandItems.length);
   });
 
+  it('shows only skill suggestions for an inline dollar query', async () => {
+    const commandItems = [
+      { name: 'stop', description: 'Cancel the active run.', type: 'command' },
+      { name: 'status', description: 'Show run status.', type: 'command' },
+      {
+        name: 'debugging',
+        description: 'Investigate unclear bugs.',
+        type: 'skill',
+      },
+      {
+        name: 'ctx7',
+        description: 'Fetch current framework docs.',
+        type: 'skill',
+      },
+    ];
+
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        commandItems,
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const composerInput = document.querySelector('#chat-composer-input');
+    expect(composerInput).toBeTruthy();
+    setInputValue(composerInput, 'Use $');
+    composerInput.setSelectionRange(5, 5);
+    composerInput.dispatchEvent(new Event('keyup', { bubbles: true }));
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.skill-autocomplete__option').length === 2,
+      100,
+    );
+
+    const optionNames = Array.from(
+      document.querySelectorAll('.skill-autocomplete__name'),
+    ).map((element) => element.textContent.trim());
+    expect(optionNames).toEqual(['debugging', 'ctx7']);
+    expect(
+      document.querySelector('.skill-autocomplete__eyebrow').textContent,
+    ).toContain('skills');
+  });
+
   it('loads a sub-agent session override as a writable session notice', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
