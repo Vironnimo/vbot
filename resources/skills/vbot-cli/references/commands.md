@@ -36,6 +36,7 @@ Only server lifecycle commands can operate without an already-running vBot serve
 vbot config
 vbot config get <key>
 vbot config set <key> <json-or-string-value>
+vbot doctor settings [--data-dir <path>]
 ```
 
 Examples:
@@ -46,9 +47,11 @@ vbot config set server_port 9000
 vbot config set skill_directories '["C:/Users/Viro/skills"]'
 vbot config set extension_directories '["C:/Users/Viro/vbot-extensions"]'
 vbot config set defaults '{"agent":{"temperature":0.4}}'
+vbot doctor settings
 ```
 
 `config set` parses JSON values first and falls back to plain strings. Quote JSON as one shell argument.
+`doctor settings` validates the target data-dir `settings.json` locally and prints file/path diagnostics; it does not require a running server.
 
 ## Providers
 
@@ -216,6 +219,7 @@ After every change, run a read command from the same area:
 
 ```bash
 vbot config get <key>
+vbot doctor settings
 vbot agent show --id <agent-id>
 vbot agent list
 vbot channel status --id <channel-id>

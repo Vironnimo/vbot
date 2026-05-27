@@ -73,9 +73,11 @@ vbot config
 vbot config get server_port
 vbot config set server_port 9000
 vbot config set skill_directories '["C:/skills"]'
+vbot doctor settings
 ```
 
 Pass JSON values as one shell argument when setting arrays, objects, booleans, or numbers.
+Use `doctor settings` before or after manual settings edits; it runs locally and does not require a running server.
 
 ### Providers And Models
 

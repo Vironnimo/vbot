@@ -86,6 +86,8 @@ def make_result(
         ["config"],
         ["config", "get"],
         ["config", "set"],
+        ["doctor"],
+        ["doctor", "settings"],
     ],
 )
 def test_cli_area_and_subcommand_help_is_informative(

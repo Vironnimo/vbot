@@ -2,9 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from core.settings import SettingsValidationError, parse_settings_update
+from core.settings import (
+    SettingsValidationError,
+    SettingsValidationReport,
+    parse_settings_update,
+    validate_settings_file,
+)
+
+
+def diagnostics_as_tuples(report: SettingsValidationReport) -> list[tuple[str, str, str]]:
+    return [
+        (diagnostic.severity, diagnostic.path, diagnostic.message)
+        for diagnostic in report.diagnostics
+    ]
 
 
 def test_parse_settings_update_normalizes_all_supported_sections() -> None:
@@ -98,3 +113,111 @@ def test_parse_settings_update_rejects_invalid_payloads(
 ) -> None:
     with pytest.raises(SettingsValidationError, match=message):
         parse_settings_update(params)
+
+
+def test_validate_settings_file_accepts_missing_settings(tmp_path: Path) -> None:
+    report = validate_settings_file(tmp_path / "settings.json")
+
+    assert report.ok is True
+    assert report.exists is False
+    assert report.diagnostics == ()
+
+
+def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "server_port": 8500,
+                "appearance": {"language": "en"},
+                "skill_directories": ["~/skills"],
+                "extension_directories": ["C:/vbot/extensions"],
+                "attachment_max_size_bytes": 1024,
+                "max_subagent_depth": 4,
+                "max_subagents_per_turn": 8,
+                "subagent_timeout_minutes": 60,
+                "compaction": {
+                    "auto": True,
+                    "threshold": 0.8,
+                    "tail_tokens": 15_000,
+                    "summary_model": None,
+                },
+                "defaults": {
+                    "agent": {
+                        "model": "openai/gpt-5.2",
+                        "fallback_model": "",
+                        "temperature": 0.7,
+                        "thinking_effort": "medium",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is True
+    assert report.exists is True
+    assert report.diagnostics == ()
+
+
+def test_validate_settings_file_reports_invalid_json(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("{", encoding="utf-8")
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        (
+            "error",
+            "$",
+            "invalid JSON: Expecting property name enclosed in double quotes at line 1 column 2",
+        )
+    ]
+
+
+def test_validate_settings_file_reports_wrong_root_type(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("[]", encoding="utf-8")
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [("error", "$", "expected JSON object, got list")]
+
+
+def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "server_port": 70000,
+                "skill_directories": ["relative/path"],
+                "attachment_max_size_bytes": 0,
+                "compaction": {"threshold": 2, "tail_tokens": False},
+                "defaults": {"agent": {"temperature": "warm", "unknown": True}},
+                "typo": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        ("warning", "$.typo", "unknown settings key: typo"),
+        ("error", "$.server_port", "must be between 1 and 65535"),
+        ("error", "$.skill_directories[0]", "must be an absolute or home-relative path"),
+        ("error", "$.attachment_max_size_bytes", "must be a positive integer"),
+        ("error", "$.compaction.threshold", "must be in (0, 1]"),
+        ("error", "$.compaction.tail_tokens", "must be a positive integer"),
+        (
+            "error",
+            "$.defaults.agent.unknown",
+            "unsupported defaults.agent setting: unknown",
+        ),
+        ("error", "$.defaults.agent.temperature", "must be a number"),
+    ]
