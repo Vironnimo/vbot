@@ -6,10 +6,13 @@ from core.skills.skills import (
     SkillMetadata,
     SkillRegistry,
 )
+from core.skills.requirements import SkillAvailability, SkillRequirements
 
 __all__ = [
     "FRONT_MATTER_DELIMITER",
+    "SkillAvailability",
     "SkillMetadata",
     "SkillRegistry",
+    "SkillRequirements",
     "WILDCARD_ALLOWLIST",
 ]

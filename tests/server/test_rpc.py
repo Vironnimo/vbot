@@ -642,6 +642,9 @@ class StubSkills:
     def warnings_for(self, name: str) -> list[str]:
         return list(self._warnings[name])
 
+    def availability_for(self, _name: str) -> Any:
+        return SimpleNamespace(state="available", missing=(), optional_missing=())
+
     def invalid_diagnostics(self) -> list[Any]:
         return list(self._invalid)
 
@@ -657,6 +660,9 @@ class ReloadableStubRuntimeSkills:
 
     def warnings_for(self, _name: str) -> list[str]:
         return []
+
+    def availability_for(self, _name: str) -> Any:
+        return SimpleNamespace(state="available", missing=(), optional_missing=())
 
     def invalid_diagnostics(self) -> list[Any]:
         return []
@@ -1817,12 +1823,16 @@ async def test_skill_list_returns_loadable_and_invalid_diagnostics(tmp_path: Pat
                     "description": "Debug failures.",
                     "valid": True,
                     "warnings": [],
+                    "state": "available",
+                    "requirements": {"missing": [], "optional_missing": []},
                 },
                 {
                     "name": "warned",
                     "description": "Loads with warnings.",
                     "valid": False,
                     "warnings": ["Name does not match directory."],
+                    "state": "available",
+                    "requirements": {"missing": [], "optional_missing": []},
                 },
             ],
             "invalid_skills": [
@@ -2060,6 +2070,8 @@ async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
                     "description": "debugging skill.",
                     "valid": True,
                     "warnings": [],
+                    "state": "available",
+                    "requirements": {"missing": [], "optional_missing": []},
                 }
             ],
             "invalid_skills": [],

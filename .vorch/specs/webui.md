@@ -110,7 +110,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
 - `webui/src/components/ChatView.svelte`
-  - Loads `chat.commands` on mount and passes the flat combined command/skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
+  - Loads `chat.commands` on mount and passes the flat combined command/available-skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
   - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
   - When a manual `/compact` command is handled without starting a Run, ChatView reloads the active session history so the new compaction separator appears immediately.
   - When the backend rejects `/compact` because the target Session already has an active Run, ChatView surfaces the handled reply inline and does not start a second Run.
@@ -151,7 +151,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
     on missing tool/context metadata.
   - The Agent form uses backend-backed selects for `model`, `fallback_model`,
     and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
-  - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.
+  - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, availability state, requirement details, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.
   - In edit mode, the primary save action lives in a sticky footer at the bottom
     of the detail scroll area; the destructive delete action stays in the top
     detail action cluster.

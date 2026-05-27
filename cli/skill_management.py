@@ -142,7 +142,27 @@ def _format_skill_row(skill: object) -> str:
 
     name = _string_or_default(skill.get("name"), "?")
     description = _string_or_default(skill.get("description"), "?")
-    return f"- {name}  {description}"
+    suffix = _format_requirement_suffix(skill)
+    return f"- {name}  {description}{suffix}"
+
+
+def _format_requirement_suffix(skill: Mapping[str, Any]) -> str:
+    state = _string_or_default(skill.get("state"), "available")
+    requirements = skill.get("requirements")
+    if not isinstance(requirements, dict):
+        requirements = {}
+
+    missing = _string_list(requirements.get("missing"))
+    optional_missing = _string_list(requirements.get("optional_missing"))
+    parts: list[str] = []
+    if state != "available":
+        detail = "; ".join(missing) if missing else state
+        parts.append(f"{state}: {detail}")
+    if optional_missing:
+        parts.append(f"optional missing: {'; '.join(optional_missing)}")
+    if not parts:
+        return ""
+    return f" ({'; '.join(parts)})"
 
 
 def _format_invalid_skill_row(diagnostic: object) -> str:
@@ -161,6 +181,12 @@ def _first_warning(warnings: object) -> str:
         if isinstance(first, str) and first:
             return first
     return "unknown error"
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
 
 
 def _string_or_default(value: object, default: str) -> str:

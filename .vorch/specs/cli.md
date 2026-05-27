@@ -49,7 +49,7 @@ contract rather than reading or mutating files directly.
 - `python cli/main.py model refresh [--provider <id>]`
   - calls `model.refresh_db` over server RPC and refreshes provider model catalogs
 - `python cli/main.py skill list`
-  - calls `skill.list` over server RPC and prints valid plus invalid skill diagnostics
+  - calls `skill.list` over server RPC and prints valid, unavailable, optional-missing, and invalid skill diagnostics
 - `python cli/main.py config`
   - calls `settings.get_raw` over server RPC and prints raw `settings.json`
 - `python cli/main.py config get <key>`

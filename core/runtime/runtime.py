@@ -206,6 +206,7 @@ class Runtime:
         self._skills = SkillRegistry.load(
             self._storage.data_dir / "skills",
             extra_dirs=skill_directories,
+            environment=self._skill_environment(data_dir_credentials),
         )
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if invalid_skill_count > 0:
@@ -482,6 +483,11 @@ class Runtime:
             return os.environ[key]
         return self._fallback_environment.get(key, "")
 
+    def _skill_environment(self, fallback_environment: dict[str, str]) -> dict[str, str]:
+        environment = dict(fallback_environment)
+        environment.update(os.environ)
+        return environment
+
     def _reload_channel_tool_if_started(self) -> None:
         if not self._started:
             return
@@ -520,6 +526,7 @@ class Runtime:
         self._skills = SkillRegistry.load(
             self.storage.data_dir / "skills",
             extra_dirs=skill_directories,
+            environment=self._skill_environment(self.storage.load_environment()),
         )
         invalid_skill_count = len(self._skills.invalid_diagnostics())
         if self.logger is not None:

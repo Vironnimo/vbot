@@ -10,9 +10,11 @@ Skills are playbooks, not normal user-managed tools. The registry exposes prompt
 
 ## Data Model
 
-- `SkillMetadata`: `name`, `description`, internal `path`, optional `license`, `compatibility`, `metadata`, and `allowed_tools` parsed from YAML frontmatter.
+- `SkillMetadata`: `name`, `description`, internal `path`, optional `license`, `compatibility`, `metadata`, `allowed_tools`, and parsed vBot requirements from YAML frontmatter.
 - `SkillDiagnostic`: `name`, `path`, `valid`, `warnings`, and `loadable` for both loadable skills with warnings and rejected skill directories.
+- Skill availability has three runtime states: `invalid` for malformed/non-loadable skills, `unavailable` for loadable skills with unmet required vBot requirements, and `available` when required requirements are satisfied. Optional requirements never make a skill unavailable.
 - YAML frontmatter is parsed with PyYAML. Validation is lenient: name/directory mismatch and names longer than 64 characters are warnings; missing required fields or invalid YAML make the skill non-loadable.
+- vBot-specific machine-checkable requirements live under `metadata.vbot.requirements`, not `compatibility`. Supported required/optional primitives are `env`, `binary`, and `skill`, composed with nested `all` and `any` groups. Provider requirements are intentionally not supported; model/provider-specific prerequisites should be expressed as concrete env vars or skill instructions.
 - Resource paths are not stored in `SkillMetadata`; `scripts/` and `references/` are scanned at activation time.
 - Bundled `resources/skills/` contains tiny sample skills, including warning and broken examples, so UI diagnostics can be inspected manually.
 - Activated skill content is wrapped in `<skill_content name="...">` and persisted as an internal chat note so it remains available across later turns in the same Session without appearing as a normal visible chat message.
@@ -33,6 +35,7 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `available_skills` is the root element.
 - Each `skill` element contains only `name` and `description`.
 - Do not expose `path`, `location`, or other local filesystem details in the prompt catalog.
+- Prompt catalogs and command autocomplete include only skills that are allowed for the agent and currently `available`. `skill.list` still returns unavailable skills with requirement details so the user can fix local prerequisites.
 - Skill values inserted into the XML block must be XML-escaped.
 - The bundled skills prompt must explain that `/skill-name` and `$skill-name` user tokens are activation hints once matching `<skill_content>` has been injected, so the model follows the loaded skill instructions without echoing the marker as requested output.
 
@@ -43,6 +46,8 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `get(name) -> SkillMetadata`
 - `list_all() -> list[SkillMetadata]`
 - `filter_allowed(allowed_skills) -> list[SkillMetadata]`
+- `availability_for(name, allowed_skills=None) -> SkillAvailability`
+- `is_allowed(name, allowed_skills) -> bool`
 - `diagnostics() -> list[SkillDiagnostic]`
 - `invalid_diagnostics() -> list[SkillDiagnostic]`
 - `warnings_for(name) -> list[str]`
@@ -54,11 +59,41 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 - `allowed_skills=[]` exposes none.
 - Explicit allowlists match exact skill names.
 - Unknown allowlist entries are ignored because skills are not hard execution gates.
+- Skill dependency requirements (`skill: other-skill`) must not bypass agent allowlists. If the dependency skill is not allowed for the current agent, the dependent skill is unavailable for that agent.
 - Duplicate skill names are resolved by first-found-wins scan order and recorded as diagnostics for rejected duplicates.
 - The internal `skill` tool is included in provider tool definitions when an agent has at least one loadable allowed skill. It is not controlled by `allowed_tools` and must stay out of normal tool lists and Agent tool toggles.
 - Full skill instructions have a single provider-visible source: the session-scoped injected `<skill_content>` note. Tool-call results for the internal `skill` tool must not include `content`, raw skill Markdown, or a `<skill_content>` block, otherwise the model sees duplicate instructions.
-- `/skill-name` and `$skill-name` triggers preserve the original user message. `allowed_skills=[]` exposes no skills; only a missing/`None` allowlist falls back to wildcard behavior in compatibility test stubs. Unknown or non-loadable triggers become internal system reminders.
-- `$skill-name` is a skill-only mention convention. Surfaces that provide `$` autocomplete must list only loadable skills and must not include built-in slash commands. Slash autocomplete may list both built-in commands and skills because `/` is the shared user-entry affordance; backend command dispatch still handles only recognized built-in commands before the normal skill-trigger path.
+- `/skill-name` and `$skill-name` triggers preserve the original user message. `allowed_skills=[]` exposes no skills; only a missing/`None` allowlist falls back to wildcard behavior in compatibility test stubs. Unknown, non-loadable, or unavailable triggers become internal system reminders.
+- `$skill-name` is a skill-only mention convention. Surfaces that provide `$` autocomplete must list only currently available skills and must not include built-in slash commands. Slash autocomplete may list both built-in commands and available skills because `/` is the shared user-entry affordance; backend command dispatch still handles only recognized built-in commands before the normal skill-trigger path.
+
+## vBot Requirements Metadata
+
+Example:
+
+```yaml
+metadata:
+  vbot:
+    requirements:
+      all:
+        - binary: git
+        - any:
+            - binary: gcc
+            - binary: clang
+        - any:
+            - env: OPENAI_API_KEY
+            - env: ANTHROPIC_API_KEY
+        - skill: vbot-cli
+      optional:
+        - binary: jq
+```
+
+- `all` requires every child node.
+- `any` requires at least one child node.
+- `optional` is a list of nodes whose missing checks are reported but do not change `available` status.
+- `env` checks for a non-empty value in the runtime skill environment: process environment first, then data-dir `.env` fallback.
+- `binary` checks the current `PATH` with safe path lookup, not shell execution.
+- `skill` checks that the dependency skill is loadable, available, and allowed for the current agent.
+- Malformed `metadata.vbot.requirements` makes the skill invalid/non-loadable.
 
 ## External Dependencies
 
