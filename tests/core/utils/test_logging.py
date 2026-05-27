@@ -89,6 +89,17 @@ def test_log_manager_configures_vbot_namespace_for_direct_loggers(tmp_path: Path
     assert "[INFO] vbot.runtime.direct - Inherited handler path" in contents
 
 
+def test_log_manager_close_restores_vbot_namespace_propagation(tmp_path: Path) -> None:
+    logger = logging.getLogger("vbot")
+    logger.handlers = []
+    manager = LogManager(level="INFO", data_dir=tmp_path)
+
+    manager.get_logger("core")
+    manager.close()
+
+    assert logger.propagate is True
+
+
 def test_resolve_daily_log_path_uses_log_suffix(tmp_path: Path) -> None:
     """Daily log paths keep the date-based contract and now end with `.log`."""
 

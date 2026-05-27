@@ -387,6 +387,7 @@ class LogManager:
             handler.close()
         self._handlers = []
         self._configured = False
+        logger.propagate = True
 
     # ------------------------------------------------------------------
     # Internal helpers
