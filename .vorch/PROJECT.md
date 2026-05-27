@@ -135,7 +135,7 @@ If worktree commands fail or behave unexpectedly, read `scripts/README-worktree.
 **Run:**
 ```bash
 python server/main.py                 # Server foreground
-python cli/main.py server start       # Server background (managed)
+vbot server start                     # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
 

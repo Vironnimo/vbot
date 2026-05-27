@@ -6,8 +6,8 @@ targeting/status contract, but it does not own server business logic.
 
 ## Overview
 
-`cli/` is the local process-management and management-command entrypoint used by
-both human users and agents. It owns `server start`, `server stop`, `server
+`cli/` is the local process-management and management-command entrypoint exposed
+as the installed `vbot` console command for both human users and agents. It owns `server start`, `server stop`, `server
 restart`, `server status`, and RPC-backed management commands for channels,
 providers, models, skills, and config. The CLI is non-interactive and
 automation-safe: it never opens the browser and instead prints the resolved
@@ -18,43 +18,43 @@ contract rather than reading or mutating files directly.
 
 ## Interfaces
 
-- `python cli/main.py server start [--host] [--port] [--data-dir]`
+- `vbot server start [--host] [--port] [--data-dir]`
   - resolves the target instance configuration
   - starts the server if no vBot server is already reachable at the target
   - succeeds only when `GET /health` responds successfully
-- `python cli/main.py server stop [--host] [--port] [--data-dir]`
+- `vbot server stop [--host] [--port] [--data-dir]`
   - targets an already-running local vBot server at the resolved address
   - attempts graceful shutdown, then force-stop after a bounded timeout if needed
-- `python cli/main.py server restart [--host] [--port] [--data-dir]`
+- `vbot server restart [--host] [--port] [--data-dir]`
   - stops the target local vBot server if present
   - re-resolves host/port/data-dir from current args, env, and settings before restart
-- `python cli/main.py server status [--host] [--port] [--data-dir]`
+- `vbot server status [--host] [--port] [--data-dir]`
   - reports at least: running/not running, resolved URL, WebUI available/unavailable, and resolved `data_dir`
-- `python cli/main.py channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
+- `vbot channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
   - calls `channel.create` over server RPC and creates a persisted channel config
-- `python cli/main.py channel list`
+- `vbot channel list`
   - calls `channel.list` over server RPC and prints deterministic output
-- `python cli/main.py channel remove --id`
+- `vbot channel remove --id`
   - calls `channel.delete` over server RPC
-- `python cli/main.py channel enable --id`
+- `vbot channel enable --id`
   - calls `channel.enable` over server RPC
-- `python cli/main.py channel disable --id`
+- `vbot channel disable --id`
   - calls `channel.disable` over server RPC
-- `python cli/main.py channel status --id`
+- `vbot channel status --id`
   - calls `channel.status` over server RPC
-- `python cli/main.py provider list`
+- `vbot provider list`
   - calls `connection.list` over server RPC and prints configured connections
-- `python cli/main.py model list`
+- `vbot model list`
   - calls `model.list` over server RPC and prints available models
-- `python cli/main.py model refresh [--provider <id>]`
+- `vbot model refresh [--provider <id>]`
   - calls `model.refresh_db` over server RPC and refreshes provider model catalogs
-- `python cli/main.py skill list`
+- `vbot skill list`
   - calls `skill.list` over server RPC and prints valid plus invalid skill diagnostics
-- `python cli/main.py config`
+- `vbot config`
   - calls `settings.get_raw` over server RPC and prints raw `settings.json`
-- `python cli/main.py config get <key>`
+- `vbot config get <key>`
   - calls `settings.get_raw` over server RPC and prints one raw top-level settings key
-- `python cli/main.py config set <key> <value>`
+- `vbot config set <key> <value>`
   - coerces the CLI value to JSON-native data, then calls `settings.set_key` over server RPC
 
 ## Conventions

@@ -108,6 +108,15 @@ description: >
         assert registry.list_all() == []
         assert registry.diagnostics() == []
 
+    def test_loads_bundled_vbot_cli_skill(self) -> None:
+        skills_dir = Path(__file__).resolve().parents[3] / "resources" / "skills"
+
+        registry = SkillRegistry.load(skills_dir)
+        skill = registry.get("vbot-cli")
+
+        assert skill.description.startswith("Configure and inspect a local vBot instance")
+        assert skill.path == (skills_dir / "vbot-cli" / "SKILL.md").resolve()
+
     def test_ignores_non_skill_directories_and_files(self, tmp_path: Path) -> None:
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()

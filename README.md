@@ -58,7 +58,7 @@ ANTHROPIC_API_KEY=...
 Managed background start via CLI:
 
 ```bash
-python cli/main.py server start
+vbot server start
 ```
 
 Alternative foreground start:
@@ -139,7 +139,7 @@ The current server exposes:
 ## Main Access Paths
 
 - WebUI in the browser
-- CLI via `python cli/main.py ...`
+- CLI via `vbot ...`
 - Desktop shell via `python desktop/main.py`
 - HTTP, SSE, and WebSocket integrations against the server
 

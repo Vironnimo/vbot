@@ -42,7 +42,7 @@ server. No orphan processes.
 ## CLI Commands to Test
 
 All commands accept `--host`, `--port`, `--data-dir` flags. Run via
-`python cli/main.py server <command>`.
+`vbot server <command>`.
 
 | Command | What it does | What to verify |
 |---|---|---|
