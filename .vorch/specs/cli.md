@@ -8,8 +8,8 @@ targeting/status contract, but it does not own server business logic.
 
 `cli/` is the local process-management and management-command entrypoint used by
 both human users and agents. It owns `server start`, `server stop`, `server
-restart`, `server status`, and RPC-backed management commands for channels,
-providers, models, skills, and config. The CLI is non-interactive and
+restart`, `server status`, and RPC-backed management commands for agents,
+channels, providers, models, skills, and config. The CLI is non-interactive and
 automation-safe: it never opens the browser and instead prints the resolved
 server URL and status information. It manages local vBot server reachability
 around the existing `server/main.py` foreground entrypoint, and every CLI
@@ -30,6 +30,16 @@ contract rather than reading or mutating files directly.
   - re-resolves host/port/data-dir from current args, env, and settings before restart
 - `python cli/main.py server status [--host] [--port] [--data-dir]`
   - reports at least: running/not running, resolved URL, WebUI available/unavailable, and resolved `data_dir`
+- `python cli/main.py agent list`
+  - calls `agent.list` over server RPC and prints deterministic agent rows
+- `python cli/main.py agent show --id`
+  - calls `agent.get` over server RPC and prints one agent with mutable fields, allowlists, workspace, current session, and context window
+- `python cli/main.py agent create --id --name [--model] [--fallback-model] [--temperature] [--thinking-effort] [--allowed-tools ...] [--allowed-skills ...]`
+  - calls `agent.create` over server RPC and creates a persisted agent config
+- `python cli/main.py agent update --id [--name] [--model] [--fallback-model] [--temperature] [--clear-temperature] [--thinking-effort] [--clear-thinking-effort] [--allowed-tools ...] [--allowed-skills ...] [--current-session-id]`
+  - calls `agent.update` over server RPC; clear flags send JSON `null` for inherited defaults, while `--thinking-effort none` sends the literal `"none"` effort
+- `python cli/main.py agent delete --id`
+  - calls `agent.delete` over server RPC and relies on server-side last-agent, busy-agent, and reference checks
 - `python cli/main.py channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
   - calls `channel.create` over server RPC and creates a persisted channel config
 - `python cli/main.py channel list`
@@ -94,3 +104,5 @@ contract rather than reading or mutating files directly.
   application logger.
 - Channel command output is deterministic and automation-safe. RPC failures and
   malformed envelopes surface as non-zero exits with clear messages.
+- Agent command output is deterministic and automation-safe. Agent create/update
+  accepts only public mutable RPC fields; workspace mutation remains server-rejected.
