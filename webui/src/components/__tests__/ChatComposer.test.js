@@ -91,6 +91,38 @@ describe('ChatComposer', () => {
     expect(input.value).toBe('/compact');
   });
 
+  it('offers only skills for inline dollar autocomplete', async () => {
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: {
+        availableSkills: [
+          {
+            name: 'stop',
+            description: 'Cancel the active run.',
+            type: 'command',
+          },
+          {
+            name: 'debugging',
+            description: 'Investigate unclear bugs.',
+            type: 'skill',
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    const input = composerInput();
+    input.value = 'Please use $';
+    input.setSelectionRange(12, 12);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(autocompleteNames()).toEqual(['debugging']);
+    expect(document.body.querySelector('.skill-autocomplete__eyebrow').textContent).toContain(
+      'skills',
+    );
+  });
+
   it('inserts inline skill triggers without rewriting the message', async () => {
     const onSendMessage = vi.fn();
     mountedComponent = mount(ChatComposer, {
@@ -440,6 +472,12 @@ function autocompleteOptions() {
   return Array.from(
     document.body.querySelectorAll('.skill-autocomplete__option'),
   );
+}
+
+function autocompleteNames() {
+  return Array.from(
+    document.body.querySelectorAll('.skill-autocomplete__name'),
+  ).map((element) => element.textContent.trim());
 }
 
 function filePickerInput() {

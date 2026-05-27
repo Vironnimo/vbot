@@ -28,7 +28,10 @@
   let _suppressSelectionUpdate = false;
   let _triggerClosed = false;
 
-  let loadableSkills = $derived(availableSkills.filter((skill) => skill?.name));
+  let triggerItems = $derived(availableSkills.filter((item) => item?.name));
+  let autocompleteItems = $derived.by(() =>
+    triggerItemsForContext(triggerContext),
+  );
   let autocompleteQuery = $derived.by(() => {
     if (!triggerContext) {
       return '';
@@ -390,16 +393,28 @@
     }
 
     const normalizedQuery = autocompleteQuery.trim().toLowerCase();
-    const matchingSkills = normalizedQuery
-      ? loadableSkills.filter((skill) =>
-          `${skill.name} ${skill.description ?? ''}`
+    const matchingItems = normalizedQuery
+      ? autocompleteItems.filter((item) =>
+          `${item.name} ${item.description ?? ''}`
             .toLowerCase()
             .includes(normalizedQuery),
         )
-      : loadableSkills;
+      : autocompleteItems;
 
-    return Math.min(matchingSkills.length, 8);
+    return Math.min(matchingItems.length, 8);
   };
+
+  function triggerItemsForContext(context) {
+    if (!context) {
+      return [];
+    }
+
+    if (context.marker === '$') {
+      return triggerItems.filter((item) => item.type !== 'command');
+    }
+
+    return triggerItems;
+  }
 
   const updateTriggerContext = () => {
     if (_triggerClosed) {
@@ -513,8 +528,9 @@
   {#if showSkillAutocomplete}
     <SkillAutocomplete
       bind:this={autocompleteElement}
-      skills={loadableSkills}
+      skills={autocompleteItems}
       query={autocompleteQuery}
+      marker={triggerContext.marker}
       activeIndex={activeSkillIndex}
       onSelect={selectSkill}
       onHover={(index) => {

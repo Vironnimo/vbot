@@ -106,6 +106,7 @@ container; a Run is one active execution inside that session.
 - Failed Runs may append `role: "error"` messages to JSONL history. `error_kind` must be non-empty when writing; unknown future `error_kind` values are accepted on read. LLM-visible error kinds are embedded into later provider requests as `<system-reminder>` blocks; non-visible error kinds stay in history/UI only.
 - Skill-context notes are kernel-internal persistence records. They remain in JSONL history as `role: "note"`, are filtered from normal history, and are restored into provider requests as `<skill_content>` context messages rather than `<system-reminder>` blocks.
 - User messages can trigger deterministic skill activation before provider requests with `/skill-name` at the start of the message or `$skill-name` anywhere in the message. The original user message is preserved unchanged.
+- `$skill-name` is always interpreted as a skill activation hint, never as a built-in command route. If it matches an allowed loadable skill, the chat loop injects that skill's persisted `<skill_content>` context before the original user message; if it does not match, the original message remains unchanged and an internal system reminder explains that the trigger did not match an allowed loadable skill.
 - Recognized built-in slash commands (currently `/stop` and `/compact`) are not part of that
   skill-activation path. They are handled earlier by the shared command
   dispatcher; unrecognized slash text still reaches the existing skill-trigger

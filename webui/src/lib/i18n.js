@@ -160,6 +160,7 @@ export const englishCatalog = Object.freeze({
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',
+  'skillAutocomplete.eyebrow.skills': 'skills',
   'skillAutocomplete.noDescription': 'No description available',
 
   'queue.title': 'Queued messages',

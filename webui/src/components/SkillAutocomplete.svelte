@@ -6,6 +6,7 @@
   let {
     skills = [],
     query = '',
+    marker = '/',
     activeIndex = 0,
     onSelect = noop,
     onHover = noop,
@@ -49,6 +50,17 @@
 
     return filteredSkills;
   }
+
+  function eyebrowText() {
+    if (marker === '$') {
+      return t('skillAutocomplete.eyebrow.skills', 'skills');
+    }
+
+    return t(
+      'skillAutocomplete.eyebrow.commandsAndSkills',
+      'commands & skills',
+    );
+  }
 </script>
 
 {#if matchingSkills.length > 0}
@@ -58,7 +70,7 @@
     aria-label={t('skillAutocomplete.label', 'Skill suggestions')}
   >
     <div class="skill-autocomplete__eyebrow">
-      {t('skillAutocomplete.eyebrow.commandsAndSkills', 'commands & skills')}
+      {eyebrowText()}
     </div>
     {#each matchingSkills as skill, index (skill.name)}
       <button

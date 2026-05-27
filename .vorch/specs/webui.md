@@ -128,11 +128,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/components/ChatComposer.svelte`
   - Supports `/skill-name` at the start of input and `$skill-name` inline autocomplete. Selection inserts only the trigger token and preserves the rest of the message text exactly; backend chat activation handles loading.
   - Built-in command autocomplete consumes bare command names from `chat.commands` and inserts the `/` prefix exactly once at compose time.
+  - Slash-trigger autocomplete shows the combined command/skill catalog from `chat.commands`; dollar-trigger autocomplete filters that catalog to skills only because `$skill-name` is a skill-only convention.
   - Supports attachment uploads via file picker, image paste, and drag-and-drop.
   - Maintains local pending attachments with `preview_url` object URLs and builds
     canonical message `content` as `string` or `list[ContentBlock]` on send.
 - `webui/src/components/SkillAutocomplete.svelte`
-  - Renders a flat combined command/skill name/description list for composer trigger contexts. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
+  - Renders the flat name/description list selected by the composer for the active trigger context: combined commands plus skills for `/`, skills only for `$`. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
   displayed from Agent data but omitted from public create/update payloads.
