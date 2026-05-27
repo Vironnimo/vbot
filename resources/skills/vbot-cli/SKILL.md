@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, list providers models or skills, refresh models, update settings, or manage Telegram channels.
+description: Configure and inspect a local vBot instance through the vbot CLI. Use when the user asks an agent to start, stop, restart, or check the server, manage agents, list providers models skills or tools, refresh models, update prompts or settings, inspect logs, or manage Telegram channels.
 ---
 
 # vBot CLI
@@ -17,7 +17,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 
 ## Workflow
 
-1. Identify the requested change: server lifecycle, agents, settings, providers, models, skills, or channels.
+1. Identify the requested change: server lifecycle, agents, settings, providers, models, skills, tools, prompts, logs, or channels.
 2. Resolve the target instance. Use defaults unless the user gives a host, port, or data directory. Add `--host`, `--port`, and `--data-dir` to every command that must target a non-default instance.
 3. Check reachability:
 
@@ -38,6 +38,9 @@ vbot config
 vbot provider list
 vbot model list
 vbot skill list
+vbot tool list
+vbot prompt list
+vbot log list
 vbot agent list
 vbot channel list
 ```
@@ -91,6 +94,37 @@ Use this to list loadable skills and invalid skill diagnostics:
 vbot skill list
 ```
 
+### Tools
+
+Use this to inspect public tools exposed to agents:
+
+```bash
+vbot tool list
+```
+
+### Prompts
+
+Use prompt commands to inspect and update editable System Prompt fragments through server RPC:
+
+```bash
+vbot prompt list
+vbot prompt update --name tools.md --content "# Custom tools"
+vbot prompt update --name tools.md --file ./tools.md
+vbot prompt reset --name tools.md
+vbot prompt preview --agent assistant
+```
+
+Prefer `--file` for multi-line prompt content. Do not edit prompt fragment files directly when `vbot prompt update` or `vbot prompt reset` can express the change.
+
+### Logs
+
+Use log commands to inspect server logs through the RPC log viewer:
+
+```bash
+vbot log list
+vbot log read --file 2026-05-11
+```
+
 ### Agents
 
 Use agent commands to inspect and manage agent configuration through server RPC:
@@ -114,15 +148,19 @@ Use channel commands to create and operate channel configurations. Pass token en
 vbot channel add --id tg-main --platform telegram --agent assistant --token-env TELEGRAM_BOT_TOKEN --allow 12345
 vbot channel list
 vbot channel status --id tg-main
+vbot channel update --id tg-main --agent assistant --allow 12345 67890
 vbot channel enable --id tg-main
 vbot channel disable --id tg-main
 vbot channel remove --id tg-main
 ```
 
+Use `channel update` for partial config changes. Omitted fields remain unchanged; `--allow` replaces the full allowlist.
+
 ## Pitfalls
 
 - Do not assume the server is running. Check `vbot server status` first for management tasks.
 - Do not edit `settings.json` directly when `vbot config set` can express the change.
+- Do not edit prompt fragments directly when `vbot prompt update` or `vbot prompt reset` can express the change.
 - Do not configure channels with token literals. Store the token in the environment or data-dir `.env`, then pass the variable name with `--token-env`.
 - Do not edit agent JSON directly when `vbot agent create`, `vbot agent update`, or `vbot agent delete` can express the change. Workspace paths are not mutable through public agent CLI commands.
 - If a command fails because another process occupies the port, do not kill it manually. Report the conflict or target a different port/data directory.

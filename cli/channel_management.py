@@ -62,6 +62,22 @@ def channel_remove(instance: ServerInstance, channel_id: str) -> CommandResult:
     return CommandResult(ok=True, message=f"removed {channel_id}", instance=instance)
 
 
+def channel_update(
+    instance: ServerInstance,
+    channel_id: str,
+    changes: Mapping[str, Any],
+) -> CommandResult:
+    """Update a channel configuration via `channel.update` RPC."""
+
+    if not changes:
+        return CommandResult(ok=False, message="no channel fields provided", instance=instance)
+
+    payload = _rpc_call(instance, "channel.update", {"id": channel_id, **dict(changes)})
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(ok=True, message=f"updated {channel_id}", instance=instance)
+
+
 def channel_enable(instance: ServerInstance, channel_id: str) -> CommandResult:
     """Enable a channel listener via `channel.enable` RPC."""
 

@@ -118,10 +118,56 @@ vbot skill list
 
 The output includes loadable skills and an `invalid skills:` section when diagnostics exist.
 
+## Tools
+
+```bash
+vbot tool list
+```
+
+Use this to inspect public registered tools. Internal system-managed tools are omitted by the server.
+
+## Prompts
+
+```bash
+vbot prompt list
+vbot prompt update --name <fragment-name> --content <text>
+vbot prompt update --name <fragment-name> --file <path>
+vbot prompt reset --name <fragment-name>
+vbot prompt preview --agent <agent-id>
+```
+
+Examples:
+
+```bash
+vbot prompt list
+vbot prompt update --name tools.md --file ./tools.md
+vbot prompt reset --name skills.md
+vbot prompt preview --agent assistant
+```
+
+`prompt list` shows editable fragments, modified state, and variable placeholders. `prompt update` sends replacement content through server RPC; use `--file` for multi-line content. `prompt preview` prints token metadata and the rendered System Prompt for one agent.
+
+## Logs
+
+```bash
+vbot log list
+vbot log read --file <daily-log-name>
+```
+
+Examples:
+
+```bash
+vbot log list
+vbot log read --file 2026-05-11
+```
+
+`log list` shows daily log files newest-first. `log read` returns parsed entries and a cursor for live-tail handoff.
+
 ## Telegram Channels
 
 ```bash
 vbot channel add --id <channel-id> --platform telegram --agent <agent-id> --token-env <ENV_VAR> [--dm-scope <scope>] [--allow <chat-id> ...]
+vbot channel update --id <channel-id> [--platform telegram] [--agent <agent-id>] [--token-env <ENV_VAR>] [--dm-scope <scope>] [--allow <chat-id> ...] [--enabled true|false]
 vbot channel list
 vbot channel status --id <channel-id>
 vbot channel enable --id <channel-id>
@@ -134,9 +180,12 @@ Examples:
 ```bash
 vbot channel add --id tg-main --platform telegram --agent assistant --token-env TELEGRAM_BOT_TOKEN --allow 12345
 vbot channel add --id tg-work --platform telegram --agent assistant --token-env TELEGRAM_WORK_BOT_TOKEN --dm-scope per_peer --allow 12345 67890
+vbot channel update --id tg-work --agent coder --allow 12345 67890 24680
 vbot channel enable --id tg-main
 vbot channel status --id tg-main
 ```
+
+`channel update` is a partial update: omitted fields remain unchanged. Passing `--allow` replaces the full allowed chat-id list. Use `--enabled true` or `--enabled false` for config-level enabled state; use `channel enable` and `channel disable` for the common on/off operation.
 
 Supported `--dm-scope` values:
 
@@ -156,8 +205,12 @@ vbot config get <key>
 vbot agent show --id <agent-id>
 vbot agent list
 vbot channel status --id <channel-id>
+vbot channel list
 vbot provider list
 vbot model list
 vbot skill list
+vbot tool list
+vbot prompt list
+vbot log list
 vbot server status
 ```

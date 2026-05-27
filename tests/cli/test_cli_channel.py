@@ -103,6 +103,37 @@ def test_parse_args_supports_channel_list_target_options() -> None:
     assert args.data_dir == "dev"
 
 
+def test_parse_args_supports_channel_update_options() -> None:
+    args = cli_main.parse_args(
+        [
+            "channel",
+            "update",
+            "--id",
+            "tg-assistant",
+            "--agent",
+            "coder",
+            "--token-env",
+            "TELEGRAM_BOT_TOKEN_CODER",
+            "--dm-scope",
+            "per_peer",
+            "--allow",
+            "100",
+            "101",
+            "--enabled",
+            "false",
+        ]
+    )
+
+    assert args.area == "channel"
+    assert args.command == "update"
+    assert args.id == "tg-assistant"
+    assert args.agent == "coder"
+    assert args.token_env == "TELEGRAM_BOT_TOKEN_CODER"
+    assert args.dm_scope == "per_peer"
+    assert args.allow == [100, 101]
+    assert args.enabled == "false"
+
+
 def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
@@ -211,6 +242,46 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
         {
             "url": f"{instance.url}/api/rpc",
             "json": {"method": "channel.status", "params": {"id": "tg-assistant"}},
+            "timeout": 10.0,
+        }
+    ]
+
+
+def test_channel_update_posts_update_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return httpx.Response(200, json={"ok": True, "result": {"ok": True}})
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_update(
+        instance,
+        "tg-assistant",
+        {
+            "agent_id": "coder",
+            "token_env_var": "TELEGRAM_BOT_TOKEN_CODER",
+            "allowed_chat_ids": [100, 101],
+            "enabled": False,
+        },
+    )
+
+    assert result == CommandResult(ok=True, message="updated tg-assistant", instance=instance)
+    assert calls == [
+        {
+            "url": f"{instance.url}/api/rpc",
+            "json": {
+                "method": "channel.update",
+                "params": {
+                    "id": "tg-assistant",
+                    "agent_id": "coder",
+                    "token_env_var": "TELEGRAM_BOT_TOKEN_CODER",
+                    "allowed_chat_ids": [100, 101],
+                    "enabled": False,
+                },
+            },
             "timeout": 10.0,
         }
     ]
@@ -331,6 +402,24 @@ def test_channel_commands_surface_rpc_domain_errors(
             "result: removed tg-assistant",
         ),
         (
+            "update",
+            [
+                "channel",
+                "update",
+                "--id",
+                "tg-assistant",
+                "--agent",
+                "coder",
+                "--allow",
+                "1",
+                "2",
+                "--enabled",
+                "false",
+            ],
+            "update",
+            "result: updated tg-assistant",
+        ),
+        (
             "enable",
             ["channel", "enable", "--id", "tg-assistant"],
             "enable",
@@ -400,6 +489,19 @@ def test_run_dispatches_channel_commands(
         calls.append(("remove", {"instance": resolved_instance, "id": channel_id}))
         return CommandResult(ok=True, message="removed tg-assistant", instance=resolved_instance)
 
+    def fake_update(
+        resolved_instance: ServerInstance,
+        channel_id: str,
+        changes: dict[str, Any],
+    ) -> CommandResult:
+        calls.append(
+            (
+                "update",
+                {"instance": resolved_instance, "id": channel_id, "changes": changes},
+            )
+        )
+        return CommandResult(ok=True, message="updated tg-assistant", instance=resolved_instance)
+
     def fake_enable(resolved_instance: ServerInstance, channel_id: str) -> CommandResult:
         calls.append(("enable", {"instance": resolved_instance, "id": channel_id}))
         return CommandResult(ok=True, message="enabled tg-assistant", instance=resolved_instance)
@@ -422,6 +524,7 @@ def test_run_dispatches_channel_commands(
         add_channel=fake_add,
         list_channels=fake_list,
         remove_channel=fake_remove,
+        update_channel=fake_update,
         enable_channel=fake_enable,
         disable_channel=fake_disable,
         channel_status_fn=fake_status,

@@ -23,9 +23,12 @@ from cli.channel_management import (
     channel_list,
     channel_remove,
     channel_status,
+    channel_update,
 )
 from cli.config_management import coerce_config_value, config_get, config_set, config_show
+from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
+from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
 from cli.provider_management import provider_list
 from cli.server_management import (
     CommandResult,
@@ -36,11 +39,15 @@ from cli.server_management import (
     stop_server,
 )
 from cli.skill_management import skill_list
+from cli.tool_management import tool_list
 from server.main import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")
-CHANNEL_COMMANDS = ("add", "list", "remove", "enable", "disable", "status")
+CHANNEL_COMMANDS = ("add", "list", "remove", "update", "enable", "disable", "status")
 AGENT_COMMANDS = ("list", "show", "create", "update", "delete")
+TOOL_COMMANDS = ("list",)
+PROMPT_COMMANDS = ("list", "update", "reset", "preview")
+LOG_COMMANDS = ("list", "read")
 PROVIDER_COMMANDS = ("list",)
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
@@ -127,6 +134,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_target_arguments(remove_parser)
     remove_parser.add_argument("--id", required=True)
 
+    update_parser = channel_subparsers.add_parser("update")
+    _add_target_arguments(update_parser)
+    update_parser.add_argument("--id", required=True)
+    update_parser.add_argument("--platform", choices=CHANNEL_PLATFORMS)
+    update_parser.add_argument("--agent")
+    update_parser.add_argument("--token-env")
+    update_parser.add_argument("--dm-scope", choices=CHANNEL_DM_SCOPES)
+    update_parser.add_argument("--allow", type=int, nargs="*")
+    update_parser.add_argument("--enabled", choices=("true", "false"))
+
     enable_parser = channel_subparsers.add_parser("enable")
     _add_target_arguments(enable_parser)
     enable_parser.add_argument("--id", required=True)
@@ -138,6 +155,37 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     status_parser = channel_subparsers.add_parser("status")
     _add_target_arguments(status_parser)
     status_parser.add_argument("--id", required=True)
+
+    tool_parser = subparsers.add_parser("tool", description="Inspect vBot tools")
+    tool_subparsers = tool_parser.add_subparsers(dest="command", required=True)
+    for command in TOOL_COMMANDS:
+        command_parser = tool_subparsers.add_parser(command)
+        _add_target_arguments(command_parser)
+
+    prompt_parser = subparsers.add_parser("prompt", description="Manage vBot prompt fragments")
+    prompt_subparsers = prompt_parser.add_subparsers(dest="command", required=True)
+    prompt_list_parser = prompt_subparsers.add_parser("list")
+    _add_target_arguments(prompt_list_parser)
+    prompt_update_parser = prompt_subparsers.add_parser("update")
+    _add_target_arguments(prompt_update_parser)
+    prompt_update_parser.add_argument("--name", required=True)
+    content_group = prompt_update_parser.add_mutually_exclusive_group(required=True)
+    content_group.add_argument("--content")
+    content_group.add_argument("--file", dest="content_file")
+    prompt_reset_parser = prompt_subparsers.add_parser("reset")
+    _add_target_arguments(prompt_reset_parser)
+    prompt_reset_parser.add_argument("--name", required=True)
+    prompt_preview_parser = prompt_subparsers.add_parser("preview")
+    _add_target_arguments(prompt_preview_parser)
+    prompt_preview_parser.add_argument("--agent", required=True)
+
+    log_parser = subparsers.add_parser("log", description="Inspect vBot logs")
+    log_subparsers = log_parser.add_subparsers(dest="command", required=True)
+    log_list_parser = log_subparsers.add_parser("list")
+    _add_target_arguments(log_list_parser)
+    log_read_parser = log_subparsers.add_parser("read")
+    _add_target_arguments(log_read_parser)
+    log_read_parser.add_argument("--file", required=True)
 
     provider_parser = subparsers.add_parser("provider", description="Manage vBot providers")
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
@@ -210,7 +258,9 @@ def run(
     status: Callable[[ServerInstance], CommandResult] = get_status,
     list_agents: Callable[[ServerInstance], CommandResult] = agent_list,
     show_agent: Callable[[ServerInstance, str], CommandResult] = agent_show,
-    create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult] = agent_create,
+    create_agent: Callable[
+        [ServerInstance, str, str, dict[str, Any]], CommandResult
+    ] = agent_create,
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
     delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
     add_channel: Callable[
@@ -218,9 +268,17 @@ def run(
     ] = channel_add,
     list_channels: Callable[[ServerInstance], CommandResult] = channel_list,
     remove_channel: Callable[[ServerInstance, str], CommandResult] = channel_remove,
+    update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = channel_update,
     enable_channel: Callable[[ServerInstance, str], CommandResult] = channel_enable,
     disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
     channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
+    list_tools_fn: Callable[[ServerInstance], CommandResult] = tool_list,
+    list_prompts_fn: Callable[[ServerInstance], CommandResult] = prompt_list,
+    update_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_update,
+    reset_prompt_fn: Callable[[ServerInstance, str], CommandResult] = prompt_reset,
+    preview_prompt_fn: Callable[[ServerInstance, str], CommandResult] = prompt_preview,
+    list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
+    read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
     list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
@@ -269,11 +327,42 @@ def run(
             add_channel=add_channel,
             list_channels=list_channels,
             remove_channel=remove_channel,
+            update_channel=update_channel,
             enable_channel=enable_channel,
             disable_channel=disable_channel,
             channel_status_fn=channel_status_fn,
         )
         print_channel_command_result(args.command, result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "tool":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_tool_command(args, instance, list_tools_fn=list_tools_fn)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "prompt":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_prompt_command(
+            args,
+            instance,
+            list_prompts_fn=list_prompts_fn,
+            update_prompt_fn=update_prompt_fn,
+            reset_prompt_fn=reset_prompt_fn,
+            preview_prompt_fn=preview_prompt_fn,
+        )
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "log":
+        instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+        result = dispatch_log_command(
+            args,
+            instance,
+            list_logs_fn=list_logs_fn,
+            read_log_fn=read_log_fn,
+        )
+        print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "provider":
@@ -364,6 +453,75 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return changes
 
 
+def dispatch_tool_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_tools_fn: Callable[[ServerInstance], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed tool command against the server RPC client."""
+
+    if args.command == "list":
+        return list_tools_fn(instance)
+    raise ValueError(f"Unsupported tool command: {args.command}")
+
+
+def dispatch_prompt_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_prompts_fn: Callable[[ServerInstance], CommandResult],
+    update_prompt_fn: Callable[[ServerInstance, str, str], CommandResult],
+    reset_prompt_fn: Callable[[ServerInstance, str], CommandResult],
+    preview_prompt_fn: Callable[[ServerInstance, str], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed prompt command against the server RPC client."""
+
+    if args.command == "list":
+        return list_prompts_fn(instance)
+    if args.command == "update":
+        try:
+            content = _prompt_content_from_args(args)
+        except (OSError, ValueError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read prompt content file: {exc}",
+                instance=instance,
+            )
+        return update_prompt_fn(instance, args.name, content)
+    if args.command == "reset":
+        return reset_prompt_fn(instance, args.name)
+    if args.command == "preview":
+        return preview_prompt_fn(instance, args.agent)
+    raise ValueError(f"Unsupported prompt command: {args.command}")
+
+
+def dispatch_log_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+    *,
+    list_logs_fn: Callable[[ServerInstance], CommandResult],
+    read_log_fn: Callable[[ServerInstance, str], CommandResult],
+) -> CommandResult:
+    """Dispatch one parsed log command against the server RPC client."""
+
+    if args.command == "list":
+        return list_logs_fn(instance)
+    if args.command == "read":
+        return read_log_fn(instance, args.file)
+    raise ValueError(f"Unsupported log command: {args.command}")
+
+
+def _prompt_content_from_args(args: argparse.Namespace) -> str:
+    content = args.content
+    if isinstance(content, str):
+        return content
+    content_file = args.content_file
+    if not isinstance(content_file, str):
+        raise ValueError("missing prompt content file")
+    return Path(content_file).read_text(encoding="utf-8")
+
+
 def dispatch_channel_command(
     args: argparse.Namespace,
     instance: ServerInstance,
@@ -371,6 +529,7 @@ def dispatch_channel_command(
     add_channel: Callable[[ServerInstance, str, str, str, str, str, Sequence[int]], CommandResult],
     list_channels: Callable[[ServerInstance], CommandResult],
     remove_channel: Callable[[ServerInstance, str], CommandResult],
+    update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
     enable_channel: Callable[[ServerInstance, str], CommandResult],
     disable_channel: Callable[[ServerInstance, str], CommandResult],
     channel_status_fn: Callable[[ServerInstance, str], CommandResult],
@@ -391,6 +550,8 @@ def dispatch_channel_command(
         return list_channels(instance)
     if args.command == "remove":
         return remove_channel(instance, args.id)
+    if args.command == "update":
+        return update_channel(instance, args.id, _channel_changes_from_args(args))
     if args.command == "enable":
         return enable_channel(instance, args.id)
     if args.command == "disable":
@@ -398,6 +559,23 @@ def dispatch_channel_command(
     if args.command == "status":
         return channel_status_fn(instance, args.id)
     raise ValueError(f"Unsupported channel command: {args.command}")
+
+
+def _channel_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    if args.platform is not None:
+        changes["platform"] = args.platform
+    if args.agent is not None:
+        changes["agent_id"] = args.agent
+    if args.token_env is not None:
+        changes["token_env_var"] = args.token_env
+    if args.dm_scope is not None:
+        changes["dm_scope"] = args.dm_scope
+    if args.allow is not None:
+        changes["allowed_chat_ids"] = list(args.allow)
+    if args.enabled is not None:
+        changes["enabled"] = args.enabled == "true"
+    return changes
 
 
 def dispatch_provider_command(
