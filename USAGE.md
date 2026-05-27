@@ -174,25 +174,25 @@ python server/main.py
 Managed background start via CLI:
 
 ```bash
-vbot server start
+python cli/main.py server start
 ```
 
 Check status:
 
 ```bash
-vbot server status
+python cli/main.py server status
 ```
 
 Stop the managed server:
 
 ```bash
-vbot server stop
+python cli/main.py server stop
 ```
 
 Restart the managed server:
 
 ```bash
-vbot server restart
+python cli/main.py server restart
 ```
 
 All other CLI areas are RPC-backed accessors. Commands such as `channel`,
@@ -433,24 +433,24 @@ This applies to channel, provider, model, skill, and config areas.
 Examples:
 
 ```bash
-vbot channel list
-vbot provider list
-vbot model list
-vbot model refresh --provider openai
-vbot skill list
-vbot config
-vbot config get server_port
-vbot config set server_port 9000
-vbot channel status --id my-channel
-vbot channel enable --id my-channel
-vbot channel disable --id my-channel
-vbot channel remove --id my-channel
+python cli/main.py channel list
+python cli/main.py provider list
+python cli/main.py model list
+python cli/main.py model refresh --provider openai
+python cli/main.py skill list
+python cli/main.py config
+python cli/main.py config get server_port
+python cli/main.py config set server_port 9000
+python cli/main.py channel status --id my-channel
+python cli/main.py channel enable --id my-channel
+python cli/main.py channel disable --id my-channel
+python cli/main.py channel remove --id my-channel
 ```
 
 Adding a channel follows this shape:
 
 ```bash
-vbot channel add --id my-channel --platform telegram --agent coder --token-env TELEGRAM_BOT_TOKEN
+python cli/main.py channel add --id my-channel --platform telegram --agent coder --token-env TELEGRAM_BOT_TOKEN
 ```
 
 These commands require a reachable vBot server because they are RPC-backed accessors.
