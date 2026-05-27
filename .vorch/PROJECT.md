@@ -199,6 +199,11 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   commands are an accessor over public Agent RPCs. They may change mutable Agent
   config fields, allowlists, and current session pointers, but must not mutate
   workspaces directly or bypass server-side last-agent/reference/busy checks.
+- **Management CLI areas stay thin.** Channel update, tool catalog, prompt
+  fragment, and log inspection commands are RPC accessors over the server
+  contract. Prompt updates may read a local source file for input text, but the
+  server remains responsible for validation and persistence; log commands read
+  through `log.*` RPCs rather than direct data-dir file access.
 
 - **Raw model catalog files are kept alongside sanitized files.** After a
   model-db refresh, `resources/models/<provider>.raw.json` stores the full

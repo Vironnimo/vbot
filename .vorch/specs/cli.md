@@ -9,7 +9,7 @@ targeting/status contract, but it does not own server business logic.
 `cli/` is the local process-management and management-command entrypoint used by
 both human users and agents. It owns `server start`, `server stop`, `server
 restart`, `server status`, and RPC-backed management commands for agents,
-channels, providers, models, skills, and config. The CLI is non-interactive and
+channels, providers, models, skills, tools, prompts, logs, and config. The CLI is non-interactive and
 automation-safe: it never opens the browser and instead prints the resolved
 server URL and status information. It manages local vBot server reachability
 around the existing `server/main.py` foreground entrypoint, and every CLI
@@ -46,6 +46,8 @@ contract rather than reading or mutating files directly.
   - calls `channel.list` over server RPC and prints deterministic output
 - `python cli/main.py channel remove --id`
   - calls `channel.delete` over server RPC
+- `python cli/main.py channel update --id [--platform telegram] [--agent] [--token-env] [--dm-scope] [--allow ...] [--enabled true|false]`
+  - calls `channel.update` over server RPC; omitted fields remain unchanged, and `--allow` replaces the full allowed chat-id list
 - `python cli/main.py channel enable --id`
   - calls `channel.enable` over server RPC
 - `python cli/main.py channel disable --id`
@@ -60,6 +62,20 @@ contract rather than reading or mutating files directly.
   - calls `model.refresh_db` over server RPC and refreshes provider model catalogs
 - `python cli/main.py skill list`
   - calls `skill.list` over server RPC and prints valid, unavailable, optional-missing, and invalid skill diagnostics
+- `python cli/main.py tool list`
+  - calls `tool.list` over server RPC and prints registered public tools
+- `python cli/main.py prompt list`
+  - calls `prompt.list` over server RPC and prints editable prompt fragments with modified state and variable placeholders
+- `python cli/main.py prompt update --name <fragment> (--content <text>|--file <path>)`
+  - reads direct content or one local source file, then calls `prompt.update` over server RPC
+- `python cli/main.py prompt reset --name <fragment>`
+  - calls `prompt.reset` over server RPC
+- `python cli/main.py prompt preview --agent <agent-id>`
+  - calls `prompt.preview` over server RPC and prints token metadata plus rendered System Prompt text
+- `python cli/main.py log list`
+  - calls `log.list` over server RPC and prints available daily log files and the default newest file
+- `python cli/main.py log read --file <daily-log-name>`
+  - calls `log.read` over server RPC and prints parsed log entries plus the returned cursor
 - `python cli/main.py config`
   - calls `settings.get_raw` over server RPC and prints raw `settings.json`
 - `python cli/main.py config get <key>`
@@ -102,7 +118,8 @@ contract rather than reading or mutating files directly.
   live reachability and `/health` detection are the authority.
 - CLI-managed background server startup must not bypass the managed
   application logger.
-- Channel command output is deterministic and automation-safe. RPC failures and
+- Channel, tool, prompt, and log command output is deterministic and automation-safe. RPC failures and
   malformed envelopes surface as non-zero exits with clear messages.
 - Agent command output is deterministic and automation-safe. Agent create/update
   accepts only public mutable RPC fields; workspace mutation remains server-rejected.
+- Prompt updates may read a local source file, but storage writes still happen only through `prompt.update`; log commands must not read `<data_dir>/logs/` directly.
