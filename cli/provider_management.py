@@ -29,11 +29,43 @@ def provider_list(instance: ServerInstance) -> CommandResult:
     return CommandResult(ok=True, message=_format_connection_rows(connections), instance=instance)
 
 
+def provider_status(
+    instance: ServerInstance,
+    provider_id: str,
+    connection_id: str | None = None,
+) -> CommandResult:
+    """Return filtered provider connection status from `connection.list` RPC."""
+
+    payload = _rpc_call(instance, "connection.list", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    connections = payload.data.get("connections")
+    if not isinstance(connections, list):
+        return CommandResult(
+            ok=False,
+            message="RPC result missing connections list",
+            instance=instance,
+        )
+
+    filtered_connections = _filter_connections(connections, provider_id, connection_id)
+    if not filtered_connections:
+        target = connection_id if connection_id is not None else provider_id
+        return CommandResult(
+            ok=False, message=f"provider status not found: {target}", instance=instance
+        )
+    return CommandResult(
+        ok=True,
+        message=_format_connection_rows(filtered_connections),
+        instance=instance,
+    )
+
+
 def provider_set_key(
     instance: ServerInstance,
     provider_id: str,
     value: str,
     connection_id: str | None = None,
+    refresh_models: bool = False,
 ) -> CommandResult:
     """Set an API-key provider credential via `provider.set_key` RPC."""
 
@@ -47,9 +79,21 @@ def provider_set_key(
 
     resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
     credential_key = _string_or_default(payload.data.get("credential_key"), "?")
+    message = f"set {resolved_connection_id} credential {credential_key}"
+
+    if refresh_models:
+        refresh_payload = _rpc_call(instance, "model.refresh_db", {"provider_id": provider_id})
+        if not refresh_payload.ok:
+            return CommandResult(
+                ok=False,
+                message=f"{message}\nrefresh failed: {refresh_payload.message}",
+                instance=instance,
+            )
+        message = f"{message}\n{_format_refresh_result(refresh_payload.data, provider_id)}"
+
     return CommandResult(
         ok=True,
-        message=f"set {resolved_connection_id} credential {credential_key}",
+        message=message,
         instance=instance,
     )
 
@@ -150,6 +194,23 @@ def _format_connection_rows(connections: Sequence[object]) -> str:
     return "\n".join(lines)
 
 
+def _filter_connections(
+    connections: Sequence[object],
+    provider_id: str,
+    connection_id: str | None,
+) -> list[object]:
+    filtered_connections: list[object] = []
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        if connection.get("provider_id") != provider_id:
+            continue
+        if connection_id is not None and connection.get("id") != connection_id:
+            continue
+        filtered_connections.append(connection)
+    return filtered_connections
+
+
 def _format_connection_row(connection: object) -> str:
     if not isinstance(connection, dict):
         return "- invalid connection entry"
@@ -172,3 +233,11 @@ def _string_or_default(value: object, default: str) -> str:
     if isinstance(value, str) and value:
         return value
     return default
+
+
+def _format_refresh_result(data: Mapping[str, Any], provider_id: str) -> str:
+    resolved_provider_id = _string_or_default(data.get("provider_id"), provider_id)
+    model_count = data.get("model_count")
+    if isinstance(model_count, int) and not isinstance(model_count, bool):
+        return f"refreshed {resolved_provider_id} ({model_count} models)"
+    return f"refreshed {resolved_provider_id}"

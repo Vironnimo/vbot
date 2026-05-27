@@ -29,7 +29,7 @@ from cli.config_management import coerce_config_value, config_get, config_set, c
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
-from cli.provider_management import provider_list, provider_set_key
+from cli.provider_management import provider_list, provider_set_key, provider_status
 from cli.server_management import (
     CommandResult,
     ServerInstance,
@@ -48,7 +48,7 @@ AGENT_COMMANDS = ("list", "show", "create", "update", "delete")
 TOOL_COMMANDS = ("list",)
 PROMPT_COMMANDS = ("list", "update", "reset", "preview")
 LOG_COMMANDS = ("list", "read")
-PROVIDER_COMMANDS = ("list", "set-key")
+PROVIDER_COMMANDS = ("list", "status", "set-key")
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
@@ -191,11 +191,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
     provider_list_parser = provider_subparsers.add_parser("list")
     _add_target_arguments(provider_list_parser)
+    provider_status_parser = provider_subparsers.add_parser("status")
+    _add_target_arguments(provider_status_parser)
+    provider_status_parser.add_argument("--provider", required=True)
+    provider_status_parser.add_argument("--connection")
     provider_set_key_parser = provider_subparsers.add_parser("set-key")
     _add_target_arguments(provider_set_key_parser)
     provider_set_key_parser.add_argument("--provider", required=True)
     provider_set_key_parser.add_argument("--connection")
     provider_set_key_parser.add_argument("--value", required=True)
+    provider_set_key_parser.add_argument("--refresh-models", action="store_true")
 
     model_parser = subparsers.add_parser("model", description="Manage vBot models")
     model_subparsers = model_parser.add_subparsers(dest="command", required=True)
@@ -284,8 +289,11 @@ def run(
     list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
     read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
     list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
+    provider_status_fn: Callable[
+        [ServerInstance, str, str | None], CommandResult
+    ] = provider_status,
     set_provider_key: Callable[
-        [ServerInstance, str, str, str | None], CommandResult
+        [ServerInstance, str, str, str | None, bool], CommandResult
     ] = provider_set_key,
     list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
@@ -378,6 +386,7 @@ def run(
             args,
             instance,
             list_providers=list_providers,
+            provider_status_fn=provider_status_fn,
             set_provider_key=set_provider_key,
         )
         print_management_command_result(result)
@@ -595,14 +604,23 @@ def dispatch_provider_command(
     instance: ServerInstance,
     *,
     list_providers: Callable[[ServerInstance], CommandResult],
-    set_provider_key: Callable[[ServerInstance, str, str, str | None], CommandResult],
+    provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
+    set_provider_key: Callable[[ServerInstance, str, str, str | None, bool], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
     if args.command == "list":
         return list_providers(instance)
+    if args.command == "status":
+        return provider_status_fn(instance, args.provider, args.connection)
     if args.command == "set-key":
-        return set_provider_key(instance, args.provider, args.value, args.connection)
+        return set_provider_key(
+            instance,
+            args.provider,
+            args.value,
+            args.connection,
+            args.refresh_models,
+        )
     raise ValueError(f"Unsupported provider command: {args.command}")
 
 

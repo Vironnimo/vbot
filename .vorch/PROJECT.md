@@ -207,7 +207,9 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 - **Provider API-key setup is CLI-supported.** `provider set-key` sends a direct
   API-key value to server RPC, the server writes the configured provider
   connection `credential_key` into the data-dir `.env`, and runtime provider
-  credentials reload immediately. OAuth console login remains a separate scope.
+  credentials reload immediately. `provider status` filters connection usability,
+  and `provider set-key --refresh-models` may refresh that provider's model
+  catalog in the same CLI flow. OAuth console login remains a separate scope.
 
 - **Raw model catalog files are kept alongside sanitized files.** After a
   model-db refresh, `resources/models/<provider>.raw.json` stores the full

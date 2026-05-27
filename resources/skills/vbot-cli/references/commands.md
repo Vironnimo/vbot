@@ -54,15 +54,17 @@ vbot config set defaults '{"agent":{"temperature":0.4}}'
 
 ```bash
 vbot provider list
-vbot provider set-key --provider <provider-id> [--connection <provider:connection-id>] --value <api-key>
+vbot provider status --provider <provider-id> [--connection <provider:connection-id>]
+vbot provider set-key --provider <provider-id> [--connection <provider:connection-id>] --value <api-key> [--refresh-models]
 ```
 
-Use `provider list` before model or agent configuration work to see configured provider connections and whether they are usable. Use `provider set-key` to activate an API-key provider through the server: vBot resolves the configured provider credential key, writes it to the target data-dir `.env`, reloads provider credentials, and prints only the provider connection and credential key name.
+Use `provider list` before model or agent configuration work to see configured provider connections and whether they are usable. Use `provider status` for one provider or connection. Use `provider set-key` to activate an API-key provider through the server: vBot resolves the configured provider credential key, writes it to the target data-dir `.env`, reloads provider credentials, and prints only the provider connection and credential key name. Add `--refresh-models` to refresh that provider's model catalog immediately after setting the key.
 
 Examples:
 
 ```bash
-vbot provider set-key --provider openrouter --value <api-key>
+vbot provider status --provider openrouter
+vbot provider set-key --provider openrouter --value <api-key> --refresh-models
 vbot provider set-key --provider openai --connection openai:api-key --value <api-key>
 vbot provider list
 vbot model refresh --provider openrouter
@@ -219,6 +221,7 @@ vbot agent list
 vbot channel status --id <channel-id>
 vbot channel list
 vbot provider list
+vbot provider status --provider <provider-id>
 vbot model list
 vbot skill list
 vbot tool list
