@@ -58,6 +58,42 @@ vbot provider list
 
 Use this before model or agent configuration work to see configured provider connections and whether they are usable.
 
+## Agents
+
+```bash
+vbot agent list
+vbot agent show --id <agent-id>
+vbot agent create --id <agent-id> --name <display-name> [--model <provider/model-id>] [--fallback-model <provider/model-id>] [--temperature <0..2>] [--thinking-effort <effort>] [--allowed-tools <tool> ...] [--allowed-skills <skill> ...]
+vbot agent update --id <agent-id> [--name <display-name>] [--model <provider/model-id>] [--fallback-model <provider/model-id>] [--temperature <0..2>] [--clear-temperature] [--thinking-effort <effort>] [--clear-thinking-effort] [--allowed-tools <tool> ...] [--allowed-skills <skill> ...] [--current-session-id <session-id>]
+vbot agent delete --id <agent-id>
+```
+
+Examples:
+
+```bash
+vbot agent list
+vbot agent show --id assistant
+vbot agent create --id coder --name Coder --model openai/gpt-5.2 --allowed-tools '*' --allowed-skills '*'
+vbot agent update --id coder --temperature 0.4 --thinking-effort high
+vbot agent update --id coder --allowed-tools read_file edit_file --allowed-skills debugging vbot-cli
+vbot agent update --id coder --clear-temperature --clear-thinking-effort
+vbot agent delete --id old-agent
+```
+
+Supported `--thinking-effort` values:
+
+```text
+none
+minimal
+low
+medium
+high
+xhigh
+max
+```
+
+`--clear-temperature` and `--clear-thinking-effort` send JSON `null` so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear operation. `--allowed-tools` and `--allowed-skills` replace the full allowlist; pass the flag with no values to set an empty list.
+
 ## Models
 
 ```bash
@@ -117,6 +153,8 @@ After every change, run a read command from the same area:
 
 ```bash
 vbot config get <key>
+vbot agent show --id <agent-id>
+vbot agent list
 vbot channel status --id <channel-id>
 vbot provider list
 vbot model list
