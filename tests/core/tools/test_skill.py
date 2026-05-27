@@ -96,8 +96,7 @@ metadata:
 
     assert result == tool_failure(
         "skill_unavailable",
-        "Skill 'openai-helper' is unavailable: "
-        "missing environment variable 'OPENAI_API_KEY'",
+        "Skill 'openai-helper' is unavailable: missing environment variable 'OPENAI_API_KEY'",
     )
 
 
