@@ -87,6 +87,16 @@ def test_parse_args_supports_provider_status_options() -> None:
     assert args.connection == "openrouter:api-key"
 
 
+def test_provider_set_key_help_is_informative(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main.parse_args(["provider", "set-key", "--help"])
+
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "Write an API key to the target data-dir .env" in output
+    assert "--refresh-models" in output
+
+
 def test_provider_list_posts_connection_list_rpc(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,6 +268,46 @@ def test_provider_status_returns_not_found_for_missing_connection(
     assert result == CommandResult(
         ok=False,
         message="provider status not found: openrouter:api-key",
+        instance=instance,
+    )
+
+
+def test_provider_status_not_found_includes_candidates_and_suggestion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "connections": [
+                        {
+                            "id": "openrouter:api-key",
+                            "provider_id": "openrouter",
+                            "type": "api_key",
+                            "label": "API Key",
+                            "usable": True,
+                        }
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_status(instance, "openruter")
+
+    assert result == CommandResult(
+        ok=False,
+        message=(
+            "provider status not found: openruter\n"
+            "available providers: openrouter\n"
+            "did you mean: openrouter"
+        ),
         instance=instance,
     )
 

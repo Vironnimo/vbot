@@ -204,6 +204,9 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   contract. Prompt updates may read a local source file for input text, but the
   server remains responsible for validation and persistence; log commands read
   through `log.*` RPCs rather than direct data-dir file access.
+- **CLI output is agent-facing.** Commands must not be silent on success or
+  failure. Help text, success text, errors, and candidate suggestions should be
+  explicit enough for an agent to choose the next command without guessing.
 - **Provider API-key setup is CLI-supported.** `provider set-key` sends a direct
   API-key value to server RPC, the server writes the configured provider
   connection `credential_key` into the data-dir `.env`, and runtime provider

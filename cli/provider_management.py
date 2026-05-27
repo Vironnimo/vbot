@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from difflib import get_close_matches
 from typing import Any
 
 import httpx
@@ -51,7 +52,9 @@ def provider_status(
     if not filtered_connections:
         target = connection_id if connection_id is not None else provider_id
         return CommandResult(
-            ok=False, message=f"provider status not found: {target}", instance=instance
+            ok=False,
+            message=_format_status_not_found(target, connection_id, connections),
+            instance=instance,
         )
     return CommandResult(
         ok=True,
@@ -209,6 +212,46 @@ def _filter_connections(
             continue
         filtered_connections.append(connection)
     return filtered_connections
+
+
+def _format_status_not_found(
+    target: str,
+    connection_id: str | None,
+    connections: Sequence[object],
+) -> str:
+    candidates = (
+        _connection_ids(connections) if connection_id is not None else _provider_ids(connections)
+    )
+    lines = [f"provider status not found: {target}"]
+    if candidates:
+        label = "connections" if connection_id is not None else "providers"
+        lines.append(f"available {label}: {', '.join(candidates)}")
+        suggestions = get_close_matches(target, candidates, n=1)
+        if suggestions:
+            lines.append(f"did you mean: {suggestions[0]}")
+    return "\n".join(lines)
+
+
+def _provider_ids(connections: Sequence[object]) -> list[str]:
+    provider_ids: set[str] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        provider_id = connection.get("provider_id")
+        if isinstance(provider_id, str):
+            provider_ids.add(provider_id)
+    return sorted(provider_ids)
+
+
+def _connection_ids(connections: Sequence[object]) -> list[str]:
+    connection_ids: set[str] = set()
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        connection_id = connection.get("id")
+        if isinstance(connection_id, str):
+            connection_ids.add(connection_id)
+    return sorted(connection_ids)
 
 
 def _format_connection_row(connection: object) -> str:
