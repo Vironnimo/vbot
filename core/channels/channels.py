@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import ChannelAdapter, FileData
+from core.settings import SettingsValidationError, load_validated_channel_json
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -204,14 +205,9 @@ class ChannelStorage:
 
     def _read_config(self, config_path: Path) -> ChannelConfig:
         try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as error:
-            raise ChannelConfigError(f"Invalid JSON in {config_path}: {error}") from error
-        except OSError as error:
-            raise ChannelError(f"Cannot read {config_path}: {error}") from error
-
-        if not isinstance(payload, dict):
-            raise ChannelConfigError(f"Channel config must be an object: {config_path}")
+            payload = load_validated_channel_json(config_path)
+        except SettingsValidationError as error:
+            raise ChannelConfigError(str(error)) from error
 
         config = ChannelConfig.from_dict(payload)
         if config.id != config_path.parent.name:

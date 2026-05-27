@@ -13,7 +13,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.automation.cron as cron_module
-from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronService
+from core.automation.cron import (
+    CronJobNotFoundError,
+    CronJobValidationError,
+    CronService,
+    CronStorageError,
+)
 
 
 def make_service(tmp_path: Path) -> tuple[CronService, SimpleNamespace]:
@@ -65,6 +70,18 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     assert jobs == []
     assert jobs_path.exists()
     assert json.loads(jobs_path.read_text(encoding="utf-8")) == []
+
+
+def test_jobs_json_schema_is_validated_on_read(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text(
+        json.dumps([{"id": "job-one", "schedule_type": "daily"}]), encoding="utf-8"
+    )
+    service, _trigger_service = make_service(tmp_path)
+
+    with pytest.raises(CronStorageError, match=r"\$\[0\]\.schedule_type: must be one of"):
+        service.list_jobs()
 
 
 def test_utc_timezone_is_accepted_when_zoneinfo_database_is_unavailable(

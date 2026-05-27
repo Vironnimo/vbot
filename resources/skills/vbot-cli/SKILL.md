@@ -74,10 +74,11 @@ vbot config get server_port
 vbot config set server_port 9000
 vbot config set skill_directories '["C:/skills"]'
 vbot doctor settings
+vbot doctor config
 ```
 
 Pass JSON values as one shell argument when setting arrays, objects, booleans, or numbers.
-Use `doctor settings` before or after manual settings edits; it runs locally and does not require a running server.
+Use `doctor settings` before or after manual settings edits; it runs locally and does not require a running server. Use `doctor config` after manual edits to any user-editable runtime JSON such as settings, agents, channels, or cron jobs.
 
 ### Providers And Models
 
@@ -172,6 +173,7 @@ Use `channel update` for partial config changes. Omitted fields remain unchanged
 - Do not hand-edit `.env` for provider API keys when `vbot provider set-key` can express the change.
 - Do not configure channels with token literals. Store the token in the environment or data-dir `.env`, then pass the variable name with `--token-env`.
 - Do not edit agent JSON directly when `vbot agent create`, `vbot agent update`, or `vbot agent delete` can express the change. Workspace paths are not mutable through public agent CLI commands.
+- If direct JSON edits were required, run `vbot doctor config` before relying on the instance.
 - If a command fails because another process occupies the port, do not kill it manually. Report the conflict or target a different port/data directory.
 
 ## Output Contract

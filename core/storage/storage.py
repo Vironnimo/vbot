@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
 
@@ -174,22 +175,10 @@ class StorageManager:
     def load_settings(self) -> dict[str, Any]:
         """Load ``settings.json`` or return an empty mapping when it does not exist."""
 
-        if not self.settings_path.exists():
-            return {}
-
         try:
-            data = json.loads(self.settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise StorageError(f"Invalid JSON in {self.settings_path}: {exc}") from exc
-        except OSError as exc:
-            raise StorageError(f"Cannot read {self.settings_path}: {exc}") from exc
-
-        if not isinstance(data, dict):
-            raise StorageError(
-                f"Expected a JSON object at {self.settings_path}, got {type(data).__name__}"
-            )
-
-        return data
+            return load_validated_settings_json(self.settings_path)
+        except SettingsValidationError as exc:
+            raise StorageError(str(exc)) from exc
 
     def supported_appearance_languages(self) -> list[str]:
         """Return language codes supported by the persisted Settings surface."""

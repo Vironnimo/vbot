@@ -1,16 +1,19 @@
-# Doctor Settings Validator Plan
+# Doctor Config Validator Plan
 
-Goal: add a `vbot doctor` surface that validates user-editable runtime
-configuration before vBot uses it. First scope is `settings.json`; the command
-shape should leave room for agents, channels, cron, and provider checks later.
+Goal: add a central JSON validation layer for user-editable runtime
+configuration, enforce it when files are read, and expose it through `vbot
+doctor` so agents can preflight a data directory before normal runtime paths use
+the files.
 
 ## Checklist
 
-- [x] Add a pure raw `settings.json` validator in `core/settings`.
-- [x] Validate current known settings sections without writing or normalizing files.
-- [x] Report precise diagnostics with path, severity, message, and optional JSON path.
-- [x] Add a `vbot doctor settings` CLI command that runs locally against the target data dir.
-- [x] Print explicit success and failure output for agent callers.
+- [x] Move raw JSON diagnostics into a dedicated central validation module.
+- [x] Keep `settings.json` validation there instead of growing `settings.py`.
+- [x] Add validators for `agent.json`, `channels/*/channel.json`, and `cron/jobs.json`.
+- [x] Enforce validation at read time for settings, agents, channels, and cron.
+- [x] Add `vbot doctor config` for the full data-dir config bundle.
+- [x] Keep `vbot doctor settings` for the focused settings-only check.
+- [x] Print explicit success/failure output with file/path diagnostics for agent callers.
 - [x] Cover valid, missing, invalid JSON, wrong root type, and invalid field cases with tests.
-- [x] Update project specs/docs for the new doctor command.
+- [x] Update project specs/docs and the `vbot-cli` skill.
 - [x] Run quality gates and commit the finished slice.

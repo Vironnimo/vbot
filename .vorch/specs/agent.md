@@ -37,6 +37,9 @@ Persisted agent configuration and workspace lifecycle management.
   applied.
 - `list() -> list[Agent]` — returns effective Agents with `defaults.agent`
   applied.
+- Agent reads pass `agent.json` through `core/settings/validation.py` before
+  constructing `Agent` objects. Malformed JSON or schema errors raise
+  `AgentError` with file/path diagnostics instead of being normalized later.
 - `update(agent_id, **changes) -> Agent` — updates mutable fields only; `id` is immutable. Raw values are written unchanged and the returned Agent is resolved after write.
 - `delete(agent_id) -> Path` — moves active data under `<data_dir>/archive/<agent-id>/`.
 ## Conventions

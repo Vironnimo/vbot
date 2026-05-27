@@ -179,6 +179,17 @@ def test_get_missing_agent_raises_not_found(store: AgentStore) -> None:
         store.get("missing")
 
 
+def test_get_rejects_invalid_agent_json_schema(store: AgentStore) -> None:
+    store.create("broken", "Broken Agent")
+    agent_path = store.data_dir / "agents" / "broken" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    data["allowed_tools"] = "read_file"
+    agent_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(AgentError, match=r"\$\.allowed_tools: must be a list of strings"):
+        store.get("broken")
+
+
 def test_list_returns_agents_sorted_by_id(store: AgentStore) -> None:
     store.create("beta", "Beta Agent")
     store.create("alpha", "Alpha Agent")

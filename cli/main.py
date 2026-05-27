@@ -26,7 +26,7 @@ from cli.channel_management import (
     channel_update,
 )
 from cli.config_management import coerce_config_value, config_get, config_set, config_show
-from cli.doctor_management import doctor_settings
+from cli.doctor_management import doctor_config, doctor_settings
 from cli.log_management import log_list, log_read
 from cli.model_management import model_list, model_refresh
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
@@ -53,7 +53,7 @@ PROVIDER_COMMANDS = ("list", "status", "set-key")
 MODEL_COMMANDS = ("list", "refresh")
 SKILL_COMMANDS = ("list",)
 CONFIG_COMMANDS = ("get", "set")
-DOCTOR_COMMANDS = ("settings",)
+DOCTOR_COMMANDS = ("settings", "config")
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "agent": "Inspect and manage agent configs",
@@ -112,7 +112,10 @@ CONFIG_HELP = {
     "get": "Show one raw settings key",
     "set": "Set one raw settings key",
 }
-DOCTOR_HELP = {"settings": "Validate the target data-dir settings.json"}
+DOCTOR_HELP = {
+    "settings": "Validate the target data-dir settings.json",
+    "config": "Validate all user-editable JSON config files in the target data-dir",
+}
 TOOL_HELP = {"list": "List public registered tools"}
 SKILL_HELP = {"list": "List skills and diagnostics"}
 THINKING_EFFORTS = ("", "none", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -464,15 +467,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description=AREA_HELP["doctor"],
     )
     doctor_subparsers = doctor_parser.add_subparsers(dest="command", required=True)
-    doctor_settings_parser = doctor_subparsers.add_parser(
-        DOCTOR_COMMANDS[0],
-        help=DOCTOR_HELP["settings"],
-        description=DOCTOR_HELP["settings"],
-    )
-    doctor_settings_parser.add_argument(
-        "--data-dir",
-        help="Target vBot data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot",
-    )
+    for command in DOCTOR_COMMANDS:
+        doctor_command_parser = doctor_subparsers.add_parser(
+            command,
+            help=DOCTOR_HELP[command],
+            description=DOCTOR_HELP[command],
+        )
+        doctor_command_parser.add_argument(
+            "--data-dir",
+            help=(
+                "Target vBot data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot"
+            ),
+        )
 
     return parser.parse_args(argv)
 
@@ -547,6 +553,7 @@ def run(
     get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
+    doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -668,7 +675,11 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "doctor":
-        result = dispatch_doctor_command(args, doctor_settings_fn=doctor_settings_fn)
+        result = dispatch_doctor_command(
+            args,
+            doctor_settings_fn=doctor_settings_fn,
+            doctor_config_fn=doctor_config_fn,
+        )
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
@@ -928,11 +939,14 @@ def dispatch_doctor_command(
     args: argparse.Namespace,
     *,
     doctor_settings_fn: Callable[[str | Path | None], CommandResult],
+    doctor_config_fn: Callable[[str | Path | None], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed local doctor command."""
 
     if args.command == "settings":
         return doctor_settings_fn(args.data_dir)
+    if args.command == "config":
+        return doctor_config_fn(args.data_dir)
     raise ValueError(f"Unsupported doctor command: {args.command}")
 
 

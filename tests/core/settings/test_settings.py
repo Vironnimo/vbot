@@ -173,7 +173,7 @@ def test_validate_settings_file_reports_invalid_json(tmp_path: Path) -> None:
         (
             "error",
             "$",
-            "invalid JSON: Expecting property name enclosed in double quotes at line 1 column 2",
+            "Invalid JSON: Expecting property name enclosed in double quotes at line 1 column 2",
         )
     ]
 
@@ -185,7 +185,7 @@ def test_validate_settings_file_reports_wrong_root_type(tmp_path: Path) -> None:
     report = validate_settings_file(settings_path)
 
     assert report.ok is False
-    assert diagnostics_as_tuples(report) == [("error", "$", "expected JSON object, got list")]
+    assert diagnostics_as_tuples(report) == [("error", "$", "Expected a JSON object, got list")]
 
 
 def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:

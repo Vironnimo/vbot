@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sessions import ChatSessionManager
+from core.settings import SettingsValidationError, load_validated_agent_json
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
@@ -267,7 +268,10 @@ class AgentStore:
         return defaults
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
-        data = json.loads(agent_path.read_text(encoding="utf-8"))
+        try:
+            data = load_validated_agent_json(agent_path)
+        except SettingsValidationError as exc:
+            raise AgentError(str(exc)) from exc
         agent_id = _validate_string_field("id", data["id"], allow_empty=False)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
         agent = _agent_from_dict(data, default_workspace=self._default_workspace(agent_id))

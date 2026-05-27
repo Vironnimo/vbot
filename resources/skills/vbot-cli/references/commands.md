@@ -37,6 +37,7 @@ vbot config
 vbot config get <key>
 vbot config set <key> <json-or-string-value>
 vbot doctor settings [--data-dir <path>]
+vbot doctor config [--data-dir <path>]
 ```
 
 Examples:
@@ -48,10 +49,11 @@ vbot config set skill_directories '["C:/Users/Viro/skills"]'
 vbot config set extension_directories '["C:/Users/Viro/vbot-extensions"]'
 vbot config set defaults '{"agent":{"temperature":0.4}}'
 vbot doctor settings
+vbot doctor config
 ```
 
 `config set` parses JSON values first and falls back to plain strings. Quote JSON as one shell argument.
-`doctor settings` validates the target data-dir `settings.json` locally and prints file/path diagnostics; it does not require a running server.
+`doctor settings` validates the target data-dir `settings.json` locally and prints file/path diagnostics; it does not require a running server. `doctor config` validates the full user-editable runtime JSON bundle: settings, agents, channels, and cron jobs.
 
 ## Providers
 
@@ -220,6 +222,7 @@ After every change, run a read command from the same area:
 ```bash
 vbot config get <key>
 vbot doctor settings
+vbot doctor config
 vbot agent show --id <agent-id>
 vbot agent list
 vbot channel status --id <channel-id>
