@@ -207,6 +207,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
 - **CLI output is agent-facing.** Commands must not be silent on success or
   failure. Help text, success text, errors, and candidate suggestions should be
   explicit enough for an agent to choose the next command without guessing.
+- **Doctor CLI commands are local preflight checks.** `doctor settings` validates
+  the target data-dir `settings.json` without requiring a running server, and
+  prints file/path diagnostics that agents can act on before normal runtime
+  paths consume the file.
 - **Provider API-key setup is CLI-supported.** `provider set-key` sends a direct
   API-key value to server RPC, the server writes the configured provider
   connection `credential_key` into the data-dir `.env`, and runtime provider

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 JsonObject = dict[str, Any]
+DiagnosticSeverity = str
 
 ALLOWED_THINKING_EFFORTS = frozenset(
     {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -17,15 +21,342 @@ MAX_TEMPERATURE = 2.0
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {"appearance", "skills", "subagents", "compaction", "defaults"}
 )
+KNOWN_RAW_SETTINGS_KEYS = frozenset(
+    {
+        "PORT",
+        "SERVER_PORT",
+        "appearance",
+        "attachment_max_size_bytes",
+        "compaction",
+        "defaults",
+        "extension_directories",
+        "max_subagent_depth",
+        "max_subagents_per_turn",
+        "port",
+        "server_port",
+        "skill_directories",
+        "subagent_timeout_minutes",
+    }
+)
+PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
     "subagent_timeout_minutes",
 )
+APPEARANCE_FIELDS = frozenset({"language"})
+SUPPORTED_APPEARANCE_LANGUAGES = frozenset({"en"})
+COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
+DEFAULTS_SECTIONS = frozenset({"agent"})
 
 
 class SettingsValidationError(ValueError):
     """Raised when a public Settings payload is malformed."""
+
+
+@dataclass(frozen=True)
+class SettingsDiagnostic:
+    """One raw settings file validation diagnostic."""
+
+    severity: DiagnosticSeverity
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class SettingsValidationReport:
+    """Validation result for one raw settings file."""
+
+    file_path: Path
+    exists: bool
+    diagnostics: tuple[SettingsDiagnostic, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not any(diagnostic.severity == "error" for diagnostic in self.diagnostics)
+
+    @property
+    def error_count(self) -> int:
+        return sum(1 for diagnostic in self.diagnostics if diagnostic.severity == "error")
+
+    @property
+    def warning_count(self) -> int:
+        return sum(1 for diagnostic in self.diagnostics if diagnostic.severity == "warning")
+
+
+def validate_settings_file(settings_path: str | Path) -> SettingsValidationReport:
+    """Validate a raw ``settings.json`` file without mutating it."""
+
+    path = Path(settings_path)
+    if not path.exists():
+        return SettingsValidationReport(file_path=path, exists=False)
+
+    try:
+        data = _load_json_path(path)
+    except json.JSONDecodeError as exc:
+        return SettingsValidationReport(
+            file_path=path,
+            exists=True,
+            diagnostics=(
+                SettingsDiagnostic(
+                    severity="error",
+                    path="$",
+                    message=(f"invalid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}"),
+                ),
+            ),
+        )
+    except OSError as exc:
+        return SettingsValidationReport(
+            file_path=path,
+            exists=True,
+            diagnostics=(
+                SettingsDiagnostic(
+                    severity="error",
+                    path="$",
+                    message=f"cannot read settings file: {exc}",
+                ),
+            ),
+        )
+
+    return SettingsValidationReport(
+        file_path=path,
+        exists=True,
+        diagnostics=tuple(validate_settings_data(data)),
+    )
+
+
+def _load_json_path(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_settings_data(data: Any) -> list[SettingsDiagnostic]:
+    """Validate a decoded raw Settings mapping and return diagnostics."""
+
+    diagnostics: list[SettingsDiagnostic] = []
+    if not isinstance(data, dict):
+        return [
+            SettingsDiagnostic(
+                severity="error",
+                path="$",
+                message=f"expected JSON object, got {type(data).__name__}",
+            )
+        ]
+
+    _warn_unknown_keys(diagnostics, "$", data, KNOWN_RAW_SETTINGS_KEYS, "settings key")
+    _validate_port_settings(diagnostics, data)
+    _validate_appearance(diagnostics, data.get("appearance"))
+    _validate_directory_list(diagnostics, "$.skill_directories", data.get("skill_directories"))
+    _validate_directory_list(
+        diagnostics,
+        "$.extension_directories",
+        data.get("extension_directories"),
+    )
+    _validate_positive_integer(
+        diagnostics,
+        "$.attachment_max_size_bytes",
+        data.get("attachment_max_size_bytes"),
+        required=False,
+    )
+    for field in SUBAGENT_SETTING_FIELDS:
+        _validate_positive_integer(diagnostics, f"$.{field}", data.get(field), required=False)
+    _validate_compaction(diagnostics, data.get("compaction"))
+    _validate_defaults(diagnostics, data.get("defaults"))
+    return diagnostics
+
+
+def _warn_unknown_keys(
+    diagnostics: list[SettingsDiagnostic],
+    parent_path: str,
+    data: Mapping[str, Any],
+    known_keys: frozenset[str],
+    label: str,
+) -> None:
+    for key in sorted(set(data) - known_keys):
+        diagnostics.append(
+            SettingsDiagnostic(
+                severity="warning",
+                path=_child_path(parent_path, key),
+                message=f"unknown {label}: {key}",
+            )
+        )
+
+
+def _validate_port_settings(diagnostics: list[SettingsDiagnostic], data: Mapping[str, Any]) -> None:
+    for key in sorted(PORT_SETTING_KEYS):
+        if key in data:
+            _validate_port(diagnostics, f"$.{key}", data[key])
+
+
+def _validate_port(diagnostics: list[SettingsDiagnostic], path: str, value: Any) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        _error(diagnostics, path, "must be an integer port")
+        return
+    try:
+        port = int(value)
+    except ValueError:
+        _error(diagnostics, path, "must be an integer port")
+        return
+    if port < 1 or port > 65535:
+        _error(diagnostics, path, "must be between 1 and 65535")
+
+
+def _validate_appearance(diagnostics: list[SettingsDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.appearance", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.appearance", value, APPEARANCE_FIELDS, "appearance field")
+    language = value.get("language")
+    if language is None:
+        return
+    if not isinstance(language, str) or not language:
+        _error(diagnostics, "$.appearance.language", "must be a non-empty string")
+        return
+    if language not in SUPPORTED_APPEARANCE_LANGUAGES:
+        supported = ", ".join(sorted(SUPPORTED_APPEARANCE_LANGUAGES))
+        _error(
+            diagnostics, "$.appearance.language", f"unsupported language; supported: {supported}"
+        )
+
+
+def _validate_directory_list(
+    diagnostics: list[SettingsDiagnostic],
+    path: str,
+    value: Any,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        _error(diagnostics, path, "must be a list")
+        return
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        if not isinstance(item, str) or not item.strip():
+            _error(diagnostics, item_path, "must be a non-empty string")
+            continue
+        if not _is_absolute_or_home_relative_path(item.strip()):
+            _error(diagnostics, item_path, "must be an absolute or home-relative path")
+
+
+def _validate_positive_integer(
+    diagnostics: list[SettingsDiagnostic],
+    path: str,
+    value: Any,
+    *,
+    required: bool,
+) -> None:
+    if value is None:
+        if required:
+            _error(diagnostics, path, "is required")
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        _error(diagnostics, path, "must be a positive integer")
+        return
+    if value <= 0:
+        _error(diagnostics, path, "must be a positive integer")
+
+
+def _validate_compaction(diagnostics: list[SettingsDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.compaction", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.compaction", value, COMPACTION_FIELDS, "compaction field")
+    if "auto" in value and not isinstance(value["auto"], bool):
+        _error(diagnostics, "$.compaction.auto", "must be a boolean")
+    if "threshold" in value:
+        threshold = value["threshold"]
+        if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+            _error(diagnostics, "$.compaction.threshold", "must be a number")
+        else:
+            normalized_threshold = float(threshold)
+            if normalized_threshold <= 0 or normalized_threshold > 1:
+                _error(diagnostics, "$.compaction.threshold", "must be in (0, 1]")
+    _validate_positive_integer(
+        diagnostics,
+        "$.compaction.tail_tokens",
+        value.get("tail_tokens"),
+        required=False,
+    )
+    if (
+        "summary_model" in value
+        and value["summary_model"] is not None
+        and not isinstance(value["summary_model"], str)
+    ):
+        _error(diagnostics, "$.compaction.summary_model", "must be a string or null")
+
+
+def _validate_defaults(diagnostics: list[SettingsDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.defaults", "must be an object")
+        return
+
+    unsupported_sections = sorted(set(value) - DEFAULTS_SECTIONS)
+    for section in unsupported_sections:
+        _error(
+            diagnostics,
+            _child_path("$.defaults", section),
+            f"unsupported defaults section: {section}",
+        )
+
+    agent_defaults = value.get("agent")
+    if agent_defaults is None:
+        return
+    if not isinstance(agent_defaults, Mapping):
+        _error(diagnostics, "$.defaults.agent", "must be an object")
+        return
+
+    unsupported_fields = sorted(set(agent_defaults) - AGENT_DEFAULT_FIELDS)
+    for field in unsupported_fields:
+        _error(
+            diagnostics,
+            _child_path("$.defaults.agent", field),
+            f"unsupported defaults.agent setting: {field}",
+        )
+
+    for field, item in agent_defaults.items():
+        if field not in AGENT_DEFAULT_FIELDS:
+            continue
+        item_path = _child_path("$.defaults.agent", field)
+        if item is None:
+            continue
+        if field in {"model", "fallback_model"}:
+            if not isinstance(item, str):
+                _error(diagnostics, item_path, "must be a string or null")
+            continue
+        if field == "temperature":
+            try:
+                _validate_temperature(item, label=item_path, allow_none=True)
+            except SettingsValidationError as exc:
+                _error(diagnostics, item_path, str(exc).removeprefix(f"{item_path} "))
+            continue
+        if field == "thinking_effort":
+            try:
+                _validate_thinking_effort(item, label=item_path, allow_none=True)
+            except SettingsValidationError as exc:
+                _error(diagnostics, item_path, str(exc).removeprefix(f"{item_path} "))
+
+
+def _child_path(parent_path: str, key: str) -> str:
+    if key.replace("_", "").isalnum():
+        return f"{parent_path}.{key}"
+    return f"{parent_path}[{key!r}]"
+
+
+def _is_absolute_or_home_relative_path(path: str) -> bool:
+    if path == "~" or path.startswith(("~/", "~\\")):
+        return True
+    return Path(path).is_absolute()
+
+
+def _error(diagnostics: list[SettingsDiagnostic], path: str, message: str) -> None:
+    diagnostics.append(SettingsDiagnostic(severity="error", path=path, message=message))
 
 
 def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
