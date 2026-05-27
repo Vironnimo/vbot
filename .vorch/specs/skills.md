@@ -14,7 +14,7 @@ Skills are playbooks, not normal user-managed tools. The registry exposes prompt
 - `SkillDiagnostic`: `name`, `path`, `valid`, `warnings`, and `loadable` for both loadable skills with warnings and rejected skill directories.
 - YAML frontmatter is parsed with PyYAML. Validation is lenient: name/directory mismatch and names longer than 64 characters are warnings; missing required fields or invalid YAML make the skill non-loadable.
 - Resource paths are not stored in `SkillMetadata`; `scripts/` and `references/` are scanned at activation time.
-- Bundled `resources/skills/` contains built-in operational skills plus tiny sample skills, including warning and broken examples, so UI diagnostics can be inspected manually.
+- Bundled `resources/skills/` contains tiny sample skills, including warning and broken examples, so UI diagnostics can be inspected manually.
 - Activated skill content is wrapped in `<skill_content name="...">` and persisted as an internal chat note so it remains available across later turns in the same Session without appearing as a normal visible chat message.
 
 ## Prompt Catalog

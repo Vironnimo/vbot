@@ -29,7 +29,7 @@ For each created worktree it does all of the following:
 - builds the frontend once during creation
 
 The goal is that once you are inside the worktree, normal commands like
-`vbot server start` or `python scripts/test-env.py start` use the
+`python cli/main.py server start` or `python scripts/test-env.py start` use the
 worktree's own data dir and port automatically.
 
 ## Basic model
@@ -105,8 +105,8 @@ From this point on, use normal relative commands inside the worktree.
 Examples:
 
 ```bash
-vbot server status
-vbot server start
+python cli/main.py server status
+python cli/main.py server start
 python scripts/test-env.py start
 python scripts/quality.py tests/scripts/test_test_env.py
 python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js
@@ -255,7 +255,7 @@ Also good:
 
 ```bash
 Push-Location .worktrees/my-task
-vbot server status
+python cli/main.py server status
 Pop-Location
 ```
 
@@ -289,7 +289,7 @@ python scripts/worktree.py list
 From inside the worktree:
 
 ```bash
-vbot server status
+python cli/main.py server status
 ```
 
 ### Start the local worktree server
@@ -297,7 +297,7 @@ vbot server status
 From inside the worktree:
 
 ```bash
-vbot server start
+python cli/main.py server start
 ```
 
 or:
@@ -313,7 +313,7 @@ python scripts/test-env.py start
 From inside the worktree:
 
 ```bash
-vbot server stop
+python cli/main.py server stop
 ```
 
 or:

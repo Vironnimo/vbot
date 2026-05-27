@@ -14,9 +14,6 @@ cli     = ["rich", "psutil"]
 desktop = ["pywebview"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart", "psutil"]
 
-[project.scripts]
-vbot = "cli.main:main"
-
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
 
