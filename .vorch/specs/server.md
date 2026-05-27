@@ -16,7 +16,7 @@ Clients call the vBot server contract; provider wire details stay behind
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional
   `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false,
   "error": { "code": ..., "message": ... } }`.
-- WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `provider.connect`, `provider.disconnect`,
+- WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `provider.set_key`, `provider.connect`, `provider.disconnect`,
   `provider.connection_status`, `tool.list`, `skill.list`, `agent.list`,
   `agent.get`, `agent.create`, `agent.update`, `agent.delete`, `session.create`,
   `session.list`, `session.link_channel`, `chat.history`, `chat.send`,
@@ -28,6 +28,7 @@ Clients call the vBot server contract; provider wire details stay behind
   `prompt.preview`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
   `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
+- `provider.set_key` accepts `{ provider_id, value, connection_id? }`, resolves the target API-key connection, writes the connection's configured `credential_key` to the data-dir `.env`, reloads runtime provider credentials, and returns `{ provider_id, connection_id, credential_key, configured }`. If `connection_id` is omitted, the provider must have exactly one API-key connection. OAuth connections are rejected; the secret value is never returned.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
   `connection.list`: `provider.connect`, `provider.disconnect`, and
   `provider.connection_status` accept `{ provider_id, connection_id }`, where

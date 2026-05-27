@@ -11,7 +11,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 
 - Use the installed `vbot` command in examples and shell commands. Do not use `python cli/main.py` unless you are debugging the source tree entrypoint itself.
 - Prefer CLI/RPC-backed changes over direct file edits. Use direct file edits only when no CLI command exists and the user explicitly asked for that level of change.
-- Never put raw API keys, bot tokens, OAuth codes, passwords, or other secrets into chat or command arguments. Use environment variable names and tell the user to provide secret values through their shell or data-dir `.env`.
+- When the user gives you an API key and asks you to configure a provider, use `vbot provider set-key --provider <id> --value <api-key>`. Do not print the key back. For bot tokens, OAuth codes, passwords, and other secrets, prefer environment variable names unless a dedicated CLI command exists.
 - Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, and `vbot server status` work without an already-running server.
 - Keep commands non-interactive and automation-safe. Capture the result, then verify with a read/list/status command.
 
@@ -81,10 +81,13 @@ Use these commands to inspect configured provider connections and model catalogs
 
 ```bash
 vbot provider list
+vbot provider set-key --provider openrouter --value <api-key>
 vbot model list
 vbot model refresh
 vbot model refresh --provider openrouter
 ```
+
+Use `provider set-key` when the user gives you an API key and asks you to activate a provider. The command writes the correct provider credential key into the target data-dir `.env`; it does not print the API key back. OAuth/browser login setup is not part of this CLI flow yet.
 
 ### Skills
 
@@ -161,6 +164,7 @@ Use `channel update` for partial config changes. Omitted fields remain unchanged
 - Do not assume the server is running. Check `vbot server status` first for management tasks.
 - Do not edit `settings.json` directly when `vbot config set` can express the change.
 - Do not edit prompt fragments directly when `vbot prompt update` or `vbot prompt reset` can express the change.
+- Do not hand-edit `.env` for provider API keys when `vbot provider set-key` can express the change.
 - Do not configure channels with token literals. Store the token in the environment or data-dir `.env`, then pass the variable name with `--token-env`.
 - Do not edit agent JSON directly when `vbot agent create`, `vbot agent update`, or `vbot agent delete` can express the change. Workspace paths are not mutable through public agent CLI commands.
 - If a command fails because another process occupies the port, do not kill it manually. Report the conflict or target a different port/data directory.

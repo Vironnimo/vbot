@@ -56,6 +56,8 @@ contract rather than reading or mutating files directly.
   - calls `channel.status` over server RPC
 - `python cli/main.py provider list`
   - calls `connection.list` over server RPC and prints configured connections
+- `python cli/main.py provider set-key --provider <id> [--connection <provider:connection-id>] --value <api-key>`
+  - calls `provider.set_key` over server RPC, writes the API-key connection's configured credential key to the data-dir `.env`, reloads runtime provider credentials, and never echoes the API key in output
 - `python cli/main.py model list`
   - calls `model.list` over server RPC and prints available models
 - `python cli/main.py model refresh [--provider <id>]`
@@ -118,8 +120,11 @@ contract rather than reading or mutating files directly.
   live reachability and `/health` detection are the authority.
 - CLI-managed background server startup must not bypass the managed
   application logger.
-- Channel, tool, prompt, and log command output is deterministic and automation-safe. RPC failures and
+- Provider, channel, tool, prompt, and log command output is deterministic and automation-safe. RPC failures and
   malformed envelopes surface as non-zero exits with clear messages.
+- Provider `set-key` accepts a direct API-key value because agents are expected
+  to configure local vBot instances through the CLI. It must send the value only
+  to `provider.set_key` and must not echo the value in success or error output.
 - Agent command output is deterministic and automation-safe. Agent create/update
   accepts only public mutable RPC fields; workspace mutation remains server-rejected.
 - Prompt updates may read a local source file, but storage writes still happen only through `prompt.update`; log commands must not read `<data_dir>/logs/` directly.

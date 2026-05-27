@@ -54,9 +54,21 @@ vbot config set defaults '{"agent":{"temperature":0.4}}'
 
 ```bash
 vbot provider list
+vbot provider set-key --provider <provider-id> [--connection <provider:connection-id>] --value <api-key>
 ```
 
-Use this before model or agent configuration work to see configured provider connections and whether they are usable.
+Use `provider list` before model or agent configuration work to see configured provider connections and whether they are usable. Use `provider set-key` to activate an API-key provider through the server: vBot resolves the configured provider credential key, writes it to the target data-dir `.env`, reloads provider credentials, and prints only the provider connection and credential key name.
+
+Examples:
+
+```bash
+vbot provider set-key --provider openrouter --value <api-key>
+vbot provider set-key --provider openai --connection openai:api-key --value <api-key>
+vbot provider list
+vbot model refresh --provider openrouter
+```
+
+OAuth/browser login flows are not configured by `provider set-key`.
 
 ## Agents
 

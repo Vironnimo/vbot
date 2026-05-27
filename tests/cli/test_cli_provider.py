@@ -37,6 +37,36 @@ def test_parse_args_supports_provider_list_target_options() -> None:
     assert args.data_dir == "dev"
 
 
+def test_parse_args_supports_provider_set_key_options() -> None:
+    args = cli_main.parse_args(
+        [
+            "provider",
+            "set-key",
+            "--provider",
+            "openrouter",
+            "--connection",
+            "openrouter:api-key",
+            "--value",
+            "sk-or-test",
+            "--host",
+            "localhost",
+            "--port",
+            "8700",
+            "--data-dir",
+            "dev",
+        ]
+    )
+
+    assert args.area == "provider"
+    assert args.command == "set-key"
+    assert args.provider == "openrouter"
+    assert args.connection == "openrouter:api-key"
+    assert args.value == "sk-or-test"
+    assert args.host == "localhost"
+    assert args.port == 8700
+    assert args.data_dir == "dev"
+
+
 def test_provider_list_posts_connection_list_rpc(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -148,3 +178,129 @@ def test_provider_list_returns_error_on_rpc_failure(
     result = provider_management.provider_list(instance)
 
     assert result == CommandResult(ok=False, message="provider_error: boom", instance=instance)
+
+
+def test_provider_set_key_posts_set_key_rpc_without_echoing_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "openrouter",
+                    "connection_id": "openrouter:api-key",
+                    "credential_key": "OPENROUTER_API_KEY",
+                    "configured": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_set_key(
+        instance,
+        provider_id="openrouter",
+        connection_id="openrouter:api-key",
+        value="sk-or-test",
+    )
+
+    assert result == CommandResult(
+        ok=True,
+        message="set openrouter:api-key credential OPENROUTER_API_KEY",
+        instance=instance,
+    )
+    assert "sk-or-test" not in result.message
+    assert calls == [
+        {
+            "url": f"{instance.url}/api/rpc",
+            "json": {
+                "method": "provider.set_key",
+                "params": {
+                    "provider_id": "openrouter",
+                    "value": "sk-or-test",
+                    "connection_id": "openrouter:api-key",
+                },
+            },
+            "timeout": 10.0,
+        }
+    ]
+
+
+def test_run_provider_set_key_dispatches_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path, port=8765)
+    calls: list[tuple[str, Any]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_set_key(
+        resolved_instance: ServerInstance,
+        provider_id: str,
+        value: str,
+        connection_id: str | None,
+    ) -> CommandResult:
+        calls.append(
+            (
+                "provider.set_key",
+                {
+                    "instance": resolved_instance,
+                    "provider_id": provider_id,
+                    "value": value,
+                    "connection_id": connection_id,
+                },
+            )
+        )
+        return CommandResult(
+            ok=True,
+            message="set openrouter:api-key credential OPENROUTER_API_KEY",
+            instance=resolved_instance,
+        )
+
+    exit_code = cli_main.run(
+        [
+            "provider",
+            "set-key",
+            "--provider",
+            "openrouter",
+            "--connection",
+            "openrouter:api-key",
+            "--value",
+            "sk-or-test",
+            "--host",
+            "localhost",
+            "--port",
+            "8765",
+            "--data-dir",
+            "data",
+        ],
+        resolve=fake_resolve,
+        set_provider_key=fake_set_key,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
+        (
+            "provider.set_key",
+            {
+                "instance": instance,
+                "provider_id": "openrouter",
+                "value": "sk-or-test",
+                "connection_id": "openrouter:api-key",
+            },
+        ),
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "set openrouter:api-key credential OPENROUTER_API_KEY"
+    ]

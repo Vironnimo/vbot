@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -15,6 +16,7 @@ from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
+ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PROMPT_FRAGMENT_NAMES = frozenset(
     {
         "system.md",
@@ -121,6 +123,45 @@ class StorageManager:
         """Read ``<data_dir>/.env`` as a credential fallback snapshot."""
 
         return read_env_file(self.data_dir / ".env")
+
+    def set_data_dir_credential(self, key: str, value: str) -> None:
+        """Write or replace one credential in ``<data_dir>/.env``."""
+
+        if not ENV_KEY_PATTERN.fullmatch(key):
+            raise StorageError(f"Invalid environment key: {key}")
+        if not value:
+            raise StorageError("Credential value must not be empty")
+        if "\n" in value or "\r" in value:
+            raise StorageError("Credential value must be a single line")
+
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        env_path = self.data_dir / ".env"
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        except OSError as exc:
+            raise StorageError(f"Cannot read {env_path}: {exc}") from exc
+
+        new_line = f"{key}={value}"
+        updated_lines: list[str] = []
+        replaced = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                candidate_key = stripped.partition("=")[0].strip()
+                if candidate_key == key:
+                    if not replaced:
+                        updated_lines.append(new_line)
+                        replaced = True
+                    continue
+            updated_lines.append(line)
+
+        if not replaced:
+            updated_lines.append(new_line)
+
+        try:
+            env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
     def build_environment_snapshot(self) -> dict[str, str]:
         """Return process-env-over-data-dir merged credentials without mutation."""

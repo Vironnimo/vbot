@@ -178,6 +178,8 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _list_models(state, params)
         case "model.refresh_db":
             return await _refresh_model_db(state, params)
+        case "provider.set_key":
+            return _set_provider_key(state, params)
         case "provider.connect":
             return await _connect_provider(state, params)
         case "provider.disconnect":
@@ -453,6 +455,39 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"connections": connections}
+
+
+def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id", "value"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported provider set-key fields: {', '.join(unsupported_fields)}",
+        )
+
+    provider_id = _required_string(params, "provider_id")
+    value = _required_string(params, "value")
+    raw_connection_id = params.get("connection_id")
+    connection_id = (
+        _required_string(params, "connection_id") if raw_connection_id is not None else None
+    )
+
+    try:
+        runtime = state.runtime
+        connection = _api_key_connection(runtime, provider_id, connection_id)
+        public_connection_id = f"{provider_id}:{connection.id}"
+        credential_key = connection.auth.credential_key
+        runtime.storage.set_data_dir_credential(credential_key, value)
+        runtime.reload_provider_credentials()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {
+        "provider_id": provider_id,
+        "connection_id": public_connection_id,
+        "credential_key": credential_key,
+        "configured": True,
+    }
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
@@ -2081,6 +2116,35 @@ def _oauth_connection(runtime: Any, provider_id: str, connection_id: str) -> Any
     return connection
 
 
+def _api_key_connection(runtime: Any, provider_id: str, connection_id: str | None) -> Any:
+    if connection_id is not None:
+        connection = _provider_connection(runtime, provider_id, connection_id)
+        if getattr(connection, "type", "") != "api_key":
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"provider connection '{connection_id}' is not an API key connection",
+            )
+        return connection
+
+    provider = runtime.providers.get(provider_id)
+    connections = [
+        connection
+        for connection in provider.connections
+        if getattr(connection, "type", "") == "api_key"
+    ]
+    if not connections:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"provider '{provider_id}' has no API key connection",
+        )
+    if len(connections) > 1:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"provider '{provider_id}' has multiple API key connections; pass connection_id",
+        )
+    return connections[0]
+
+
 def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> Any:
     provider = runtime.providers.get(provider_id)
     expected_prefix = f"{provider_id}:"
@@ -2089,7 +2153,13 @@ def _provider_connection(runtime: Any, provider_id: str, connection_id: str) -> 
             f"Connection id '{connection_id}' does not belong to provider '{provider_id}'"
         )
     local_connection_id = connection_id.removeprefix(expected_prefix)
-    return provider.get_connection(local_connection_id)
+    get_connection = getattr(provider, "get_connection", None)
+    if callable(get_connection):
+        return get_connection(local_connection_id)
+    for connection in provider.connections:
+        if getattr(connection, "id", "") == local_connection_id:
+            return connection
+    raise ConfigError(f"Unknown connection id '{connection_id}' for provider '{provider_id}'")
 
 
 def _runtime_token_store(runtime: Any) -> Any:
