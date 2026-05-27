@@ -14,6 +14,7 @@ Use this skill when the user wants you to configure, inspect, or operate vBot it
 - When the user gives you an API key and asks you to configure a provider, use `vbot provider set-key --provider <id> --value <api-key>`. Do not print the key back. For bot tokens, OAuth codes, passwords, and other secrets, prefer environment variable names unless a dedicated CLI command exists.
 - Start or locate the target server before running RPC-backed management commands. Only `vbot server start`, `vbot server stop`, `vbot server restart`, and `vbot server status` work without an already-running server.
 - Keep commands non-interactive and automation-safe. Capture the result, then verify with a read/list/status command.
+- Treat CLI output as the source of truth for the next step. If a command returns an error with available candidates or `did you mean`, use that hint before retrying.
 
 ## Workflow
 

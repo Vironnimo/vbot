@@ -91,6 +91,17 @@ contract rather than reading or mutating files directly.
 ## Conventions
 
 - `server start` is data-dir-scoped for instance selection.
+- The CLI is primarily agent-operated. Every command and subcommand must have
+  useful `--help` text, including purpose and important arguments. Success and
+  failure output must be explicit; silent success or silent failure is invalid.
+- Successful mutating commands must name the target and the action performed.
+  Read commands must print enough structured state for an agent to decide the
+  next command without guessing.
+- Failures must include the server RPC error code/message when available and an
+  actionable hint when the CLI has enough local candidates to produce one. For
+  bounded identifiers such as providers, connections, agents, channels, prompt
+  fragments, and log files, prefer `did you mean` suggestions over bare
+  not-found output.
 - Every CLI command except `server start`, `server stop`, `server restart`, and
   `server status` requires a reachable vBot server because the CLI is an
   accessor and those areas are RPC-backed, not local file mutations.

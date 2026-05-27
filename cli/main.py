@@ -187,20 +187,49 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_target_arguments(log_read_parser)
     log_read_parser.add_argument("--file", required=True)
 
-    provider_parser = subparsers.add_parser("provider", description="Manage vBot providers")
+    provider_parser = subparsers.add_parser(
+        "provider",
+        description="Inspect and configure vBot provider connections",
+    )
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
-    provider_list_parser = provider_subparsers.add_parser("list")
+    provider_list_parser = provider_subparsers.add_parser(
+        "list",
+        help="List provider connections and usability",
+        description="List all configured provider connections and whether credentials are usable.",
+    )
     _add_target_arguments(provider_list_parser)
-    provider_status_parser = provider_subparsers.add_parser("status")
+    provider_status_parser = provider_subparsers.add_parser(
+        "status",
+        help="Show one provider or connection status",
+        description=(
+            "Show connection usability for one provider, optionally narrowed to one connection."
+        ),
+    )
     _add_target_arguments(provider_status_parser)
-    provider_status_parser.add_argument("--provider", required=True)
-    provider_status_parser.add_argument("--connection")
-    provider_set_key_parser = provider_subparsers.add_parser("set-key")
+    provider_status_parser.add_argument("--provider", required=True, help="Provider id to inspect")
+    provider_status_parser.add_argument(
+        "--connection",
+        help="Optional compositional connection id, for example openai:api-key",
+    )
+    provider_set_key_parser = provider_subparsers.add_parser(
+        "set-key",
+        help="Set an API-key provider credential",
+        description="Write an API key to the target data-dir .env through the server RPC contract.",
+    )
     _add_target_arguments(provider_set_key_parser)
-    provider_set_key_parser.add_argument("--provider", required=True)
-    provider_set_key_parser.add_argument("--connection")
-    provider_set_key_parser.add_argument("--value", required=True)
-    provider_set_key_parser.add_argument("--refresh-models", action="store_true")
+    provider_set_key_parser.add_argument(
+        "--provider", required=True, help="Provider id to configure"
+    )
+    provider_set_key_parser.add_argument(
+        "--connection",
+        help="Optional compositional connection id, for example openai:api-key",
+    )
+    provider_set_key_parser.add_argument("--value", required=True, help="API key value to persist")
+    provider_set_key_parser.add_argument(
+        "--refresh-models",
+        action="store_true",
+        help="Refresh this provider's model catalog after setting the key",
+    )
 
     model_parser = subparsers.add_parser("model", description="Manage vBot models")
     model_subparsers = model_parser.add_subparsers(dest="command", required=True)
