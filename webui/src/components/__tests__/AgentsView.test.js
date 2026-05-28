@@ -284,6 +284,58 @@ describe('AgentsView', () => {
     });
   });
 
+  it('edits workspace from the identity section without duplicate workspace displays', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#agent-workspace')?.value ===
+        'C:/agents/alpha',
+      100,
+    );
+
+    const workspaceLabels = Array.from(
+      document.body.querySelectorAll('.agent-detail-pane .f-label'),
+    ).filter((label) => label.textContent.trim() === 'Workspace');
+    expect(workspaceLabels).toHaveLength(1);
+
+    const workspaceInput = document.body.querySelector('#agent-workspace');
+    workspaceInput.value = 'D:/agents/alpha';
+    workspaceInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      workspace: 'D:/agents/alpha',
+    });
+  });
+
+  it('does not render a duplicate fallback status below the fallback picker', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
+
+    const modelLabels = Array.from(
+      document.body.querySelectorAll('.agents-view__model-fields .f-label'),
+    ).map((label) => label.textContent.trim());
+
+    expect(modelLabels).toEqual([
+      'Model',
+      'Fallback model',
+      'Thinking effort',
+      'Temperature',
+    ]);
+  });
+
   it('renders one usable connection without a label suffix', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({

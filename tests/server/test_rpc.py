@@ -2586,26 +2586,34 @@ async def test_agent_rpc_rejects_malformed_mutable_payloads(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "params"),
-    [
-        ("agent.create", {"id": "writer", "name": "Writer", "workspace": "C:/escape"}),
-        ("agent.update", {"id": "coder", "workspace": "C:/escape"}),
-    ],
-)
-async def test_agent_rpc_rejects_workspace_mutation(
-    tmp_path: Path,
-    method: str,
-    params: JsonObject,
-) -> None:
+async def test_agent_create_rpc_rejects_workspace_field(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    original_workspace = state.runtime.agents.get("coder").workspace
 
-    response = await dispatch_rpc(state, {"method": method, "params": params})
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.create",
+            "params": {"id": "writer", "name": "Writer", "workspace": "C:/escape"},
+        },
+    )
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert state.runtime.agents.get("coder").workspace == original_workspace
+
+
+@pytest.mark.asyncio
+async def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    workspace = tmp_path / "updated-workspace"
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "coder", "workspace": str(workspace)}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["workspace"] == str(workspace.resolve())
+    assert state.runtime.agents.get("coder").workspace == str(workspace.resolve())
 
 
 @pytest.mark.asyncio

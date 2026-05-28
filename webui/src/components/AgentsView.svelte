@@ -416,7 +416,11 @@
       initialValues: editBaselineValues,
     });
 
-    return result.isValid && agentPayloadHasChanges(result.payload);
+    return (
+      result.isValid &&
+      !Object.hasOwn(result.payload, 'workspace') &&
+      agentPayloadHasChanges(result.payload)
+    );
   }
 
   function agentPayloadHasChanges(payload) {
@@ -859,29 +863,39 @@
               {/if}
             </label>
 
-            <div class="f wide">
-              <div class="f-label">
+            <label class="f wide">
+              <span class="f-label">
                 {t('agents.form.workspace', 'Workspace')}
-              </div>
-              {#if formValues.workspace}
-                <div class="f-value mono agents-view__wrap-value">
-                  {formValues.workspace}
-                </div>
-              {:else}
-                <div class="f-value agents-view__muted-value">
-                  {t(
-                    'agents.form.workspaceAssignedByServer',
-                    'Workspace is assigned by the server when the agent is created.',
-                  )}
-                </div>
-              {/if}
-              <small class="agents-view__field-help">
-                {t(
-                  'agents.form.workspaceReadOnly',
-                  'Workspace is read-only in this WebUI.',
-                )}
+              </span>
+              <input
+                id="agent-workspace"
+                class:agents-view__invalid={formErrors.workspace}
+                class="s-input mono"
+                type="text"
+                bind:value={formValues.workspace}
+                disabled={formMode === AGENT_FORM_MODE_CREATE}
+                aria-describedby="agent-workspace-help agent-workspace-error"
+              />
+              <small id="agent-workspace-help" class="agents-view__field-help">
+                {formMode === AGENT_FORM_MODE_CREATE
+                  ? t(
+                      'agents.form.workspaceAssignedByServer',
+                      'Workspace is assigned by the server when the agent is created.',
+                    )
+                  : t(
+                      'agents.form.workspaceEditableHelp',
+                      "Workspace path used by this agent's tools.",
+                    )}
               </small>
-            </div>
+              {#if formErrors.workspace}
+                <small
+                  id="agent-workspace-error"
+                  class="agents-view__field-error"
+                >
+                  {fieldError('workspace')}
+                </small>
+              {/if}
+            </label>
           </div>
         </div>
 
@@ -975,18 +989,6 @@
                 </small>
               {/if}
             </label>
-
-            <div class="f">
-              <div class="f-label">
-                {t('agents.detail.fallbackStatus', 'Fallback')}
-              </div>
-              <div
-                class:f-value={formValues.fallback_model}
-                class:agents-view__muted-value={!formValues.fallback_model}
-              >
-                {displayValue(formValues.fallback_model)}
-              </div>
-            </div>
           </div>
         </div>
 
@@ -1196,17 +1198,6 @@
                 </div>
               </div>
             {/if}
-          </div>
-
-          <div class="detail-fields agents-view__access-meta">
-            <div class="f wide">
-              <div class="f-label">
-                {t('agents.form.workspace', 'Workspace')}
-              </div>
-              <div class="f-value mono agents-view__wrap-value">
-                {displayValue(formValues.workspace)}
-              </div>
-            </div>
           </div>
         </div>
 

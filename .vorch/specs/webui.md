@@ -148,7 +148,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders the flat name/description list selected by the composer for the active trigger context: combined commands plus skills for `/`, skills only for `$`. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
-  displayed from Agent data but omitted from public create/update payloads.
+  omitted from public create payloads but included in edit payloads when changed.
   - In edit mode it builds sparse update payloads: unchanged fields are omitted
     so inherited resolved defaults are not written back as explicit overrides.
     Clearing `temperature` or `thinking_effort` sends `null`; clearing model
@@ -164,6 +164,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - The Agent edit form uses backend-backed selects for `model`,
     `fallback_model`, and `thinking_effort`, plus a tool-toggle list sourced
     from `tool.list`.
+  - The Agent edit form shows workspace once in the Identity section as an
+    editable text field. Workspace changes are saved through `agent.update` and
+    are not duplicated again in the Access section.
   - The `New` action opens a compact modal instead of switching the detail pane
     into the full editor. The modal collects only Agent ID, name, model,
     thinking effort, and temperature; advanced access/fallback/session fields
@@ -178,7 +181,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     selected connection. If a provider has one usable connection, the label stays
     as the model ID (for example `openrouter/anthropic/claude-sonnet-4`). If a
     provider has multiple usable connections, the label adds the connection
-    label suffix (for example `openai/gpt-5.4 (OAuth)`).
+    label suffix (for example `openai/gpt-5.4 (OAuth)`). The Model section does
+    not repeat the selected fallback model in a second read-only Fallback row.
 - `webui/src/lib/settingsView.js`
   - Normalizes Settings provider metadata that now uses credential-centric
     fields (`credential_key`, `credentials_configured`) rather than env/API-key

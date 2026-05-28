@@ -16,6 +16,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'fallback_model',
   'temperature',
   'thinking_effort',
+  'workspace',
   'allowed_tools',
   'allowed_skills',
 ]);
@@ -58,12 +59,17 @@ export function normalizeAgentForm(values, options = {}) {
     errors.name = 'required';
   }
 
+  if (mode === AGENT_FORM_MODE_EDIT && !normalized.workspace) {
+    errors.workspace = 'required';
+  }
+
   const temperature = normalizeTemperature(normalized.temperature);
   if (normalized.temperature && temperature === null) {
     errors.temperature = 'invalid_number';
   }
 
-  let payload = buildAgentPayload(normalized, temperature);
+  const payloadOptions = { includeWorkspace: mode === AGENT_FORM_MODE_EDIT };
+  let payload = buildAgentPayload(normalized, temperature, payloadOptions);
 
   if (
     mode === AGENT_FORM_MODE_EDIT &&
@@ -74,6 +80,7 @@ export function normalizeAgentForm(values, options = {}) {
     const initialPayload = buildAgentPayload(
       initialNormalized,
       normalizeTemperature(initialNormalized.temperature),
+      payloadOptions,
     );
     payload = filterChangedFields(payload, initialPayload);
   }
@@ -158,8 +165,8 @@ function normalizeTemperature(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
-function buildAgentPayload(normalized, temperature) {
-  return {
+function buildAgentPayload(normalized, temperature, options = {}) {
+  const payload = {
     name: normalized.name,
     model: normalized.model,
     fallback_model: normalized.fallback_model,
@@ -168,6 +175,12 @@ function buildAgentPayload(normalized, temperature) {
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
   };
+
+  if (options.includeWorkspace) {
+    payload.workspace = normalized.workspace;
+  }
+
+  return payload;
 }
 
 function filterChangedFields(payload, baselinePayload) {

@@ -183,7 +183,6 @@ class AgentStore:
             "id",
             "created_at",
             "updated_at",
-            "workspace",
         }
         unknown_fields = sorted(set(changes) - allowed_fields)
         if unknown_fields:
@@ -201,6 +200,8 @@ class AgentStore:
                 changes[field],
                 allow_empty=field in {"model", "fallback_model"},
             )
+        if "workspace" in changes:
+            changes["workspace"] = str(_validate_workspace(changes["workspace"]).resolve())
         if "temperature" in changes:
             changes["temperature"] = _validate_temperature(changes["temperature"])
         if "thinking_effort" in changes:
@@ -217,6 +218,8 @@ class AgentStore:
             self._validate_current_session(agent_id, changes["current_session_id"])
 
         updated_agent = replace(agent, **changes, updated_at=_utc_now())
+        if "workspace" in changes:
+            self._seed_workspace(Path(updated_agent.workspace))
         self._write_agent(updated_agent)
         return self._apply_defaults(updated_agent, self._agent_defaults())
 
@@ -384,6 +387,8 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
 def _validate_workspace(workspace: str | Path) -> Path:
     if not isinstance(workspace, str | os.PathLike):
         raise AgentError("workspace must be a path string")
+    if not str(workspace).strip():
+        raise AgentError("workspace must be a non-empty path string")
     return Path(workspace)
 
 
