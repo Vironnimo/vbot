@@ -74,5 +74,5 @@ Model data includes: name, capabilities (vision, tools, reasoning, etc.), contex
 **Definition:** A function with a name, a description, and a parameter schema (JSON Schema) that an agent can call during a chat. The agent decides via the agentic loop whether a tool call is needed; the runtime executes it and returns the result to the model. Tools resolve relative paths against the agent's workspace by default.
 
 ## Workspace
-**Definition:** The agent's home directory at `<datadir>/workspace-<agent-id>/`. Contains Markdown files the agent reads and maintains itself (`SOUL.md`, `IDENTITY.md`, `AGENTS.md`, etc.). Tools resolve relative paths against the workspace by default; absolute paths bypass it.
+**Definition:** The agent's home directory at `<datadir>/workspace-<agent-id>/`. Contains Markdown files the agent reads and maintains itself, primarily `SOUL.md` and `USER.md`. Tools resolve relative paths against the workspace by default; absolute paths bypass it.
 **Not:** The app source directory. Not the sessions directory. The workspace is agent-owned and agent-maintained — sessions are system-owned persisted chat history.

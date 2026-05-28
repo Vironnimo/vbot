@@ -502,16 +502,16 @@ function baseFragments() {
       name: 'system.md',
       content: '# System prompt content',
       is_modified: false,
-      variables: [
-        { placeholder: '{app_version}', description: 'Application version' },
-        { placeholder: '{runtime}', description: 'Runtime info' },
-      ],
+      variables: [{ placeholder: '{runtime}', description: 'Runtime info' }],
     },
     {
       name: 'runtime.md',
       content: '# Runtime content',
       is_modified: false,
-      variables: [{ placeholder: '{host}', description: 'Server host' }],
+      variables: [
+        { placeholder: '{app_version}', description: 'Application version' },
+        { placeholder: '{host}', description: 'Server host' },
+      ],
     },
     {
       name: 'tools.md',

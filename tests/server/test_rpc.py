@@ -3847,7 +3847,8 @@ async def test_prompt_list_includes_content_is_modified_and_variables(tmp_path: 
     system = fragments["system.md"]
     assert system["content"] == "# System\nDefault system prompt."
     assert system["is_modified"] is False
-    assert any(v["placeholder"] == "{app_version}" for v in system["variables"])
+    runtime = fragments["runtime.md"]
+    assert any(v["placeholder"] == "{app_version}" for v in runtime["variables"])
     tools = fragments["tools.md"]
     assert any(v["placeholder"] == "{tool_list}" for v in tools["variables"])
 

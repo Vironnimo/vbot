@@ -26,7 +26,6 @@ EDITABLE_PROMPT_FRAGMENT_NAMES = (
 )
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
-        {"placeholder": "{app_version}", "description": "Application version string"},
         {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
         {"placeholder": "{tools}", "description": "Rendered tools fragment"},
         {"placeholder": "{channels}", "description": "Rendered channels fragment"},
@@ -37,6 +36,7 @@ PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
         },
     ],
     "runtime.md": [
+        {"placeholder": "{app_version}", "description": "Application version string"},
         {"placeholder": "{host}", "description": "Host machine name"},
         {"placeholder": "{os}", "description": "Operating system name"},
         {"placeholder": "{model}", "description": "Active model identifier"},
@@ -317,6 +317,7 @@ class SystemPromptManager:
         thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
         replacements = {
             "{host}": self._host or socket.gethostname(),
+            "{app_version}": self._app_version,
             "{os}": self._os_name or platform.platform(),
             "{model}": agent.model,
             "{agent_workspace}": agent.workspace,

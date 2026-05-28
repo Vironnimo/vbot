@@ -24,7 +24,7 @@ Editable prompt fragments are exactly these five names, in UI order:
 
 - `core/prompts/__init__.py` exports `SystemPromptManager`, `PromptFragmentManager`, `PromptError`, prompt Protocols, editable fragment names, and variable metadata.
 - `SystemPromptManager(storage, tool_registry, skill_registry, app_version, app_dir, data_root, ...)`
-  - `build_system_prompt(agent) -> str` expands `{app_version}`, `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and `{include:filename}`.
+  - `build_system_prompt(agent) -> str` expands `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and `{include:filename}`. The rendered runtime fragment expands `{app_version}` with the application version.
   - `provider_tool_definitions(agent) -> list[dict]` returns provider tool schemas filtered by the Agent allowlist and adds the internal `skill` tool only when the Agent has loadable skills.
   - `update_skill_registry(skill_registry)` refreshes prompt-visible skill filtering after runtime skill reload.
 - `PromptFragmentManager(storage)`
