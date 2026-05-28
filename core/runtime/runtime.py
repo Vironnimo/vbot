@@ -47,6 +47,7 @@ from core.tools import (
     register_grep_tool,
     register_process_tool,
     register_read_tool,
+    register_session_search_tool,
     register_skill_tool,
     register_web_fetch_tool,
     register_web_search_tool,
@@ -222,6 +223,7 @@ class Runtime:
             extra_dirs=extension_dirs,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        register_session_search_tool(self._tools, self._chat_sessions)
         self._chat_run_manager = ChatRunManager()
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,

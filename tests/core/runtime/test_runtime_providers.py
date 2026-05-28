@@ -618,6 +618,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "grep",
         "process",
         "read",
+        "session_search",
         "status",
         "subagent",
         "subagent_result",
