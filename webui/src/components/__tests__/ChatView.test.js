@@ -740,7 +740,8 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.querySelectorAll('.skill-autocomplete__option').length === 2,
+      () =>
+        document.querySelectorAll('.skill-autocomplete__option').length === 2,
       100,
     );
 
@@ -777,6 +778,7 @@ describe('ChatView', () => {
     expect(rpcMock).toHaveBeenCalledWith('chat.history', {
       agent_id: 'alpha',
       session_id: 'sub-session-1',
+      limit: 100,
     });
     expect(document.body.textContent).toContain('Viewing a sub-agent session');
     expect(document.body.textContent).toContain('Return to current session');
@@ -786,6 +788,66 @@ describe('ChatView', () => {
       ),
     ).toBeTruthy();
     expect(document.querySelector('textarea')?.disabled).toBe(false);
+  });
+
+  it('loads the newest history first and prepends older messages on top scroll', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-1': createHistoryMessages(120),
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('History message 21') &&
+        !document.body.textContent.includes('History message 20'),
+      100,
+    );
+
+    const messages = document.querySelector('.messages');
+    let scrollHeight = 1000;
+    Object.defineProperty(messages, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+    Object.defineProperty(messages, 'scrollTop', {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    messages.dispatchEvent(new Event('scroll'));
+    scrollHeight = 1400;
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('History message 20') &&
+        messages.scrollTop === 400,
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      limit: 100,
+    });
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      limit: 50,
+      before: 'message-021',
+    });
   });
 
   it('subscribes to an active run returned with opened session history', async () => {
@@ -910,6 +972,7 @@ describe('ChatView', () => {
     expect(rpcMock).toHaveBeenCalledWith('chat.history', {
       agent_id: 'alpha',
       session_id: 'session-1',
+      limit: 100,
     });
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
@@ -1088,6 +1151,7 @@ describe('ChatView', () => {
     expect(rpcMock).toHaveBeenCalledWith('chat.history', {
       agent_id: 'alpha',
       session_id: 'ch-tg-assistant-12345',
+      limit: 100,
     });
   });
 
@@ -1203,9 +1267,20 @@ function createChatRpcMock({
     if (method === 'chat.history') {
       const messages = resolvedSessionMessages[params.session_id];
       if (messages) {
+        const beforeIndex = params.before
+          ? messages.findIndex((message) => message.id === params.before)
+          : messages.length;
+        if (beforeIndex < 0) {
+          throw new Error(`Unexpected before message id: ${params.before}`);
+        }
+        const sourceMessages = messages.slice(0, beforeIndex);
+        const pageMessages = params.limit
+          ? sourceMessages.slice(-params.limit)
+          : sourceMessages;
         const response = {
           session_id: params.session_id,
-          messages,
+          messages: pageMessages,
+          has_more: sourceMessages.length > pageMessages.length,
         };
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];
@@ -1255,6 +1330,17 @@ function createChatRpcMock({
 
     throw new Error(`Unexpected RPC method: ${method}`);
   };
+}
+
+function createHistoryMessages(count) {
+  return Array.from({ length: count }, (_item, index) => {
+    const number = index + 1;
+    return {
+      id: `message-${String(number).padStart(3, '0')}`,
+      role: 'user',
+      content: `History message ${number}`,
+    };
+  });
 }
 
 function createAgent(overrides = {}) {

@@ -168,6 +168,7 @@ describe('App', () => {
       expect(rpcMock).toHaveBeenCalledWith('chat.history', {
         agent_id: 'beta',
         session_id: 'session-beta',
+        limit: 100,
       });
     });
   });

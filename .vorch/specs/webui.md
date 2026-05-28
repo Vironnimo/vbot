@@ -117,6 +117,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
 - `webui/src/components/ChatView.svelte`
+  - Loads chat history in pages: the initial session load asks `chat.history`
+    for the newest 100 visible messages, and top-of-timeline pagination requests
+    50 older messages at a time.
   - Loads `chat.commands` on mount and passes the flat combined command/available-skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
   - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
   - When a manual `/compact` command is handled without starting a Run, ChatView reloads the active session history so the new compaction separator appears immediately.
@@ -233,6 +236,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     it and refreshes settings. Settings sends public compositional connection IDs such as
     `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
+  - When older history is available, scrolling to the top calls back to ChatView
+    to prepend older messages and preserves the user's scroll anchor after the
+    DOM grows above the viewport.
   - Shows day separators only when the visible Session timeline spans more than
     one local calendar day. In multi-day histories, each day group gets its own
     separator and the current local day is labeled with `chat.today` (`Today`).

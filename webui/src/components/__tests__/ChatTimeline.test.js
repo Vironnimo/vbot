@@ -118,6 +118,55 @@ describe('ChatTimeline', () => {
     expect(dateSeparators[1].textContent.trim()).toBe('Today');
   });
 
+  it('loads older history at the top and preserves the scroll anchor', async () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-load-older-anchor',
+    );
+    sessionState.messages = [
+      {
+        id: 'message-older-boundary',
+        role: 'user',
+        content: 'Oldest loaded message',
+        timestamp: '2026-05-10T09:00:00',
+      },
+    ];
+    let scrollHeight = 1000;
+    const onLoadOlder = vi.fn(async () => {
+      scrollHeight = 1400;
+      return true;
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        hasOlderHistory: true,
+        onLoadOlder,
+      },
+    });
+    flushSync();
+
+    const messages = document.querySelector('.messages');
+    Object.defineProperty(messages, 'scrollHeight', {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+    Object.defineProperty(messages, 'scrollTop', {
+      configurable: true,
+      writable: true,
+      value: 0,
+    });
+
+    messages.dispatchEvent(new Event('scroll'));
+
+    await waitForCondition(
+      () => onLoadOlder.mock.calls.length === 1 && messages.scrollTop === 400,
+    );
+  });
+
   it('scrolls the submitted user turn to the top when requested', async () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = Element.prototype.scrollIntoView;

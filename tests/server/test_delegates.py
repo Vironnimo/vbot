@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -43,6 +44,22 @@ def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:
 class HistoryAgentStore:
     def get(self, _agent_id: str) -> SimpleNamespace:
         return SimpleNamespace(current_session_id="session-one")
+
+
+def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]:
+    chat_sessions = ChatSessionManager(tmp_path)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            agents=HistoryAgentStore(),
+            chat_sessions=chat_sessions,
+        )
+    )
+    return state, chat_sessions
+
+
+def _history_message(index: int) -> ChatMessage:
+    message = ChatMessage.user(f"Message {index}")
+    return replace(message, id=f"message-{index:03d}")
 
 
 class RetryLoopStub:
@@ -176,6 +193,89 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
         "Sub-agent batch completed." not in (message.get("content") or "")
         for message in response["result"]["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_history_limit_returns_newest_visible_messages(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    for index in range(1, 6):
+        session.append(_history_message(index))
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "parent", "limit": 2}},
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert [message["id"] for message in result["messages"]] == [
+        "message-004",
+        "message-005",
+    ]
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_chat_history_before_returns_older_visible_page(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    for index in range(1, 7):
+        session.append(_history_message(index))
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {
+                "agent_id": "parent",
+                "limit": 2,
+                "before": "message-005",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert [message["id"] for message in result["messages"]] == [
+        "message-003",
+        "message-004",
+    ]
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_chat_history_rejects_unknown_before_message(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    session.append(_history_message(1))
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "parent", "before": "message-missing"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_chat_history_rejects_limit_above_maximum(tmp_path: Path) -> None:
+    state, _chat_sessions = _history_state(tmp_path)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "parent", "limit": delegates.MAX_CHAT_HISTORY_LIMIT + 1},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio

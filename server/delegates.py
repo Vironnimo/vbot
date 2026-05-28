@@ -119,6 +119,7 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
     )
 )
 BOOLEAN_MODEL_CAPABILITIES = frozenset(("vision", "tools", "json_mode", "reasoning"))
+MAX_CHAT_HISTORY_LIMIT = 500
 
 RPC_ERROR_INVALID_REQUEST = "invalid_request"
 RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
@@ -902,17 +903,28 @@ def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _chat_history(state: Any, params: JsonObject) -> JsonObject:
+    supported_fields = {"agent_id", "session_id", "limit", "before"}
+    unsupported_fields = sorted(set(params) - supported_fields)
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.history fields: {', '.join(unsupported_fields)}",
+        )
+
     agent_id = _required_string(params, "agent_id")
     session_id = _optional_string(params, "session_id")
+    limit = _optional_positive_integer(params, "limit", max_value=MAX_CHAT_HISTORY_LIMIT)
+    before = _optional_string(params, "before")
     try:
         agent = state.runtime.agents.get(agent_id)
         active_session_id = session_id or agent.current_session_id
         session = state.runtime.chat_sessions.get(agent_id, active_session_id)
-        messages = [
+        visible_messages = [
             _visible_message(message)
             for message in session.load()
             if _is_visible_history_message(message)
         ]
+        messages, has_more = _history_page(visible_messages, limit=limit, before=before)
         active_run = _active_run_response(state, agent_id, active_session_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -920,10 +932,31 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         "agent_id": agent_id,
         "session_id": active_session_id,
         "messages": messages,
+        "has_more": has_more,
     }
     if active_run is not None:
         response["active_run"] = active_run
     return response
+
+
+def _history_page(
+    messages: list[JsonObject], *, limit: int | None, before: str | None
+) -> tuple[list[JsonObject], bool]:
+    page_source = messages
+    if before is not None:
+        before_index = next(
+            (index for index, message in enumerate(messages) if message.get("id") == before),
+            None,
+        )
+        if before_index is None:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.before must reference a message id")
+        page_source = messages[:before_index]
+
+    if limit is None:
+        return list(page_source), False
+
+    page = page_source[-limit:]
+    return page, len(page_source) > len(page)
 
 
 def _extract_command_text(content: str | list[ContentBlock]) -> str | None:
@@ -2213,6 +2246,22 @@ def _optional_string(params: JsonObject, key: str) -> str | None:
         return None
     if not isinstance(value, str) or not value:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
+    return value
+
+
+def _optional_positive_integer(
+    params: JsonObject, key: str, *, max_value: int | None = None
+) -> int | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a positive integer")
+    if max_value is not None and value > max_value:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be less than or equal to {max_value}",
+        )
     return value
 
 

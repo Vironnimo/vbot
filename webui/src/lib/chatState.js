@@ -77,6 +77,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       error: null,
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
+      hasOlderHistory: false,
+      loadingOlderHistory: false,
     };
   }
   return state.sessions[key];
@@ -95,7 +97,7 @@ export function updateSessionUsage(sessionState, usage) {
   return sessionState;
 }
 
-export function loadHistory(sessionState, messages) {
+export function loadHistory(sessionState, messages, options = {}) {
   const activeRunEvents = isRunActive(sessionState)
     ? sessionState.runEvents
     : [];
@@ -114,6 +116,7 @@ export function loadHistory(sessionState, messages) {
   sessionState.messages = Array.isArray(messages)
     ? messages.filter(isVisibleHistoryMessage)
     : [];
+  sessionState.hasOlderHistory = options.hasMore === true;
   sessionState.runEvents = activeRunEvents;
   sessionState.streamingItems = activeStreamingItems;
   sessionState.streamingRunEvents = activeStreamingRunEvents;
@@ -127,6 +130,23 @@ export function loadHistory(sessionState, messages) {
   if (lastUsage) {
     sessionState.usage = lastUsage;
   }
+  return sessionState;
+}
+
+export function prependHistory(sessionState, messages, options = {}) {
+  const existingIds = new Set(
+    (sessionState.messages ?? [])
+      .map((message) => message?.id)
+      .filter((id) => typeof id === 'string' && id.length > 0),
+  );
+  const olderMessages = Array.isArray(messages)
+    ? messages
+        .filter(isVisibleHistoryMessage)
+        .filter((message) => !message?.id || !existingIds.has(message.id))
+    : [];
+
+  sessionState.messages = [...olderMessages, ...(sessionState.messages ?? [])];
+  sessionState.hasOlderHistory = options.hasMore === true;
   return sessionState;
 }
 

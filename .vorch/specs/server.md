@@ -112,9 +112,10 @@ Clients call the vBot server contract; provider wire details stay behind
   appends a System Reminder note so the next provider request sees the channel
   context.
 - `chat.history` returns visible persisted messages for `{ agent_id,
-  session_id? }`. If `session_id` is omitted, it loads the Agent's
-  `current_session_id`. Kernel-internal note messages are excluded from this
-  normal history response; persisted `role: "error"` and `role: "compaction_checkpoint"` messages are included.
+  session_id?, limit?, before? }`. If `session_id` is omitted, it loads the
+  Agent's `current_session_id`. When `limit` is supplied, the newest `limit`
+  visible messages are returned; `before` pages older visible messages before a
+  known message id. The response includes `has_more` for older history. Kernel-internal note messages are excluded from this normal history response; persisted `role: "error"` and `role: "compaction_checkpoint"` messages are included.
 - `channel.list` returns `{ channels }`, where each item includes the persisted
   channel config fields `{ id, platform, agent_id, dm_scope, allowed_chat_ids,
   token_env_var, enabled }`.
