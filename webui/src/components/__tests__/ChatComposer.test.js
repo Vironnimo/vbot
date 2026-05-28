@@ -118,9 +118,9 @@ describe('ChatComposer', () => {
     flushSync();
 
     expect(autocompleteNames()).toEqual(['debugging']);
-    expect(document.body.querySelector('.skill-autocomplete__eyebrow').textContent).toContain(
-      'skills',
-    );
+    expect(
+      document.body.querySelector('.skill-autocomplete__eyebrow').textContent,
+    ).toContain('skills');
   });
 
   it('inserts inline skill triggers without rewriting the message', async () => {
@@ -334,6 +334,53 @@ describe('ChatComposer', () => {
 
     expect(input.value).toContain('$debugging');
     expect(autocompleteOptions()).toHaveLength(0);
+  });
+
+  it('focuses the message textarea when clicking the composer padding', () => {
+    mountedComponent = mount(ChatComposer, { target: document.body });
+    flushSync();
+
+    const wrap = document.body.querySelector('.input-wrap');
+    expect(wrap).toBeTruthy();
+
+    const event = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+    });
+    wrap.dispatchEvent(event);
+    flushSync();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(composerInput());
+  });
+
+  it('resets the textarea height after sending a tall draft', () => {
+    const onSendMessage = vi.fn();
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    const input = composerInput();
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true,
+      get: () => 144,
+    });
+
+    input.value = 'line one\nline two\nline three';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    flushSync();
+
+    expect(input.style.height).toBe('144px');
+
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith(
+      'line one\nline two\nline three',
+    );
+    expect(input.value).toBe('');
+    expect(input.style.height).toBe('');
   });
 
   it('sends uploaded text files as embedded text blocks', async () => {

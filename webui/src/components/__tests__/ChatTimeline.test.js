@@ -629,6 +629,35 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.inline-attachment-image')).toBeNull();
   });
 
+  it('allows long unbroken user text to wrap inside the user bubble', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-long-token',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-long-token',
+        role: 'user',
+        content: 'x'.repeat(240),
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const userBodyText = document.querySelector('.msg.user .msg-body-text');
+    expect(userBodyText).toBeTruthy();
+    expect(userBodyText.classList.contains('msg-body-text--user')).toBe(true);
+  });
+
   it('renders markdown bold in completed assistant run output', () => {
     const sessionState = ensureSessionState(
       createChatState(),
