@@ -139,6 +139,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Supports attachment uploads via file picker, image paste, and drag-and-drop.
   - Maintains local pending attachments with `preview_url` object URLs and builds
     canonical message `content` as `string` or `list[ContentBlock]` on send.
+  - The visible composer box focuses the textarea from its padded wrapper area,
+    not only from the text glyph area. After a successful send, the textarea
+    value and height reset to the single-line composer state.
 - `webui/src/components/SkillAutocomplete.svelte`
   - Renders the flat name/description list selected by the composer for the active trigger context: combined commands plus skills for `/`, skills only for `$`. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
@@ -244,6 +247,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Renders assistant streaming output through `renderMarkdownStreaming(...)` and settled assistant run output plus persisted assistant messages through `renderMarkdown(...)`, all inside a scoped `.msg-markdown` container so normal agent replies display headings, lists, links, tables, and code fences as Markdown instead of raw source while long open fenced blocks remain inspectable during streaming.
   - Renders user message content arrays block-by-block: `text` as normal message text,
     image `media` via `/api/attachments/<id>`, and `file` as download links.
+  - User message text preserves plain text formatting but must wrap long
+    unbroken tokens inside the bubble instead of creating horizontal overflow.
 - `webui/src/components/LogsView.svelte`
   - Loads the daily logs catalog on mount, selects the newest file by default,
     reads one file at a time through `log.read`, applies local level/search/sort
@@ -320,7 +325,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - Assistant output Markdown rendering is accessor-side only. It applies to live
   streaming assistant text, completed assistant output, and persisted assistant
   history messages. User text, reasoning bodies, tool details, and error
-  messages remain plain pre-wrapped text.
+  messages remain plain pre-wrapped text; user text additionally breaks long
+  unbroken tokens within the message bubble.
 - Visible chat rendering treats an assistant Run as one assistant block. Tool
   lifecycle events (`tool_call_started` and `tool_call_result`) are merged into a
   single expandable tool row inside that block rather than rendered as separate

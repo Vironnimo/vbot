@@ -1332,7 +1332,7 @@
 
 {#snippet userContentBlock(block)}
   {#if isTextContentBlock(block)}
-    <p class="msg-body-text">{block.text}</p>
+    <p class="msg-body-text msg-body-text--user">{block.text}</p>
   {:else if isImageMediaContentBlock(block)}
     {@const mediaUrl = attachmentUrlForBlock(block)}
     {#if mediaUrl}
@@ -1714,7 +1714,12 @@
                     </div>
                   {/if}
                 {:else}
-                  <p class="msg-body-text">{textFromMessage(item.message)}</p>
+                  <p
+                    class="msg-body-text"
+                    class:msg-body-text--user={item.message.role === 'user'}
+                  >
+                    {textFromMessage(item.message)}
+                  </p>
                 {/if}
               {/if}
             </div>
@@ -1823,7 +1828,12 @@
                     {/each}
                   </div>
                 {:else}
-                  <p class="msg-body-text">{textFromEvent(item.event)}</p>
+                  <p
+                    class="msg-body-text"
+                    class:msg-body-text--user={isUserItem(item)}
+                  >
+                    {textFromEvent(item.event)}
+                  </p>
                 {/if}
               </div>
             </article>
@@ -2129,6 +2139,12 @@
 
   .msg-body-blocks .msg-body-text {
     margin: 0;
+  }
+
+  .msg-body-text--user {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .inline-attachment {

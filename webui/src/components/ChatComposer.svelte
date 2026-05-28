@@ -313,7 +313,30 @@
     triggerContext = null;
     activeSkillIndex = 0;
     isDragOver = false;
-    resizeInput();
+    resetInputHeight();
+  };
+
+  const focusInputFromWrap = (event) => {
+    if (event.target === inputElement) {
+      return;
+    }
+
+    if (event.target?.closest?.('button, input, a')) {
+      return;
+    }
+
+    event.preventDefault();
+    inputElement?.focus();
+  };
+
+  const focusInputFromWrapAction = (node) => {
+    node.addEventListener('mousedown', focusInputFromWrap);
+
+    return {
+      destroy() {
+        node.removeEventListener('mousedown', focusInputFromWrap);
+      },
+    };
   };
 
   const resizeInput = () => {
@@ -322,6 +345,15 @@
     }
     inputElement.style.height = 'auto';
     inputElement.style.height = `${inputElement.scrollHeight}px`;
+  };
+
+  const resetInputHeight = () => {
+    if (!inputElement) {
+      return;
+    }
+
+    inputElement.style.height = '';
+    inputElement.scrollTop = 0;
   };
 
   const handleKeydown = (event) => {
@@ -538,7 +570,12 @@
       }}
     />
   {/if}
-  <div class="input-wrap">
+  <div
+    class="input-wrap"
+    role="group"
+    aria-label={t('chat.composerArea', 'Message composer')}
+    use:focusInputFromWrapAction
+  >
     <textarea
       id="chat-composer-input"
       bind:this={inputElement}
