@@ -255,8 +255,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
         tool_definitions = runtime.system_prompts.provider_tool_definitions(agent)
 
         assert "Soul template for integration" in prompt
-        assert "Identity template for integration" in prompt
-        assert "Agents template for integration" in prompt
+        assert "Version test-version" in prompt
         assert "User template for integration" in prompt
         assert "- read_file: Read a workspace file." in prompt
         assert "shell" not in prompt
@@ -351,12 +350,11 @@ def _write_prompt_resources(resources: Path) -> None:
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
     (prompts_dir / "system.md").write_text(
-        "App {app_version}\n{runtime}\n{tools}\n{channels}\n{skills}\n"
-        "{include:SOUL.md}\n{include:IDENTITY.md}\n{include:AGENTS.md}\n{include:USER.md}",
+        "{include:SOUL.md}\n{runtime}\n{include:USER.md}\n{tools}\n{channels}\n{skills}",
         encoding="utf-8",
     )
     (prompts_dir / "runtime.md").write_text(
-        "Model {model}\nWorkspace {agent_workspace}\n"
+        "Version {app_version}\nModel {model}\nWorkspace {agent_workspace}\n"
         "Thinking {thinking_effort}\nDate {current_date}",
         encoding="utf-8",
     )
@@ -371,8 +369,6 @@ def _write_workspace_templates(resources: Path) -> None:
     templates_dir.mkdir(parents=True)
     templates = {
         "SOUL.md": "Soul template for integration",
-        "IDENTITY.md": "Identity template for integration",
-        "AGENTS.md": "Agents template for integration",
         "USER.md": "User template for integration",
     }
     for filename, content in templates.items():

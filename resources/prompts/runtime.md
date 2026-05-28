@@ -4,6 +4,7 @@ Here is useful information about the environment you are running in:
 
 - Host: {host}
 - OS: {os}
+- App version: {app_version}
 - You are powered by the model {model}
 - Your Workspace (HOME, your CWD for tools, where you and your files live): {agent_workspace}
 - App Path: {app_dir}

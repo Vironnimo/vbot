@@ -136,20 +136,13 @@ class StubChannels:
 def fragments() -> dict[str, str]:
     return {
         "system.md": (
-            "App {app_version}\n"
-            "{runtime}\n"
-            "{tools}\n"
-            "{channels}\n"
-            "{skills}\n"
-            "{include:SOUL.md}\n"
-            "{include:IDENTITY.md}\n"
-            "{include:AGENTS.md}\n"
-            "{include:USER.md}"
+            "{include:SOUL.md}\n{runtime}\n{include:USER.md}\n{tools}\n{channels}\n{skills}"
         ),
         "runtime.md": (
             "## Runtime\n"
             "- Host: {host}\n"
             "- OS: {os}\n"
+            "- App version: {app_version}\n"
             "- You are powered by the model {model}\n"
             "- Your Workspace (HOME, your CWD for tools, where you and your files live): "
             "{agent_workspace}\n"
@@ -170,8 +163,6 @@ def workspace(tmp_path: Path) -> Path:
     directory = tmp_path / "workspace"
     directory.mkdir()
     (directory / "SOUL.md").write_text("Soul text", encoding="utf-8")
-    (directory / "IDENTITY.md").write_text("Identity text", encoding="utf-8")
-    (directory / "AGENTS.md").write_text("Agents text", encoding="utf-8")
     (directory / "USER.md").write_text("User text", encoding="utf-8")
     return directory
 
@@ -235,9 +226,9 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
 
     prompt = manager.build_system_prompt(agent)
 
-    assert "App 0.1.0" in prompt
     assert "- Host: test-host" in prompt
     assert "- OS: test-os" in prompt
+    assert "- App version: 0.1.0" in prompt
     assert "- You are powered by the model openai/gpt-5.2" in prompt
     assert f"{workspace}" in prompt
     assert str((tmp_path / "app").resolve()) in prompt
@@ -256,8 +247,6 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "<location>" not in prompt
     assert "news" not in prompt
     assert "Soul text" in prompt
-    assert "Identity text" in prompt
-    assert "Agents text" in prompt
     assert "User text" in prompt
     assert '<file name="SOUL.md">' in prompt
     assert "{" not in prompt
@@ -486,7 +475,7 @@ def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: 
     assert [fragment["name"] for fragment in fragments] == list(EDITABLE_PROMPT_FRAGMENT_NAMES)
     assert fragments[0]["is_modified"] is False
     assert fragments[1]["is_modified"] is True
-    assert any(variable["placeholder"] == "{app_version}" for variable in fragments[0]["variables"])
+    assert any(variable["placeholder"] == "{app_version}" for variable in fragments[1]["variables"])
 
 
 def test_prompt_fragment_manager_updates_and_resets_editable_fragment(tmp_path: Path) -> None:

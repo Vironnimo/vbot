@@ -18,7 +18,7 @@ from core.agents import (
 )
 from core.agents import agents as agents_module
 
-TEMPLATE_FILES = ("SOUL.md", "IDENTITY.md", "AGENTS.md", "USER.md")
+TEMPLATE_FILES = ("SOUL.md", "USER.md")
 
 
 @pytest.fixture
@@ -551,4 +551,4 @@ def test_workspace_seeding_does_not_overwrite_existing_custom_workspace_file(
     store.create("coder", "Coder Agent", workspace=custom_workspace)
 
     assert (custom_workspace / "SOUL.md").read_text(encoding="utf-8") == "custom soul"
-    assert (custom_workspace / "IDENTITY.md").exists()
+    assert (custom_workspace / "USER.md").exists()

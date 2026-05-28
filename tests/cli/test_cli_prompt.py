@@ -44,6 +44,11 @@ def test_prompt_list_posts_rpc_and_formats_rows(
                         {
                             "name": "system.md",
                             "is_modified": False,
+                            "variables": [{"placeholder": "{runtime}"}],
+                        },
+                        {
+                            "name": "runtime.md",
+                            "is_modified": False,
                             "variables": [{"placeholder": "{app_version}"}],
                         },
                         {"name": "tools.md", "is_modified": True, "variables": []},
@@ -60,7 +65,8 @@ def test_prompt_list_posts_rpc_and_formats_rows(
         ok=True,
         message=(
             "prompts:\n"
-            "- system.md modified=no variables={app_version}\n"
+            "- system.md modified=no variables={runtime}\n"
+            "- runtime.md modified=no variables={app_version}\n"
             "- tools.md modified=yes variables=-"
         ),
         instance=instance,
