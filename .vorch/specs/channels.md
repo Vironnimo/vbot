@@ -57,7 +57,10 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Telegram adapter responsibilities:
   - long polling only in the first implementation
   - per-chat sequencing / batching in the adapter, not in `TriggerService`
-  - pure-text built-in slash commands are dispatched before `trigger_run`; handled commands reply immediately and do not start a Run
+  - pure-text built-in slash commands are dispatched before `trigger_run`; handled commands reply immediately and command action results are executed through channel-safe behavior
+  - `/compact` uses the shared manual compaction action and replies with the compaction result
+  - `/retry` retries the latest user turn through `TriggerService.retry_run()` and relays the resulting Run's final assistant text
+  - `/new` currently replies that starting a new Session is unavailable from Telegram channels because deterministic channel Session routing has no persisted rotation mapping yet
   - `run.subscribe()` reply delivery: only the final assistant text is forwarded
   - meaningful error reply on run failure or cancellation
   - outbound file sends decide between `send_photo`, `send_document`, and media groups inside the adapter
@@ -70,7 +73,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 
 - Closed architectural decisions D1-D8 from `stuff/channels.md` are binding for this domain.
 - Final assistant replies for inbound platform turns are automatic. Agents do not call `channel_send` for normal replies.
-- Recognized built-in slash commands are handled before `TriggerService`
+- Recognized built-in slash commands are handled before normal `TriggerService`
   queueing, but unknown slash text still follows the normal inbound chat path.
 - `channel_send` is for proactive outbound only.
 - `channel_send` may send text only, files only, or both; at least one payload is required.

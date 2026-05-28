@@ -130,12 +130,19 @@ Clients call the vBot server contract; provider wire details stay behind
   `core.runs.ChatRunManager` queue and return `{ queued: true, item }` instead of an
   `active_run` RPC error.
 - Recognized built-in slash commands are intercepted before Run start only when
-  `content` resolves to pure text. In that case `chat.send` and `chat.stream`
-  return `{ command_handled: true, reply }` instead of starting a Run. Current built-ins include `/stop` and `/compact`. Unknown
-  slash text still goes through the normal chat flow.
+  `content` resolves to pure text. Current built-ins are `/compact`, `/help`,
+  `/new`, `/retry`, `/status`, and `/stop`. Unknown slash text still goes
+  through the normal chat flow.
+- Commands that complete without starting a Run return
+  `{ command_handled: true, reply }`. `/new` also returns optional structured
+  data `{ command: "new", session_id }` so clients can switch to the new current
+  Session.
 - `/compact` is only allowed when the target Session has no active Run. If the
   Session already has an in-flight Run, the server returns a handled reply and
   does not append a checkpoint.
+- `/retry` starts a retry Run for the latest persisted user turn and returns the
+  normal Run response shape: `chat.send` waits for the final message, while
+  `chat.stream` returns a Run/SSE payload.
 - `chat.stream` returns a `run_id` and SSE URL; the SSE endpoint streams stable
   vBot Run events, not provider chunks.
 - `chat.retry_last_turn` accepts `{ agent_id, session_id }`, retries the latest

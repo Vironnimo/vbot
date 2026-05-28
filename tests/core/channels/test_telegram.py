@@ -21,7 +21,7 @@ from core.channels.adapter import (
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError
 from core.channels.telegram import TELEGRAM_MESSAGE_LIMIT, TelegramChannelAdapter
-from core.chat.commands import CommandHandled, NotACommand
+from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run
 from core.sessions import ChatSessionManager
@@ -126,6 +126,8 @@ def make_adapter(
     dm_scope: str = "per_conversation",
     allowed_chat_ids: list[int] | None = None,
     trigger_run: AsyncMock | None = None,
+    retry_run: AsyncMock | None = None,
+    compact_session: AsyncMock | None = None,
     runtime: object | None = None,
     attachment_store: AttachmentStore | None = None,
     command_dispatcher: object | None = None,
@@ -138,7 +140,11 @@ def make_adapter(
 
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
-    trigger_service = SimpleNamespace(trigger_run=trigger_mock)
+    trigger_service = SimpleNamespace(
+        trigger_run=trigger_mock,
+        retry_run=retry_run or AsyncMock(),
+        compact_session=compact_session or AsyncMock(return_value="Context compacted."),
+    )
     resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
 
     adapter = TelegramChannelAdapter(
@@ -369,6 +375,87 @@ async def test_plain_text_command_is_dispatched_before_trigger_run(
     )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_compact_command_action_replies_without_trigger_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compact_mock = AsyncMock(return_value="Context compacted.")
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        compact_session=compact_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/compact"),
+        SimpleNamespace(),
+    )
+
+    compact_mock.assert_awaited_once_with("assistant", "ch-tg-assistant-12345")
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="Context compacted.")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_command_action_reports_channel_limitation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        command_dispatcher=command_dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/new"),
+        SimpleNamespace(),
+    )
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(
+        chat_id=12345,
+        text="Starting a new session is not available from Telegram channels yet.",
+    )
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_retry_command_action_retries_and_relays_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant-12345"
+    retry_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="retried reply")
+    )
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="retry_last_turn"))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        retry_run=retry_mock,
+        command_dispatcher=command_dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/retry"),
+        SimpleNamespace(),
+    )
+
+    retry_mock.assert_awaited_once_with("assistant", session_id)
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="retried reply")
     await adapter.stop()
 
 

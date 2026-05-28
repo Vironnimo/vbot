@@ -6,7 +6,7 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.runs import ChatRunManager, RunNotFoundError
 from core.utils.logging import get_logger
@@ -23,7 +23,9 @@ else:
     ChatSessionManager = Any
     ModelRegistry = Any
 
-CommandHandler = Callable[[str, str], "CommandHandled"]
+CommandActionName = Literal["compact", "new_session", "retry_last_turn"]
+
+CommandHandler = Callable[[str, str], "CommandHandled | CommandAction"]
 
 _LOGGER = get_logger("chat.commands")
 
@@ -40,6 +42,14 @@ class CommandHandled:
     """Result indicating command dispatch handled the message."""
 
     reply: str | None
+    data: dict[str, object] | None = None
+
+
+@dataclass(frozen=True)
+class CommandAction:
+    """Result indicating a recognized command needs accessor-level execution."""
+
+    name: CommandActionName
 
 
 @dataclass(frozen=True)
@@ -47,7 +57,7 @@ class NotACommand:
     """Result indicating message should continue through normal chat flow."""
 
 
-DispatchResult = CommandHandled | NotACommand
+DispatchResult = CommandHandled | CommandAction | NotACommand
 
 
 class CommandDispatcher:
@@ -55,7 +65,9 @@ class CommandDispatcher:
 
     BUILT_IN_COMMANDS: dict[str, str] = {
         "compact": "Compact the current session's context immediately.",
+        "help": "Show available built-in slash commands.",
         "new": "Start a new session for the current agent.",
+        "retry": "Retry the last user turn in this session.",
         "status": "Show current session and runtime status.",
         "stop": "Cancel the active run for this session.",
     }
@@ -74,7 +86,10 @@ class CommandDispatcher:
         self._models = models
         self._started_at = started_at
         self._commands: dict[str, CommandHandler] = {
+            "/compact": self._handle_compact,
+            "/help": self._handle_help,
             "/new": self._handle_new,
+            "/retry": self._handle_retry,
             "/status": self._handle_status,
             "/stop": self._handle_stop,
         }
@@ -87,6 +102,24 @@ class CommandDispatcher:
             return NotACommand()
         return handler(agent_id, session_id)
 
+    def _handle_compact(self, agent_id: str, session_id: str) -> CommandAction:
+        return CommandAction(name="compact")
+
+    def _handle_help(self, agent_id: str, session_id: str) -> CommandHandled:
+        lines = ["Built-in slash commands:"]
+        lines.extend(
+            f"/{name} - {description}"
+            for name, description in sorted(self.BUILT_IN_COMMANDS.items())
+        )
+        lines.extend(
+            [
+                "",
+                "Skill shortcuts also start with slash names. "
+                "Use $skill-name to force a skill without sending a slash command.",
+            ]
+        )
+        return CommandHandled(reply="\n".join(lines))
+
     def _handle_stop(self, agent_id: str, session_id: str) -> CommandHandled:
         try:
             self._chat_runs.cancel_by_session(agent_id, session_id)
@@ -94,23 +127,11 @@ class CommandDispatcher:
             return CommandHandled(reply="No active run to cancel.")
         return CommandHandled(reply="Run cancelled.")
 
-    def _handle_new(self, agent_id: str, session_id: str) -> CommandHandled:
-        if self._sessions is None or self._agents is None:
-            return CommandHandled(reply="Session management is not available.")
+    def _handle_new(self, agent_id: str, session_id: str) -> CommandAction:
+        return CommandAction(name="new_session")
 
-        try:
-            active_run = self._chat_runs.active_run(agent_id=agent_id, session_id=session_id)
-            if active_run is not None:
-                return CommandHandled(
-                    reply="A new session can be started after the current run finishes.",
-                )
-
-            self._agents.get(agent_id)
-            new_session = self._sessions.create(agent_id)
-            self._agents.update(agent_id, current_session_id=new_session.id)
-            return CommandHandled(reply=f"New session started: {new_session.id}")
-        except Exception:
-            raise
+    def _handle_retry(self, agent_id: str, session_id: str) -> CommandAction:
+        return CommandAction(name="retry_last_turn")
 
     def _handle_status(self, agent_id: str, session_id: str) -> CommandHandled:
         agent: Agent | None = None

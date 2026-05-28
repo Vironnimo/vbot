@@ -123,6 +123,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Loads `chat.commands` on mount and passes the flat combined command/available-skill list to the composer as the existing `availableSkills` prop shape for trigger suggestions.
   - Shows inline neutral `actionInfo` feedback when `chat.stream` handles a built-in command without starting a Run.
   - When a manual `/compact` command is handled without starting a Run, ChatView reloads the active session history so the new compaction separator appears immediately.
+  - When a handled `/new` command includes `{ data: { command: "new", session_id } }`, ChatView updates the selected Agent's current Session locally, clears any Session override, and loads the new Session history.
+  - `/retry` follows the normal Run response path: when `chat.stream` returns a Run/SSE payload, ChatView starts the Run locally and subscribes to its SSE URL instead of treating it as command-handled feedback.
   - When the backend rejects `/compact` because the target Session already has an active Run, ChatView surfaces the handled reply inline and does not start a second Run.
   - Sends message submits to the server even while the Session has an active Run. When `chat.stream` returns `{ queued: true, item }`, ChatView adds that server queue item locally and does not open an SSE subscription for it.
   - Refreshes queued-message state from `chat.queue_list` after history load and after terminal Run events so the accessor reflects the server-owned queue after reloads, reconnects, and drain transitions.
@@ -352,7 +354,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - Persisted `compaction_checkpoint` records are visible timeline markers only;
   they must not render as normal message bubbles.
 - Skill trigger autocomplete is a composer aid only. It must not fetch or inject skill content directly; `/skill-name` and `$skill-name` text is sent unchanged for backend deterministic activation.
-- Built-in command handling feedback is accessor-local UI state only. When the backend returns `{ command_handled: true, reply }`, ChatView shows the reply inline and must not subscribe to a Run stream for that submit.
+- Built-in command handling feedback is accessor-local UI state only. When the backend returns `{ command_handled: true, reply }`, ChatView shows the reply inline and must not subscribe to a Run stream for that submit. The exception is not a handled command response: `/retry` returns a normal Run/SSE payload and must be handled like any other started Run.
 - Partial tool-call argument JSON may be accumulated internally but must not be
   displayed as final normal UI data before the complete `tool_call_started`
   event arrives.

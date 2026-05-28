@@ -19,7 +19,7 @@ from core.channels.adapter import (
     RouteFacts,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
-from core.chat.commands import CommandDispatcher, CommandHandled
+from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock, TextBlock
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
@@ -287,10 +287,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             route.session_id,
             message_text,
         )
-        if isinstance(command_result, CommandHandled):
-            reply = command_result.reply
-            if isinstance(reply, str) and reply.strip():
-                await self.send(reply, reply_plan.platform_target)
+        if await self._handle_dispatch_result(command_result, route, reply_plan):
             return
 
         self._enqueue_chat_message(
@@ -625,10 +622,11 @@ class TelegramChannelAdapter(ChannelAdapter):
                 queued.route.session_id,
                 command_text,
             )
-            if isinstance(dispatch_result, CommandHandled):
-                reply = dispatch_result.reply
-                if isinstance(reply, str) and reply.strip():
-                    await self.send(reply, queued.reply_plan.platform_target)
+            if await self._handle_dispatch_result(
+                dispatch_result,
+                queued.route,
+                queued.reply_plan,
+            ):
                 return
 
         try:
@@ -642,6 +640,56 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         await self._relay_run_events(run, queued.reply_plan.platform_target)
+
+    async def _handle_dispatch_result(
+        self,
+        dispatch_result: object,
+        route: RouteFacts,
+        reply_plan: ReplyPlanFacts,
+    ) -> bool:
+        if isinstance(dispatch_result, CommandHandled):
+            reply = dispatch_result.reply
+            if isinstance(reply, str) and reply.strip():
+                await self.send(reply, reply_plan.platform_target)
+            return True
+
+        if isinstance(dispatch_result, CommandAction):
+            await self._handle_command_action(dispatch_result, route, reply_plan)
+            return True
+
+        return False
+
+    async def _handle_command_action(
+        self,
+        command_action: CommandAction,
+        route: RouteFacts,
+        reply_plan: ReplyPlanFacts,
+    ) -> None:
+        match command_action.name:
+            case "compact":
+                try:
+                    reply = await self._trigger_service.compact_session(
+                        route.agent_id,
+                        route.session_id,
+                    )
+                except Exception:
+                    reply = _format_failed_reply()
+                await self.send(reply, reply_plan.platform_target)
+            case "new_session":
+                await self.send(
+                    "Starting a new session is not available from Telegram channels yet.",
+                    reply_plan.platform_target,
+                )
+            case "retry_last_turn":
+                try:
+                    run = await self._trigger_service.retry_run(
+                        route.agent_id,
+                        route.session_id,
+                    )
+                except Exception:
+                    await self.send(_format_failed_reply(), reply_plan.platform_target)
+                    return
+                await self._relay_run_events(run, reply_plan.platform_target)
 
     async def _relay_run_events(self, run: Run, platform_target: str) -> None:
         assistant_text: str | None = None

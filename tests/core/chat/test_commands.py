@@ -8,9 +8,10 @@ from typing import cast
 
 import pytest
 
-from core.agents.agents import Agent, AgentNotFoundError, AgentStore
+from core.agents.agents import Agent, AgentStore
 from core.chat import (
     ChatMessage,
+    CommandAction,
     CommandDispatcher,
     CommandHandled,
     NotACommand,
@@ -186,97 +187,44 @@ def test_dispatch_non_command_message_returns_not_a_command() -> None:
     assert isinstance(result, NotACommand)
 
 
-def test_built_in_commands_include_compact() -> None:
-    assert "compact" in CommandDispatcher.BUILT_IN_COMMANDS
+def test_built_in_commands_include_current_catalog() -> None:
+    assert set(CommandDispatcher.BUILT_IN_COMMANDS) == {
+        "compact",
+        "help",
+        "new",
+        "retry",
+        "status",
+        "stop",
+    }
 
 
-def test_built_in_commands_include_new() -> None:
-    assert "new" in CommandDispatcher.BUILT_IN_COMMANDS
+@pytest.mark.parametrize(
+    ("message", "action_name"),
+    [
+        ("/compact", "compact"),
+        ("/new", "new_session"),
+        ("/retry", "retry_last_turn"),
+    ],
+)
+def test_dispatch_accessor_commands_return_actions(message: str, action_name: str) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", message)
+
+    assert isinstance(result, CommandAction)
+    assert result.name == action_name
 
 
-def test_dispatch_new_creates_session_and_returns_reply() -> None:
-    agents = _StubAgents(_make_agent())
-    sessions = _StubSessions(created_session_id="session-fresh")
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agents=cast(AgentStore, agents),
-        sessions=cast(ChatSessionManager, sessions),
-    )
+def test_dispatch_help_returns_current_command_list() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/new")
+    result = dispatcher.dispatch("coder", "session-one", "/help")
 
     assert isinstance(result, CommandHandled)
     assert result.reply is not None
-    assert "session-fresh" in result.reply
-    assert sessions.create_calls == ["coder"]
-    assert agents.update_calls == [("coder", {"current_session_id": "session-fresh"})]
-
-
-@pytest.mark.asyncio
-async def test_dispatch_new_blocked_with_active_run() -> None:
-    manager = ChatRunManager()
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def execute(_run: Run) -> str:
-        started.set()
-        await release.wait()
-        return "done"
-
-    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
-    await started.wait()
-
-    agents = _StubAgents(_make_agent())
-    sessions = _StubSessions(created_session_id="session-fresh")
-    dispatcher = CommandDispatcher(
-        manager,
-        agents=cast(AgentStore, agents),
-        sessions=cast(ChatSessionManager, sessions),
-    )
-
-    try:
-        result = dispatcher.dispatch("coder", "session-one", "/new")
-
-        assert isinstance(result, CommandHandled)
-        assert result.reply is not None
-        assert "after the current run finishes" in result.reply
-        assert sessions.create_calls == []
-        assert agents.update_calls == []
-    finally:
-        release.set()
-        assert await run.wait() == "done"
-
-
-def test_dispatch_new_without_session_manager_returns_unavailable_reply() -> None:
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agents=cast(AgentStore, _StubAgents(_make_agent())),
-        sessions=None,
-    )
-
-    result = dispatcher.dispatch("coder", "session-one", "/new")
-
-    assert isinstance(result, CommandHandled)
-    assert result.reply == "Session management is not available."
-
-
-def test_dispatch_new_with_nonexistent_agent_preserves_error_and_creates_no_session() -> None:
-    agents = _StubAgents(
-        _make_agent(),
-        get_error=AgentNotFoundError("Agent not found: ghost"),
-        update_error=AgentNotFoundError("Agent not found: ghost"),
-    )
-    sessions = _StubSessions(created_session_id="session-fresh")
-    dispatcher = CommandDispatcher(
-        ChatRunManager(),
-        agents=cast(AgentStore, agents),
-        sessions=cast(ChatSessionManager, sessions),
-    )
-
-    with pytest.raises(AgentNotFoundError, match="Agent not found: ghost"):
-        dispatcher.dispatch("ghost", "session-one", "/new")
-
-    assert sessions.create_calls == []
+    assert "/compact - Compact the current session's context immediately." in result.reply
+    assert "/retry - Retry the last user turn in this session." in result.reply
+    assert "$skill-name" in result.reply
 
 
 def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:

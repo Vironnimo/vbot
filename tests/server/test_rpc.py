@@ -17,6 +17,7 @@ from typing import Any, cast
 import pytest
 
 import server.delegates as delegates
+from core.automation import TriggerService
 from core.chat import ChatLoop, ChatMessage, ChatSessionManager
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.models import Capabilities, Model, ReasoningCapabilities
@@ -751,6 +752,7 @@ class StubRuntime:
         self.providers = StubProviders()
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
+        self.trigger_service: Any = None
 
     def start(self) -> None:
         return None
@@ -827,10 +829,12 @@ def make_state(tmp_path: Path, adapter: StubAdapter) -> SimpleNamespace:
     runtime = StubRuntime(tmp_path, adapter)
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
+    chat_loop = ChatLoop(runtime)
+    runtime.trigger_service = TriggerService(chat_loop, chat_runs, cast(Any, runtime))
     return SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
-        chat_loop=ChatLoop(runtime),
+        chat_loop=chat_loop,
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
         server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
@@ -2934,8 +2938,99 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
     command_names = [
         item["name"] for item in response["result"]["items"] if item.get("type") == "command"
     ]
-    assert command_names == ["compact", "new", "status", "stop"]
+    assert command_names == ["compact", "help", "new", "retry", "status", "stop"]
     assert all(not name.startswith("/") for name in command_names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_new_command_with_session_payload(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "/new",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["command_handled"] is True
+    assert result["reply"].startswith("New session started: ")
+    assert result["data"]["command"] == "new"
+    new_session_id = result["data"]["session_id"]
+    assert isinstance(new_session_id, str)
+    assert new_session_id != "session-one"
+    assert state.runtime.agents.get("coder").current_session_id == new_session_id
+    assert state.runtime.chat_sessions.get("coder", new_session_id).load() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "streaming"),
+    [("chat.send", False), ("chat.stream", True)],
+)
+async def test_chat_methods_handle_retry_command_as_run_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    streaming: bool,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    run = StubDelegateRun(
+        run_id="run-retry",
+        agent_id="coder",
+        session_id="session-one",
+        status="running" if streaming else "completed",
+        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Retried"),
+    )
+    captured: JsonObject = {}
+
+    async def fake_retry_run(agent_id: str, session_id: str) -> StubDelegateRun:
+        captured["agent_id"] = agent_id
+        captured["session_id"] = session_id
+        return run
+
+    if streaming:
+        monkeypatch.setattr(
+            delegates,
+            "_streaming_chat_loop",
+            lambda _state: SimpleNamespace(retry_run=fake_retry_run),
+        )
+    else:
+        monkeypatch.setattr(state.chat_loop, "retry_run", fake_retry_run)
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": " /RETRY ",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["run_id"] == "run-retry"
+    assert captured == {"agent_id": "coder", "session_id": "session-one"}
+    if streaming:
+        assert response["result"]["sse_url"] == "/api/runs/run-retry/events"
+    else:
+        assert response["result"]["message"]["content"] == "Retried"
 
 
 @pytest.mark.asyncio
@@ -2950,6 +3045,7 @@ async def test_chat_methods_reject_compact_command_while_session_run_is_active(
     state = make_state(tmp_path, adapter)
     compaction_service = RecordingCompactionService()
     state.compaction_service = compaction_service
+    state.chat_loop._compaction_service = compaction_service
     state.runtime.chat_sessions.create("coder", session_id="session-one")
 
     started = asyncio.Event()
@@ -3026,6 +3122,43 @@ async def test_chat_methods_handle_compact_command_when_service_unavailable(
             "reply": "Compaction is not available.",
         },
     }
+    assert adapter.requests == []
+    assert adapter.stream_requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_compact_command_model_errors_as_command_reply(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    adapter = StubAdapter()
+    state = make_state(tmp_path, adapter)
+    compaction_service = RecordingCompactionService()
+    state.chat_loop._compaction_service = compaction_service
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    state.runtime.agents.update("coder", model="")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": " /COMPACT ",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "Compaction failed: agent has no model set",
+        },
+    }
+    assert compaction_service.calls == 0
     assert adapter.requests == []
     assert adapter.stream_requests == []
 
