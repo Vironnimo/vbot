@@ -1,3 +1,5 @@
-# User
+# User Profile
 
-Record durable user preferences, constraints, and context that should guide future interactions.
+No durable user profile facts are recorded yet.
+
+Use this file for stable facts about the user: preferences, communication style, expectations, workflow habits, and durable context that should guide future interactions. Keep entries concise and user-specific; put project conventions in AGENTS.md instead.
