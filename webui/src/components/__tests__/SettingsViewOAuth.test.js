@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
+let toastMock;
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -35,6 +36,7 @@ describe('SettingsView OAuth providers', () => {
     });
     init('en');
     mountedComponent = null;
+    toastMock = vi.fn();
     currentSettings = settingsPayload({ oauthConfigured: false });
     rpcMock.mockReset();
     rpcMock.mockImplementation(createSettingsRpcMock(() => currentSettings));
@@ -84,10 +86,15 @@ describe('SettingsView OAuth providers', () => {
     buttonByText('Connect').click();
     await waitForCondition(() => buttonByText('Copy'));
     buttonByText('Copy').click();
-    await waitForCondition(() => document.body.textContent.includes('Copied'));
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('ABCD-1234');
-    expect(document.body.textContent).toContain('Device code copied.');
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Device code copied.',
+        variant: 'success',
+      }),
+    );
   });
 
   it('closes the dialog and shows a success toast after auth completion', async () => {
@@ -109,11 +116,17 @@ describe('SettingsView OAuth providers', () => {
       },
     });
     await waitForCondition(() =>
-      document.body.textContent.includes(
-        'GitHub Copilot connected successfully',
+      toastMock.mock.calls.some(
+        (call) => call[0]?.title === 'GitHub Copilot connected successfully',
       ),
     );
 
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'GitHub Copilot connected successfully',
+        variant: 'success',
+      }),
+    );
     expect(document.body.textContent).not.toContain('ABCD-1234');
     expect(providerRow('GitHub Copilot').textContent).toContain('Disconnect');
   });
@@ -136,9 +149,17 @@ describe('SettingsView OAuth providers', () => {
       },
     });
     await waitForCondition(() =>
-      document.body.textContent.includes('Authorization failed or timed out'),
+      toastMock.mock.calls.some(
+        (call) => call[0]?.title === 'Authorization failed or timed out',
+      ),
     );
 
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Authorization failed or timed out',
+        variant: 'error',
+      }),
+    );
     expect(document.body.textContent).not.toContain('ABCD-1234');
     expect(providerRow('GitHub Copilot').textContent).toContain('Connect');
   });
@@ -186,7 +207,10 @@ describe('SettingsView OAuth providers', () => {
 });
 
 function mountSettingsView(props = {}) {
-  return mount(SettingsView, { target: document.body, props });
+  return mount(SettingsView, {
+    target: document.body,
+    props: { onToast: toastMock, ...props },
+  });
 }
 
 async function openProvidersPanel() {

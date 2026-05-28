@@ -11,10 +11,17 @@
     normalizeAgentForm,
   } from '$lib/agentForm.js';
   import { t } from '$lib/i18n.js';
+  import {
+    buildModelSelectOptions,
+    modelSelectionValue,
+    parseModelSelectionValue,
+    selectModelValue,
+  } from '$lib/modelSelection.js';
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const WILDCARD_ACCESS = '*';
+  const noop = () => {};
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
     'none',
@@ -30,6 +37,7 @@
     sharedSelectedAgentId = '',
     onAgentsChanged,
     onAgentSelected,
+    onToast = noop,
   } = $props();
 
   let agents = $state([]);
@@ -39,11 +47,15 @@
   let formValues = $state(createAgentFormValues());
   let editBaselineValues = $state(createAgentFormValues());
   let formErrors = $state({});
+  let isCreateModalOpen = $state(false);
+  let createModalValues = $state(createAgentFormValues());
+  let createModalErrors = $state({});
+  let createModalErrorMessage = $state('');
+  let isCreateModalSaving = $state(false);
   let isLoading = $state(false);
   let isSaving = $state(false);
   let isDeleting = $state(false);
   let errorMessage = $state('');
-  let statusMessage = $state('');
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let availableTools = $state([]);
@@ -51,6 +63,7 @@
   let invalidSkills = $state([]);
   let modelSelectValue = $state('');
   let fallbackModelSelectValue = $state('');
+  let createModalModelSelectValue = $state('');
   let agentAutoSaveTimer = null;
 
   let selectedAgent = $derived(
@@ -85,6 +98,12 @@
       t('agents.form.fallbackModelPlaceholder', 'None'),
     ),
   );
+  let createModalModelOptions = $derived(
+    selectModelOptions(
+      createModalValues.model,
+      t('agents.form.modelPlaceholder', 'Default (no model selected)'),
+    ),
+  );
   let thinkingEffortOptions = $derived(
     THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
@@ -97,6 +116,10 @@
     fallbackModelSelectValue = selectModelValue(
       formValues.fallback_model,
       fallbackModelOptions,
+    );
+    createModalModelSelectValue = selectModelValue(
+      createModalValues.model,
+      createModalModelOptions,
     );
   });
 
@@ -219,7 +242,83 @@
     formValues = createAgentFormValues();
     editBaselineValues = createAgentFormValues();
     formErrors = {};
-    statusMessage = '';
+  }
+
+  function openCreateModal() {
+    clearAgentAutoSaveTimer();
+    createModalValues = createAgentFormValues();
+    createModalErrors = {};
+    createModalErrorMessage = '';
+    isCreateModalOpen = true;
+  }
+
+  function closeCreateModal() {
+    if (isCreateModalSaving) {
+      return;
+    }
+
+    isCreateModalOpen = false;
+    createModalErrors = {};
+    createModalErrorMessage = '';
+  }
+
+  function handleDocumentKeydown(event) {
+    if (event.key === 'Escape' && isCreateModalOpen && !isCreateModalSaving) {
+      closeCreateModal();
+    }
+  }
+
+  function handleCreateModalOverlayClick(event) {
+    if (event.target === event.currentTarget) {
+      closeCreateModal();
+    }
+  }
+
+  function updateCreateModalModelSelection(selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    createModalValues.model = modelSelectionValue(
+      selection.model,
+      selection.connectionLocalId,
+    );
+  }
+
+  async function submitCreateModal(event) {
+    event.preventDefault();
+
+    if (isCreateModalSaving) {
+      return;
+    }
+
+    const result = normalizeAgentForm(createModalValues, {
+      mode: AGENT_FORM_MODE_CREATE,
+    });
+
+    createModalErrors = result.errors;
+    createModalErrorMessage = '';
+
+    if (!result.isValid) {
+      createModalErrorMessage = t(
+        'errors.validation',
+        'Check the highlighted fields and try again.',
+      );
+      return;
+    }
+
+    isCreateModalSaving = true;
+    errorMessage = '';
+
+    try {
+      const savedAgent = await rpc('agent.create', result.payload);
+      showAgentToast(t('agents.created', 'Agent created.'));
+      isCreateModalOpen = false;
+      await loadAgents({
+        preferredAgentId: savedAgent.id ?? result.payload.id,
+      });
+    } catch (error) {
+      createModalErrorMessage = viewErrorMessage(error, t('agents.saveError'));
+    } finally {
+      isCreateModalSaving = false;
+    }
   }
 
   async function saveAgent(event = null, options = {}) {
@@ -242,7 +341,6 @@
 
     if (source === 'manual') {
       formErrors = result.errors;
-      statusMessage = '';
       errorMessage = '';
     }
 
@@ -261,7 +359,7 @@
       !agentPayloadHasChanges(result.payload)
     ) {
       if (source === 'manual') {
-        statusMessage = t('common.alreadySaved', 'Already saved');
+        showAgentToast(t('common.alreadySaved', 'Already saved'));
       }
       return;
     }
@@ -277,7 +375,7 @@
         saveMode === AGENT_FORM_MODE_CREATE ? 'agent.create' : 'agent.update';
       const savedAgent = await rpc(method, result.payload);
       if (saveMode === AGENT_FORM_MODE_CREATE) {
-        statusMessage = t('agents.created', 'Agent created.');
+        showAgentToast(t('agents.created', 'Agent created.'));
         await loadAgents({
           preferredAgentId: savedAgent.id ?? result.payload.id,
         });
@@ -288,7 +386,7 @@
           draftValues,
         );
         if (updatedSelectedAgent) {
-          statusMessage = t('agents.updated', 'Agent updated.');
+          showAgentToast(t('agents.updated', 'Agent updated.'));
         }
       }
     } catch (error) {
@@ -332,6 +430,10 @@
 
     clearTimeout(agentAutoSaveTimer);
     agentAutoSaveTimer = null;
+  }
+
+  function showAgentToast(title, variant = 'success') {
+    onToast?.({ title, variant });
   }
 
   function cloneAgentFormValues(values) {
@@ -394,12 +496,11 @@
     }
 
     isDeleting = true;
-    statusMessage = '';
     errorMessage = '';
 
     try {
       await rpc('agent.delete', { id: selectedAgent.id });
-      statusMessage = t('agents.deleted', 'Agent deleted.');
+      showAgentToast(t('agents.deleted', 'Agent deleted.'));
       await loadAgents();
     } catch (error) {
       errorMessage = viewErrorMessage(error, t('agents.deleteError'));
@@ -548,156 +649,13 @@
   }
 
   function selectModelOptions(selectedModelValue, emptyLabel) {
-    const connectionsByProvider = usableConnectionsByProvider();
-    const selectedModel = parseModelSelectionValue(selectedModelValue);
-    const selectedConnectionId = connectionIdFromModel(
-      selectedModel.model,
-      selectedModel.connectionLocalId,
-    );
-    const selectedValue = modelSelectionValue(
-      selectedModel.model,
-      selectedModel.connectionLocalId,
-    );
-    const modelExistsInCatalog = availableModels.some(
-      (model) => model.id === selectedModel.model,
-    );
-    const selectedModelOption =
-      selectedModel.model &&
-      !selectedModel.connectionLocalId &&
-      modelExistsInCatalog
-        ? {
-            value: selectedModel.model,
-            label: selectedModel.model,
-            isUnavailable: false,
-          }
-        : null;
-    const emptyOption = {
-      value: '',
-      label: emptyLabel,
-      isUnavailable: false,
-    };
-    const catalogOptions = availableModels.flatMap((model) => {
-      const providerConnections =
-        connectionsByProvider[model.provider_id] ?? [];
-
-      return providerConnections.map((connection) => ({
-        value: modelSelectionValue(
-          model.id,
-          connectionLocalIdFromConnectionId(connection.id),
-        ),
-        label: modelOptionLabel(model, connection, providerConnections.length),
-        isUnavailable: false,
-      }));
+    return buildModelSelectOptions({
+      models: availableModels,
+      connections: availableConnections,
+      selectedModelValue,
+      emptyLabel,
+      translate: t,
     });
-
-    if (
-      !selectedValue ||
-      catalogOptions.some((option) => option.value === selectedValue) ||
-      selectedModelOption
-    ) {
-      return selectedModelOption
-        ? [emptyOption, selectedModelOption, ...catalogOptions]
-        : [emptyOption, ...catalogOptions];
-    }
-
-    return [
-      emptyOption,
-      {
-        value: selectedValue,
-        label: unavailableModelOptionLabel(
-          selectedModel.model,
-          selectedConnectionId,
-        ),
-        isUnavailable: true,
-      },
-      ...catalogOptions,
-    ];
-  }
-
-  function usableConnectionsByProvider() {
-    const connectionsByProvider = {};
-
-    for (const connection of availableConnections) {
-      if (!connection?.usable || !connection.provider_id) {
-        continue;
-      }
-
-      if (!connectionsByProvider[connection.provider_id]) {
-        connectionsByProvider[connection.provider_id] = [];
-      }
-
-      connectionsByProvider[connection.provider_id].push(connection);
-    }
-
-    return connectionsByProvider;
-  }
-
-  function modelOptionLabel(model, connection, providerConnectionCount) {
-    if (providerConnectionCount <= 1) {
-      return model.id;
-    }
-
-    return `${model.id} (${connection.label})`;
-  }
-
-  function unavailableModelOptionLabel(model, connection) {
-    if (!connection) {
-      return t(
-        'agents.form.modelUnavailableOption',
-        'Unavailable / custom: {model}',
-        {
-          model,
-        },
-      );
-    }
-
-    return t(
-      'agents.form.modelUnavailableConnectionOption',
-      'Unavailable / custom: {model} ({connection})',
-      {
-        connection: connectionDisplayLabel(connection),
-        model,
-      },
-    );
-  }
-
-  function connectionDisplayLabel(connectionId) {
-    const connection = availableConnections.find(
-      (item) => item.id === connectionId,
-    );
-
-    return connection?.label || connectionId;
-  }
-
-  function connectionLocalIdFromConnectionId(connectionId) {
-    if (!connectionId) {
-      return '';
-    }
-
-    const separatorIndex = connectionId.indexOf(':');
-    if (separatorIndex === -1) {
-      return connectionId;
-    }
-
-    return connectionId.slice(separatorIndex + 1);
-  }
-
-  function connectionIdFromModel(model, connectionLocalId) {
-    if (!model || !connectionLocalId) {
-      return '';
-    }
-
-    const providerSeparatorIndex = model.indexOf('/');
-    if (providerSeparatorIndex === -1) {
-      return '';
-    }
-
-    const providerId = model.slice(0, providerSeparatorIndex);
-    if (!providerId) {
-      return '';
-    }
-
-    return `${providerId}:${connectionLocalId}`;
   }
 
   function updateModelSelection(modelFieldName, selectedValue) {
@@ -706,58 +664,6 @@
       selection.model,
       selection.connectionLocalId,
     );
-  }
-
-  function selectModelValue(modelValue, options) {
-    const selection = parseModelSelectionValue(modelValue);
-
-    if (!selection.model) {
-      return '';
-    }
-
-    const exactValue = modelSelectionValue(
-      selection.model,
-      selection.connectionLocalId,
-    );
-
-    if (options.some((option) => option.value === exactValue)) {
-      return exactValue;
-    }
-
-    if (selection.connectionLocalId) {
-      return exactValue;
-    }
-
-    return selection.model;
-  }
-
-  function modelSelectionValue(model, connectionLocalId) {
-    if (!model) {
-      return '';
-    }
-
-    if (!connectionLocalId) {
-      return model;
-    }
-
-    return `${model}::${connectionLocalId}`;
-  }
-
-  function parseModelSelectionValue(selectedValue) {
-    if (!selectedValue) {
-      return { model: '', connectionLocalId: '' };
-    }
-
-    const separatorIndex = selectedValue.lastIndexOf('::');
-
-    if (separatorIndex === -1) {
-      return { model: selectedValue, connectionLocalId: '' };
-    }
-
-    return {
-      model: selectedValue.slice(0, separatorIndex),
-      connectionLocalId: selectedValue.slice(separatorIndex + 2),
-    };
   }
 
   function thinkingEffortLabel(option) {
@@ -772,12 +678,12 @@
     onAgentsChanged?.(agents);
   }
 
-  function fieldError(fieldName) {
-    if (!formErrors[fieldName]) {
+  function fieldError(fieldName, errors = formErrors) {
+    if (!errors[fieldName]) {
       return '';
     }
 
-    if (formErrors[fieldName] === 'required') {
+    if (errors[fieldName] === 'required') {
       return t('agents.form.required', 'This field is required.');
     }
 
@@ -804,6 +710,8 @@
   }
 </script>
 
+<svelte:document onkeydown={handleDocumentKeydown} />
+
 <section class="agents-view view active" aria-labelledby="agents-list-title">
   <div class="agents-layout">
     <aside class="agent-list-pane" aria-labelledby="agents-list-title">
@@ -811,7 +719,7 @@
         <span id="agents-list-title" class="pane-title">
           {t('agents.title', 'Agents')}
         </span>
-        <button class="btn-new" type="button" onclick={startCreate}>
+        <button class="btn-new" type="button" onclick={openCreateModal}>
           <svg viewBox="0 0 14 14" aria-hidden="true">
             <path d="M7 1v12M1 7h12" />
           </svg>
@@ -906,10 +814,6 @@
           >
             {errorMessage}
           </p>
-        {/if}
-
-        {#if statusMessage}
-          <p class="agents-view__notice" role="status">{statusMessage}</p>
         {/if}
 
         <div class="detail-group">
@@ -1082,21 +986,6 @@
               >
                 {displayValue(formValues.fallback_model)}
               </div>
-            </div>
-
-            <div class="f">
-              <div class="f-label">
-                {t('agents.detail.thinkingStatus', 'Thinking')}
-              </div>
-              {#if formValues.thinking_effort}
-                <div class="f-value">
-                  <span class="chip chip-orange"
-                    >{formValues.thinking_effort}</span
-                  >
-                </div>
-              {:else}
-                <div class="agents-view__muted-value">{EMPTY_VALUE}</div>
-              {/if}
             </div>
           </div>
         </div>
@@ -1358,7 +1247,7 @@
           </p>
         {/if}
 
-        <div class="agent-sticky-footer">
+        <div class="agent-detail-footer">
           <button class="btn-outline" type="submit" disabled={isSaving}>
             {isSaving ? t('common.saving', 'Saving…') : submitLabel}
           </button>
@@ -1366,6 +1255,179 @@
       </div>
     </form>
   </div>
+
+  {#if isCreateModalOpen}
+    <div
+      class="modal-overlay open"
+      role="presentation"
+      onclick={handleCreateModalOverlayClick}
+    >
+      <div
+        class="modal agents-view__create-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-create-modal-title"
+      >
+        <div class="modal-header">
+          <h3 id="agent-create-modal-title" class="modal-title">
+            {t('agents.create', 'Create Agent')}
+          </h3>
+          <button
+            type="button"
+            class="modal-close"
+            aria-label={t('common.close', 'Close')}
+            disabled={isCreateModalSaving}
+            onclick={closeCreateModal}
+          >
+            ×
+          </button>
+        </div>
+
+        <form onsubmit={submitCreateModal}>
+          <div class="modal-body agents-view__create-modal-body">
+            <label class="modal-field">
+              <span class="modal-label">{t('agents.form.id', 'Agent ID')}</span>
+              <input
+                class:agents-view__invalid={createModalErrors.id}
+                class="s-input"
+                type="text"
+                value={createModalValues.id}
+                disabled={isCreateModalSaving}
+                oninput={(event) => {
+                  createModalValues.id = event.currentTarget.value;
+                  createModalErrors.id = '';
+                  createModalErrorMessage = '';
+                }}
+              />
+              {#if createModalErrors.id}
+                <small class="agents-view__field-error">
+                  {fieldError('id', createModalErrors)}
+                </small>
+              {/if}
+            </label>
+
+            <label class="modal-field">
+              <span class="modal-label">{t('agents.form.name', 'Name')}</span>
+              <input
+                class:agents-view__invalid={createModalErrors.name}
+                class="s-input"
+                type="text"
+                value={createModalValues.name}
+                disabled={isCreateModalSaving}
+                oninput={(event) => {
+                  createModalValues.name = event.currentTarget.value;
+                  createModalErrors.name = '';
+                  createModalErrorMessage = '';
+                }}
+              />
+              {#if createModalErrors.name}
+                <small class="agents-view__field-error">
+                  {fieldError('name', createModalErrors)}
+                </small>
+              {/if}
+            </label>
+
+            <label class="modal-field">
+              <span class="modal-label">{t('agents.form.model', 'Model')}</span>
+              <SearchableDropdown
+                id="agent-create-model"
+                value={createModalModelSelectValue}
+                options={createModalModelOptions}
+                placeholder={t(
+                  'agents.form.modelPlaceholder',
+                  'Default (no model selected)',
+                )}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t('agents.form.model', 'Model')}
+                disabled={isCreateModalSaving}
+                triggerClass="agents-view__dropdown"
+                panelClass="agents-view__search-panel agents-view__modal-search-panel"
+                onValueChange={updateCreateModalModelSelection}
+              />
+            </label>
+
+            <label class="modal-field">
+              <span class="modal-label">
+                {t('agents.form.thinkingEffort', 'Thinking effort')}
+              </span>
+              <Dropdown
+                id="agent-create-thinking-effort"
+                value={createModalValues.thinking_effort}
+                options={thinkingEffortOptions}
+                ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
+                disabled={isCreateModalSaving}
+                triggerClass="agents-view__dropdown"
+                listClass="agents-view__thinking-list agents-view__modal-thinking-list"
+                onValueChange={(selectedValue) => {
+                  createModalValues.thinking_effort = selectedValue;
+                }}
+              />
+            </label>
+
+            <label class="modal-field">
+              <span class="modal-label">
+                {t('agents.form.temperature', 'Temperature')}
+              </span>
+              <input
+                class:agents-view__invalid={createModalErrors.temperature}
+                class="s-input"
+                type="number"
+                step="0.01"
+                value={createModalValues.temperature}
+                disabled={isCreateModalSaving}
+                oninput={(event) => {
+                  createModalValues.temperature = event.currentTarget.value;
+                  createModalErrors.temperature = '';
+                  createModalErrorMessage = '';
+                }}
+              />
+              {#if createModalErrors.temperature}
+                <small class="agents-view__field-error">
+                  {fieldError('temperature', createModalErrors)}
+                </small>
+              {/if}
+            </label>
+
+            {#if createModalErrorMessage}
+              <p
+                class="agents-view__notice agents-view__notice--error"
+                role="alert"
+              >
+                {createModalErrorMessage}
+              </p>
+            {/if}
+          </div>
+
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="modal-btn-cancel"
+              disabled={isCreateModalSaving}
+              onclick={closeCreateModal}
+            >
+              {t('common.cancel', 'Cancel')}
+            </button>
+            <button
+              type="submit"
+              class="modal-btn-confirm"
+              disabled={isCreateModalSaving}
+            >
+              {isCreateModalSaving
+                ? t('common.saving', 'Saving…')
+                : t('agents.form.submitCreate', 'Create agent')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -1535,13 +1597,19 @@
     gap: 8px;
   }
 
-  .agent-sticky-footer {
-    position: sticky;
-    bottom: 0;
+  .agent-detail-footer {
     display: flex;
+    flex-shrink: 0;
     justify-content: flex-end;
-    padding: 16px 0 4px;
-    background: var(--surface);
+    padding: 0 0 4px;
+  }
+
+  .agents-view__create-modal {
+    width: min(520px, 90vw);
+  }
+
+  .agents-view__create-modal-body {
+    gap: 14px;
   }
 
   .detail-group {
@@ -1564,6 +1632,7 @@
   .detail-group-title {
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
     background: var(--surface);
   }
 
@@ -1753,6 +1822,11 @@
 
   :global(.agents-view__search-panel) {
     z-index: 220;
+  }
+
+  :global(.agents-view__modal-search-panel),
+  :global(.agents-view__modal-thinking-list) {
+    z-index: 620;
   }
 
   .agents-view__thinking-field {

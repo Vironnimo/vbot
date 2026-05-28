@@ -115,16 +115,8 @@ describe('SystemPromptView', () => {
     expect(document.body.textContent).toContain('unsaved');
   });
 
-  it('save calls prompt.update and clears dirty state', async () => {
-    rpcMock.mockImplementation(
-      createRpcMock({
-        promptUpdate: {
-          name: 'system.md',
-          content: 'updated content',
-          is_modified: true,
-        },
-      }),
-    );
+  it('global save calls prompt.update for all dirty fragments and clears dirty state', async () => {
+    rpcMock.mockImplementation(createRpcMock());
 
     mountedComponent = mount(SystemPromptView, { target: document.body });
     flushSync();
@@ -134,9 +126,11 @@ describe('SystemPromptView', () => {
       100,
     );
 
-    const textarea = document.body.querySelectorAll('textarea.sp-textarea')[0];
-    textarea.value = 'updated content';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    const textareas = document.body.querySelectorAll('textarea.sp-textarea');
+    textareas[0].value = 'updated content';
+    textareas[0].dispatchEvent(new Event('input', { bubbles: true }));
+    textareas[1].value = 'runtime updated content';
+    textareas[1].dispatchEvent(new Event('input', { bubbles: true }));
     flushSync();
 
     expect(document.body.textContent).toContain('unsaved');
@@ -144,22 +138,30 @@ describe('SystemPromptView', () => {
     const saveButtons = Array.from(
       document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
     ).filter((btn) => btn.textContent.trim() === 'Save');
-    expect(saveButtons.length).toBeGreaterThan(0);
+    expect(saveButtons).toHaveLength(1);
+    expect(saveButtons[0].closest('.sp-global-footer')).toBeTruthy();
+    expect(document.body.querySelector('.sp-sticky-footer')).toBeNull();
 
     saveButtons[0].click();
     flushSync();
 
     await waitForCondition(
-      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.update'),
+      () =>
+        rpcMock.mock.calls.filter((call) => call[0] === 'prompt.update')
+          .length === 2,
       100,
     );
 
-    const updateCall = rpcMock.mock.calls.find(
+    const updateCalls = rpcMock.mock.calls.filter(
       (call) => call[0] === 'prompt.update',
     );
-    expect(updateCall[1]).toMatchObject({
+    expect(updateCalls[0][1]).toMatchObject({
       name: 'system.md',
       content: 'updated content',
+    });
+    expect(updateCalls[1][1]).toMatchObject({
+      name: 'runtime.md',
+      content: 'runtime updated content',
     });
 
     await waitForCondition(
@@ -169,9 +171,13 @@ describe('SystemPromptView', () => {
   });
 
   it('auto-saves a dirty fragment after 800ms debounce', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForCondition(
@@ -220,15 +226,20 @@ describe('SystemPromptView', () => {
       content: 'auto-saved content',
     });
 
-    expect(document.body.textContent).toContain('Saved');
-
-    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Saved', variant: 'success' }),
+    );
+    expect(document.body.querySelector('.sp-toast--success')).toBeNull();
   });
 
   it('auto-save clears dirty state and clean save click stays clean', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForCondition(
@@ -258,7 +269,7 @@ describe('SystemPromptView', () => {
       document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
     ).filter((button) => button.textContent.trim() === 'Save');
 
-    expect(saveButtons.length).toBeGreaterThan(0);
+    expect(saveButtons).toHaveLength(1);
 
     saveButtons[0].click();
     flushSync();
@@ -268,15 +279,20 @@ describe('SystemPromptView', () => {
     );
     expect(updateCallsAfterCleanClick).toHaveLength(1);
 
-    expect(document.body.textContent).toContain('Already saved');
-
-    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Already saved', variant: 'success' }),
+    );
+    expect(document.body.querySelector('.sp-toast--success')).toBeNull();
   });
 
   it('manual save click on clean fragment shows already saved success toast', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(createRpcMock());
 
-    mountedComponent = mount(SystemPromptView, { target: document.body });
+    mountedComponent = mount(SystemPromptView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForCondition(
@@ -288,8 +304,9 @@ describe('SystemPromptView', () => {
       document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
     ).filter((button) => button.textContent.trim() === 'Save');
 
-    expect(saveButtons.length).toBeGreaterThan(0);
-    expect(saveButtons[0].closest('.sp-sticky-footer')).toBeTruthy();
+    expect(saveButtons).toHaveLength(1);
+    expect(saveButtons[0].closest('.sp-global-footer')).toBeTruthy();
+    expect(document.body.querySelector('.sp-sticky-footer')).toBeNull();
     expect(saveButtons[0].disabled).toBe(false);
 
     saveButtons[0].click();
@@ -299,12 +316,10 @@ describe('SystemPromptView', () => {
       rpcMock.mock.calls.every((call) => call[0] !== 'prompt.update'),
     ).toBe(true);
 
-    await waitForCondition(
-      () => document.body.textContent.includes('Already saved'),
-      50,
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Already saved', variant: 'success' }),
     );
-
-    expect(document.body.querySelector('.sp-toast--success')).toBeTruthy();
+    expect(document.body.querySelector('.sp-toast--success')).toBeNull();
   });
 
   it('reset calls prompt.reset after confirm and updates content', async () => {

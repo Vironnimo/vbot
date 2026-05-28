@@ -35,6 +35,7 @@
 
 <script>
   import { onMount } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
   import AppShell from './components/AppShell.svelte';
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
@@ -55,6 +56,7 @@
 
   const navigationItems = NAVIGATION_ITEMS;
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
+  const TOAST_AUTO_DISMISS_MS = 3200;
   const RUN_SERVER_EVENT_TYPES = new Set([
     'run_started',
     'run_output',
@@ -83,6 +85,7 @@
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvent = $state(null);
+  const toastDismissTimers = new SvelteMap();
 
   $effect(() => {
     try {
@@ -143,12 +146,53 @@
     agentsRefreshToken += 1;
   };
 
+  const clearToastDismissTimer = (id) => {
+    const timer = toastDismissTimers.get(id);
+    if (!timer) {
+      return;
+    }
+
+    clearTimeout(timer);
+    toastDismissTimers.delete(id);
+  };
+
+  const clearToastDismissTimers = () => {
+    for (const timer of toastDismissTimers.values()) {
+      clearTimeout(timer);
+    }
+    toastDismissTimers.clear();
+  };
+
+  const dismissAppToast = (id) => {
+    clearToastDismissTimer(id);
+    dismissToast(toastState, id);
+  };
+
+  const showToast = ({
+    title,
+    message = '',
+    variant = 'info',
+    autoDismiss = true,
+  }) => {
+    const id = addToast(toastState, { title, message, variant });
+    if (!autoDismiss) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      dismissToast(toastState, id);
+      toastDismissTimers.delete(id);
+    }, TOAST_AUTO_DISMISS_MS);
+    toastDismissTimers.set(id, timer);
+  };
+
   const handleServerEvent = async (event) => {
     if (event.type === 'app_error') {
-      addToast(toastState, {
+      showToast({
         title: t('errors.appError', 'Error'),
         message: event.payload?.message ?? '',
         variant: 'error',
+        autoDismiss: false,
       });
       return;
     }
@@ -177,7 +221,10 @@
 
   onMount(() => {
     connect(connectionState, { onEvent: handleServerEvent });
-    return () => disconnect(connectionState);
+    return () => {
+      disconnect(connectionState);
+      clearToastDismissTimers();
+    };
   });
 </script>
 
@@ -203,18 +250,16 @@
       sharedSelectedAgentId={selectedAgentId}
       onAgentsChanged={refreshAgents}
       onAgentSelected={selectAgent}
+      onToast={showToast}
     />
   {:else if activeViewId === 'cron'}
     <CronView />
   {:else if activeViewId === 'system-prompt'}
-    <SystemPromptView />
+    <SystemPromptView onToast={showToast} />
   {:else if activeViewId === 'settings'}
-    <SettingsView {providerAuthEvent} />
+    <SettingsView {providerAuthEvent} onToast={showToast} />
   {:else if activeViewId === 'logs'}
     <LogsView />
   {/if}
-  <ToastStack
-    toasts={toastState.toasts}
-    onDismiss={(id) => dismissToast(toastState, id)}
-  />
+  <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
