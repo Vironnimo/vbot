@@ -522,7 +522,7 @@ svg {
 
 .input-wrap {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 8px;
   padding: 11px 14px;
   border: 1px solid var(--border-2);
@@ -570,6 +570,7 @@ textarea::placeholder {
 .input-btns {
   display: flex;
   flex-shrink: 0;
+  align-self: flex-end;
   align-items: center;
   gap: 4px;
 }
