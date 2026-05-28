@@ -20,6 +20,7 @@ import {
   syncQueueFromServer,
   startRun,
   updateQueuedMessageContent,
+  prependHistory,
   updateSessionUsage,
   visibleTimelineItems,
   visibleTimelineItemsForRender,
@@ -77,6 +78,41 @@ describe('chat state helpers', () => {
       { id: 'message-one', role: 'user', content: 'Hi' },
     ]);
     expect(sessionState.queue).toHaveLength(1);
+  });
+
+  it('prepends older history without duplicating loaded messages', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(
+      sessionState,
+      [
+        { id: 'message-three', role: 'user', content: 'Three' },
+        { id: 'message-four', role: 'assistant', content: 'Four' },
+      ],
+      { hasMore: true },
+    );
+    prependHistory(
+      sessionState,
+      [
+        { id: 'message-one', role: 'user', content: 'One' },
+        { id: 'message-two', role: 'assistant', content: 'Two' },
+        { id: 'message-three', role: 'user', content: 'Three duplicate' },
+        { id: 'note-one', role: 'note', content: 'Internal note' },
+      ],
+      { hasMore: false },
+    );
+
+    expect(sessionState.messages.map((message) => message.id)).toEqual([
+      'message-one',
+      'message-two',
+      'message-three',
+      'message-four',
+    ]);
+    expect(sessionState.hasOlderHistory).toBe(false);
   });
 
   it('filters internal notes from loaded history and visible timeline', () => {

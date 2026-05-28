@@ -23,6 +23,7 @@
     isRunActive,
     loadHistory,
     markSessionError,
+    prependHistory,
     removeQueuedMessage,
     selectAgent,
     selectedAgent,
@@ -76,6 +77,8 @@
     'run_cancelled',
     'run_failed',
   ]);
+  const HISTORY_INITIAL_LIMIT = 100;
+  const HISTORY_OLDER_LIMIT = 50;
   let actionInfoTimeoutId = null;
   let lastRunServerEventKey = '';
 
@@ -341,8 +344,11 @@
       const history = await rpc('chat.history', {
         agent_id: agentId,
         session_id: sessionId,
+        limit: HISTORY_INITIAL_LIMIT,
       });
-      loadHistory(sessionState, history.messages ?? []);
+      loadHistory(sessionState, history.messages ?? [], {
+        hasMore: history.has_more === true,
+      });
       attachRunStream(sessionState, history.active_run);
       await syncSessionQueue(sessionState);
     } catch (error) {
@@ -352,6 +358,54 @@
       loadingHistory = false;
     }
   };
+
+  const loadOlderHistory = async () => {
+    const agent = selectedAgent(chatState);
+    const sessionState = activeSessionState;
+    if (
+      !agent ||
+      !sessionState ||
+      !sessionState.hasOlderHistory ||
+      sessionState.loadingOlderHistory ||
+      sessionState.messages.length === 0
+    ) {
+      return false;
+    }
+
+    const before = oldestLoadedMessageId(sessionState);
+    if (!before) {
+      sessionState.hasOlderHistory = false;
+      return false;
+    }
+
+    sessionState.loadingOlderHistory = true;
+    actionError = '';
+    try {
+      const history = await rpc('chat.history', {
+        agent_id: agent.id,
+        session_id: sessionState.sessionId,
+        limit: HISTORY_OLDER_LIMIT,
+        before,
+      });
+      prependHistory(sessionState, history.messages ?? [], {
+        hasMore: history.has_more === true,
+      });
+      return true;
+    } catch (error) {
+      actionError = `${t('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${error.message}`;
+      return false;
+    } finally {
+      sessionState.loadingOlderHistory = false;
+    }
+  };
+
+  function oldestLoadedMessageId(sessionState) {
+    return (
+      (sessionState.messages ?? []).find(
+        (message) => typeof message?.id === 'string' && message.id.length > 0,
+      )?.id ?? ''
+    );
+  }
 
   const handleSelectAgent = async (agentId) => {
     if (agentId === chatState.selectedAgentId) {
@@ -987,6 +1041,10 @@
             agentName={activeAgent.name}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
+            hasOlderHistory={activeSessionState?.hasOlderHistory === true}
+            loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
+              true}
+            onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={navigateToSubAgent}
             onRetry={handleRetry}
           />

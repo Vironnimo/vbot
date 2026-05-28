@@ -17,6 +17,9 @@
     submittedTurnScrollRunId = '',
     onNavigateToSubAgent = () => {},
     onRetry = () => {},
+    hasOlderHistory = false,
+    loadingOlderHistory = false,
+    onLoadOlder = async () => false,
   } = $props();
 
   const SUBMITTED_TURN_SCROLL_OPTIONS = Object.freeze({
@@ -25,6 +28,7 @@
     behavior: 'smooth',
   });
   const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
+  const LOAD_OLDER_SCROLL_THRESHOLD = 48;
 
   function isNearBottom(container) {
     return (
@@ -45,6 +49,7 @@
   let pendingSubmittedTurnScrollKey = $state(0);
   let pendingSubmittedTurnScrollRunId = $state('');
   let handledSubmittedTurnScrollKey = $state(0);
+  let loadingOlderFromScroll = $state(false);
   let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
   let latestTerminalState = $derived.by(() => {
     for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
@@ -1116,6 +1121,39 @@
     return userMessages[userMessages.length - 1] ?? null;
   }
 
+  async function handleMessagesScroll() {
+    if (!shouldLoadOlderHistory()) {
+      return;
+    }
+
+    const previousScrollHeight = scrollContainer.scrollHeight;
+    const previousScrollTop = scrollContainer.scrollTop;
+    loadingOlderFromScroll = true;
+    try {
+      const loaded = await onLoadOlder?.();
+      if (loaded === false) {
+        return;
+      }
+      await tick();
+      const scrollHeightDelta =
+        scrollContainer.scrollHeight - previousScrollHeight;
+      scrollContainer.scrollTop = previousScrollTop + scrollHeightDelta;
+    } finally {
+      loadingOlderFromScroll = false;
+    }
+  }
+
+  function shouldLoadOlderHistory() {
+    return (
+      hasOlderHistory &&
+      !loadingOlderHistory &&
+      !loadingOlderFromScroll &&
+      timelineItems.length > 0 &&
+      scrollContainer &&
+      scrollContainer.scrollTop <= LOAD_OLDER_SCROLL_THRESHOLD
+    );
+  }
+
   function hasSubmittedTurnUserItem() {
     if (!pendingSubmittedTurnScrollKey) {
       return false;
@@ -1392,7 +1430,12 @@
   {/if}
 {/snippet}
 
-<section class="messages" bind:this={scrollContainer} aria-live="polite">
+<section
+  class="messages"
+  bind:this={scrollContainer}
+  aria-live="polite"
+  onscroll={handleMessagesScroll}
+>
   <div class="messages__content">
     {#if timelineItems.length === 0}
       <div class="empty-state chat-empty-state">
