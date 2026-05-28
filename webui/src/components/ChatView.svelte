@@ -264,6 +264,14 @@
     return normalizedBuiltInCommandName(trimmed) === 'compact';
   };
 
+  const newSessionIdFromCommandResponse = (response) => {
+    const data = response?.data;
+    if (data?.command !== 'new' || typeof data.session_id !== 'string') {
+      return '';
+    }
+    return data.session_id.trim();
+  };
+
   const loadCommands = async () => {
     try {
       const result = await rpc('chat.commands');
@@ -478,21 +486,31 @@
         agent_id: agent.id,
         make_current: true,
       });
-      const updatedAgents = chatState.agents.map((candidate) =>
-        candidate.id === agent.id
-          ? { ...candidate, current_session_id: session.session_id }
-          : candidate,
-      );
-      setAgents(chatState, updatedAgents);
-      onAgentsChanged?.(updatedAgents);
-      onAgentSelected?.(agent.id);
-      ensureSessionState(chatState, agent.id, session.session_id);
-      await loadCurrentHistory();
+      await switchToCurrentSession(agent.id, session.session_id);
     } catch (error) {
       actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
     } finally {
       creatingSession = false;
     }
+  };
+
+  const switchToCurrentSession = async (agentId, sessionId) => {
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    if (!agentId || !normalizedSessionId) {
+      return;
+    }
+
+    clearSessionOverride();
+    const updatedAgents = chatState.agents.map((candidate) =>
+      candidate.id === agentId
+        ? { ...candidate, current_session_id: normalizedSessionId }
+        : candidate,
+    );
+    setAgents(chatState, updatedAgents);
+    onAgentsChanged?.(updatedAgents);
+    onAgentSelected?.(agentId);
+    ensureSessionState(chatState, agentId, normalizedSessionId);
+    await loadHistoryForSession(agentId, normalizedSessionId);
   };
 
   const handleSendMessage = async (content) => {
@@ -515,7 +533,10 @@
       });
       if (run?.command_handled) {
         setActionInfo(run.reply);
-        if (isCompactCommand(content)) {
+        const newSessionId = newSessionIdFromCommandResponse(run);
+        if (newSessionId) {
+          await switchToCurrentSession(agent.id, newSessionId);
+        } else if (isCompactCommand(content)) {
           await loadHistoryForSession(agent.id, sessionState.sessionId);
         }
         return true;

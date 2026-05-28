@@ -304,8 +304,18 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "type": "command",
                 },
                 {
+                    "name": "help",
+                    "description": "Show available built-in slash commands.",
+                    "type": "command",
+                },
+                {
                     "name": "new",
                     "description": "Start a new session for the current agent.",
+                    "type": "command",
+                },
+                {
+                    "name": "retry",
+                    "description": "Retry the last user turn in this session.",
                     "type": "command",
                 },
                 {

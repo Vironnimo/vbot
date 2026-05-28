@@ -229,6 +229,102 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
+  it('switches to the session returned by a handled /new command', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-new': [],
+        },
+        streamHandler: ({ content }) => {
+          if (content === '/new') {
+            return {
+              command_handled: true,
+              reply: 'New session started: session-new',
+              data: {
+                command: 'new',
+                session_id: 'session-new',
+              },
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/new');
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'session-new',
+        ),
+      100,
+    );
+
+    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
+      'New session started: session-new',
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: '/new',
+    });
+    expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+  });
+
+  it('subscribes to the run returned by a /retry command', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: ({ content }) => {
+          if (content === '/retry') {
+            return {
+              run_id: 'run-retry-1',
+              sse_url: '/api/runs/run-retry-1/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/retry');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: '/retry',
+    });
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/run-retry-1/events',
+      expect.any(Object),
+      { afterSequence: 0 },
+    );
+  });
+
   it('keeps slash skill triggers queued while allowing built-in /stop to bypass during an active run', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(

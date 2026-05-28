@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from core.chat.chat import ChatLoop as ChatLoop
     from core.chat.chat import ChatMessage as ChatMessage
     from core.chat.chat import ToolCall as ToolCall
+    from core.chat.commands import CommandAction as CommandAction
     from core.chat.commands import CommandDispatcher as CommandDispatcher
     from core.chat.commands import CommandHandled as CommandHandled
     from core.chat.commands import DispatchResult as DispatchResult
@@ -30,6 +31,7 @@ _EXPORT_MODULES = {
     "ChatSessionError": "core.chat.errors",
     "ChatSessionManager": "core.sessions",
     "CommandDispatcher": "core.chat.commands",
+    "CommandAction": "core.chat.commands",
     "CommandHandled": "core.chat.commands",
     "DispatchResult": "core.chat.commands",
     "MAX_TOOL_ITERATIONS": "core.chat.chat",

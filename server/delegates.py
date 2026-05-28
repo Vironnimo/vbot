@@ -21,17 +21,15 @@ from core.chat import (
     ChatLoop,
     ChatMessage,
     ChatSessionError,
+    CommandAction,
     CommandDispatcher,
     CommandHandled,
 )
 from core.chat.chat import (
-    _close_adapter,
     _display_content_preview,
     _ensure_provider_exists,
     _resolve_agent_connection,
-    _split_agent_model,
     parse_bare_model,
-    parse_model_with_connection,
 )
 from core.chat.content_blocks import (
     ContentBlock,
@@ -39,7 +37,6 @@ from core.chat.content_blocks import (
     TextBlock,
     content_block_from_dict,
 )
-from core.compaction import CompactionSettings
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.prompts import PromptError, PromptFragmentManager
@@ -972,11 +969,93 @@ def _extract_command_text(content: str | list[ContentBlock]) -> str | None:
     return None
 
 
-def _command_handled_response(reply: str | None) -> JsonObject:
-    return {
+def _command_handled_response(result: CommandHandled | str | None) -> JsonObject:
+    if isinstance(result, CommandHandled):
+        reply = result.reply
+        data = result.data
+    else:
+        reply = result
+        data = None
+
+    response: JsonObject = {
         "command_handled": True,
         "reply": reply or "",
     }
+    if data:
+        response["data"] = dict(data)
+    return response
+
+
+async def _dispatch_chat_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    command_text: str,
+    *,
+    streaming: bool,
+) -> JsonObject | None:
+    try:
+        command_result = _state_command_dispatcher(state).dispatch(
+            agent_id,
+            session_id,
+            command_text,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if isinstance(command_result, CommandHandled):
+        return _command_handled_response(command_result)
+    if isinstance(command_result, CommandAction):
+        return await _handle_command_action(
+            state,
+            agent_id,
+            session_id,
+            command_result,
+            streaming=streaming,
+        )
+    return None
+
+
+async def _handle_command_action(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    command_action: CommandAction,
+    *,
+    streaming: bool,
+) -> JsonObject:
+    match command_action.name:
+        case "compact":
+            return await _handle_compact_command(state, agent_id, session_id)
+        case "new_session":
+            return _handle_new_session_command(state, agent_id, session_id)
+        case "retry_last_turn":
+            return await _retry_chat_for_ids(state, agent_id, session_id, streaming=streaming)
+    raise AssertionError(f"unsupported command action: {command_action.name}")
+
+
+def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> JsonObject:
+    try:
+        active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+        if active_run is not None:
+            return _command_handled_response(
+                "A new session can be started after the current run finishes.",
+            )
+
+        response = _create_session(
+            state,
+            {"agent_id": agent_id, "make_current": True},
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    new_session_id = _required_string(response, "session_id")
+    return _command_handled_response(
+        CommandHandled(
+            reply=f"New session started: {new_session_id}",
+            data={"command": "new", "session_id": new_session_id},
+        )
+    )
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -985,23 +1064,16 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _parse_chat_content(params, "content")
 
     command_text = _extract_command_text(content)
-    if command_text and command_text.strip().lower() == "/compact":
-        try:
-            return await _handle_compact_command(state, agent_id, session_id)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-
     if command_text is not None:
-        try:
-            command_result = _state_command_dispatcher(state).dispatch(
-                agent_id,
-                session_id,
-                command_text,
-            )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        if isinstance(command_result, CommandHandled):
-            return _command_handled_response(command_result.reply)
+        command_response = await _dispatch_chat_command(
+            state,
+            agent_id,
+            session_id,
+            command_text,
+            streaming=False,
+        )
+        if command_response is not None:
+            return command_response
 
     try:
         run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
@@ -1033,23 +1105,16 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     content = _parse_chat_content(params, "content")
 
     command_text = _extract_command_text(content)
-    if command_text and command_text.strip().lower() == "/compact":
-        try:
-            return await _handle_compact_command(state, agent_id, session_id)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-
     if command_text is not None:
-        try:
-            command_result = _state_command_dispatcher(state).dispatch(
-                agent_id,
-                session_id,
-                command_text,
-            )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        if isinstance(command_result, CommandHandled):
-            return _command_handled_response(command_result.reply)
+        command_response = await _dispatch_chat_command(
+            state,
+            agent_id,
+            session_id,
+            command_text,
+            streaming=True,
+        )
+        if command_response is not None:
+            return command_response
 
     streaming_chat_loop = _streaming_chat_loop(state)
     try:
@@ -1076,125 +1141,41 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _handle_compact_command(state: Any, agent_id: str, session_id: str) -> JsonObject:
-    compaction_service = getattr(state, "compaction_service", None)
-    if compaction_service is None:
-        return _command_handled_response("Compaction is not available.")
-
-    runtime = state.runtime
-    chat_runs = getattr(state, "chat_runs", None)
-    if not isinstance(chat_runs, ChatRunManager):
-        chat_runs = getattr(runtime, "chat_runs", None)
-    if isinstance(chat_runs, ChatRunManager):
-        active_run = chat_runs.active_run(agent_id=agent_id, session_id=session_id)
-        if active_run is not None:
-            return _command_handled_response(
-                "Cannot compact while a run is active for this session."
-            )
-
-    agent = runtime.agents.get(agent_id)
-    session = runtime.chat_sessions.get(agent_id, session_id)
-    messages = session.load()
-    raw_settings = runtime.storage.load_compaction_settings()
-    settings = CompactionSettings(
-        auto=raw_settings["auto"],
-        threshold=raw_settings["threshold"],
-        tail_tokens=raw_settings["tail_tokens"],
-        summary_model=raw_settings["summary_model"],
-    )
-
-    provider_id, connection_id = _resolve_agent_connection(runtime, agent)
-    adapter = runtime.get_adapter(provider_id, connection_id)
-    _model_provider_id, model_id = _split_agent_model(agent.model)
-    summary_adapter = adapter
-    summary_model_id = model_id
-
     try:
-        summary_adapter, summary_model_id = _resolve_summary_adapter_for_compact(
-            runtime,
-            adapter,
-            model_id,
-            settings,
-        )
-        checkpoint = await compaction_service.compact(
-            messages,
-            agent=agent,
-            summary_adapter=summary_adapter,
-            summary_model_id=summary_model_id,
-            storage=runtime.storage,
-            settings=settings,
-        )
-        session.append(checkpoint)
+        reply = await state.runtime.trigger_service.compact_session(agent_id, session_id)
     except Exception as exc:
-        return _command_handled_response(f"Compaction failed: {exc}")
-    finally:
-        await _close_adapter(adapter)
-        if summary_adapter is not adapter:
-            await _close_adapter(summary_adapter)
-
-    return _command_handled_response("Context compacted.")
-
-
-def _resolve_summary_adapter_for_compact(
-    runtime: Any,
-    adapter: Any,
-    model_id: str,
-    settings: CompactionSettings,
-) -> tuple[Any, str]:
-    summary_model = settings.summary_model
-    if not isinstance(summary_model, str):
-        return adapter, model_id
-
-    normalized_summary_model = summary_model.strip()
-    if not normalized_summary_model:
-        return adapter, model_id
-
-    try:
-        provider_id, summary_model_id, connection_suffix = parse_model_with_connection(
-            normalized_summary_model
-        )
-    except ChatError:
-        return adapter, model_id
-
-    connection_id: str | None = None
-    if connection_suffix:
-        connection_id = f"{provider_id}:{connection_suffix}"
-    else:
-        try:
-            provider = runtime.providers.get(provider_id)
-        except Exception:
-            return adapter, model_id
-
-        credential_resolver = getattr(runtime, "provider_credentials", None)
-        if credential_resolver is None:
-            return adapter, model_id
-
-        for connection in provider.connections:
-            candidate_connection_id = f"{provider_id}:{connection.id}"
-            if credential_resolver.has_credentials(provider_id, candidate_connection_id):
-                connection_id = candidate_connection_id
-                break
-
-    if connection_id is None:
-        return adapter, model_id
-
-    try:
-        summary_adapter = runtime.get_adapter(provider_id, connection_id)
-    except Exception:
-        return adapter, model_id
-
-    return summary_adapter, summary_model_id
+        raise _map_expected_error(exc) from exc
+    return _command_handled_response(reply)
 
 
 async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    return await _retry_chat_for_ids(state, agent_id, session_id, streaming=True)
+
+
+async def _retry_chat_for_ids(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    *,
+    streaming: bool,
+) -> JsonObject:
     try:
-        streaming_chat_loop = _streaming_chat_loop(state)
-        run = await streaming_chat_loop.retry_run(agent_id, session_id)
+        chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
+        run = await chat_loop.retry_run(agent_id, session_id)
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+
+    if streaming:
+        return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+
+    try:
+        assistant_message = await run.wait()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return _run_response(run, final_message=assistant_message)
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
