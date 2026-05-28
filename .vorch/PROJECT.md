@@ -196,11 +196,6 @@ browser strategy, which features need API credentials, shutdown — live in
 Use this section only for important strategic decisions, unusual global
 constraints, or things an agent would otherwise likely assume incorrectly.
 
-- **Direct single-agent workflow is the default for repository work.**
-  `AGENTS.md` is the authoritative operating rule set for a direct agent that
-  owns planning, implementation, docs/specs, verification, git, and final
-  handoff end to end. Work happens on the current branch by default, usually
-  `main`; subagents are used only when the user explicitly asks for them.
 - **CLI is an accessor, not a second control plane.** Only `server start`,
   `server stop`, `server restart`, and `server status` act locally. Every other
   CLI area must require a reachable vBot server and go through the server RPC
