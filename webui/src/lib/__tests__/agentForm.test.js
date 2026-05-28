@@ -201,7 +201,34 @@ describe('agent form helpers', () => {
     expect(result.isValid).toBe(true);
     expect(result.payload.id).toBe('coder');
     expect(result.payload.name).toBe('Coder Prime');
-    expect(result.payload).not.toHaveProperty('workspace');
+    expect(result.payload.workspace).toBe('C:/workspace-coder');
+  });
+
+  it('sends changed workspace when editing with baseline values', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/workspace-coder',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+    });
+
+    const result = normalizeAgentForm(
+      {
+        ...initialValues,
+        workspace: 'D:/workspace-coder',
+      },
+      {
+        mode: AGENT_FORM_MODE_EDIT,
+        initialValues,
+      },
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).toEqual({
+      id: 'coder',
+      workspace: 'D:/workspace-coder',
+    });
   });
 
   it('sends only changed fields when editing with baseline values', () => {
@@ -259,6 +286,20 @@ describe('agent form helpers', () => {
 
     expect(result.isValid).toBe(false);
     expect(result.errors.id).toBe('invalid_id');
+  });
+
+  it('reports a required workspace while editing', () => {
+    const result = normalizeAgentForm(
+      {
+        id: 'coder',
+        name: 'Coder',
+        workspace: '',
+      },
+      { mode: AGENT_FORM_MODE_EDIT },
+    );
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors.workspace).toBe('required');
   });
 
   it('converts list text using one item per line', () => {

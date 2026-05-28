@@ -98,7 +98,9 @@ Clients call the vBot server contract; provider wire details stay behind
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
   fields. `temperature` and `thinking_effort` accept `null` to clear an explicit
-  override back to inherited defaults. `workspace` is intentionally not accepted through public RPC.
+  override back to inherited defaults. `agent.create` keeps `workspace`
+  server-assigned; `agent.update` accepts a non-empty `workspace` string and
+  returns the normalized absolute workspace path.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each

@@ -124,19 +124,17 @@ def test_phase4_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -
     assert delete_response.json()["result"]["agent_id"] == "coder"
 
 
-def test_phase4_agent_rpc_rejects_workspace_mutation(tmp_path: Path) -> None:
+def test_phase4_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
     runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
+    workspace = tmp_path / "outside"
 
     with TestClient(app) as client:
-        original_agent = client.post(
-            "/api/rpc", json={"method": "agent.list", "params": {}}
-        ).json()["result"]["agents"][0]
         update_response = client.post(
             "/api/rpc",
             json={
                 "method": "agent.update",
-                "params": {"id": "main", "workspace": str(tmp_path / "outside")},
+                "params": {"id": "main", "workspace": str(workspace)},
             },
         )
         create_response = client.post(
@@ -146,13 +144,14 @@ def test_phase4_agent_rpc_rejects_workspace_mutation(tmp_path: Path) -> None:
                 "params": {"id": "coder", "name": "Coder", "workspace": str(tmp_path / "outside")},
             },
         )
-        unchanged_agent = client.post(
-            "/api/rpc", json={"method": "agent.list", "params": {}}
-        ).json()["result"]["agents"][0]
+        updated_agent = client.post("/api/rpc", json={"method": "agent.list", "params": {}}).json()[
+            "result"
+        ]["agents"][0]
 
-    assert update_response.json()["error"]["code"] == "invalid_request"
+    assert update_response.json()["result"]["workspace"] == str(workspace.resolve())
     assert create_response.json()["error"]["code"] == "invalid_request"
-    assert unchanged_agent["workspace"] == original_agent["workspace"]
+    assert updated_agent["workspace"] == str(workspace.resolve())
+    assert (workspace / "SOUL.md").exists()
 
 
 def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:

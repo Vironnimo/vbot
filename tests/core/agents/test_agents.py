@@ -116,6 +116,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         ("temperature", -0.1, "temperature must be between"),
         ("temperature", 2.1, "temperature must be between"),
         ("thinking_effort", "extreme", "thinking_effort must be one of"),
+        ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
@@ -219,6 +220,24 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert store.get("coder") == updated
 
 
+def test_update_changes_workspace_and_seeds_templates(
+    store: AgentStore,
+    tmp_path: Path,
+) -> None:
+    store.create("coder", "Coder Agent")
+    workspace = tmp_path / "updated-workspace"
+
+    updated = store.update("coder", workspace=workspace)
+
+    assert updated.workspace == str(workspace.resolve())
+    assert workspace.is_dir()
+    assert (workspace / "SOUL.md").exists()
+
+    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert data["workspace"] == str(workspace.resolve())
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -229,6 +248,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         ("temperature", True, "temperature must be a number"),
         ("temperature", 3.0, "temperature must be between"),
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
+        ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),

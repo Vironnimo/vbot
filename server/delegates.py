@@ -2235,6 +2235,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
     }
     if not for_create:
         public_fields.add("current_session_id")
+        public_fields.add("workspace")
 
     rejected_fields = sorted(set(params) - public_fields - blocked)
     if rejected_fields:
@@ -2252,7 +2253,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
-    if key in {"name", "current_session_id"}:
+    if key in {"name", "current_session_id", "workspace"}:
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
         return value
