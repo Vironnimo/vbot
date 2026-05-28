@@ -95,6 +95,7 @@ describe('SettingsView', () => {
   });
 
   it('adds, removes, and saves skill directories', async () => {
+    const toastMock = vi.fn();
     rpcMock
       .mockResolvedValueOnce(createSettingsPayload())
       .mockImplementationOnce(async (_method, params) =>
@@ -106,7 +107,10 @@ describe('SettingsView', () => {
         }),
       );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForText('0.0.0.0:9001');
@@ -136,10 +140,17 @@ describe('SettingsView', () => {
       },
     });
 
-    await waitForText('Skill directories updated.');
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Skill directories updated.',
+        variant: 'success',
+      }),
+    );
   });
 
   it('edits and saves sub-agent settings', async () => {
+    const toastMock = vi.fn();
     rpcMock
       .mockResolvedValueOnce(createSettingsPayload())
       .mockImplementationOnce(async (_method, params) =>
@@ -148,7 +159,10 @@ describe('SettingsView', () => {
         }),
       );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForText('0.0.0.0:9001');
@@ -182,7 +196,13 @@ describe('SettingsView', () => {
       },
     });
 
-    await waitForText('Sub-agent settings updated.');
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Sub-agent settings updated.',
+        variant: 'success',
+      }),
+    );
   });
 
   it('renders load failures and retries settings.get successfully', async () => {
@@ -211,8 +231,9 @@ describe('SettingsView', () => {
   });
 
   it('keeps appearance save enabled and persists language through settings.update', async () => {
+    const toastMock = vi.fn();
     rpcMock
-      .mockResolvedValueOnce(createSettingsPayload())
+      .mockResolvedValueOnce(createSettingsPayload({ appearanceLanguage: '' }))
       .mockResolvedValueOnce(
         createSettingsPayload({
           appearance: {
@@ -222,7 +243,10 @@ describe('SettingsView', () => {
         }),
       );
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForText('0.0.0.0:9001');
@@ -254,11 +278,18 @@ describe('SettingsView', () => {
       },
     });
 
-    await waitForText('Language preference updated.');
-
-    expect(document.body.textContent).toContain('Language preference updated.');
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Language preference updated.',
+        variant: 'success',
+      }),
+    );
+    expect(document.body.textContent).not.toContain(
+      'Language preference updated.',
+    );
     expect(document.body.querySelector('select')?.value).toBe('fr');
-    expect(getButton('Save').disabled).toBe(false);
+    expect(saveButton.disabled).toBe(false);
   });
 });
 
@@ -522,6 +553,19 @@ async function waitForText(text, attempts = 20) {
   }
 
   throw new Error(`Timed out waiting for text: ${text}`);
+}
+
+async function waitForCondition(check, attempts = 20) {
+  for (let index = 0; index < attempts; index += 1) {
+    await Promise.resolve();
+    flushSync();
+
+    if (check()) {
+      return;
+    }
+  }
+
+  throw new Error('Timed out waiting for condition.');
 }
 
 function translate(key, fallback, values) {

@@ -4,8 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
-import { AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT } from '../../lib/settingsView.js';
-
 const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -194,10 +192,22 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('Temperature');
     expect(document.body.textContent).toContain('Thinking effort');
 
-    setInputValue('#settings-defaults-model', 'openai/gpt-5.2');
-    setInputValue('#settings-defaults-fallback-model', 'openai/gpt-5.2-mini');
+    expect(buttonsByText('Clear')).toHaveLength(0);
+
+    await waitForModelCatalogs();
+
+    await openSearchableDropdown('settings-defaults-model');
+    selectSearchableOption('settings-defaults-model', 'openai/gpt-5.2');
+
+    await openSearchableDropdown('settings-defaults-fallback-model');
+    selectSearchableOption(
+      'settings-defaults-fallback-model',
+      'openai/gpt-5.2-mini',
+    );
+
     setInputValue('#settings-defaults-temperature', '0.7');
-    setSelectValue('#settings-defaults-thinking-effort', 'high');
+    openSimpleDropdown('settings-defaults-thinking-effort');
+    selectSimpleOption('settings-defaults-thinking-effort', 'high');
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
@@ -205,21 +215,27 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()[0][1]).toEqual({
       defaults: {
         agent: {
-          model: 'openai/gpt-5.2',
-          fallback_model: 'openai/gpt-5.2-mini',
+          model: 'openai/gpt-5.2::api-key',
+          fallback_model: 'openai/gpt-5.2-mini::api-key',
           temperature: 0.7,
           thinking_effort: 'high',
         },
       },
     });
 
-    setInputValue('#settings-defaults-model', '');
-    setInputValue('#settings-defaults-fallback-model', '');
-    getButton('Clear').click();
-    setSelectValue(
-      '#settings-defaults-thinking-effort',
-      AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+    await openSearchableDropdown('settings-defaults-model');
+    selectSearchableOption('settings-defaults-model', '— (no default)');
+
+    await openSearchableDropdown('settings-defaults-fallback-model');
+    selectSearchableOption(
+      'settings-defaults-fallback-model',
+      '— (no default)',
     );
+
+    setInputValue('#settings-defaults-temperature', '');
+
+    openSimpleDropdown('settings-defaults-thinking-effort');
+    selectSimpleOption('settings-defaults-thinking-effort', '— (no default)');
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
@@ -235,7 +251,11 @@ describe('SettingsView', () => {
       },
     });
 
-    setSelectValue('#settings-defaults-thinking-effort', '');
+    openSimpleDropdown('settings-defaults-thinking-effort');
+    selectSimpleOption(
+      'settings-defaults-thinking-effort',
+      '— (provider default)',
+    );
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 3);
@@ -248,6 +268,51 @@ describe('SettingsView', () => {
           temperature: null,
           thinking_effort: '',
         },
+      },
+    });
+  });
+
+  it('uses the model picker for compaction summary model', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openCompactionPanel();
+    await waitForModelCatalogs();
+
+    await openSearchableDropdown('settings-compaction-summary-model');
+    selectSearchableOption(
+      'settings-compaction-summary-model',
+      'openai/gpt-5.2-mini',
+    );
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      compaction: {
+        auto: true,
+        threshold: 0.8,
+        tail_tokens: 15000,
+        summary_model: 'openai/gpt-5.2-mini::api-key',
+      },
+    });
+
+    await openSearchableDropdown('settings-compaction-summary-model');
+    selectSearchableOption(
+      'settings-compaction-summary-model',
+      'Active agent model',
+    );
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
+
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      compaction: {
+        auto: true,
+        threshold: 0.8,
+        tail_tokens: 15000,
+        summary_model: null,
       },
     });
   });
@@ -492,16 +557,23 @@ describe('SettingsView', () => {
   });
 
   it('shows Already saved when manual save is clicked with no changes', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(createSettingsRpcMock());
 
-    mountedComponent = mount(SettingsView, { target: document.body });
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
     await openSubAgentsPanel();
 
     getButton('Save').click();
     flushSync();
 
-    expect(document.body.textContent).toContain('Already saved');
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Already saved', variant: 'success' }),
+    );
+    expect(document.body.textContent).not.toContain('Already saved');
     expect(getSettingsUpdateCalls()).toHaveLength(0);
   });
 
@@ -589,12 +661,29 @@ async function openSubAgentsPanel() {
   );
 }
 
+async function openCompactionPanel() {
+  await waitForCondition(() => buttonByText('Compaction'));
+  buttonByText('Compaction').click();
+  flushSync();
+  await waitForCondition(() =>
+    document.body.textContent.includes('Summary model'),
+  );
+}
+
 async function openDefaultsPanel() {
   await waitForCondition(() => buttonByText('Defaults'));
   buttonByText('Defaults').click();
   flushSync();
   await waitForCondition(() =>
     document.body.textContent.includes('Fallback model'),
+  );
+}
+
+async function waitForModelCatalogs() {
+  await waitForCondition(
+    () =>
+      rpcMock.mock.calls.some((call) => call[0] === 'model.list') &&
+      rpcMock.mock.calls.some((call) => call[0] === 'connection.list'),
   );
 }
 
@@ -647,6 +736,96 @@ function setSelectValue(selector, value) {
   select.value = value;
   select.dispatchEvent(new Event('change', { bubbles: true }));
   flushSync();
+}
+
+async function openSearchableDropdown(id, rect = defaultTriggerRect()) {
+  const trigger = getSearchableTrigger(id);
+  stubTriggerRect(trigger, rect);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+
+  await waitForCondition(
+    () => getSearchableRoot(id).dataset.state === 'open',
+    100,
+  );
+}
+
+function selectSearchableOption(id, label) {
+  const option = Array.from(
+    getSearchablePanel(id)?.querySelectorAll('.searchable-dropdown__option') ??
+      [],
+  ).find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function getSearchableRoot(id) {
+  return getSearchableTrigger(id)?.closest('.searchable-dropdown');
+}
+
+function getSearchableTrigger(id) {
+  const trigger = document.body.querySelector(`button#${id}`);
+  expect(trigger).toBeTruthy();
+  return trigger;
+}
+
+function getSearchablePanel(id) {
+  return getSearchableRoot(id)?.querySelector('.searchable-dropdown__panel');
+}
+
+function openSimpleDropdown(id) {
+  const trigger = getSimpleTrigger(id);
+  trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function selectSimpleOption(id, label) {
+  const option = Array.from(
+    getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
+  ).find((item) => item.textContent.trim() === label);
+  expect(option).toBeTruthy();
+  option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+function getSimpleRoot(id) {
+  return getSimpleTrigger(id)?.closest('.dropdown-primitive');
+}
+
+function getSimpleTrigger(id) {
+  const trigger = document.body.querySelector(`button#${id}`);
+  expect(trigger).toBeTruthy();
+  return trigger;
+}
+
+function getSimpleList(id) {
+  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
+}
+
+function stubTriggerRect(trigger, rect) {
+  trigger.getBoundingClientRect = () => ({
+    x: rect.left,
+    y: rect.top,
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+    toJSON: () => rect,
+  });
+}
+
+function defaultTriggerRect() {
+  return {
+    left: 96,
+    top: 144,
+    right: 416,
+    bottom: 176,
+    width: 320,
+    height: 32,
+  };
 }
 
 function submitChannelForm() {
@@ -737,7 +916,11 @@ function createSettingsRpcMock(options = {}) {
     }
 
     if (method === 'model.list') {
-      return { models: [{ id: 'openrouter/fresh-model' }] };
+      return { models: options.models ?? modelsPayload() };
+    }
+
+    if (method === 'connection.list') {
+      return { connections: options.connections ?? connectionsPayload() };
     }
 
     if (method === 'agent.list') {
@@ -932,6 +1115,48 @@ function agentsPayload() {
     {
       id: 'assistant-work',
       name: 'Assistant Work',
+    },
+  ];
+}
+
+function modelsPayload() {
+  return [
+    {
+      id: 'openai/gpt-5.2',
+      provider_id: 'openai',
+      model_id: 'gpt-5.2',
+      name: 'GPT-5.2',
+    },
+    {
+      id: 'openai/gpt-5.2-mini',
+      provider_id: 'openai',
+      model_id: 'gpt-5.2-mini',
+      name: 'GPT-5.2 Mini',
+    },
+    {
+      id: 'openrouter/fresh-model',
+      provider_id: 'openrouter',
+      model_id: 'fresh-model',
+      name: 'Fresh Model',
+    },
+  ];
+}
+
+function connectionsPayload() {
+  return [
+    {
+      id: 'openai:api-key',
+      provider_id: 'openai',
+      type: 'api_key',
+      label: 'API Key',
+      usable: true,
+    },
+    {
+      id: 'openrouter:api-key',
+      provider_id: 'openrouter',
+      type: 'api_key',
+      label: 'API Key',
+      usable: true,
     },
   ];
 }

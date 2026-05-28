@@ -83,7 +83,14 @@ does not talk to providers directly. The product presents an Agent-first chat su
     chat bubbles.
 - `webui/src/lib/toastState.js`
   - Pure helpers for app-level toast state: `createToastState()`, `addToast(...)`,
-    and `dismissToast(...)`.
+    and `dismissToast(...)`. `addToast(...)` returns the generated toast id so
+    the app shell can schedule and cancel auto-dismiss timers.
+- `webui/src/lib/modelSelection.js`
+  - Pure helpers for backend-backed model picker options shared by Agents and
+    Settings. They combine `model.list` models with usable `connection.list`
+    connections, preserve unavailable/custom saved values, and store selected
+    connection-qualified values such as `openai/gpt-5.2::api-key` when the user
+    picks a concrete provider connection.
 - `webui/src/lib/markdown.js`
   - Owns the shared `markdown-it` singleton for assistant-output rendering and
     exports `renderMarkdown(src)` for settled assistant text plus
@@ -149,12 +156,19 @@ does not talk to providers directly. The product presents an Agent-first chat su
     providers such as future Ollama or LM Studio integrations may expose sparse
     or user-tuned catalog facts, and the Agent selector must not hide them based
     on missing tool/context metadata.
-  - The Agent form uses backend-backed selects for `model`, `fallback_model`,
-    and `thinking_effort`, plus a tool-toggle list sourced from `tool.list`.
+  - The Agent edit form uses backend-backed selects for `model`,
+    `fallback_model`, and `thinking_effort`, plus a tool-toggle list sourced
+    from `tool.list`.
+  - The `New` action opens a compact modal instead of switching the detail pane
+    into the full editor. The modal collects only Agent ID, name, model,
+    thinking effort, and temperature; advanced access/fallback/session fields
+    are configured after creation from the normal edit detail pane.
   - The Agent skill section is backend-backed by `skill.list`. Loadable skills are shown with name, description, warning text, availability state, requirement details, and toggles that write array-based `allowed_skills`. Non-loadable skills from `invalid_skills` render in a separate unavailable list with warnings and no toggles.
-  - In edit mode, the primary save action lives in a sticky footer at the bottom
-    of the detail scroll area; the destructive delete action stays in the top
-    detail action cluster.
+  - In edit mode, the primary save action lives as a normal footer at the bottom
+    of the detail content, not as a floating/sticky control. The destructive
+    delete action stays in the top detail action cluster.
+  - Save/create/update/delete success feedback is sent through the app-level
+    `ToastStack`, not through an inline success notice in the detail pane.
   - Model and fallback-model selects store both the canonical public model ID and
     selected connection. If a provider has one usable connection, the label stays
     as the model ID (for example `openrouter/anthropic/claude-sonnet-4`). If a
@@ -186,14 +200,21 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `thinking_effort` through `settings.update({ defaults: { agent: ... } })`.
     `temperature` supports explicit clear-to-null; `thinking_effort`
     distinguishes between no default and provider default.
+    `model` and `fallback_model` use the same backend-backed searchable model
+    picker as Agents, and `thinking_effort` uses the shared simple dropdown
+    rather than a native select. Temperature is cleared by emptying the number
+    field; there is no separate inline clear button.
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
-  - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`.
+  - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`. `summary_model` uses the same backend-backed searchable model picker as Agents, with the empty value meaning the active Agent model.
   - The Appearance, Skills, Sub-Agents, and Compaction panels auto-save about
     800 ms after the last dirty edit. Their manual save buttons remain visible
     in sticky footers inside the panel scroll area, stay enabled for trust, save
     immediately when dirty, and show an "Already saved" success toast when the
     panel is already clean.
+  - Transient save/copy/OAuth feedback is emitted through the app-level
+    `ToastStack`; Settings must not render a separate local toast box for these
+    messages.
   - Includes a Channels panel. It lists configured channels, hydrates per-row
     running state via `channel.status`, and supports create, edit, delete,
     enable, and disable actions through the `channel.*` RPC methods.
@@ -240,11 +261,16 @@ does not talk to providers directly. The product presents an Agent-first chat su
     explicitly changes them.
 - `webui/src/components/SystemPromptView.svelte`
   - Renders the editable prompt fragments with reset controls near the fragment
-    header, while the primary save button lives in a sticky footer below each
-    textarea.
+    header. Fragment cards must clip their surface backgrounds to the rounded
+    card corners so header bars do not bleed past the radius.
   - Dirty fragments auto-save about 800 ms after the last edit using per-fragment
-    debounce timers. Manual save stays enabled, saves immediately when dirty,
-    and shows an "Already saved" success toast when the fragment is already clean.
+    debounce timers.
+  - Manual save is a single global button at the bottom of the System Prompt
+    content. It saves all dirty fragments immediately, stays enabled for trust
+    when the view is clean, and shows an "Already saved" success toast when
+    there are no dirty fragments.
+  - Transient save/reset/preview/copy feedback is emitted through the app-level
+    `ToastStack`; System Prompt must not render a separate local toast box.
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
@@ -252,6 +278,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     System Prompt.
   - Routes the top-level `Logs` navigation item to `LogsView`.
   - Handles server-pushed `app_error` WebSocket events as error toasts.
+  - Owns the app-level toast queue, auto-dismiss timers, and dismissal callback,
+    and passes an `onToast` callback to tabs that need transient user feedback.
   - Forwards `provider_auth_completed` WebSocket events to `SettingsView` when
     the Settings view is active.
 
@@ -321,7 +349,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   last-selected Agent is restored through `localStorage` when available.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with save/reset/variable-reference, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed.
+- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search

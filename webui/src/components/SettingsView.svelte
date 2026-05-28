@@ -1,8 +1,16 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Dropdown from './Dropdown.svelte';
+  import SearchableDropdown from './SearchableDropdown.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
+  import {
+    buildModelSelectOptions,
+    modelSelectionValue,
+    parseModelSelectionValue,
+    selectModelValue,
+  } from '$lib/modelSelection.js';
   import * as settingsViewHelpers from '$lib/settingsView.js';
   import {
     CHANNEL_DM_SCOPES,
@@ -51,6 +59,7 @@
   });
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const noop = () => {};
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
     'none',
     'minimal',
@@ -127,6 +136,7 @@
     providerAuthEvent = null,
     connectProvider = null,
     disconnectProvider = null,
+    onToast = noop,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -225,7 +235,6 @@
   let loading = $state(true);
   let loadError = $state('');
   let saveError = $state('');
-  let saveNotice = $state('');
   let saving = $state(false);
   let selectedLanguageId = $state('en');
   let skillDirectories = $state([]);
@@ -233,13 +242,14 @@
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let newSkillDirectory = $state('');
+  let availableModels = $state([]);
+  let availableConnections = $state([]);
+  let modelCatalogsLoaded = $state(false);
+  let modelCatalogsLoading = $state(false);
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
   let modelRefreshError = $state('');
   let oauthConnectionStates = $state({});
-  let toastMessage = $state('');
-  let toastVariant = $state('success');
-  let toastTimer = null;
   let handledProviderAuthEvent = null;
   let copiedDeviceFlowConnectionId = $state('');
   let channelPanelState = $state(createChannelPanelState());
@@ -274,6 +284,53 @@
   let availableLanguageOptions = $derived(
     buildLanguageOptions(settings?.appearance),
   );
+  let defaultModelOptions = $derived(
+    selectModelOptions(
+      agentDefaults.model,
+      t('settings.defaults.noModelDefault', '— (no default)'),
+    ),
+  );
+  let defaultFallbackModelOptions = $derived(
+    selectModelOptions(
+      agentDefaults.fallback_model,
+      t('settings.defaults.noFallbackModelDefault', '— (no default)'),
+    ),
+  );
+  let compactionSummaryModelOptions = $derived(
+    selectModelOptions(
+      compactionSettings.summary_model ?? '',
+      t('settings.compaction.summaryModelPlaceholder', 'Active agent model'),
+    ),
+  );
+  let defaultModelSelectValue = $derived(
+    selectModelValue(agentDefaults.model, defaultModelOptions),
+  );
+  let defaultFallbackModelSelectValue = $derived(
+    selectModelValue(agentDefaults.fallback_model, defaultFallbackModelOptions),
+  );
+  let compactionSummaryModelSelectValue = $derived(
+    selectModelValue(
+      compactionSettings.summary_model ?? '',
+      compactionSummaryModelOptions,
+    ),
+  );
+  let thinkingEffortOptions = $derived([
+    {
+      value: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
+      label: t('settings.defaults.noThinkingEffort', '— (no default)'),
+    },
+    {
+      value: '',
+      label: t(
+        'settings.defaults.providerThinkingEffortDefault',
+        '— (provider default)',
+      ),
+    },
+    ...AGENT_THINKING_EFFORT_OPTIONS.map((option) => ({
+      value: option,
+      label: t(`agents.form.thinkingEffortOption.${option}`, option),
+    })),
+  ]);
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));
   let channelPlatformOptions = $derived(
     CHANNEL_PLATFORMS.map((platformId) => ({
@@ -332,10 +389,6 @@
     loadSettings();
 
     return () => {
-      if (toastTimer) {
-        clearTimeout(toastTimer);
-      }
-
       clearLanguageAutoSaveTimer();
       clearSkillDirectoriesAutoSaveTimer();
       clearSubAgentSettingsAutoSaveTimer();
@@ -429,10 +482,44 @@
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
-    saveNotice = '';
 
     if (panelId === 'channels') {
       void ensureChannelsLoaded();
+    }
+
+    if (panelUsesModelPicker(panelId)) {
+      void ensureModelCatalogsLoaded();
+    }
+  }
+
+  function panelUsesModelPicker(panelId) {
+    return panelId === 'defaults' || panelId === 'compaction';
+  }
+
+  async function ensureModelCatalogsLoaded() {
+    if (modelCatalogsLoaded || modelCatalogsLoading) {
+      return;
+    }
+
+    modelCatalogsLoading = true;
+
+    try {
+      const [modelsResult, connectionsResult] = await Promise.all([
+        rpc('model.list'),
+        rpc('connection.list'),
+      ]);
+
+      availableModels = Array.isArray(modelsResult?.models)
+        ? modelsResult.models
+        : [];
+      availableConnections = Array.isArray(connectionsResult?.connections)
+        ? connectionsResult.connections
+        : [];
+      modelCatalogsLoaded = true;
+    } catch (error) {
+      saveError = `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`;
+    } finally {
+      modelCatalogsLoading = false;
     }
   }
 
@@ -474,7 +561,6 @@
 
     saving = true;
     saveError = '';
-    saveNotice = '';
 
     try {
       const nextSettings = await rpc('settings.update', {
@@ -482,9 +568,9 @@
       });
       commitSettings(nextSettings);
       init(selectedLanguageId);
-      saveNotice = t(
-        'settings.appearance.saveSuccess',
-        'Language preference updated.',
+      showSettingsToast(
+        t('settings.appearance.saveSuccess', 'Language preference updated.'),
+        'success',
       );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
@@ -500,7 +586,6 @@
 
     saving = true;
     saveError = '';
-    saveNotice = '';
 
     try {
       const nextSettings = await rpc(
@@ -508,9 +593,9 @@
         createSkillDirectoriesUpdatePayload(skillDirectories),
       );
       commitSettings(nextSettings);
-      saveNotice = t(
-        'settings.skills.saveSuccess',
-        'Skill directories updated.',
+      showSettingsToast(
+        t('settings.skills.saveSuccess', 'Skill directories updated.'),
+        'success',
       );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
@@ -526,7 +611,6 @@
 
     saving = true;
     saveError = '';
-    saveNotice = '';
 
     try {
       const nextSettings = await rpc(
@@ -535,9 +619,9 @@
       );
       commitSettings(nextSettings);
       agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
-      saveNotice = t(
-        'settings.defaults.saveSuccess',
-        'Agent defaults updated.',
+      showSettingsToast(
+        t('settings.defaults.saveSuccess', 'Agent defaults updated.'),
+        'success',
       );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
@@ -553,7 +637,6 @@
 
     saving = true;
     saveError = '';
-    saveNotice = '';
 
     try {
       const nextSettings = await rpc(
@@ -561,9 +644,9 @@
         buildSubAgentSettingsPayload(subAgentSettings),
       );
       commitSettings(nextSettings);
-      saveNotice = t(
-        'settings.subagents.saveSuccess',
-        'Sub-agent settings updated.',
+      showSettingsToast(
+        t('settings.subagents.saveSuccess', 'Sub-agent settings updated.'),
+        'success',
       );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
@@ -579,7 +662,6 @@
 
     saving = true;
     saveError = '';
-    saveNotice = '';
 
     try {
       const nextSettings = await rpc(
@@ -587,7 +669,10 @@
         buildCompactionSettingsPayload(compactionSettings),
       );
       commitSettings(nextSettings);
-      saveNotice = t('settings.compaction.saved', 'Compaction settings saved.');
+      showSettingsToast(
+        t('settings.compaction.saved', 'Compaction settings saved.'),
+        'success',
+      );
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
     } finally {
@@ -624,7 +709,7 @@
   }
 
   function showAlreadySavedToast() {
-    showLocalToast(t('common.alreadySaved', 'Already saved'), 'success');
+    showSettingsToast(t('common.alreadySaved', 'Already saved'), 'success');
   }
 
   function handleManualLanguageSave() {
@@ -708,19 +793,16 @@
 
     newSkillDirectory = '';
     saveError = '';
-    saveNotice = '';
   }
 
   function removeSkillDirectory(directory) {
     skillDirectories = skillDirectories.filter((item) => item !== directory);
     saveError = '';
-    saveNotice = '';
   }
 
   function handleLanguageChange(event) {
     selectedLanguageId = event.currentTarget.value;
     saveError = '';
-    saveNotice = '';
   }
 
   function handleSkillDirectoryKeydown(event) {
@@ -738,7 +820,6 @@
       [key]: event.currentTarget.value,
     };
     saveError = '';
-    saveNotice = '';
   }
 
   function handleAgentDefaultsChange(key, value) {
@@ -747,11 +828,6 @@
       [key]: value,
     };
     saveError = '';
-    saveNotice = '';
-  }
-
-  function clearAgentDefaultsTemperature() {
-    handleAgentDefaultsChange('temperature', '');
   }
 
   function handleCompactionSettingChange(key, value) {
@@ -760,7 +836,32 @@
       [key]: value,
     };
     saveError = '';
-    saveNotice = '';
+  }
+
+  function updateAgentDefaultsModelSelection(key, selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    handleAgentDefaultsChange(
+      key,
+      modelSelectionValue(selection.model, selection.connectionLocalId),
+    );
+  }
+
+  function updateCompactionSummaryModelSelection(selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    handleCompactionSettingChange(
+      'summary_model',
+      modelSelectionValue(selection.model, selection.connectionLocalId),
+    );
+  }
+
+  function selectModelOptions(selectedModelValue, emptyLabel) {
+    return buildModelSelectOptions({
+      models: availableModels,
+      connections: availableConnections,
+      selectedModelValue,
+      emptyLabel,
+      translate: t,
+    });
   }
 
   function subAgentSettingsMatch(left, right) {
@@ -858,7 +959,6 @@
     const connectionId = getPublicConnectionId(connection);
 
     saveError = '';
-    saveNotice = '';
     copiedDeviceFlowConnectionId = '';
     updateOAuthState(connection.id, {
       flowActive: true,
@@ -890,7 +990,6 @@
   async function disconnectOAuthProvider(provider, connection, options = {}) {
     const connectionId = getPublicConnectionId(connection);
     saveError = '';
-    saveNotice = '';
     copiedDeviceFlowConnectionId = '';
 
     try {
@@ -916,7 +1015,7 @@
       showDialog: false,
       dialogData: null,
     });
-    showLocalToast(
+    showSettingsToast(
       t(
         'settings.providers.device_flow.success_toast',
         'GitHub Copilot connected successfully',
@@ -933,7 +1032,7 @@
       showDialog: false,
       dialogData: null,
     });
-    showLocalToast(
+    showSettingsToast(
       t(
         'settings.providers.device_flow.error_toast',
         'Authorization failed or timed out',
@@ -942,16 +1041,8 @@
     );
   }
 
-  function showLocalToast(message, variant = 'success') {
-    if (toastTimer) {
-      clearTimeout(toastTimer);
-    }
-
-    toastMessage = message;
-    toastVariant = variant;
-    toastTimer = setTimeout(() => {
-      toastMessage = '';
-    }, 4000);
+  function showSettingsToast(message, variant = 'success') {
+    onToast?.({ title: message, variant });
   }
 
   async function copyDeviceFlowUserCode(connection, userCode) {
@@ -960,7 +1051,7 @@
     }
 
     if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-      showLocalToast(
+      showSettingsToast(
         t(
           'settings.providers.device_flow.copy_error',
           'Device code could not be copied.',
@@ -973,12 +1064,12 @@
     try {
       await navigator.clipboard.writeText(userCode);
       copiedDeviceFlowConnectionId = connection.id;
-      showLocalToast(
+      showSettingsToast(
         t('settings.providers.device_flow.copy_success', 'Device code copied.'),
         'success',
       );
     } catch {
-      showLocalToast(
+      showSettingsToast(
         t(
           'settings.providers.device_flow.copy_error',
           'Device code could not be copied.',
@@ -1053,7 +1144,10 @@
     try {
       const result = await rpc('model.refresh_db');
       applyProviderRefreshResult(result);
-      await rpc('model.list');
+      const modelsResult = await rpc('model.list');
+      availableModels = Array.isArray(modelsResult?.models)
+        ? modelsResult.models
+        : [];
       modelRefreshMessage = t(
         'settings.providers.refreshSuccess',
         'Model DB updated: {providerCount} providers, {count} models available.',
@@ -1419,17 +1513,6 @@
       {:else}
         {#if saveError}
           <div class="s-feedback s-feedback--error">{saveError}</div>
-        {:else if saveNotice}
-          <div class="s-feedback s-feedback--success">{saveNotice}</div>
-        {/if}
-
-        {#if toastMessage}
-          <div
-            class={`s-local-toast s-local-toast--${toastVariant}`}
-            role="alert"
-          >
-            {toastMessage}
-          </div>
         {/if}
 
         {#if activePanelId === 'providers' && modelRefreshError}
@@ -1486,15 +1569,28 @@
                 )}
               </div>
             </div>
-            <div class="s-row-control s-row-control--input">
-              <input
+            <div class="s-row-control s-row-control--model">
+              <SearchableDropdown
                 id="settings-defaults-model"
-                class="s-input"
-                type="text"
-                value={agentDefaults.model}
-                aria-label={t('settings.defaults.model', 'Model')}
-                oninput={(event) =>
-                  handleAgentDefaultsChange('model', event.currentTarget.value)}
+                value={defaultModelSelectValue}
+                options={defaultModelOptions}
+                placeholder={t(
+                  'settings.defaults.noModelDefault',
+                  '— (no default)',
+                )}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t('settings.defaults.model', 'Model')}
+                triggerClass="settings-view__dropdown"
+                panelClass="settings-view__model-panel"
+                onValueChange={(selectedValue) =>
+                  updateAgentDefaultsModelSelection('model', selectedValue)}
               />
             </div>
           </div>
@@ -1511,20 +1607,33 @@
                 )}
               </div>
             </div>
-            <div class="s-row-control s-row-control--input">
-              <input
+            <div class="s-row-control s-row-control--model">
+              <SearchableDropdown
                 id="settings-defaults-fallback-model"
-                class="s-input"
-                type="text"
-                value={agentDefaults.fallback_model}
-                aria-label={t(
+                value={defaultFallbackModelSelectValue}
+                options={defaultFallbackModelOptions}
+                placeholder={t(
+                  'settings.defaults.noFallbackModelDefault',
+                  '— (no default)',
+                )}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t(
                   'settings.defaults.fallbackModel',
                   'Fallback model',
                 )}
-                oninput={(event) =>
-                  handleAgentDefaultsChange(
+                triggerClass="settings-view__dropdown"
+                panelClass="settings-view__model-panel"
+                onValueChange={(selectedValue) =>
+                  updateAgentDefaultsModelSelection(
                     'fallback_model',
-                    event.currentTarget.value,
+                    selectedValue,
                   )}
               />
             </div>
@@ -1542,7 +1651,7 @@
                 )}
               </div>
             </div>
-            <div class="s-row-control s-row-control--input-actions">
+            <div class="s-row-control s-row-control--number">
               <input
                 id="settings-defaults-temperature"
                 class="s-input"
@@ -1558,17 +1667,6 @@
                     event.currentTarget.value,
                   )}
               />
-              <button
-                class="btn-outline s-inline-clear"
-                type="button"
-                aria-label={t(
-                  'settings.defaults.clearTemperature',
-                  'Clear default temperature',
-                )}
-                onclick={clearAgentDefaultsTemperature}
-              >
-                {t('common.clear', 'Clear')}
-              </button>
             </div>
           </div>
 
@@ -1584,33 +1682,20 @@
                 )}
               </div>
             </div>
-            <div class="s-row-control s-row-control--input">
-              <select
+            <div class="s-row-control s-row-control--model">
+              <Dropdown
                 id="settings-defaults-thinking-effort"
-                class="s-select"
                 value={agentDefaults.thinking_effort}
-                aria-label={t(
+                options={thinkingEffortOptions}
+                ariaLabel={t(
                   'settings.defaults.thinkingEffort',
                   'Thinking effort',
                 )}
-                onchange={(event) =>
-                  handleAgentDefaultsChange(
-                    'thinking_effort',
-                    event.currentTarget.value,
-                  )}
-              >
-                <option value={AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT}>
-                  {t('settings.defaults.noThinkingEffort', '— (no default)')}
-                </option>
-                <option value="">
-                  {t('agents.form.thinkingEffortDefault', '—')}
-                </option>
-                {#each AGENT_THINKING_EFFORT_OPTIONS as option (option)}
-                  <option value={option}>
-                    {t(`agents.form.thinkingEffortOption.${option}`, option)}
-                  </option>
-                {/each}
-              </select>
+                triggerClass="settings-view__dropdown"
+                listClass="settings-view__thinking-list"
+                onValueChange={(selectedValue) =>
+                  handleAgentDefaultsChange('thinking_effort', selectedValue)}
+              />
             </div>
           </div>
 
@@ -1927,20 +2012,30 @@
                 )}
               </div>
             </div>
-            <div class="s-row-control s-row-control--input">
-              <input
-                class="s-input"
-                type="text"
-                value={compactionSettings.summary_model ?? ''}
-                aria-label={t(
+            <div class="s-row-control s-row-control--model">
+              <SearchableDropdown
+                id="settings-compaction-summary-model"
+                value={compactionSummaryModelSelectValue}
+                options={compactionSummaryModelOptions}
+                placeholder={t(
+                  'settings.compaction.summaryModelPlaceholder',
+                  'Active agent model',
+                )}
+                searchPlaceholder={t(
+                  'agents.form.modelSearchPlaceholder',
+                  'Filter models…',
+                )}
+                emptyLabel={t(
+                  'agents.form.modelSearchEmpty',
+                  'No models match',
+                )}
+                ariaLabel={t(
                   'settings.compaction.summaryModel',
                   'Summary model',
                 )}
-                oninput={(event) =>
-                  handleCompactionSettingChange(
-                    'summary_model',
-                    event.currentTarget.value,
-                  )}
+                triggerClass="settings-view__dropdown"
+                panelClass="settings-view__model-panel"
+                onValueChange={updateCompactionSummaryModelSelection}
               />
             </div>
           </div>
@@ -2825,6 +2920,24 @@
     min-width: 180px;
   }
 
+  .s-row-control--model {
+    width: min(420px, 100%);
+    min-width: 260px;
+  }
+
+  :global(.settings-view__dropdown) {
+    width: 100%;
+  }
+
+  :global(.settings-view__model-panel) {
+    z-index: 220;
+  }
+
+  :global(.settings-view__thinking-list) {
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
   .s-row-control--input-actions {
     gap: 10px;
     width: min(360px, 100%);
@@ -3012,26 +3125,6 @@
     margin-top: 14px;
   }
 
-  .s-local-toast {
-    margin-bottom: 20px;
-    padding: 10px 12px;
-    border: 1px solid var(--border-2);
-    border-left-width: 2px;
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-    color: var(--text-hi);
-    font-size: 12.5px;
-  }
-
-  .s-local-toast--success {
-    border-left-color: var(--green);
-  }
-
-  .s-local-toast--error {
-    border-left-color: var(--red);
-    color: var(--red);
-  }
-
   @keyframes s-oauth-spin {
     to {
       transform: rotate(360deg);
@@ -3075,11 +3168,6 @@
 
   .s-directory-remove {
     flex-shrink: 0;
-  }
-
-  .s-inline-clear {
-    flex-shrink: 0;
-    white-space: nowrap;
   }
 
   .s-refresh-button {
@@ -3230,6 +3318,7 @@
 
     .s-row-control,
     .s-row-control--input,
+    .s-row-control--model,
     .s-row-control--input-actions,
     .s-row-control--number {
       width: 100%;

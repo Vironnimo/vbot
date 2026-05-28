@@ -390,6 +390,7 @@ describe('AgentsView', () => {
   });
 
   it('auto-saves model changes 800 ms after the last edit', async () => {
+    const toastMock = vi.fn();
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         connections: [
@@ -399,7 +400,10 @@ describe('AgentsView', () => {
       }),
     );
 
-    mountedComponent = mount(AgentsView, { target: document.body });
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
     flushSync();
 
     await waitForCondition(
@@ -426,16 +430,29 @@ describe('AgentsView', () => {
       id: 'alpha',
       model: 'openai/gpt-5.2::oauth',
     });
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Agent updated.',
+        variant: 'success',
+      }),
+    );
 
     const saveButton = getButton('Save changes');
     expect(saveButton.disabled).toBe(false);
+    toastMock.mockClear();
 
     saveButton.click();
     flushSync();
     await flushAsyncUpdates();
 
     expect(getAgentUpdateCalls()).toHaveLength(1);
-    expect(document.body.textContent).toContain('Already saved');
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Already saved',
+        variant: 'success',
+      }),
+    );
+    expect(document.body.textContent).not.toContain('Already saved');
   });
 
   it('auto-saves tool access changes', async () => {
@@ -642,38 +659,66 @@ describe('AgentsView', () => {
     });
   });
 
-  it('sends selected create payload with model connection suffixes', async () => {
+  it('opens New as a compact modal and sends selected create payload', async () => {
+    const agents = [baseAgent()];
+
     rpcMock.mockImplementation(
       createAgentsRpcMock({
-        agents: [],
+        agents,
         connections: [
           usableConnection('openai:oauth', 'openai', 'OAuth'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
           usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
         ],
+        agentUpdate: (params, method) => {
+          if (method === 'agent.create') {
+            const createdAgent = {
+              ...baseAgent(),
+              ...params,
+              current_session_id: 'session-saved',
+            };
+            agents.push(createdAgent);
+            return createdAgent;
+          }
+
+          return { ...baseAgent(), ...params };
+        },
       }),
     );
 
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => searchableOptionCountReady(), 100);
-
-    setTextInputValue(0, 'bravo');
-    setTextInputValue(1, 'Bravo');
-
-    await openSearchableDropdown('agent-model');
-    selectSearchableOption('agent-model', 'openai/gpt-5.2 (API Key)');
-
-    await openSearchableDropdown('agent-fallback-model');
-    selectSearchableOption(
-      'agent-fallback-model',
-      'anthropic/claude-sonnet-4-20250219',
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
     );
 
-    document.body
+    getButton('New').click();
+    flushSync();
+
+    const modal = getDialog('Create Agent');
+    expect(modal.textContent).toContain('Agent ID');
+    expect(modal.textContent).toContain('Name');
+    expect(modal.textContent).toContain('Model');
+    expect(modal.textContent).toContain('Thinking effort');
+    expect(modal.textContent).toContain('Temperature');
+    expect(modal.textContent).not.toContain('Fallback model');
+    expect(modal.textContent).not.toContain('Allowed tools');
+
+    setTextInputValueWithin(modal, 0, 'bravo');
+    setTextInputValueWithin(modal, 1, 'Bravo');
+    setNumberInputValueWithin(modal, 0, '0.4');
+
+    await openSearchableDropdown('agent-create-model');
+    selectSearchableOption('agent-create-model', 'openai/gpt-5.2 (API Key)');
+
+    openSimpleDropdown('agent-create-thinking-effort');
+    selectSimpleOption('agent-create-thinking-effort', 'high');
+
+    modal
       .querySelector('form')
-      .dispatchEvent(new Event('submit', { bubbles: true }));
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     await waitForCondition(
       () => rpcMock.mock.calls.some((call) => call[0] === 'agent.create'),
       100,
@@ -686,8 +731,15 @@ describe('AgentsView', () => {
       id: 'bravo',
       name: 'Bravo',
       model: 'openai/gpt-5.2::api-key',
-      fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
+      thinking_effort: 'high',
+      temperature: 0.4,
     });
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: bravo'),
+      100,
+    );
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('sends selected update payload with model connection suffixes', async () => {
@@ -734,7 +786,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('keeps create mode after New when parent selection still points to an agent', async () => {
+  it('opens New in a modal while keeping the current agent selected', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, {
@@ -758,15 +810,18 @@ describe('AgentsView', () => {
     await Promise.resolve();
     flushSync();
 
-    expect(document.body.textContent).toContain('Create Agent');
-    expect(document.body.textContent).toContain('Create agent');
-    expect(document.body.textContent).not.toContain('Delete Agent');
-    expect(document.body.querySelector('button.agent-item.active')).toBeNull();
-    expect(textInputValue(0)).toBe('');
-    expect(textInputValue(1)).toBe('');
+    const modal = getDialog('Create Agent');
+    expect(modal.textContent).toContain('Create agent');
+    expect(document.body.textContent).toContain('id: alpha');
+    expect(document.body.textContent).toContain('Delete Agent');
+    expect(
+      document.body.querySelector('button.agent-item.active'),
+    ).toBeTruthy();
+    expect(textInputValue(0)).toBe('alpha');
+    expect(textInputValue(1)).toBe('Alpha');
   });
 
-  it('still selects an existing agent after entering create mode', async () => {
+  it('keeps existing agent selection after cancelling New modal', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
@@ -794,7 +849,11 @@ describe('AgentsView', () => {
     await Promise.resolve();
     flushSync();
 
-    expect(document.body.textContent).toContain('Create Agent');
+    const modal = getDialog('Create Agent');
+    expect(modal).toBeTruthy();
+    getButton('Cancel').click();
+    flushSync();
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
 
     const bravoButton = Array.from(
       document.body.querySelectorAll('button.agent-item'),
@@ -1187,6 +1246,34 @@ function getButton(label) {
   );
   expect(button).toBeTruthy();
   return button;
+}
+
+function getDialog(title) {
+  const dialog = Array.from(
+    document.body.querySelectorAll('[role="dialog"]'),
+  ).find((item) => item.textContent.includes(title));
+  expect(dialog).toBeTruthy();
+  return dialog;
+}
+
+function setTextInputValueWithin(container, index, value) {
+  const input = Array.from(
+    container.querySelectorAll('input.s-input[type="text"]'),
+  )[index];
+  expect(input).toBeTruthy();
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+function setNumberInputValueWithin(container, index, value) {
+  const input = Array.from(
+    container.querySelectorAll('input.s-input[type="number"]'),
+  )[index];
+  expect(input).toBeTruthy();
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
 }
 
 function getButtonByAriaLabel(label) {

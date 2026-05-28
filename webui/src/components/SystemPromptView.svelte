@@ -5,6 +5,9 @@
   import { t } from '$lib/i18n.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const noop = () => {};
+
+  let { onToast = noop } = $props();
 
   let fragments = $state([]);
   let agents = $state([]);
@@ -13,18 +16,15 @@
   let previewTokens = $state(null);
   let isLoadingData = $state(true);
   let isRefreshingPreview = $state(false);
-  let toastMessage = $state('');
-  let toastVariant = $state('error');
-  let toastTimer = null;
   let autoSaveTimers = [];
+
+  let isPromptSaveBusy = $derived(
+    fragments.some((fragment) => fragment.isSaving || fragment.isResetting),
+  );
 
   onMount(() => {
     loadData();
     return () => {
-      if (toastTimer) {
-        clearTimeout(toastTimer);
-      }
-
       clearAutoSaveTimers();
     };
   });
@@ -103,8 +103,9 @@
     clearAutoSaveTimer(index);
   }
 
-  async function saveFragment(index) {
+  async function saveFragment(index, options = {}) {
     const fragment = fragments[index];
+    const showSuccessToast = options.showSuccessToast ?? true;
 
     if (
       !fragment ||
@@ -112,7 +113,7 @@
       fragment.isSaving ||
       fragment.isResetting
     ) {
-      return;
+      return false;
     }
 
     const draftContent = fragment.editedContent;
@@ -142,9 +143,13 @@
       }
 
       fragments[index].isModified = result.is_modified ?? true;
-      showToast(t('common.saved', 'Saved'), 'success');
+      if (showSuccessToast) {
+        showToast(t('common.saved', 'Saved'), 'success');
+      }
+      return true;
     } catch {
       showToast(t('systemPrompt.error.saveFailed', 'Failed to save'), 'error');
+      return false;
     } finally {
       if (fragments[index]) {
         fragments[index].isSaving = false;
@@ -192,20 +197,37 @@
     autoSaveTimers = [];
   }
 
-  function handleManualSave(index) {
-    const fragment = fragments[index];
-
-    if (!fragment || fragment.isSaving || fragment.isResetting) {
+  async function handleManualSaveAll() {
+    if (isPromptSaveBusy) {
       return;
     }
 
-    if (!fragment.isDirty) {
+    const dirtyIndexes = fragments.reduce((indexes, fragment, index) => {
+      if (fragment.isDirty) {
+        indexes.push(index);
+      }
+
+      return indexes;
+    }, []);
+
+    if (dirtyIndexes.length === 0) {
       showToast(t('common.alreadySaved', 'Already saved'), 'success');
       return;
     }
 
-    clearAutoSaveTimer(index);
-    void saveFragment(index);
+    for (const index of dirtyIndexes) {
+      clearAutoSaveTimer(index);
+    }
+
+    const results = await Promise.all(
+      dirtyIndexes.map((index) =>
+        saveFragment(index, { showSuccessToast: false }),
+      ),
+    );
+
+    if (results.every(Boolean)) {
+      showToast(t('common.saved', 'Saved'), 'success');
+    }
   }
 
   async function resetFragment(index) {
@@ -276,25 +298,11 @@
   }
 
   function showToast(message, variant = 'error') {
-    if (toastTimer) {
-      clearTimeout(toastTimer);
-    }
-
-    toastMessage = message;
-    toastVariant = variant;
-    toastTimer = setTimeout(() => {
-      toastMessage = '';
-    }, 4000);
+    onToast?.({ title: message, variant });
   }
 </script>
 
 <section class="sp-view view active" aria-labelledby="sp-title">
-  {#if toastMessage}
-    <div class="sp-toast sp-toast--{toastVariant}" role="alert">
-      {toastMessage}
-    </div>
-  {/if}
-
   <div class="sp-layout">
     <div class="sp-scroll">
       <div class="sp-header">
@@ -373,18 +381,6 @@
                 value={fragment.editedContent}
                 oninput={(event) => handleTextareaInput(index, event)}
               ></textarea>
-
-              <div class="sp-sticky-footer">
-                <button
-                  class="btn-primary sp-btn-sm"
-                  type="button"
-                  onclick={() => handleManualSave(index)}
-                >
-                  {fragment.isSaving
-                    ? t('common.saving', 'Saving…')
-                    : t('systemPrompt.fragmentEditor.save', 'Save')}
-                </button>
-              </div>
             </div>
           {/each}
         </div>
@@ -452,6 +448,19 @@
             {/if}
           </div>
         </div>
+
+        <div class="sp-global-footer">
+          <button
+            class="btn-primary sp-btn-sm"
+            type="button"
+            disabled={isPromptSaveBusy}
+            onclick={handleManualSaveAll}
+          >
+            {isPromptSaveBusy
+              ? t('common.saving', 'Saving…')
+              : t('systemPrompt.fragmentEditor.save', 'Save')}
+          </button>
+        </div>
       {/if}
     </div>
   </div>
@@ -465,45 +474,6 @@
     overflow: hidden;
     background: var(--bg);
     position: relative;
-  }
-
-  .sp-toast {
-    position: absolute;
-    top: 16px;
-    right: 20px;
-    z-index: 100;
-    padding: 10px 16px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    color: var(--text-hi);
-    background: var(--surface-2);
-    font-size: 12.5px;
-    line-height: 1.4;
-    pointer-events: none;
-    animation: sp-toast-in 180ms ease;
-  }
-
-  .sp-toast--success {
-    color: var(--green);
-    background: rgba(74, 222, 128, 0.08);
-    border-color: rgba(74, 222, 128, 0.2);
-  }
-
-  .sp-toast--error {
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.12);
-    border: 1px solid rgba(252, 129, 129, 0.22);
-  }
-
-  @keyframes sp-toast-in {
-    from {
-      opacity: 0;
-      transform: translateY(-6px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
   }
 
   .sp-layout {
@@ -564,7 +534,7 @@
     flex-direction: column;
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
-    overflow: visible;
+    overflow: hidden;
     position: relative;
     background: var(--bg);
   }
@@ -576,6 +546,7 @@
     gap: 12px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
     background: var(--surface);
     flex-shrink: 0;
   }
@@ -674,15 +645,11 @@
     box-shadow: inset 0 0 0 1px rgba(232, 135, 10, 0.3);
   }
 
-  .sp-sticky-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 1;
-    padding: 8px 14px 10px;
-    background: var(--bg);
-    border-top: 1px solid var(--border);
+  .sp-global-footer {
     display: flex;
+    flex-shrink: 0;
     justify-content: flex-end;
+    padding: 0 0 4px;
   }
 
   .sp-preview-section {

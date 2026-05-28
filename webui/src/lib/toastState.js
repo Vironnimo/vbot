@@ -11,13 +11,15 @@ export function createToastState() {
 }
 
 export function addToast(state, { title, message, variant }) {
+  const id = `toast-${nextToastId}`;
   state.toasts.push({
-    id: `toast-${nextToastId}`,
+    id,
     title,
     message,
     variant: normalizeVariant(variant),
   });
   nextToastId += 1;
+  return id;
 }
 
 export function dismissToast(state, id) {
