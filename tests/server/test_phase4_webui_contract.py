@@ -68,7 +68,12 @@ def test_phase4_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
     assert agent["current_session_id"]
     assert history_response.json() == {
         "ok": True,
-        "result": {"agent_id": "main", "session_id": agent["current_session_id"], "messages": []},
+        "result": {
+            "agent_id": "main",
+            "session_id": agent["current_session_id"],
+            "messages": [],
+            "has_more": False,
+        },
     }
 
 

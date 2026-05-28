@@ -38,6 +38,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/bash.md` - `bash`
 - `tools/process.md` - `process` and `ProcessManager`
 - `tools/status.md` - `status`
+- `tools/session_search.md` - `session_search`
 - `tools/skill.md` - internal `skill`
 - `tools/subagent.md` - `subagent` and `subagent_result` registration wrapper
 - `tools/cron.md` - `cron`

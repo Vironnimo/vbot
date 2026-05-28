@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
-from core.tools import tool_success
 
 if TYPE_CHECKING:
     from core.chat.chat import ChatMessage
@@ -101,6 +100,8 @@ class ChatSession:
 
     def activate_skill_context(self, name: str, data: JsonObject) -> JsonObject:
         """Store skill context once per session and return a result envelope."""
+        from core.tools.tools import tool_success
+
         activated_contents = self._load_activated_skill_contents()
         if name in activated_contents:
             return tool_success(

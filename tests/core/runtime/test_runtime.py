@@ -34,6 +34,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "grep",
     "process",
     "read",
+    "session_search",
     "status",
     "subagent",
     "subagent_result",
