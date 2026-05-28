@@ -141,7 +141,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     canonical message `content` as `string` or `list[ContentBlock]` on send.
   - The visible composer box focuses the textarea from its padded wrapper area,
     not only from the text glyph area. After a successful send, the textarea
-    value and height reset to the single-line composer state.
+    value and height reset to the single-line composer state. The empty
+    textarea is top-aligned within the visible box so typing begins at the top
+    of the field while composer action buttons stay bottom-aligned.
 - `webui/src/components/SkillAutocomplete.svelte`
   - Renders the flat name/description list selected by the composer for the active trigger context: combined commands plus skills for `/`, skills only for `$`. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
 - `webui/src/lib/agentForm.js`
