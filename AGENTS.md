@@ -17,40 +17,26 @@ required files, read those in full too.
 When working on a domain, read its spec from `.vorch/specs/` before changing
 that domain. Treat listed specs as a starting point, not a ceiling.
 
-## Operating Mode
-
-The default mode is direct single-agent execution. You own the work end to end:
-planning, implementation, tests, documentation, git, and the final handoff.
-
-If the user explicitly asks for the old multi-agent system, follow the files in
-`.github/agents/`. Otherwise, fold the useful responsibilities into this single
-agent:
-
-- Orchestrator duties: scope the request, keep git clean, commit logical units,
-   and keep `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and `.vorch/specs/`
-   current.
-- Builder duties: write application code, tests, and UI; follow local patterns;
-   run focused quality gates before reporting done.
-- Tester duties: when live testing is requested, read `.vorch/TESTER.md`, start
-   and stop the app with `python scripts/test-env.py`, use browser automation,
-   and capture screenshots for browser-visible claims.
+## Subagents
 
 Do not use subagents unless the user explicitly asks for them. If subagents are
 forbidden or unavailable, do all work yourself.
 
 ## Working Loop
 
-1. Understand: read only the context needed to make a sound local decision.
-2. Plan: for non-trivial work, keep a short visible checklist and update it as
-    steps complete.
-3. Implement: make focused changes that match existing conventions.
-4. Verify: run the narrowest meaningful quality gates and fix failures before
-    moving on.
+1. Plan: for non-trivial work, keep a short visible checklist and update it as
+   steps complete.
+2. Implement: make focused changes that match existing conventions.
+3. Verify: run focused quality gates while iterating and fix failures before
+   moving on.
+4. Run full gates: before the final commit for code or UI changes, run the full
+   applicable quality gate without path arguments. Docs-only changes may use
+   `git diff --check` when no code gate applies.
 5. Update docs/specs: if behavior, contracts, architecture, setup, tests, or UI
-    conventions changed, update the relevant `.vorch` docs in the same task.
+   conventions changed, update the relevant `.vorch` docs in the same task.
 6. Commit: commit the completed logical unit unless the user tells you not to.
 7. Ask: before ending the turn, call `vscode_askQuestions` with concrete next
-    choices.
+   choices.
 
 If the user asks only for analysis, review, or a summary, do not edit code
 unless they ask you to proceed. Still end with `vscode_askQuestions`.
@@ -59,7 +45,9 @@ unless they ask you to proceed. Still end with `vscode_askQuestions`.
 
 You own git in direct mode.
 
-- Use the current branch/worktree unless the user asks for a new one.
+- Work on the current branch, usually `main`, and commit there unless the user
+   explicitly asks for a different branch.
+- Do not use the worktree script unless the user explicitly asks for it.
 - Check `git status --short` before committing.
 - Review the diff enough to know what is being committed.
 - Commit one logical unit at a time.
@@ -159,12 +147,23 @@ test is not practical.
 Use AAA structure: Arrange, Act, Assert. Tests must be independent,
 deterministic, and focused on observable behavior.
 
-Run focused gates before reporting done:
+Run focused gates while iterating:
 
 ```bash
 python scripts/quality.py [paths...]
 python scripts/quality-frontend.py [paths...]
 ```
+
+For code or UI changes, finish with the full applicable gate before the final
+commit:
+
+```bash
+python scripts/quality.py
+python scripts/quality-frontend.py
+```
+
+For docs-only changes, `git diff --check` is enough unless the docs change also
+requires a code gate.
 
 For live UI testing, use only:
 
