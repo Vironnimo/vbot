@@ -130,7 +130,6 @@ export const englishCatalog = Object.freeze({
   'chat.toolNoData': '—',
   'chat.runIterations': '{count} iter',
   'chat.runDurationSeconds': '{seconds}s',
-  'chat.newRun': 'New run',
   'chat.tokenBadge': '{tokens} / {context} tok',
   'chat.tokenBadgeEstimated': '~{tokens} / {context} tok',
   'chat.tokenBadgeNoContext': '{tokens} tok',
