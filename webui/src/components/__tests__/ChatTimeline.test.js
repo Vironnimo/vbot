@@ -3115,6 +3115,44 @@ describe('ChatTimeline', () => {
     });
   });
 
+  it('does not render a sub-agent row without a session target', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-started-without-target',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-started-without-target',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: true,
+            content: 'Inspect slowly',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.subagent-tool-event')).toBeNull();
+    expect(document.querySelector('.subagent-link')).toBeNull();
+  });
+
   it('does not render streaming tool preparation as a standalone card', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -3143,6 +3181,7 @@ describe('ChatTimeline', () => {
     flushSync();
 
     expect(document.querySelector('.streaming-tool-event')).toBeNull();
+    expect(document.querySelector('.subagent-tool-event')).toBeNull();
     expect(document.body.textContent).not.toContain('PREPARING TOOL');
   });
 });

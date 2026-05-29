@@ -381,10 +381,19 @@
   const visibleRunChildren = (assistantRun) =>
     (assistantRun.items ?? []).filter((child) => {
       if (child.type === 'tool_call') {
-        return Boolean(child.name || child.toolCallId || child.startedEvent);
+        return shouldRenderToolCall(child);
       }
       return Boolean(child.content);
     });
+
+  const shouldRenderToolCall = (tool) => {
+    if (isSubAgentTool(tool)) {
+      return Boolean(subAgentNavigationTarget(tool) || tool.resultEvent);
+    }
+    return Boolean(
+      tool.startedEvent || tool.resultEvent || tool.stdout || tool.stderr,
+    );
+  };
 
   const runIterationCount = (assistantRun) => {
     const outputCount = (assistantRun.outputs ?? []).length;
