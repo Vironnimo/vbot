@@ -503,11 +503,6 @@
   const MAX_TOOL_LABEL_LENGTH = 80;
   const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
   const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
-  const SUBAGENT_TERMINAL_STATUSES = new Set([
-    'completed',
-    'failed',
-    'cancelled',
-  ]);
   const TOOL_ERROR_DETAIL_KEYS = [
     'error',
     'message',
@@ -679,12 +674,6 @@
     return trimmedString(data.session_id) || trimmedString(args.session_id);
   };
 
-  const subAgentRunId = (tool) => {
-    const args = subAgentArguments(tool);
-    const data = subAgentResultData(tool);
-    return trimmedString(data.run_id) || trimmedString(args.run_id);
-  };
-
   const subAgentAgentId = (tool) => {
     const args = subAgentArguments(tool);
     const data = subAgentResultData(tool);
@@ -725,69 +714,7 @@
     return [agentId, preview].filter(Boolean).join(' · ');
   };
 
-  const subAgentCompletionData = (tool, assistantRun) => {
-    if (toolNameForRunTool(tool) !== 'subagent') {
-      return null;
-    }
-
-    const sessionId = subAgentSessionId(tool);
-    if (!sessionId || !assistantRun?.items) {
-      return null;
-    }
-
-    const runId = subAgentRunId(tool);
-    for (const child of assistantRun.items) {
-      if (
-        child === tool ||
-        child.type !== 'tool_call' ||
-        toolNameForRunTool(child) !== 'subagent_result'
-      ) {
-        continue;
-      }
-
-      const childData = subAgentResultData(child);
-      const childSessionId = subAgentSessionId(child);
-      const childRunId = subAgentRunId(child);
-      const childStatus = trimmedString(childData.status);
-      if (
-        childSessionId === sessionId &&
-        (!runId || !childRunId || childRunId === runId) &&
-        SUBAGENT_TERMINAL_STATUSES.has(childStatus)
-      ) {
-        return childData;
-      }
-    }
-    return null;
-  };
-
-  const subAgentLifecycleStatus = (tool, assistantRun = null) => {
-    const completionData = subAgentCompletionData(tool, assistantRun);
-    const completionStatus = trimmedString(completionData?.status);
-    if (completionStatus) {
-      return completionStatus;
-    }
-
-    const dataStatus = trimmedString(subAgentResultData(tool).status);
-    if (dataStatus) {
-      return dataStatus;
-    }
-
-    return toolStatus(tool);
-  };
-
-  const subAgentDotStatus = (tool, assistantRun) => {
-    const status = subAgentLifecycleStatus(tool, assistantRun);
-    if (status === 'completed' || status === 'success') {
-      return 'success';
-    }
-    if (status === 'failed') {
-      return 'failed';
-    }
-    if (status === 'cancelled') {
-      return 'cancelled';
-    }
-    return 'running';
-  };
+  const subAgentDotStatus = (tool) => toolStatus(tool);
 
   const subAgentNavigationTarget = (tool) => {
     const data = subAgentResultData(tool);
