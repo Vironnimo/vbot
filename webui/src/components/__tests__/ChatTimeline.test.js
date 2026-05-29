@@ -519,6 +519,61 @@ describe('ChatTimeline', () => {
     expect(runBoundaryOrder).toEqual(['run', 'boundary', 'run']);
   });
 
+  it('shows a run boundary between consecutive assistant history runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-follow-up-boundary',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Start background work' },
+      {
+        id: 'assistant-tool-call',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: { agent_id: 'tester', blocking: false },
+          },
+        ],
+      },
+      {
+        id: 'tool-subagent',
+        role: 'tool',
+        tool_call_id: 'call-subagent',
+        name: 'subagent',
+        content: '{"ok":true}',
+      },
+      {
+        id: 'assistant-started',
+        role: 'assistant',
+        content: 'Background sub-agent started.',
+      },
+      {
+        id: 'assistant-follow-up',
+        role: 'assistant',
+        content: 'Background sub-agent finished.',
+      },
+    ]);
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(2);
+    const boundary = document.querySelector('.run-boundary-sep');
+    expect(boundary).toBeTruthy();
+    expect(boundary.textContent.trim()).toBe('New run');
+  });
+
   it('does not show a run boundary between normal user turns', () => {
     const sessionState = ensureSessionState(
       createChatState(),
