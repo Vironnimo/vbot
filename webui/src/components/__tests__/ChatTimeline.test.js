@@ -455,7 +455,7 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.retry-btn')).toBeNull();
   });
 
-  it('shows a run boundary before an automatic assistant follow-up run', () => {
+  it('renders an automatic assistant follow-up as a separate assistant run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -506,20 +506,13 @@ describe('ChatTimeline', () => {
 
     const assistantRuns = document.querySelectorAll('.assistant-run');
     expect(assistantRuns).toHaveLength(2);
+    expect(assistantRuns[0].textContent).toContain('Waiting on sub-agents.');
+    expect(assistantRuns[1].textContent).toContain('Sub-agent batch finished.');
 
-    const boundary = document.querySelector('.run-boundary-sep');
-    expect(boundary).toBeTruthy();
-    expect(boundary.textContent.trim()).toBe('New run');
-
-    const runBoundaryOrder = Array.from(
-      document.querySelectorAll('.assistant-run, .run-boundary-sep'),
-    ).map((node) =>
-      node.classList.contains('run-boundary-sep') ? 'boundary' : 'run',
-    );
-    expect(runBoundaryOrder).toEqual(['run', 'boundary', 'run']);
+    expect(document.querySelector('.run-boundary-sep')).toBeNull();
   });
 
-  it('shows a run boundary between consecutive assistant history runs', () => {
+  it('renders consecutive assistant history runs as separate assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -568,13 +561,18 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    expect(document.querySelectorAll('.assistant-run')).toHaveLength(2);
-    const boundary = document.querySelector('.run-boundary-sep');
-    expect(boundary).toBeTruthy();
-    expect(boundary.textContent.trim()).toBe('New run');
+    const assistantRuns = document.querySelectorAll('.assistant-run');
+    expect(assistantRuns).toHaveLength(2);
+    expect(assistantRuns[0].textContent).toContain(
+      'Background sub-agent started.',
+    );
+    expect(assistantRuns[1].textContent).toContain(
+      'Background sub-agent finished.',
+    );
+    expect(document.querySelector('.run-boundary-sep')).toBeNull();
   });
 
-  it('does not show a run boundary between normal user turns', () => {
+  it('keeps normal user turns as separate assistant runs without a divider', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',

@@ -1039,35 +1039,6 @@
     );
   }
 
-  function shouldRenderRunBoundaryBefore(itemIndex) {
-    if (itemIndex <= 0) {
-      return false;
-    }
-
-    const item = timelineItems[itemIndex];
-    if (item?.type !== 'assistant_run') {
-      return false;
-    }
-
-    return isAssistantTimelineItem(timelineItems[itemIndex - 1]);
-  }
-
-  function isAssistantTimelineItem(item) {
-    if (!item) {
-      return false;
-    }
-    if (item.type === 'assistant_run') {
-      return true;
-    }
-    if (item.type === 'message') {
-      return item.message?.role === 'assistant';
-    }
-    if (item.type === 'event') {
-      return isAssistantItem(item);
-    }
-    return false;
-  }
-
   function hasPendingSubmittedTurnScroll() {
     return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
   }
@@ -1439,11 +1410,6 @@
         {#if shouldRenderTimelineDateSeparator(itemIndex)}
           <div class="date-sep">
             {formatDate(timestampForItem(item))}
-          </div>
-        {/if}
-        {#if shouldRenderRunBoundaryBefore(itemIndex)}
-          <div class="run-boundary-sep">
-            {t('chat.newRun', 'New run')}
           </div>
         {/if}
         {#if item.type === 'streaming' && shouldRenderStreamingItem(item.streamingItem)}
@@ -2035,29 +2001,6 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     text-align: center;
-  }
-
-  .run-boundary-sep {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 16px 28px 10px 62px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    text-transform: uppercase;
-  }
-
-  .run-boundary-sep::before,
-  .run-boundary-sep::after {
-    height: 1px;
-    flex: 1;
-    background: var(--border);
-    content: '';
-  }
-
-  .run-boundary-sep::before {
-    max-width: 52px;
   }
 
   .retry-btn {
