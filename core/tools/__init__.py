@@ -28,6 +28,14 @@ from core.tools.grep import (
     grep_handler,
     register_grep_tool,
 )
+from core.tools.memory import (
+    MEMORY_TOOL_DESCRIPTION,
+    MEMORY_TOOL_NAME,
+    MEMORY_TOOL_PARAMETERS,
+    make_memory_handler,
+    memory_handler,
+    register_memory_tool,
+)
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -134,6 +142,9 @@ __all__ = [
     "GREP_TOOL_PARAMETERS",
     "InvalidToolResultError",
     "JsonObject",
+    "MEMORY_TOOL_DESCRIPTION",
+    "MEMORY_TOOL_NAME",
+    "MEMORY_TOOL_PARAMETERS",
     "PROCESS_TOOL_DESCRIPTION",
     "PROCESS_TOOL_NAME",
     "PROCESS_TOOL_PARAMETERS",
@@ -176,6 +187,7 @@ __all__ = [
     "glob_handler",
     "grep_handler",
     "is_tool_result_envelope",
+    "make_memory_handler",
     "make_process_handler",
     "make_skill_handler",
     "read_handler",
@@ -185,6 +197,7 @@ __all__ = [
     "register_bash_tool",
     "register_cron_tool",
     "register_grep_tool",
+    "register_memory_tool",
     "register_process_tool",
     "register_read_tool",
     "register_session_search_tool",
@@ -193,6 +206,7 @@ __all__ = [
     "register_web_fetch_tool",
     "register_web_search_tool",
     "register_write_tool",
+    "memory_handler",
     "session_search_handler",
     "tool_failure",
     "tool_success",

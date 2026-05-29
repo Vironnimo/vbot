@@ -28,9 +28,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   provider credential resolver (process environment takes precedence over the
   data-dir fallback for environment credentials), copies prompt
   fragments, instantiates the runtime-owned `AttachmentStore` using
-  `settings.json` `attachment_max_size_bytes`, wires services, starts the
+  `settings.json` `attachment_max_size_bytes`, instantiates `MemoryService`, wires services, starts the
   `ProcessManager` sweeper when startup
-  happens inside a running asyncio loop, registers built-in tools, creates the
+  happens inside a running asyncio loop, registers built-in tools including `memory`, creates the
   shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in
   slash commands, creates resolver-wired non-streaming and streaming
   `ChatLoop` instances, wires `TriggerService`, wires and starts `ChannelService` when an event loop is active,
@@ -44,7 +44,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   Second call is no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
   `ProcessManager` sweeper, stops `ChannelService`, stops `CronService`, resets
-  started state, and clears service references.
+  started state, and clears service references including `MemoryService`.
   Safe to call before `start()`.
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.

@@ -84,6 +84,8 @@ def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) ->
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {
         "agent_id",
+        "around_message_id",
+        "bookends",
         "context",
         "limit",
         "match",
@@ -211,6 +213,56 @@ def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path)
     assert context["before"] == []
     assert context["after"][0]["role"] == "assistant"
     assert context["after"][0]["snippet"] == "I will inspect the payment flow."
+    assert matches[0]["window"][0]["role"] == "user"
+    assert matches[0]["bookend_end"][-1]["role"] == "user"
+
+
+def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="anchored-session")
+    session.append(ChatMessage.user("Session goal is memory planning", timestamp=timestamp(2, 8)))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5",
+            content="We can keep JSONL canonical.",
+            timestamp=timestamp(2, 9),
+        )
+    )
+    anchor = ChatMessage.user("Now inspect SQLite FTS options", timestamp=timestamp(2, 10))
+    session.append(anchor)
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5",
+            content="SQLite FTS should be an optional index.",
+            timestamp=timestamp(2, 11),
+        )
+    )
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"session_id": "anchored-session", "around_message_id": anchor.id, "context": 1},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["around_message_id"] == anchor.id
+    assert [item["role"] for item in data["window"]] == ["assistant", "user", "assistant"]
+    assert data["bookend_start"][0]["snippet"] == "Session goal is memory planning"
+    assert data["bookend_end"] == []
+    assert "Anchored view" in data["content"]
+
+
+def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"around_message_id": "message-1"},
+        sessions,
+    )
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "requires session_id" in error["message"]
 
 
 def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:

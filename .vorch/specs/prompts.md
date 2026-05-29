@@ -36,6 +36,7 @@ Editable prompt fragments are exactly these five names, in UI order:
 
 - Prompt domain code depends on Protocols for Agent, Tool, Skill, Channel, and Storage shapes. Avoid importing concrete AgentStore, ChannelService, or StorageManager classes here unless a new boundary genuinely needs it.
 - Workspace includes accept only safe flat filenames. `{include:filename}` resolves under the Agent workspace and wraps content as `<file name="filename">\n...\n</file>`.
+- The bundled default system prompt includes `SOUL.md`, `USER.md`, and `MEMORY.md`; missing workspace includes render as an empty tagged file rather than failing prompt assembly.
 - Skill prompt metadata is XML-escaped before insertion.
 - Prompt fragment variable metadata is descriptive UI data only; changing it is a user-visible contract change.
 

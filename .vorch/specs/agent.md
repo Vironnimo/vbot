@@ -47,7 +47,7 @@ Persisted agent configuration and workspace lifecycle management.
 
 - Agent IDs must be conservative filesystem-safe slugs: letters, numbers, hyphen, underscore, max 64 characters.
 - Writes to `agent.json` use a same-directory temp file plus atomic replace.
-- Workspace templates are `SOUL.md` and `USER.md` in `resources/workspace-templates/`. `SOUL.md` is seeded with the Hermes-style default identity wording adapted to a vBot agent. `USER.md` is seeded as a user-profile starter for durable user facts such as preferences, communication style, expectations, and workflow habits.
+- Workspace templates are `SOUL.md`, `USER.md`, and `MEMORY.md` in `resources/workspace-templates/`. `SOUL.md` is seeded with the Hermes-style default identity wording adapted to a vBot agent. `USER.md` is seeded as a user-profile starter for durable user facts such as preferences, communication style, expectations, and workflow habits. `MEMORY.md` is seeded as agent/workflow memory for concise durable notes managed by the `memory` tool.
 - Prompt bodies are file-backed and assembled through `core/prompts/`, not hardcoded in Agent code.
 
 ## Constraints & Gotchas
