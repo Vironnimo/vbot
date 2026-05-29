@@ -70,5 +70,6 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
     provider and optional connection, and vBot chooses the configured env key from
     provider metadata. CLI output must not include credential values.
 - Streaming retry only covers connection establishment. Once an SSE stream is open, mid-stream errors propagate.
+- Adapters that know streaming is unsupported for a request raise `ProviderStreamingUnsupportedError` (non-retryable `ProviderError`). The chat loop treats this as its only trigger to fall back to a non-streaming request; other streaming errors are not silently retried.
 - Provider catalogs under `resources/models/` are refreshable artifacts. Durable behavior belongs in adapter code or policy, not hand-edited generated model files.
 - Network failures use `NetworkError` and are retryable but do not trigger model fallback.

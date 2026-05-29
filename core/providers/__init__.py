@@ -7,6 +7,7 @@ from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
+    ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
 )
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -37,5 +38,6 @@ __all__ = [
     "ProviderError",
     "ProviderRateLimitError",
     "ProviderRegistry",
+    "ProviderStreamingUnsupportedError",
     "ProviderTimeoutError",
 ]

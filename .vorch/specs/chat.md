@@ -71,6 +71,13 @@ container; a Run is one active execution inside that session.
   loop accumulates into the final canonical assistant message. The final
   message is persisted at the same turn boundary as non-streaming and remains
   authoritative over transient deltas.
+- Streaming-to-non-streaming fallback is opt-in and type-driven: the chat loop
+  falls back to a non-streaming request only when an adapter raises
+  `ProviderStreamingUnsupportedError` (a non-retryable `ProviderError`) before
+  any visible delta has been emitted. Generic streaming `ProviderError`s and any
+  error raised after the first visible delta propagate as a failed Run instead
+  of silently retrying. Fallback is never decided by inspecting error message
+  text.
 - Readable `reasoning`, tool calls/results, and assistant outputs are part of
   the visible run timeline; opaque `reasoning_meta` is not.
 - Tool calls from the same assistant turn execute concurrently. The next model
@@ -133,6 +140,7 @@ container; a Run is one active execution inside that session.
 - Provider adapters extract token usage from responses: OpenAI maps `prompt_tokens`/`completion_tokens` to canonical `input_tokens`/`output_tokens`; Anthropic maps directly from `usage.input_tokens`/`usage.output_tokens`. If a provider doesn't supply usage (e.g., local providers without usage reporting), the backend falls back to a 4-chars-per-token estimation via `estimate_tokens()` in `core/utils/tokens.py` and marks the result with `"estimated": true`.
 - `ChatMessage.assistant()` accepts an optional `usage: JsonObject | None` field (canonical keys: `input_tokens`, `output_tokens`; optional `estimated` boolean). Usage is only valid on assistant messages and is rejected on other roles by `from_dict()`.
 - `_message_to_request_dict()` strips `usage`, `reasoning`, and `reasoning_meta` from assistant history before it is sent to provider APIs. Readable `reasoning` still round-trips for reasoning-aware adapters on the active tool-continuation path, but stale completed-turn reasoning must not be resent on later follow-up turns.
+- The live tool-continuation request for the current turn appends the assistant message via a helper that strips `usage` while preserving `reasoning`/`reasoning_meta`, so per-turn token accounting is never echoed back to the provider even mid-loop.
 - The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal events for failed or cancelled runs do not include usage.
 - In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
 - GitHub Copilot endpoint helpers must emit the same normalized streaming shapes

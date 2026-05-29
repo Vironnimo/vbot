@@ -37,6 +37,15 @@ class ToolNotAllowedError(ToolError):
     """Raised when a tool exists but is not on the caller's allowlist."""
 
 
+class InvalidToolResultError(ValueError):
+    """Raised when a tool handler returns a value that is not a valid result envelope.
+
+    Subclasses ``ValueError`` so existing callers that catch ``ValueError`` keep
+    working, while allowing the chat loop to distinguish an invalid handler
+    result from invalid tool arguments without inspecting message text.
+    """
+
+
 class DuplicateToolError(ToolError):
     """Raised when registering a tool name more than once."""
 
@@ -327,9 +336,11 @@ class ToolRegistry:
         if inspect.isawaitable(result):
             result = await result
         if not isinstance(result, dict):
-            raise ValueError(f"Tool handler must return a JSON object: {context.tool_name}")
+            raise InvalidToolResultError(
+                f"Tool handler must return a JSON object: {context.tool_name}"
+            )
         if not is_tool_result_envelope(result):
-            raise ValueError(
+            raise InvalidToolResultError(
                 f"Tool handler must return a valid result envelope: {context.tool_name}"
             )
         return result
