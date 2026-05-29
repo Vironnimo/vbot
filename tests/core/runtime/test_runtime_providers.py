@@ -616,6 +616,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "edit",
         "glob",
         "grep",
+        "memory",
         "process",
         "read",
         "session_search",

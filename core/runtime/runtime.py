@@ -17,6 +17,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.extensions import ExtensionRegistry
+from core.memory import MemoryService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -45,6 +46,7 @@ from core.tools import (
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
+    register_memory_tool,
     register_process_tool,
     register_read_tool,
     register_session_search_tool,
@@ -129,6 +131,7 @@ class Runtime:
         self._attachment_store: AttachmentStore | None = None
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
+        self._memory_service: MemoryService | None = None
         self._process_manager: ProcessManager | None = None
         self._skills: SkillRegistry | None = None
         self._extensions: ExtensionRegistry | None = None
@@ -195,11 +198,13 @@ class Runtime:
         self._process_manager = ProcessManager()
         self._start_process_manager()
         self._tools = ToolRegistry()
+        self._memory_service = MemoryService()
         register_read_tool(self._tools)
         register_edit_tool(self._tools)
         register_glob_tool(self._tools)
         register_grep_tool(self._tools)
         register_write_tool(self._tools)
+        register_memory_tool(self._tools, self._memory_service)
         register_web_fetch_tool(self._tools)
         register_web_search_tool(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
@@ -326,6 +331,7 @@ class Runtime:
         self._attachment_store = None
         self._agents = None
         self._tools = None
+        self._memory_service = None
         self._process_manager = None
         self._skills = None
         self._extensions = None

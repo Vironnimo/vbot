@@ -350,7 +350,8 @@ def _write_prompt_resources(resources: Path) -> None:
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
     (prompts_dir / "system.md").write_text(
-        "{include:SOUL.md}\n{runtime}\n{include:USER.md}\n{tools}\n{channels}\n{skills}",
+        "{include:SOUL.md}\n{include:MEMORY.md}\n{runtime}\n"
+        "{include:USER.md}\n{tools}\n{channels}\n{skills}",
         encoding="utf-8",
     )
     (prompts_dir / "runtime.md").write_text(
@@ -369,6 +370,7 @@ def _write_workspace_templates(resources: Path) -> None:
     templates_dir.mkdir(parents=True)
     templates = {
         "SOUL.md": "Soul template for integration",
+        "MEMORY.md": "Memory template for integration",
         "USER.md": "User template for integration",
     }
     for filename, content in templates.items():

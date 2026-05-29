@@ -23,7 +23,7 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, chat, runs, compaction, sessions, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
+**Core modules:** runtime, models, chat, runs, compaction, sessions, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
@@ -83,6 +83,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
 | `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
 | `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
+| `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
 | `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, parser errors |
 | `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
 | `.vorch/specs/attachments.md` | `core/attachments/` | Blob storage, MIME sniffing, attachment metadata, text extraction |

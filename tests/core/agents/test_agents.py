@@ -18,7 +18,7 @@ from core.agents import (
 )
 from core.agents import agents as agents_module
 
-TEMPLATE_FILES = ("SOUL.md", "USER.md")
+TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 
 @pytest.fixture

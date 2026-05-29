@@ -28,6 +28,8 @@ SESSION_SEARCH_TOOL_DESCRIPTION = (
 SESSION_SEARCH_DEFAULT_LIMIT = 20
 SESSION_SEARCH_MAX_LIMIT = 100
 SESSION_SEARCH_MAX_CONTEXT_MESSAGES = 2
+SESSION_SEARCH_DEFAULT_BOOKEND_MESSAGES = 2
+SESSION_SEARCH_MAX_BOOKEND_MESSAGES = 5
 SESSION_SEARCH_SNIPPET_CHARS = 320
 SESSION_SEARCH_CONTEXT_SNIPPET_CHARS = 180
 
@@ -59,6 +61,12 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "description": "Restrict search to one session id.",
         },
+        "around_message_id": {
+            "type": "string",
+            "description": (
+                "With session_id, return an anchored context window around this message id."
+            ),
+        },
         "since": {
             "type": "string",
             "description": "Inclusive UTC ISO-8601 timestamp or YYYY-MM-DD lower bound.",
@@ -88,6 +96,12 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
             "type": "number",
             "description": "Messages before and after each match to include (default 0, max 2).",
         },
+        "bookends": {
+            "type": "number",
+            "description": (
+                "Session start/end messages to include for orientation (default 2, max 5)."
+            ),
+        },
         "sort": {
             "type": "string",
             "enum": list(SESSION_SEARCH_SORT_MODES),
@@ -106,6 +120,7 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 class _SearchRequest:
     agent_id: str
     session_id: str | None
+    around_message_id: str | None
     query: str | None
     since: datetime | None
     until: datetime | None
@@ -113,6 +128,7 @@ class _SearchRequest:
     match_mode: str
     limit: int
     context_messages: int
+    bookend_messages: int
     sort: str
 
 
@@ -143,6 +159,8 @@ def session_search_handler(
 
     try:
         summaries = _candidate_session_summaries(sessions, request)
+        if request.around_message_id is not None:
+            return tool_success(_anchored_view_result(sessions, request, summaries))
         if request.query is None:
             return tool_success(_session_summary_result(request, summaries))
         return tool_success(_message_search_result(sessions, request, summaries))
@@ -158,6 +176,15 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Searc
         raise ValueError("agent_id must be a non-empty string")
 
     query = _optional_query(arguments.get("query"))
+    session_id = _optional_string(arguments.get("session_id"), field_name="session_id")
+    around_message_id = _optional_string(
+        arguments.get("around_message_id"),
+        field_name="around_message_id",
+    )
+    if around_message_id is not None and session_id is None:
+        raise ValueError("around_message_id requires session_id")
+    if around_message_id is not None and query is not None:
+        raise ValueError("around_message_id cannot be combined with query")
 
     since = _optional_datetime(arguments.get("since"), field_name="since", end_of_day=False)
     until = _optional_datetime(arguments.get("until"), field_name="until", end_of_day=True)
@@ -166,7 +193,8 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Searc
 
     return _SearchRequest(
         agent_id=agent_id,
-        session_id=_optional_string(arguments.get("session_id"), field_name="session_id"),
+        session_id=session_id,
+        around_message_id=around_message_id,
         query=query,
         since=since,
         until=until,
@@ -187,9 +215,16 @@ def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _Searc
         context_messages=_integer_value(
             arguments.get("context"),
             field_name="context",
-            default=0,
+            default=2 if around_message_id is not None else 0,
             minimum=0,
             maximum=SESSION_SEARCH_MAX_CONTEXT_MESSAGES,
+        ),
+        bookend_messages=_integer_value(
+            arguments.get("bookends"),
+            field_name="bookends",
+            default=SESSION_SEARCH_DEFAULT_BOOKEND_MESSAGES,
+            minimum=0,
+            maximum=SESSION_SEARCH_MAX_BOOKEND_MESSAGES,
         ),
         sort=_enum_value(
             arguments.get("sort"),
@@ -287,6 +322,58 @@ def _message_search_result(
     }
 
 
+def _anchored_view_result(
+    sessions: ChatSessionManager,
+    request: _SearchRequest,
+    summaries: list[JsonObject],
+) -> JsonObject:
+    summary = summaries[0] if summaries else None
+    if summary is None or request.session_id is None or request.around_message_id is None:
+        return _empty_anchored_view(request)
+
+    messages = sessions.get(request.agent_id, request.session_id).load()
+    anchor_index = _message_index_by_id(messages, request.around_message_id)
+    if anchor_index is None:
+        return _empty_anchored_view(request)
+    if not _message_matches_request(messages[anchor_index], request):
+        return _empty_anchored_view(request)
+
+    window = _window_payload(messages, anchor_index, request.context_messages)
+    bookends = _bookend_payload(
+        messages, anchor_index, request.context_messages, request.bookend_messages
+    )
+    return {
+        "content": _render_anchored_view(request, window, bookends),
+        "session": _session_payload(request.agent_id, summary),
+        "around_message_id": request.around_message_id,
+        "window": window,
+        "bookend_start": bookends["bookend_start"],
+        "bookend_end": bookends["bookend_end"],
+        "truncated": False,
+        "request": _request_payload(request),
+    }
+
+
+def _empty_anchored_view(request: _SearchRequest) -> JsonObject:
+    return {
+        "content": f"No message found for anchored session search: {request.around_message_id}",
+        "session": None,
+        "around_message_id": request.around_message_id,
+        "window": [],
+        "bookend_start": [],
+        "bookend_end": [],
+        "truncated": False,
+        "request": _request_payload(request),
+    }
+
+
+def _message_index_by_id(messages: list[Any], message_id: str) -> int | None:
+    for index, message in enumerate(messages):
+        if message.id == message_id:
+            return index
+    return None
+
+
 def _message_matches_request(message: Any, request: _SearchRequest) -> bool:
     if message.role not in request.roles:
         return False
@@ -317,7 +404,81 @@ def _message_match_payload(
     }
     if request.context_messages > 0:
         payload["context"] = _context_payload(messages, message_index, request.context_messages)
+    payload["window"] = _window_payload(messages, message_index, request.context_messages)
+    if request.bookend_messages > 0:
+        payload.update(
+            _bookend_payload(
+                messages,
+                message_index,
+                request.context_messages,
+                request.bookend_messages,
+            )
+        )
     return payload
+
+
+def _window_payload(
+    messages: list[Any],
+    message_index: int,
+    context_messages: int,
+) -> list[JsonObject]:
+    return [
+        _message_preview_payload(messages[index])
+        for index in _window_indices(messages, message_index, context_messages)
+    ]
+
+
+def _bookend_payload(
+    messages: list[Any],
+    message_index: int,
+    context_messages: int,
+    bookend_messages: int,
+) -> JsonObject:
+    if bookend_messages <= 0:
+        return {"bookend_start": [], "bookend_end": []}
+
+    window_indices = _window_indices(messages, message_index, context_messages)
+    window_start = min(window_indices) if window_indices else message_index
+    window_end = max(window_indices) if window_indices else message_index
+    start_items: list[JsonObject] = []
+    for message in messages[:window_start]:
+        if _is_context_message(message):
+            start_items.append(_message_preview_payload(message))
+            if len(start_items) >= bookend_messages:
+                break
+
+    end_items: list[JsonObject] = []
+    for message in reversed(messages[window_end + 1 :]):
+        if _is_context_message(message):
+            end_items.append(_message_preview_payload(message))
+            if len(end_items) >= bookend_messages:
+                break
+    end_items.reverse()
+    return {"bookend_start": start_items, "bookend_end": end_items}
+
+
+def _message_preview_payload(message: Any) -> JsonObject:
+    return {
+        "message_id": message.id,
+        "timestamp": message.timestamp,
+        "role": message.role,
+        "snippet": _trim_text(
+            _compact_text(_message_search_text(message)),
+            SESSION_SEARCH_CONTEXT_SNIPPET_CHARS,
+        ),
+    }
+
+
+def _window_indices(
+    messages: list[Any],
+    message_index: int,
+    context_messages: int,
+) -> list[int]:
+    return [
+        *_neighbor_context_indices(messages, message_index, -1, context_messages),
+        message_index,
+        *_neighbor_context_indices(messages, message_index, 1, context_messages),
+    ]
 
 
 def _context_payload(messages: list[Any], message_index: int, context_messages: int) -> JsonObject:
@@ -333,22 +494,24 @@ def _neighbor_context(
     direction: int,
     context_messages: int,
 ) -> list[JsonObject]:
-    neighbors: list[JsonObject] = []
+    return [
+        _message_preview_payload(messages[index])
+        for index in _neighbor_context_indices(messages, message_index, direction, context_messages)
+    ]
+
+
+def _neighbor_context_indices(
+    messages: list[Any],
+    message_index: int,
+    direction: int,
+    context_messages: int,
+) -> list[int]:
+    neighbors: list[int] = []
     index = message_index + direction
     while 0 <= index < len(messages) and len(neighbors) < context_messages:
         message = messages[index]
         if _is_context_message(message):
-            neighbors.append(
-                {
-                    "message_id": message.id,
-                    "timestamp": message.timestamp,
-                    "role": message.role,
-                    "snippet": _trim_text(
-                        _compact_text(_message_search_text(message)),
-                        SESSION_SEARCH_CONTEXT_SNIPPET_CHARS,
-                    ),
-                }
-            )
+            neighbors.append(index)
         index += direction
     if direction < 0:
         neighbors.reverse()
@@ -468,6 +631,7 @@ def _request_payload(request: _SearchRequest) -> JsonObject:
     payload: JsonObject = {
         "agent_id": request.agent_id,
         "session_id": request.session_id,
+        "around_message_id": request.around_message_id,
         "query": request.query,
         "since": request.since.isoformat() if request.since is not None else None,
         "until": request.until.isoformat() if request.until is not None else None,
@@ -475,6 +639,7 @@ def _request_payload(request: _SearchRequest) -> JsonObject:
         "match": request.match_mode,
         "limit": request.limit,
         "context": request.context_messages,
+        "bookends": request.bookend_messages,
         "sort": request.sort,
     }
     return payload
@@ -523,6 +688,24 @@ def _render_message_matches(
                     lines.append(f"  {side}: {item['timestamp']} {item['role']} {item['snippet']}")
     if truncated:
         lines.append(f"[Results limited to {request.limit} matches.]")
+    return "\n".join(lines)
+
+
+def _render_anchored_view(
+    request: _SearchRequest,
+    window: list[JsonObject],
+    bookends: JsonObject,
+) -> str:
+    if not window:
+        return f"No message found for anchored session search: {request.around_message_id}"
+
+    lines = [f"Anchored view for {request.session_id} around message {request.around_message_id}."]
+    for item in bookends.get("bookend_start", []):
+        lines.append(f"start: {item['timestamp']} {item['role']} {item['snippet']}")
+    for item in window:
+        lines.append(f"window: {item['timestamp']} {item['role']} {item['snippet']}")
+    for item in bookends.get("bookend_end", []):
+        lines.append(f"end: {item['timestamp']} {item['role']} {item['snippet']}")
     return "\n".join(lines)
 
 
@@ -669,6 +852,8 @@ def register_session_search_tool(registry: ToolRegistry, sessions: ChatSessionMa
 
 __all__ = [
     "SESSION_SEARCH_DEFAULT_LIMIT",
+    "SESSION_SEARCH_DEFAULT_BOOKEND_MESSAGES",
+    "SESSION_SEARCH_MAX_BOOKEND_MESSAGES",
     "SESSION_SEARCH_MAX_CONTEXT_MESSAGES",
     "SESSION_SEARCH_MAX_LIMIT",
     "SESSION_SEARCH_TOOL_DESCRIPTION",

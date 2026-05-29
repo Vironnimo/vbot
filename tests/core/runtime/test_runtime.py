@@ -32,6 +32,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "edit",
     "glob",
     "grep",
+    "memory",
     "process",
     "read",
     "session_search",

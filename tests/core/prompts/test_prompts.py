@@ -136,7 +136,8 @@ class StubChannels:
 def fragments() -> dict[str, str]:
     return {
         "system.md": (
-            "{include:SOUL.md}\n{runtime}\n{include:USER.md}\n{tools}\n{channels}\n{skills}"
+            "{include:SOUL.md}\n{include:MEMORY.md}\n{runtime}\n"
+            "{include:USER.md}\n{tools}\n{channels}\n{skills}"
         ),
         "runtime.md": (
             "## Runtime\n"
@@ -163,6 +164,7 @@ def workspace(tmp_path: Path) -> Path:
     directory = tmp_path / "workspace"
     directory.mkdir()
     (directory / "SOUL.md").write_text("Soul text", encoding="utf-8")
+    (directory / "MEMORY.md").write_text("Memory text", encoding="utf-8")
     (directory / "USER.md").write_text("User text", encoding="utf-8")
     return directory
 
@@ -247,8 +249,10 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "<location>" not in prompt
     assert "news" not in prompt
     assert "Soul text" in prompt
+    assert "Memory text" in prompt
     assert "User text" in prompt
     assert '<file name="SOUL.md">' in prompt
+    assert '<file name="MEMORY.md">' in prompt
     assert "{" not in prompt
     assert tools.prompt_allowlist == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
