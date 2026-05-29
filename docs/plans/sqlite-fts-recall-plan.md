@@ -4,7 +4,7 @@ Status legend: `[ ]` not started, `[~]` in progress, `[x]` completed.
 
 ## Context
 
-The memory MVP is mostly complete: pinned memory lives in `USER.md` and
+The memory MVP is mostly complete: curated memory lives in `USER.md` and
 `MEMORY.md`, and `session_search` now returns anchored windows and bookends over
 current JSONL Sessions. SQLite FTS was intentionally left as follow-up work in
 `docs/plans/memory-system-plan.md`.
@@ -18,9 +18,23 @@ This plan adds SQLite FTS without changing the core storage truth:
 - Future extension backends register through the same recall registry shape.
 
 The design follows the Hermes research in
-`stuff/researches/hermes-memory-system-research.md`: separate curated pinned
-memory from searchable transcript recall, and treat SQLite FTS as an index
-behind an interface rather than as the canonical Session store.
+`stuff/researches/hermes-memory-system-research.md`: separate curated memory
+from searchable transcript recall, and treat SQLite FTS as an index behind an
+interface rather than as the canonical Session store.
+
+## Terminology
+
+This plan uses three separate backend terms:
+
+| Term | Current implementation | Meaning |
+|---|---|---|
+| `MemoryBackend` | `USER.md` / `MEMORY.md` files | Curated, durable facts managed by the `memory` tool and included through prompt files. |
+| `SessionStore` | JSONL files through `ChatSessionManager` | Canonical storage for normal chat Sessions. This has not been abstracted or migrated yet. |
+| `RecallBackend` | Current JSONL scan, later optional SQLite FTS | Search/read model over stored Sessions for `session_search`. |
+
+SQLite FTS in this plan is a `RecallBackend`, not a `SessionStore`. If vBot later
+stores normal Sessions directly in SQLite, that should be a separate
+`SessionStore` plan and migration.
 
 ## Goals
 
@@ -40,7 +54,7 @@ behind an interface rather than as the canonical Session store.
 - Do not migrate Sessions from JSONL to SQLite.
 - Do not change `ChatMessage.to_dict()` / `from_dict()` persistence shape.
 - Do not add vector search or semantic embeddings.
-- Do not combine pinned memory CRUD with Session recall.
+- Do not combine curated memory CRUD with Session recall.
 - Do not add WebUI controls for recall backend selection in the first pass unless
   explicitly requested; raw `settings.json` support is enough for the backend
   work.
@@ -81,12 +95,12 @@ Runtime
   -> session_search tool
       -> RecallBackend.browse/search/scroll
 
-Pinned memory stays separate:
+Curated memory stays separate:
 
 memory tool
   -> MemoryService
-      -> PinnedMemoryBackend
-          -> FilePinnedMemoryBackend # current default
+      -> MemoryBackend
+          -> file backend # current default: USER.md / MEMORY.md
           -> extension-provided later
 ```
 
@@ -98,19 +112,20 @@ Key boundaries:
 | `RecallBackend` | Browse/search/scroll read model for Session recall | Persisting canonical messages |
 | `SqliteFtsRecallBackend` | Disposable index, FTS query execution, stale detection | Replacing JSONL Sessions |
 | `session_search` tool | Provider schema, argument parsing, result envelopes | Backend-specific indexing |
-| `MemoryService` | Pinned memory CRUD and backend selection for curated facts | Broad Session search |
+| `MemoryService` | Curated memory CRUD and backend selection for durable facts | Broad Session search or Session persistence |
 
 ## MemoryBackend Boundary
 
-The SQLite FTS work should not make pinned memory disappear from the architecture.
-It only means the immediate implementation target is `RecallBackend`, because FTS
-indexes Sessions rather than curated facts.
+The SQLite FTS work should not make the existing `MemoryBackend` boundary
+disappear from the architecture. It only means the immediate implementation
+target is `RecallBackend`, because FTS indexes Sessions rather than curated
+facts.
 
-Current pinned memory already has the beginning of the boundary:
+Current curated memory already has the beginning of the boundary:
 
 ```text
 MemoryService
-  -> FilePinnedMemoryBackend
+  -> file backend
       -> USER.md
       -> MEMORY.md
 ```
@@ -118,7 +133,7 @@ MemoryService
 The follow-up architecture should make that boundary as explicit as recall:
 
 ```python
-class PinnedMemoryBackend(Protocol):
+class MemoryBackend(Protocol):
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]: ...
     def add_entry(self, workspace: Path, scope: MemoryScope, content: str) -> MemoryEntry: ...
     def replace_entry(
@@ -134,11 +149,11 @@ class PinnedMemoryBackend(Protocol):
 Add a parallel registry when extension backend registration is implemented:
 
 ```python
-PinnedMemoryBackendFactory = Callable[[PinnedMemoryBackendContext], PinnedMemoryBackend]
+MemoryBackendFactory = Callable[[MemoryBackendContext], MemoryBackend]
 
-class PinnedMemoryBackendRegistry:
-    def register(self, name: str, factory: PinnedMemoryBackendFactory) -> None: ...
-    def create(self, name: str, context: PinnedMemoryBackendContext) -> PinnedMemoryBackend: ...
+class MemoryBackendRegistry:
+    def register(self, name: str, factory: MemoryBackendFactory) -> None: ...
+    def create(self, name: str, context: MemoryBackendContext) -> MemoryBackend: ...
 ```
 
 Suggested settings shape for later:
@@ -159,7 +174,7 @@ First-party memory backend names:
 | Value | Meaning |
 |---|---|
 | `file` | Current `USER.md` / `MEMORY.md` backend |
-| `sqlite` | Possible later pinned-memory DB backend, not part of this FTS pass |
+| `sqlite` | Possible later curated-memory DB backend, not part of this FTS pass |
 | extension name | Provider/backend registered by an extension later |
 
 For this FTS plan, do not implement a new memory storage backend. Do make the
@@ -454,15 +469,15 @@ class HooksAPI:
     def register_memory_backend(
         self,
         name: str,
-        factory: PinnedMemoryBackendFactory,
+        factory: MemoryBackendFactory,
     ) -> None: ...
 ```
 
 Ordering question:
 
 - If extensions need to register backends before runtime selects one, runtime
-  must create the recall and pinned-memory registries before
-  `ExtensionRegistry.load(...)`, and `HooksAPI` must receive them.
+  must create the recall and memory registries before `ExtensionRegistry.load(...)`,
+  and `HooksAPI` must receive them.
 - That changes the extension constructor surface, so do it as a separate commit.
 
 Extension failures should follow current extension policy:
@@ -527,10 +542,10 @@ python scripts/quality.py core/recall tests/core/recall tests/core/tools/test_se
 ### Phase 4: Extension Registry Hook
 
 - [ ] Add `HooksAPI.register_recall_backend`.
-- [ ] Add `HooksAPI.register_memory_backend` for pinned-memory backends.
+- [ ] Add `HooksAPI.register_memory_backend` for curated memory backends.
 - [ ] Wire recall registry into extension loading.
-- [ ] Wire pinned-memory registry into extension loading if memory backend
-  selection is implemented in the same pass.
+- [ ] Wire memory registry into extension loading if memory backend selection is
+  implemented in the same pass.
 - [ ] Add tests for extension-provided backend registration.
 - [ ] Document extension backend factory expectations for both backend types.
 
@@ -604,7 +619,7 @@ Settings/runtime:
 - `.vorch/specs/sessions.md`
   - Clarify JSONL remains canonical while recall indexes are derived.
 - `.vorch/specs/memory.md`
-  - Keep the pinned-memory/recall split explicit.
+  - Keep the curated-memory/recall split explicit.
 
 ## Risks And Decisions
 
@@ -627,5 +642,5 @@ Settings/runtime:
 - Deleting or corrupting the index does not lose Sessions and does not make
   recall unavailable if JSONL scanning can still answer.
 - Runtime can select recall backends by name.
-- The codebase has a documented recall domain separate from pinned memory and
+- The codebase has a documented recall domain separate from curated memory and
   Session persistence.
