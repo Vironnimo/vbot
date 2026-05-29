@@ -2,6 +2,9 @@
 
 Status legend: `[ ]` not started, `[~]` in progress, `[x]` completed.
 
+Implementation note: Phases 1-3 are implemented. Phase 4 remains deferred
+because extension backend hook wiring was explicitly optional in this pass.
+
 ## Context
 
 The memory MVP is mostly complete: curated memory lives in `USER.md` and
@@ -490,15 +493,15 @@ Extension failures should follow current extension policy:
 
 ### Phase 1: Extract Recall Boundary
 
-- [ ] Add `core/recall/` with `RecallRequest`, `RecallBackend`,
+- [x] Add `core/recall/` with `RecallRequest`, `RecallBackend`,
   `RecallBackendContext`, and `RecallBackendRegistry`.
-- [ ] Move current JSONL search/browse/scroll logic from `session_search.py`
+- [x] Move current JSONL search/browse/scroll logic from `session_search.py`
   into `JsonlSessionRecallBackend`.
-- [ ] Keep `session_search` argument parsing and provider schema in
+- [x] Keep `session_search` argument parsing and provider schema in
   `core/tools/session_search.py`.
-- [ ] Change `register_session_search_tool` to accept a `RecallBackend`.
-- [ ] Keep result payloads byte-for-byte close where practical.
-- [ ] Add focused tests for the JSONL backend plus existing tool tests.
+- [x] Change `register_session_search_tool` to accept a `RecallBackend`.
+- [x] Keep result payloads byte-for-byte close where practical.
+- [x] Add focused tests for the JSONL backend plus existing tool tests.
 
 Quality gate:
 
@@ -508,11 +511,11 @@ python scripts/quality.py core/recall core/tools/session_search.py tests/core/to
 
 ### Phase 2: Add Backend Selection
 
-- [ ] Add recall settings validation and storage normalization.
-- [ ] Add built-in registry creation.
-- [ ] Wire Runtime to select `jsonl_scan` by default.
-- [ ] Add tests for default selection and invalid configured backend fallback.
-- [ ] Update specs for runtime, settings, tools/session_search, and new recall
+- [x] Add recall settings validation and storage normalization.
+- [x] Add built-in registry creation.
+- [x] Wire Runtime to select `jsonl_scan` by default.
+- [x] Add tests for default selection and invalid configured backend fallback.
+- [x] Update specs for runtime, settings, tools/session_search, and new recall
   domain.
 
 Focused gate:
@@ -523,15 +526,15 @@ python scripts/quality.py core/recall core/runtime core/settings core/storage te
 
 ### Phase 3: Add SQLite FTS Backend
 
-- [ ] Add `SqliteFtsRecallBackend`.
-- [ ] Create index DB under `<data_dir>/recall/session_index.sqlite`.
-- [ ] Implement schema initialization, WAL attempt, and busy timeout.
-- [ ] Implement per-Session stale detection using mtime and size.
-- [ ] Implement Session reindex transaction.
-- [ ] Implement FTS search and canonical JSONL window/bookend hydration.
-- [ ] Implement corrupt-index rebuild and fallback to JSONL.
-- [ ] Add unit tests with temporary data dirs and real SQLite.
-- [ ] Add tests proving JSONL remains source of truth after index deletion.
+- [x] Add `SqliteFtsRecallBackend`.
+- [x] Create index DB under `<data_dir>/recall/session_index.sqlite`.
+- [x] Implement schema initialization, WAL attempt, and busy timeout.
+- [x] Implement per-Session stale detection using mtime and size.
+- [x] Implement Session reindex transaction.
+- [x] Implement FTS search and canonical JSONL window/bookend hydration.
+- [x] Implement corrupt-index rebuild and fallback to JSONL.
+- [x] Add unit tests with temporary data dirs and real SQLite.
+- [x] Add tests proving JSONL remains source of truth after index deletion.
 
 Focused gate:
 
@@ -553,14 +556,14 @@ This phase can be deferred if first-party SQLite FTS is the immediate need.
 
 ### Phase 5: Full Verification And Commit
 
-- [ ] Run full backend gate:
+- [x] Run full backend gate:
 
 ```bash
 python scripts/quality.py
 ```
 
-- [ ] Review diff enough to know what is being committed.
-- [ ] Commit as one or more logical units. Suggested commits:
+- [x] Review diff enough to know what is being committed.
+- [x] Commit as one or more logical units. Suggested commits:
   - `refactor(recall): extract session search backend`
   - `feat(recall): select recall backend from settings`
   - `feat(recall): add sqlite fts backend`

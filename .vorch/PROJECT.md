@@ -23,7 +23,7 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, chat, runs, compaction, sessions, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
+**Core modules:** runtime, models, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
@@ -58,7 +58,9 @@ also supports `defaults.agent` for project-wide fallback agent values
 unset values inherit these defaults at load time without rewriting their
 `agent.json` on disk. Optional built-in tool credentials such as
 `BRAVE_API_KEY` for `web_search` use that same process env → data-dir `.env`
-fallback resolution.
+fallback resolution. `settings.json` may also include `recall.backend` for raw
+configuration of the Session recall backend; `jsonl_scan` is default and
+`sqlite_fts` uses a disposable SQLite FTS5 index under `<data_dir>/recall/`.
 User-editable JSON configuration is validated through the central
 `core/settings/validation.py` layer before runtime code consumes it:
 `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and
@@ -83,6 +85,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
 | `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
 | `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
+| `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index |
 | `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
 | `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, parser errors |
 | `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |
@@ -185,7 +188,7 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
 keys), `settings.json`, `attachments/` blobs plus per-blob sidecar JSON,
 `logs/`, OAuth tokens under `oauth/`, scheduled cron jobs under `cron/jobs.json`,
-and all runtime data.
+the disposable Session recall index under `recall/`, and all runtime data.
 
 ## Testing
 

@@ -8,7 +8,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Data Model
 
-Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `skills`, `logs`.
+Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `recall`, `skills`, `logs`.
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
@@ -23,6 +23,9 @@ as a read-only fallback credential source.
 - `compaction` — automatic history-compaction settings `{ auto, threshold, tail_tokens, summary_model }`.
 - `attachment_max_size_bytes` — integer attachment upload limit for the runtime-owned `AttachmentStore`, default `20971520`.
 - `defaults.agent` — project-wide fallback Agent values `{ model?, fallback_model?, temperature?, thinking_effort? }`. Missing keys mean no global default for that field; `thinking_effort: ""` is a valid explicit "provider default" value.
+- `recall.backend` — raw Session recall backend selection, default
+  `jsonl_scan`; `sqlite_fts` stores a disposable derived index under
+  `<data_dir>/recall/`.
 
 ## Interfaces
 
@@ -42,6 +45,8 @@ as a read-only fallback credential source.
 - `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
 - `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
 - `load_defaults() -> dict[str, Any]` / `update_defaults(section, values) -> dict[str, Any]` — read/write validated `settings.json` defaults blocks. Currently only `section="agent"` is supported.
+- `load_recall_settings() -> dict[str, str]` — reads normalized raw recall
+  backend settings, defaulting to `{"backend": "jsonl_scan"}`.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 

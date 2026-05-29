@@ -33,6 +33,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "max_subagent_depth",
         "max_subagents_per_turn",
         "port",
+        "recall",
         "server_port",
         "skill_directories",
         "subagent_timeout_minutes",
@@ -48,6 +49,8 @@ APPEARANCE_FIELDS = frozenset({"language"})
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({"en"})
 COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
+RECALL_FIELDS = frozenset({"backend"})
+RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 AGENT_FIELDS = frozenset(
@@ -276,6 +279,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         _validate_positive_integer(diagnostics, f"$.{field}", data.get(field), required=False)
     _validate_compaction(diagnostics, data.get("compaction"))
     _validate_defaults(diagnostics, data.get("defaults"))
+    _validate_recall(diagnostics, data.get("recall"))
     return diagnostics
 
 
@@ -616,6 +620,24 @@ def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             continue
         if field == "thinking_effort":
             _validate_thinking_effort_value(diagnostics, item_path, item, allow_none=True)
+
+
+def _validate_recall(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.recall", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.recall", value, RECALL_FIELDS, "recall field")
+    backend = value.get("backend")
+    if backend is None:
+        return
+    if not isinstance(backend, str) or not backend.strip():
+        _error(diagnostics, "$.recall.backend", "must be a non-empty string")
+        return
+    if RECALL_BACKEND_PATTERN.fullmatch(backend.strip()) is None:
+        _error(diagnostics, "$.recall.backend", "must use lowercase snake_case")
 
 
 def _validate_agent_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:

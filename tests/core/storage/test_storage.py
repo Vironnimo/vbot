@@ -336,6 +336,28 @@ def test_load_subagent_settings_reads_custom_values(tmp_path: Path) -> None:
     }
 
 
+def test_load_recall_settings_defaults_to_jsonl_scan(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_recall_settings() == {"backend": "jsonl_scan"}
+
+
+def test_load_recall_settings_reads_configured_backend(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"recall": {"backend": "sqlite_fts"}})
+
+    assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
+
+
+def test_load_recall_settings_rejects_invalid_section(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    storage.settings_path.write_text('{"recall": []}', encoding="utf-8")
+
+    with pytest.raises(StorageError, match=r"\$\.recall: must be an object"):
+        storage.load_recall_settings()
+
+
 def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 

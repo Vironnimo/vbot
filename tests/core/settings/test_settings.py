@@ -142,6 +142,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                     "tail_tokens": 15_000,
                     "summary_model": None,
                 },
+                "recall": {"backend": "sqlite_fts"},
                 "defaults": {
                     "agent": {
                         "model": "openai/gpt-5.2",
@@ -220,4 +221,16 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
             "unsupported defaults.agent setting: unknown",
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
+    ]
+
+
+def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"recall": {"backend": "SQLite FTS"}}), encoding="utf-8")
+
+    report = validate_settings_file(settings_path)
+
+    assert report.ok is False
+    assert diagnostics_as_tuples(report) == [
+        ("error", "$.recall.backend", "must use lowercase snake_case")
     ]

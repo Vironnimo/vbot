@@ -6,7 +6,7 @@ Persisted chat containers, session metadata, and current JSONL-backed storage.
 
 `core/sessions/` owns the system-managed Session domain. A Session belongs to exactly one Agent and stores canonical `ChatMessage` history under `<data_dir>/agents/<agent-id>/sessions/`. The current implementation remains append-only UTF-8 JSONL with one canonical message per line and a JSON metadata sidecar per session.
 
-The Sessions domain owns persistence and file-format details. Chat code may append and load messages through the session API, but other domains must not construct `.jsonl` paths directly. Accessors, server delegates, and recall tools such as `session_search` should use the runtime's `chat_sessions` service.
+The Sessions domain owns persistence and file-format details. Chat code may append and load messages through the session API, but other domains must not construct `.jsonl` paths directly. Accessors and server delegates should use the runtime's `chat_sessions` service. Recall tools such as `session_search` use `core/recall/` backends, which in turn use `ChatSessionManager` for canonical data.
 
 ## Interfaces
 
@@ -43,6 +43,9 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `core/agents/` may create and validate current sessions only through `ChatSessionManager`.
 - Channel adapters must use `ChatSessionManager.exists()` / `get_or_create()` / metadata methods instead of deriving `.jsonl` paths.
 - Server RPC delegates should expose session operations through the runtime service and keep storage details out of the public contract.
+- `core/recall/` may maintain derived search indexes, but JSONL remains
+  canonical. Recall indexes must be disposable and rebuildable from
+  `ChatSessionManager`.
 
 ## SQLite Migration Notes
 
