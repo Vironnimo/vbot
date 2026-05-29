@@ -566,6 +566,7 @@ function terminalStatus(eventType) {
 function historyTimelineItems(messages) {
   const timelineItems = [];
   let activeAssistantRun = null;
+  let previousVisibleRole = '';
 
   for (const message of messages ?? []) {
     if (message?.role === 'compaction_checkpoint') {
@@ -577,6 +578,7 @@ function historyTimelineItems(messages) {
         timestamp: message.timestamp,
         message,
       });
+      previousVisibleRole = 'compaction_checkpoint';
       continue;
     }
 
@@ -584,13 +586,22 @@ function historyTimelineItems(messages) {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;
       timelineItems.push(historyMessageItem(message));
+      previousVisibleRole = 'user';
       continue;
     }
 
     if (message?.role === 'assistant') {
+      const followsAssistant = previousVisibleRole === 'assistant';
+      if (followsAssistant) {
+        pushActiveAssistantRun(timelineItems, activeAssistantRun);
+        activeAssistantRun = null;
+      }
+
       if (
         !activeAssistantRun &&
-        (hasToolCalls(message) || previousTimelineItemIsUser(timelineItems))
+        (hasToolCalls(message) ||
+          previousTimelineItemIsUser(timelineItems) ||
+          followsAssistant)
       ) {
         activeAssistantRun = createAssistantRunItem({
           id: `history-run-${message.id ?? message.timestamp ?? timelineItems.length}`,
@@ -603,21 +614,25 @@ function historyTimelineItems(messages) {
 
       if (activeAssistantRun) {
         appendHistoryAssistantMessage(activeAssistantRun, message);
+        previousVisibleRole = 'assistant';
         continue;
       }
 
       timelineItems.push(historyMessageItem(message));
+      previousVisibleRole = 'assistant';
       continue;
     }
 
     if (message?.role === 'tool' && activeAssistantRun) {
       appendHistoryToolResult(activeAssistantRun, message);
+      previousVisibleRole = 'tool';
       continue;
     }
 
     pushActiveAssistantRun(timelineItems, activeAssistantRun);
     activeAssistantRun = null;
     timelineItems.push(historyMessageItem(message));
+    previousVisibleRole = message?.role ?? '';
   }
 
   pushActiveAssistantRun(timelineItems, activeAssistantRun);

@@ -149,6 +149,64 @@ describe('chat state helpers', () => {
     );
   });
 
+  it('splits consecutive assistant history messages into separate run blocks', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-automatic-follow-up-history',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Start background work' },
+      {
+        id: 'assistant-tool-call',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: { agent_id: 'tester', blocking: false },
+          },
+        ],
+      },
+      {
+        id: 'tool-subagent',
+        role: 'tool',
+        tool_call_id: 'call-subagent',
+        name: 'subagent',
+        content: '{"ok":true}',
+      },
+      {
+        id: 'assistant-started',
+        role: 'assistant',
+        content: 'Background sub-agent started.',
+      },
+      {
+        id: 'assistant-follow-up',
+        role: 'assistant',
+        content: 'Background sub-agent finished.',
+      },
+    ]);
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    expect(timelineItems.map((item) => item.type)).toEqual([
+      'message',
+      'assistant_run',
+      'assistant_run',
+    ]);
+    expect(timelineItems[1].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-subagent' }),
+    ]);
+    expect(timelineItems[1].outputs).toEqual([
+      expect.objectContaining({ content: 'Background sub-agent started.' }),
+    ]);
+    expect(timelineItems[2].outputs).toEqual([
+      expect.objectContaining({ content: 'Background sub-agent finished.' }),
+    ]);
+  });
+
   it('keeps error history messages visible and outside assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
