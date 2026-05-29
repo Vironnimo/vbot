@@ -3228,16 +3228,16 @@ describe('ChatTimeline', () => {
     });
   });
 
-  it('does not render a sub-agent row without a session target', () => {
+  it('renders a blocking sub-agent row while the session target is starting', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
-      'session-subagent-started-without-target',
+      'session-blocking-subagent-starting',
     );
 
     appendRunEvent(sessionState, {
       type: 'tool_call_started',
-      run_id: 'run-subagent-started-without-target',
+      run_id: 'run-blocking-subagent-starting',
       sequence: 1,
       payload: {
         tool_call: {
@@ -3248,6 +3248,46 @@ describe('ChatTimeline', () => {
             agent_id: 'beta',
             blocking: true,
             content: 'Inspect slowly',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const subAgentRow = document.querySelector('.subagent-tool-event');
+    expect(subAgentRow).toBeTruthy();
+    expect(subAgentRow.textContent).toContain('starting');
+    expect(document.querySelector('.subagent-link')).toBeNull();
+  });
+
+  it('does not render a non-blocking sub-agent row before a session target', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-nonblocking-subagent-without-target',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-nonblocking-subagent-without-target',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: false,
+            content: 'Inspect in the background',
           },
         },
       },
