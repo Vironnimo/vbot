@@ -35,6 +35,7 @@ SECONDS_PER_MINUTE = 60
 SESSION_RESULT_RETRY_ATTEMPTS = 3
 SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
 SUBAGENT_STATUS_QUEUED = "queued"
+SUBAGENT_SESSION_STARTED_EVENT = "subagent_session_started"
 SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 
@@ -387,6 +388,12 @@ async def _handle_subagent(
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
         _mark_subagent_session(runtime, target_agent_id, session.id, context)
+        await _emit_subagent_session_started(
+            context,
+            target_agent_id,
+            session.id,
+            status=RunStatus.RUNNING.value,
+        )
 
         try:
             sub_run = await _start_subagent_run(
@@ -411,6 +418,13 @@ async def _handle_subagent(
                 session_id=session.id,
                 executor=executor,
                 display_content=content,
+            )
+            await _emit_subagent_session_started(
+                context,
+                target_agent_id,
+                session.id,
+                queue_item_id=item.item_id,
+                status=SUBAGENT_STATUS_QUEUED,
             )
             if not blocking:
                 queued_run = _started_run_from_queue_item(item)
@@ -454,6 +468,13 @@ async def _handle_subagent(
                     )
                     raise
 
+        await _emit_subagent_session_started(
+            context,
+            target_agent_id,
+            session.id,
+            run_id=sub_run.id,
+            status=RunStatus.RUNNING.value,
+        )
         batch_tracker.register_reserved(parent_key, target_agent_id, session.id, sub_run.id)
         slot_registered = True
         _attach_parent_cancellation(
@@ -867,6 +888,38 @@ def _mark_subagent_session(
         "tool_call_index": context.tool_call_index,
     }
     set_metadata(sub_agent_id, sub_session_id, metadata)
+
+
+async def _emit_subagent_session_started(
+    context: ToolContext,
+    sub_agent_id: str,
+    sub_session_id: str,
+    *,
+    run_id: str | None = None,
+    queue_item_id: str | None = None,
+    status: str,
+) -> None:
+    data: JsonObject = {
+        "agent_id": sub_agent_id,
+        "session_id": sub_session_id,
+        "status": status,
+    }
+    if run_id:
+        data["run_id"] = run_id
+    if queue_item_id:
+        data["queue_item_id"] = queue_item_id
+
+    await context.emit(
+        SUBAGENT_SESSION_STARTED_EVENT,
+        {
+            "tool_call": {
+                "id": context.tool_call_id,
+                "index": context.tool_call_index,
+                "name": context.tool_name,
+            },
+            "data": data,
+        },
+    )
 
 
 def _started_run_from_queue_item(item: Any) -> Run | None:

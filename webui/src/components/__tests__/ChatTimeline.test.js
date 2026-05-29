@@ -3044,6 +3044,72 @@ describe('ChatTimeline', () => {
       sessionId: 'sub-session-1',
     });
   });
+
+  it('shows a sub-agent session link before the tool result arrives', () => {
+    const onNavigateToSubAgent = vi.fn();
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-started-link',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-started-link',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: true,
+            content: 'Inspect slowly',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'subagent_session_started',
+      run_id: 'run-subagent-started-link',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+        },
+        data: {
+          agent_id: 'beta',
+          session_id: 'sub-session-running',
+          run_id: 'sub-run-running',
+          status: 'running',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        onNavigateToSubAgent,
+      },
+    });
+    flushSync();
+
+    const viewSessionButton = document.querySelector('.subagent-link');
+    expect(viewSessionButton).toBeTruthy();
+
+    viewSessionButton.click();
+    flushSync();
+
+    expect(onNavigateToSubAgent).toHaveBeenCalledWith({
+      agentId: 'beta',
+      sessionId: 'sub-session-running',
+    });
+  });
 });
 
 async function waitForCondition(check, attempts = 20) {
