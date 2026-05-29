@@ -6,6 +6,8 @@ import math
 from collections.abc import Mapping
 from typing import Any, cast
 
+from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
+
 JsonObject = dict[str, Any]
 
 ALLOWED_THINKING_EFFORTS = frozenset(
@@ -15,7 +17,7 @@ AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thi
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 SETTINGS_UPDATE_SECTIONS = frozenset(
-    {"appearance", "skills", "subagents", "compaction", "defaults"}
+    {"appearance", "skills", "subagents", "compaction", "defaults", "recall"}
 )
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
@@ -56,7 +58,28 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "defaults" in params:
         parsed_update["defaults"] = _parse_defaults_update(params["defaults"])
 
+    if "recall" in params:
+        parsed_update["recall"] = _parse_recall_update(params["recall"])
+
     return parsed_update
+
+
+def _parse_recall_update(recall: Any) -> JsonObject:
+    if not isinstance(recall, dict):
+        raise SettingsValidationError("params.recall must be an object")
+
+    unsupported_fields = sorted(set(recall) - {"backend"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported recall settings: {', '.join(unsupported_fields)}"
+        )
+
+    backend = recall.get("backend")
+    if not isinstance(backend, str) or backend not in FIRST_PARTY_RECALL_BACKENDS:
+        allowed = ", ".join(sorted(FIRST_PARTY_RECALL_BACKENDS))
+        raise SettingsValidationError(f"params.recall.backend must be one of: {allowed}")
+
+    return {"backend": backend}
 
 
 def _parse_defaults_update(defaults: Any) -> JsonObject:

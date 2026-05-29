@@ -407,6 +407,15 @@ export const englishCatalog = Object.freeze({
     'Model used for summarization. Leave blank to use the active agent model.',
   'settings.compaction.save': 'Save',
   'settings.compaction.saved': 'Compaction settings saved.',
+  'settings.recall.title': 'Recall',
+  'settings.recall.subtitle': 'Session search backend.',
+  'settings.recall.backend': 'Recall backend',
+  'settings.recall.backendDescription':
+    'Backend used by session_search for stored Session recall.',
+  'settings.recall.backends.jsonl_scan': 'JSONL scan',
+  'settings.recall.backends.sqlite_fts': 'SQLite FTS',
+  'settings.recall.save': 'Save',
+  'settings.recall.saveSuccess': 'Recall backend updated.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',

@@ -171,6 +171,9 @@ class IntegrationStorage:
             "summary_model": None,
         }
 
+    def load_recall_settings(self) -> JsonObject:
+        return {"backend": "jsonl_scan"}
+
     def load_defaults(self) -> JsonObject:
         return {}
 
@@ -403,6 +406,10 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "threshold": 0.8,
                 "tail_tokens": 15000,
                 "summary_model": None,
+            },
+            "recall": {
+                "backend": "jsonl_scan",
+                "available_backends": ["jsonl_scan", "sqlite_fts"],
             },
             "defaults": {},
         },

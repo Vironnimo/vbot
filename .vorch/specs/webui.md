@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -211,6 +211,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
     global default.
   - Normalizes Sub-Agent settings from `settings.subagents` and builds update payloads for `settings.update`.
   - Normalizes Compaction settings from `settings.compaction` and builds the corresponding `settings.update` payload.
+  - Normalizes Recall settings from `settings.recall`, derives backend dropdown options from `available_backends`, and builds `settings.update({ recall: { backend } })` payloads.
 - `webui/src/components/SettingsView.svelte`
   - Includes a Defaults panel. It lets users edit project-wide Agent fallback
     values for `model`, `fallback_model`, `temperature`, and
@@ -224,7 +225,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Skills panel. It displays the default data-directory skill path as read-only and lets users add, remove, and save extra `skill_directories` entries through `settings.update`.
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`. `summary_model` uses the same backend-backed searchable model picker as Agents, with the empty value meaning the active Agent model.
-  - The Appearance, Skills, Sub-Agents, and Compaction panels auto-save about
+  - Includes a Recall panel. It lets users choose the `session_search` recall backend with a simple dropdown backed by `settings.recall.available_backends`.
+  - The Appearance, Skills, Sub-Agents, Compaction, and Recall panels auto-save about
     800 ms after the last dirty edit. Their manual save buttons remain visible
     in sticky footers inside the panel scroll area, stay enabled for trust, save
     immediately when dirty, and show an "Already saved" success toast when the
@@ -398,7 +400,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   last-selected Agent is restored through `localStorage` when available.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
+- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Recall (session_search backend), Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search

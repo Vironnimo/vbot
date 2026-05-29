@@ -469,6 +469,26 @@ class StubStorage:
 
         return normalized
 
+    def load_recall_settings(self) -> JsonObject:
+        stored = self._settings.get("recall")
+        if not isinstance(stored, dict):
+            return {"backend": "jsonl_scan"}
+
+        backend = stored.get("backend")
+        if not isinstance(backend, str) or not backend.strip():
+            return {"backend": "jsonl_scan"}
+        return {"backend": backend.strip()}
+
+    def update_recall_settings(self, recall: object) -> JsonObject:
+        if not isinstance(recall, dict):
+            raise StorageError("Recall settings must be an object")
+
+        self._settings = {
+            **self._settings,
+            "recall": dict(self.load_recall_settings() | recall),
+        }
+        return self.load_recall_settings()
+
     def update_compaction_settings(self, compaction: object) -> JsonObject:
         if not isinstance(compaction, dict):
             raise StorageError("Compaction settings must be an object")
@@ -753,6 +773,7 @@ class StubRuntime:
         self.adapter = adapter
         self.chat_runs: ChatRunManager | None = None
         self.trigger_service: Any = None
+        self.recall_reload_count = 0
 
     def start(self) -> None:
         return None
@@ -820,6 +841,9 @@ class StubRuntime:
 
     def reload_skills(self) -> None:
         self.skills = ReloadableStubRuntimeSkills(self)
+
+    def reload_recall_backend(self) -> None:
+        self.recall_reload_count += 1
 
     def reload_provider_credentials(self) -> None:
         return None
@@ -975,6 +999,10 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "threshold": 0.8,
             "tail_tokens": 15000,
             "summary_model": None,
+        },
+        "recall": {
+            "backend": "jsonl_scan",
+            "available_backends": ["jsonl_scan", "sqlite_fts"],
         },
     }
     assert "sk-live-secret" not in str(response)
@@ -2066,6 +2094,33 @@ async def test_settings_update_persists_compaction_settings_and_returns_full_pay
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_recall_backend_and_reloads_runtime(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "recall": {
+                    "backend": "sqlite_fts",
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_recall_settings() == {"backend": "sqlite_fts"}
+    assert state.runtime.recall_reload_count == 1
+    assert response["result"]["recall"] == {
+        "backend": "sqlite_fts",
+        "available_backends": ["jsonl_scan", "sqlite_fts"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_settings_update_persists_agent_default_model_and_returns_defaults(
     tmp_path: Path,
 ) -> None:
@@ -2222,6 +2277,9 @@ async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
                 "max_subagents_per_turn": 8,
             }
         },
+        {"recall": []},
+        {"recall": {"extra": True}},
+        {"recall": {"backend": "unknown_backend"}},
     ],
 )
 async def test_settings_update_rejects_unsupported_sections_and_fields(

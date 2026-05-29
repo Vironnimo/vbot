@@ -31,6 +31,8 @@
     createSkillDirectoriesUpdatePayload,
     buildAgentDefaultsPayload,
     buildSubAgentSettingsPayload,
+    buildRecallBackendOptions,
+    buildRecallSettingsPayload,
     describeProvider,
     formatAllowedChatIds,
     formatServerHost,
@@ -49,6 +51,7 @@
     getPersistedLanguageId,
     isOAuthConnection,
     isLanguageSaveDisabled,
+    getRecallSettings,
   } from '$lib/settingsView.js';
 
   const COMPACTION_SETTING_DEFAULTS = Object.freeze({
@@ -200,6 +203,13 @@
         ),
     },
     {
+      id: 'recall',
+      labelKey: 'settings.recall.title',
+      labelFallback: 'Recall',
+      label: () => t('settings.recall.title', 'Recall'),
+      subtitle: () => t('settings.recall.subtitle', 'Session search backend.'),
+    },
+    {
       id: 'providers',
       labelKey: 'settings.providers.title',
       labelFallback: 'Providers',
@@ -241,6 +251,7 @@
   let agentDefaults = $state(normalizeAgentDefaultsFormValues(null));
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
+  let recallSettings = $state(getRecallSettings(null));
   let newSkillDirectory = $state('');
   let availableModels = $state([]);
   let availableConnections = $state([]);
@@ -266,6 +277,7 @@
   let skillDirectoriesAutoSaveTimer = null;
   let subAgentSettingsAutoSaveTimer = null;
   let compactionSettingsAutoSaveTimer = null;
+  let recallSettingsAutoSaveTimer = null;
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -313,6 +325,9 @@
       compactionSettings.summary_model ?? '',
       compactionSummaryModelOptions,
     ),
+  );
+  let recallBackendOptions = $derived(
+    buildRecallBackendOptions(recallSettings, t),
   );
   let thinkingEffortOptions = $derived([
     {
@@ -384,6 +399,11 @@
         getCompactionSettings(settings),
       ),
   );
+  let recallSettingsSaveDisabled = $derived(
+    loading ||
+      saving ||
+      recallSettingsMatch(recallSettings, getRecallSettings(settings)),
+  );
 
   onMount(() => {
     loadSettings();
@@ -393,6 +413,7 @@
       clearSkillDirectoriesAutoSaveTimer();
       clearSubAgentSettingsAutoSaveTimer();
       clearCompactionSettingsAutoSaveTimer();
+      clearRecallSettingsAutoSaveTimer();
     };
   });
 
@@ -479,6 +500,25 @@
     };
   });
 
+  $effect(() => {
+    if (activePanelId !== 'recall') {
+      return;
+    }
+
+    if (recallSettingsSaveDisabled) {
+      return;
+    }
+
+    recallSettingsAutoSaveTimer = setTimeout(() => {
+      recallSettingsAutoSaveTimer = null;
+      void saveRecallSettings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearRecallSettingsAutoSaveTimer();
+    };
+  });
+
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
@@ -532,6 +572,7 @@
     agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
     subAgentSettings = normalizeSubAgentSettings(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
+    recallSettings = getRecallSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
   }
@@ -680,6 +721,32 @@
     }
   }
 
+  async function saveRecallSettings() {
+    if (recallSettingsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        buildRecallSettingsPayload(recallSettings),
+      );
+      commitSettings(nextSettings);
+      recallSettings = getRecallSettings(nextSettings);
+      showSettingsToast(
+        t('settings.recall.saveSuccess', 'Recall backend updated.'),
+        'success',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   function clearLanguageAutoSaveTimer() {
     if (languageAutoSaveTimer !== null) {
       clearTimeout(languageAutoSaveTimer);
@@ -705,6 +772,13 @@
     if (compactionSettingsAutoSaveTimer !== null) {
       clearTimeout(compactionSettingsAutoSaveTimer);
       compactionSettingsAutoSaveTimer = null;
+    }
+  }
+
+  function clearRecallSettingsAutoSaveTimer() {
+    if (recallSettingsAutoSaveTimer !== null) {
+      clearTimeout(recallSettingsAutoSaveTimer);
+      recallSettingsAutoSaveTimer = null;
     }
   }
 
@@ -781,6 +855,20 @@
     void saveCompactionSettings();
   }
 
+  function handleManualRecallSettingsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (recallSettingsSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearRecallSettingsAutoSaveTimer();
+    void saveRecallSettings();
+  }
+
   function addSkillDirectory() {
     const directory = newSkillDirectory.trim();
     if (!directory) {
@@ -838,6 +926,14 @@
     saveError = '';
   }
 
+  function handleRecallBackendChange(backend) {
+    recallSettings = {
+      ...recallSettings,
+      backend,
+    };
+    saveError = '';
+  }
+
   function updateAgentDefaultsModelSelection(key, selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
     handleAgentDefaultsChange(
@@ -891,6 +987,13 @@
       normalizedLeft.threshold === normalizedRight.threshold &&
       normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
       normalizedLeft.summary_model === normalizedRight.summary_model
+    );
+  }
+
+  function recallSettingsMatch(left, right) {
+    return (
+      getRecallSettings({ recall: left }).backend ===
+      getRecallSettings({ recall: right }).backend
     );
   }
 
@@ -2051,6 +2154,43 @@
                 : t('settings.compaction.save', 'Save')}
             </button>
           </div>
+        {:else if activePanelId === 'recall'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.recall.backend', 'Recall backend')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.recall.backendDescription',
+                  'Backend used by session_search for stored Session recall.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--recall">
+              <Dropdown
+                id="settings-recall-backend"
+                value={recallSettings.backend}
+                options={recallBackendOptions}
+                ariaLabel={t('settings.recall.backend', 'Recall backend')}
+                triggerClass="settings-view__dropdown"
+                listClass="settings-view__thinking-list"
+                onValueChange={handleRecallBackendChange}
+              />
+            </div>
+          </div>
+
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualRecallSettingsSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('settings.recall.save', 'Save')}
+            </button>
+          </div>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
             <div class="s-feedback s-feedback--neutral">
@@ -2959,6 +3099,11 @@
     min-width: 220px;
   }
 
+  .s-row-control--recall {
+    width: min(320px, 100%);
+    min-width: 220px;
+  }
+
   .s-row-control--checkbox {
     width: auto;
     min-width: 0;
@@ -3320,7 +3465,8 @@
     .s-row-control--input,
     .s-row-control--model,
     .s-row-control--input-actions,
-    .s-row-control--number {
+    .s-row-control--number,
+    .s-row-control--recall {
       width: 100%;
       min-width: 0;
       max-width: none;

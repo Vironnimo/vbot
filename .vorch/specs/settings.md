@@ -13,8 +13,9 @@ runtime JSON: `settings.json`, `agents/*/agent.json`,
 `channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and
 runtime read paths use the same validators so manual edit errors fail fast with
 consistent diagnostics.
-Raw `settings.json` also accepts `recall.backend` for backend selection; this is
-not part of the public `settings.update` RPC surface yet.
+Raw `settings.json` also accepts `recall.backend` for backend selection, and
+the public `settings.update` RPC accepts the first-party recall backend names
+used by the Settings UI.
 
 Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes.
 
@@ -45,6 +46,7 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
 - `defaults` — `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual Agent default. `thinking_effort: ""` is a valid explicit provider-default value.
 - `subagents` — requires `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` as positive integers.
 - `compaction` — requires `{ auto, threshold, tail_tokens, summary_model }`; `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | null`.
+- `recall` — `{ backend: "jsonl_scan" | "sqlite_fts" }`; updates the backend used by the `session_search` tool.
 
 ## Constraints & Gotchas
 
@@ -58,6 +60,6 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
   the `RecallBackendRegistry` and falls back to `jsonl_scan` for unknown names.
 - `settings.py` stays focused on public `settings.update` parsing. Raw file
   validation belongs in `validation.py`.
-- `settings.update` accepts sparse Defaults updates but full Sub-Agent and Compaction sections.
-- Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update.
+- `settings.update` accepts sparse Defaults updates but full Sub-Agent and Compaction sections. Recall updates are small exact-section writes with only `backend`.
+- Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update. Recall backend changes are applied by server delegates through `runtime.reload_recall_backend()`.
 - Keep storage-level validation errors distinct from public schema errors so RPC error mapping remains stable.

@@ -46,6 +46,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                     "thinking_effort": "",
                 }
             },
+            "recall": {"backend": "sqlite_fts"},
         }
     )
 
@@ -71,6 +72,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "thinking_effort": "",
             }
         },
+        "recall": {"backend": "sqlite_fts"},
     }
 
 
@@ -104,6 +106,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         (
             {"defaults": {"agent": {"unknown_field": True}}},
             "unsupported defaults.agent settings: unknown_field",
+        ),
+        ({"recall": []}, "params.recall must be an object"),
+        (
+            {"recall": {"backend": "unknown_backend"}},
+            "params.recall.backend must be one of",
         ),
     ],
 )
