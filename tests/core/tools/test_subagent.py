@@ -259,8 +259,52 @@ async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> Non
     assert session_id == "parent-session"
     assert internal is True
     assert "Sub-agent batch completed." in message
-    assert "- worker/session-one: First result" in message
-    assert "- worker/session-two: Second result" in message
+    assert "### worker (session session-one) — completed" in message
+    assert "First result" in message
+    assert "### worker (session session-two) — completed" in message
+    assert "Second result" in message
+
+
+async def test_batch_tracker_delivers_complete_result_without_truncation() -> None:
+    # Arrange
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-one", "run-one")
+    long_result = "x" * 2000
+
+    # Act
+    tracker.on_sub_agent_complete(
+        parent_key, "run-one", {"status": "completed", "result": long_result}
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    assert len(trigger_service.calls) == 1
+    _agent_id, message, _session_id, _internal = trigger_service.calls[0]
+    assert long_result in message
+
+
+async def test_batch_tracker_surfaces_failure_note() -> None:
+    # Arrange
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-one", "run-one")
+
+    # Act
+    tracker.on_sub_agent_complete(
+        parent_key,
+        "run-one",
+        {"status": "failed", "result": None, "note": "boom"},
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    assert len(trigger_service.calls) == 1
+    _agent_id, message, _session_id, _internal = trigger_service.calls[0]
+    assert "### worker (session session-one) — failed" in message
+    assert "boom" in message
 
 
 async def test_batch_tracker_does_not_trigger_when_completed_item_was_fetched() -> None:
@@ -1195,7 +1239,8 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
     assert batch.entries["run-old"].fetched is True
     assert batch.entries["run-new"].fetched is False
     assert len(trigger_service.calls) == 1
-    assert "- worker/shared-session: new answer" in trigger_service.calls[0][1]
+    assert "### worker (session shared-session) — completed" in trigger_service.calls[0][1]
+    assert "new answer" in trigger_service.calls[0][1]
 
 
 async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
