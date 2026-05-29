@@ -58,6 +58,7 @@
   let availableSkills = $state([]);
   let showSessionDrawer = $state(false);
   let viewingSessionId = $state('');
+  let viewingSessionAgentId = $state('');
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
   let submittedTurnScrollRunId = $state('');
@@ -82,7 +83,7 @@
   let actionInfoTimeoutId = null;
   let lastRunServerEventKey = '';
 
-  let activeAgent = $derived(selectedAgent(chatState));
+  let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
@@ -140,8 +141,19 @@
     return '';
   });
 
+  function getActiveAgent() {
+    if (viewingSessionAgentId) {
+      return agentById(viewingSessionAgentId);
+    }
+    return selectedAgent(chatState);
+  }
+
+  function agentById(agentId) {
+    return chatState.agents.find((agent) => agent.id === agentId) ?? null;
+  }
+
   function getActiveSessionState() {
-    const agent = selectedAgent(chatState);
+    const agent = getActiveAgent();
     if (agent && viewingSessionId) {
       return chatState.sessions[`${agent.id}::${viewingSessionId}`] ?? null;
     }
@@ -149,7 +161,7 @@
   }
 
   function displayedSessionKey() {
-    const agent = selectedAgent(chatState);
+    const agent = getActiveAgent();
     const sessionId = viewingSessionId || agent?.current_session_id;
     return agent?.id && sessionId ? `${agent.id}::${sessionId}` : '';
   }
@@ -368,11 +380,10 @@
   };
 
   const loadOlderHistory = async () => {
-    const agent = selectedAgent(chatState);
     const sessionState = activeSessionState;
     if (
-      !agent ||
       !sessionState ||
+      !sessionState.agentId ||
       !sessionState.hasOlderHistory ||
       sessionState.loadingOlderHistory ||
       sessionState.messages.length === 0
@@ -390,7 +401,7 @@
     actionError = '';
     try {
       const history = await rpc('chat.history', {
-        agent_id: agent.id,
+        agent_id: sessionState.agentId,
         session_id: sessionState.sessionId,
         limit: HISTORY_OLDER_LIMIT,
         before,
@@ -434,26 +445,24 @@
       return;
     }
 
-    if (agentId !== chatState.selectedAgentId) {
-      selectAgent(chatState, agentId);
-      onAgentSelected?.(agentId);
-    }
-
+    viewingSessionAgentId = agentId;
     viewingSessionId = sessionId;
     viewingSubAgentSession = true;
     await loadHistoryForSession(agentId, sessionId);
   };
 
   const handleSessionSelected = async (sessionId) => {
-    const agent = selectedAgent(chatState);
+    const agent = activeAgent;
     const normalizedSessionId = String(sessionId ?? '').trim();
     if (!agent || !normalizedSessionId) {
       return;
     }
 
-    viewingSubAgentSession = false;
+    const isSelectedAgent = agent.id === chatState.selectedAgentId;
+    viewingSessionAgentId = isSelectedAgent ? '' : agent.id;
+    viewingSubAgentSession = !isSelectedAgent;
     viewingSessionId =
-      normalizedSessionId === agent.current_session_id
+      isSelectedAgent && normalizedSessionId === agent.current_session_id
         ? ''
         : normalizedSessionId;
     await loadHistoryForSession(agent.id, normalizedSessionId);
@@ -461,6 +470,7 @@
 
   const clearSessionOverride = () => {
     viewingSessionId = '';
+    viewingSessionAgentId = '';
     viewingSubAgentSession = false;
   };
 
@@ -514,7 +524,7 @@
   };
 
   const handleSendMessage = async (content) => {
-    const agent = selectedAgent(chatState);
+    const agent = activeAgent;
     const sessionState = activeSessionState;
     if (!agent || !sessionState) {
       return;
@@ -862,7 +872,7 @@
   };
 
   const handleRetry = async () => {
-    const agent = selectedAgent(chatState);
+    const agent = activeAgent;
     const sessionState = activeSessionState;
     if (!agent || !sessionState || isRunActive(sessionState)) {
       return;
@@ -886,7 +896,7 @@
 
   const handleRemoveQueuedMessage = async (queuedMessageId) => {
     const sessionState = activeSessionState;
-    const agent = selectedAgent(chatState);
+    const agent = activeAgent;
     if (!sessionState || !agent) {
       return;
     }
@@ -902,7 +912,7 @@
 
   const handleEditQueuedMessage = async (queuedMessageId, newContent) => {
     const sessionState = activeSessionState;
-    const agent = selectedAgent(chatState);
+    const agent = activeAgent;
     if (!sessionState || !agent) {
       return;
     }

@@ -137,7 +137,6 @@
     }
 
     selectView('chat');
-    selectAgent(agentId);
     pendingSubAgentNavigation = { agentId, sessionId };
   };
 

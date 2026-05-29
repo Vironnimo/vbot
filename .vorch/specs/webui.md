@@ -131,6 +131,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Owns the session drawer toggle plus local `viewingSessionId` override state.
     Selecting a session from the drawer loads its history without mutating the
     Agent's persisted `current_session_id`.
+  - Sub-agent session links keep the globally selected Agent on the parent Agent
+    and route the displayed child Session through a local Agent/Session override,
+    so “Return to current session” returns to the parent Agent's current Session.
 - `webui/src/components/QueuedMessages.svelte`
   - Renders queued server-backed messages with remove and inline edit controls. Edit mode is local UI state; save persists through `chat.queue_update` and cancel only exits the local editor.
 - `webui/src/components/SessionListDrawer.svelte`
