@@ -31,6 +31,12 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
+from core.recall import (
+    DEFAULT_RECALL_BACKEND,
+    RecallBackend,
+    RecallBackendContext,
+    RecallBackendRegistry,
+)
 from core.runs import ChatRunManager
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -136,6 +142,7 @@ class Runtime:
         self._skills: SkillRegistry | None = None
         self._extensions: ExtensionRegistry | None = None
         self._chat_sessions: ChatSessionManager | None = None
+        self._recall_backend: RecallBackend | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self._command_dispatcher: CommandDispatcher | None = None
         self.chat_runs: ChatRunManager | None = None
@@ -228,7 +235,9 @@ class Runtime:
             extra_dirs=extension_dirs,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
-        register_session_search_tool(self._tools, self._chat_sessions)
+        recall_registry = RecallBackendRegistry.with_builtins()
+        self._recall_backend = self._create_recall_backend(recall_registry)
+        register_session_search_tool(self._tools, self._recall_backend)
         self._chat_run_manager = ChatRunManager()
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,
@@ -336,6 +345,7 @@ class Runtime:
         self._skills = None
         self._extensions = None
         self._chat_sessions = None
+        self._recall_backend = None
         self._channel_service = None
         self._cron_service = None
         self._trigger_service = None
@@ -520,6 +530,30 @@ class Runtime:
 
         register_channel_send_tool(self._tools, self._channel_service, self._chat_sessions)
 
+    def _create_recall_backend(self, registry: RecallBackendRegistry) -> RecallBackend:
+        if self._storage is None:
+            raise RuntimeError("Storage service not available")
+        if self._chat_sessions is None:
+            raise RuntimeError("Chat session service not available")
+
+        settings = self._storage.load_recall_settings()
+        backend_name = settings["backend"]
+        context = RecallBackendContext(
+            data_dir=self._storage.data_dir,
+            sessions=self._chat_sessions,
+            logger=self.logger,
+        )
+        try:
+            return registry.create(backend_name, context)
+        except KeyError:
+            if self.logger is not None:
+                self.logger.warning(
+                    "Unknown recall backend %r; using %s",
+                    backend_name,
+                    DEFAULT_RECALL_BACKEND,
+                )
+            return registry.create(DEFAULT_RECALL_BACKEND, context)
+
     def reload_channel_tool(self) -> None:
         """Re-register channel_send based on current active channel adapters."""
         self._ensure_started()
@@ -672,6 +706,14 @@ class Runtime:
         if self._chat_sessions is None:
             raise RuntimeError("Chat session service not available")
         return self._chat_sessions
+
+    @property
+    def recall_backend(self) -> RecallBackend:
+        """Access to the selected Session recall backend."""
+        self._ensure_started()
+        if self._recall_backend is None:
+            raise RuntimeError("Recall backend is not available")
+        return self._recall_backend
 
     @property
     def chat_run_manager(self) -> ChatRunManager:

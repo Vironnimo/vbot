@@ -16,6 +16,7 @@ from core.chat.chat import ChatLoop
 from core.prompts import SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
+from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
 from core.runtime.runtime import Runtime
 from core.sessions import ChatSessionManager
@@ -256,6 +257,43 @@ def test_start_registers_builtin_tools_once(config: Config):
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
     assert tool_names == CANONICAL_BUILTIN_TOOLS
+
+
+def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+
+
+def test_runtime_selects_sqlite_recall_backend_from_settings(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath("settings.json").write_text(
+        json.dumps({"recall": {"backend": "sqlite_fts"}}),
+        encoding="utf-8",
+    )
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime.recall_backend, SqliteFtsRecallBackend)
+
+
+def test_runtime_unknown_recall_backend_falls_back_to_jsonl(config: Config) -> None:
+    logging.getLogger("vbot").handlers = []
+    config.data_dir.mkdir(parents=True, exist_ok=True)
+    config.data_dir.joinpath("settings.json").write_text(
+        json.dumps({"recall": {"backend": "team_backend"}}),
+        encoding="utf-8",
+    )
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
 
 
 def test_builtin_provider_definitions_expose_model_visible_metadata_only(config: Config):

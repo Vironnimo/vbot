@@ -42,10 +42,10 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 - `core/tools/memory.py` owns the provider-visible tool contract and delegates all storage behavior to `MemoryService`.
 - `core/prompts/` includes workspace files through `{include:...}`; memory code does not assemble system prompts.
 - `core/agents/` seeds `MEMORY.md` for new workspaces through the workspace-template mechanism.
-- Sessions and recall search are separate. Do not store chat transcripts or broad search indexes in this domain.
+- Sessions and recall search are separate. Do not store chat transcripts or broad search indexes in this domain. SQLite FTS Session recall lives in `core/recall/` as a derived index.
 
 ## Future Backend Boundary
 
-The current file backend is the first implementation, not a permanent storage decision. Future work should introduce registries for pinned memory and recall backends so first-party and extension-provided systems can plug into the same interface.
+The current file backend is the first implementation, not a permanent storage decision. Recall now has a first-class backend registry; future work should add the sibling pinned-memory registry so first-party and extension-provided systems can plug into the same interface.
 
 SQLite FTS belongs behind a recall backend/index contract, not inside this pinned-memory domain.

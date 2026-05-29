@@ -31,6 +31,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `settings.json` `attachment_max_size_bytes`, instantiates `MemoryService`, wires services, starts the
   `ProcessManager` sweeper when startup
   happens inside a running asyncio loop, registers built-in tools including `memory`, creates the
+  `RecallBackendRegistry`, selects the configured recall backend from
+  `settings.recall.backend` with fallback to `jsonl_scan`, registers
+  `session_search` against that backend, creates the
   shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in
   slash commands, creates resolver-wired non-streaming and streaming
   `ChatLoop` instances, wires `TriggerService`, wires and starts `ChannelService` when an event loop is active,
@@ -63,6 +66,7 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   and Run-scoped cancellation.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
+- `recall_backend` — selected `RecallBackend` used by `session_search`.
 - `chat_run_manager` — shared `ChatRunManager` used by server chat flows and
   automation triggers. Runtime also exposes it as `runtime.chat_runs` for server
   compatibility.

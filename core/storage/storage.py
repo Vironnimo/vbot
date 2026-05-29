@@ -35,6 +35,7 @@ SUBAGENT_SETTING_DEFAULTS = {
     "max_subagents_per_turn": 8,
     "subagent_timeout_minutes": 60,
 }
+DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
 COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "auto": True,
     "threshold": 0.8,
@@ -57,6 +58,7 @@ PHASE_TWO_DIRECTORIES = (
     "cron",
     "oauth",
     "prompts",
+    "recall",
     "skills",
     "logs",
 )
@@ -246,6 +248,12 @@ class StorageManager:
 
         settings = self.load_settings()
         return self._normalize_defaults_settings(settings.get("defaults"))
+
+    def load_recall_settings(self) -> dict[str, str]:
+        """Return normalized persisted recall backend settings."""
+
+        settings = self.load_settings()
+        return self._normalize_recall_settings(settings.get("recall"))
 
     def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         """Persist normalized defaults for a single section and return persisted values."""
@@ -551,6 +559,22 @@ class StorageManager:
         if not normalized_agent_defaults:
             return {}
         return {"agent": normalized_agent_defaults}
+
+    @classmethod
+    def _normalize_recall_settings(cls, recall: Any) -> dict[str, str]:
+        section = cls._coerce_recall_section(recall)
+        backend = section.get("backend", DEFAULT_RECALL_SETTINGS["backend"])
+        if not isinstance(backend, str) or not backend.strip():
+            raise StorageError("Recall backend must be a non-empty string")
+        return {"backend": backend.strip()}
+
+    @staticmethod
+    def _coerce_recall_section(recall: Any) -> dict[str, Any]:
+        if recall is None:
+            return {}
+        if not isinstance(recall, Mapping):
+            raise StorageError("Expected settings.recall to be an object")
+        return dict(recall)
 
     @staticmethod
     def _coerce_defaults_section(defaults: Any) -> dict[str, Any]:

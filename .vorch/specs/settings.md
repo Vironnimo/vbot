@@ -13,6 +13,8 @@ runtime JSON: `settings.json`, `agents/*/agent.json`,
 `channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and
 runtime read paths use the same validators so manual edit errors fail fast with
 consistent diagnostics.
+Raw `settings.json` also accepts `recall.backend` for backend selection; this is
+not part of the public `settings.update` RPC surface yet.
 
 Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes.
 
@@ -51,6 +53,9 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
   Formatting for agents belongs to CLI doctor commands.
 - Unknown top-level raw settings keys are warnings, not errors, because raw
 	settings may temporarily contain values not consumed by current runtime code.
+- `settings.recall` must be an object when present. `settings.recall.backend`
+  must be a non-empty lowercase snake_case string; runtime resolves it against
+  the `RecallBackendRegistry` and falls back to `jsonl_scan` for unknown names.
 - `settings.py` stays focused on public `settings.update` parsing. Raw file
   validation belongs in `validation.py`.
 - `settings.update` accepts sparse Defaults updates but full Sub-Agent and Compaction sections.
