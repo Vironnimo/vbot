@@ -388,7 +388,11 @@
 
   const shouldRenderToolCall = (tool) => {
     if (isSubAgentTool(tool)) {
-      return Boolean(subAgentNavigationTarget(tool) || tool.resultEvent);
+      return Boolean(
+        subAgentNavigationTarget(tool) ||
+        tool.resultEvent ||
+        isStartingBlockingSubAgent(tool),
+      );
     }
     return Boolean(
       tool.startedEvent || tool.resultEvent || tool.stdout || tool.stderr,
@@ -637,6 +641,13 @@
 
   const isSubAgentTool = (tool) =>
     SUBAGENT_TOOL_NAMES.has(toolNameForRunTool(tool));
+
+  const isStartingBlockingSubAgent = (tool) => {
+    if (toolNameForRunTool(tool) !== 'subagent' || !tool.startedEvent) {
+      return false;
+    }
+    return subAgentArguments(tool).blocking !== false;
+  };
 
   const subAgentArguments = (tool) => {
     const parsedArguments = parseJsonValue(toolArguments(tool));
@@ -1642,6 +1653,10 @@
                           >
                             {t('chat.subagent.viewSession', 'view session')}
                           </button>
+                        {:else if isStartingBlockingSubAgent(child)}
+                          <span class="subagent-state">
+                            {t('chat.subagent.starting', 'starting')}
+                          </span>
                         {/if}
                       </summary>
                       <div class="tool-event-body">
@@ -2206,6 +2221,12 @@
     border-radius: 3px;
     outline: 1px solid rgba(232, 135, 10, 0.4);
     outline-offset: 3px;
+  }
+
+  .subagent-state {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
   }
 
   .streaming-caret {

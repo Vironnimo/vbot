@@ -265,10 +265,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Keeps Sub-Agent tool rows collapsed by default, including while running;
     the row itself remains visible with status and `view session`, and details
     open only when the user asks for them.
-  - Does not render provisional Sub-Agent rows without a session navigation
-    target while tool arguments are still streaming or before the backend has
-    emitted `subagent_session_started`. When a Sub-Agent row is visible during
-    work, it must already be actionable unless it is a final error/result row.
+  - Does not render streamed/provisional Sub-Agent rows while tool arguments are
+    still streaming. Once a blocking `subagent` tool call has started, the row
+    appears immediately as `starting`; `view session` appears as soon as the
+    backend emits `subagent_session_started`. Non-blocking rows wait for a
+    navigation target or final result so background calls do not show inert
+    pseudo-rows.
   - Does not render streamed tool-call preparation as a standalone timeline
     card. Tool-call deltas stay inside the live assistant-run model until the
     real tool row is available.
