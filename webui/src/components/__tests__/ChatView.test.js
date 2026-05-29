@@ -1073,6 +1073,98 @@ describe('ChatView', () => {
     expect(document.querySelector('textarea')?.disabled).toBe(false);
   });
 
+  it('returns from a different-agent sub-agent session to the parent current session', async () => {
+    const agents = [
+      createAgent({
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'parent-session',
+      }),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'beta-current-session',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'parent-session': [
+            {
+              id: 'parent-assistant-one',
+              role: 'assistant',
+              content: 'Parent main response',
+            },
+          ],
+          'beta-sub-session': [
+            {
+              id: 'beta-sub-assistant-one',
+              role: 'assistant',
+              content: 'Beta sub-agent response',
+            },
+          ],
+          'beta-current-session': [
+            {
+              id: 'beta-current-assistant-one',
+              role: 'assistant',
+              content: 'Beta current response',
+            },
+          ],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'beta',
+          sessionId: 'beta-sub-session',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta sub-agent response'),
+      100,
+    );
+
+    const returnButton = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Return to current session',
+    );
+
+    expect(returnButton).toBeTruthy();
+    returnButton.click();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Parent main response') &&
+        !document.body.textContent.includes('Viewing a sub-agent session'),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'beta-sub-session',
+      limit: 100,
+    });
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'parent-session',
+      limit: 100,
+    });
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'beta-current-session',
+      limit: 100,
+    });
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+  });
+
   it('retries the sub-agent session when retry is requested from its override', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -1174,6 +1266,92 @@ describe('ChatView', () => {
 
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
       '/api/runs/sub-run-continue/events',
+      expect.any(Object),
+      { afterSequence: 0 },
+    );
+  });
+
+  it('sends messages to a different-agent sub-agent session override', async () => {
+    const agents = [
+      createAgent({
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'parent-session',
+      }),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'beta-current-session',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'parent-session': [
+            {
+              id: 'parent-assistant-one',
+              role: 'assistant',
+              content: 'Parent main response',
+            },
+          ],
+          'beta-sub-session': [
+            {
+              id: 'beta-sub-assistant-one',
+              role: 'assistant',
+              content: 'Beta sub-agent response',
+            },
+          ],
+        },
+        streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
+          if (agentId === 'beta' && sessionId === 'beta-sub-session') {
+            return {
+              run_id: 'beta-sub-run-continue',
+              sse_url: '/api/runs/beta-sub-run-continue/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          throw new Error(`Unexpected stream target: ${agentId}/${sessionId}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        sharedSelectedAgentId: 'alpha',
+        pendingSubAgentNavigation: {
+          agentId: 'beta',
+          sessionId: 'beta-sub-session',
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta sub-agent response'),
+      100,
+    );
+
+    sendComposerMessage('Continue beta child work');
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.stream' &&
+            params?.agent_id === 'beta' &&
+            params?.session_id === 'beta-sub-session' &&
+            params?.content === 'Continue beta child work',
+        ),
+      100,
+    );
+
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/beta-sub-run-continue/events',
       expect.any(Object),
       { afterSequence: 0 },
     );
@@ -1335,7 +1513,11 @@ function createChatRpcMock({
   streamHandler,
   commandsError = false,
   commandItems,
+  agents,
 } = {}) {
+  const resolvedAgents = agents ?? [
+    createAgent({ context_window: contextWindow }),
+  ];
   const resolvedSessionMessages = {
     'session-1': [
       {
@@ -1357,7 +1539,7 @@ function createChatRpcMock({
 
   return async (method, params) => {
     if (method === 'agent.list') {
-      return { agents: [createAgent({ context_window: contextWindow })] };
+      return { agents: resolvedAgents };
     }
 
     if (method === 'chat.history') {
@@ -1462,6 +1644,10 @@ function findButtonByText(text) {
   return Array.from(document.querySelectorAll('button')).find((button) =>
     button.textContent.includes(text),
   );
+}
+
+function activeAgentTab() {
+  return document.querySelector('.agent-tab.active');
 }
 
 function setInputValue(input, value) {
