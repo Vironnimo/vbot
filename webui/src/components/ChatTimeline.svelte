@@ -640,11 +640,17 @@
   };
 
   const subAgentResultData = (tool) => {
+    const sessionData = isPlainObject(tool.subAgentSession)
+      ? tool.subAgentSession
+      : {};
     const resultEnvelope = subAgentResultEnvelope(tool);
     if (isPlainObject(resultEnvelope.data)) {
-      return resultEnvelope.data;
+      return { ...sessionData, ...resultEnvelope.data };
     }
-    return resultEnvelope;
+    if (isPlainObject(resultEnvelope)) {
+      return { ...sessionData, ...resultEnvelope };
+    }
+    return sessionData;
   };
 
   const subAgentSessionId = (tool) => {

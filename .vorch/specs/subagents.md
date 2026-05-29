@@ -26,6 +26,11 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 - With `session_id`, spawning routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.
 - Blocking mode waits for completion and returns the result payload.
+- The `subagent` tool emits `subagent_session_started` Run events as soon as a
+  child Session is known, then again when run/queue details are known. The event
+  payload includes the parent tool-call id/index plus child `agent_id`,
+  `session_id`, optional `run_id` or `queue_item_id`, and `status` so accessors
+  can link to running child Sessions before the final tool result exists.
 - Non-blocking mode returns a running descriptor when a Run has started. If the target Session is still busy and the child Run is only queued, it returns a queued descriptor containing `agent_id`, `session_id`, `queue_item_id`, and `status: "queued"` instead of waiting for the child Run to start.
 - Result lookup checks live Run state first, reports queued tracked entries while no `run_id` exists, then falls back to the last non-empty assistant message in the target Session.
 - Result lookup marks tracked entries fetched before waiting on a live Run to avoid a completion/fetch race.

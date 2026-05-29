@@ -259,6 +259,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     argument-label fallbacks exist only for history or old events without a
     display payload; empty summaries render no parenthesized argument text.
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`. When a later `subagent_result` completes the same child session, the original `subagent` spawn row should no longer appear stuck in `running` state.
+  - Merges live `subagent_session_started` Run events into the matching
+    `subagent` tool row so `view session` is available while a blocking child
+    Session is still running, before the final tool result has returned.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
   - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.
   - Renders assistant streaming output through `renderMarkdownStreaming(...)` and settled assistant run output plus persisted assistant messages through `renderMarkdown(...)`, all inside a scoped `.msg-markdown` container so normal agent replies display headings, lists, links, tables, and code fences as Markdown instead of raw source while long open fenced blocks remain inspectable during streaming.

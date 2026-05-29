@@ -41,6 +41,7 @@ def make_context(
     run_id: str = "parent-run",
     tool_name: str = SUBAGENT_TOOL_NAME,
     nesting_depth: int = 0,
+    emit_hook: Any | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -52,6 +53,7 @@ def make_context(
         workspace=Path("workspace"),
         app_root=Path("app"),
         data_root=Path("data"),
+        emit_hook=emit_hook,
         nesting_depth=nesting_depth,
     )
 
@@ -501,6 +503,64 @@ async def test_subagent_tool_marks_created_session_with_parent_metadata(
         "tool_call_id": context.tool_call_id,
         "tool_call_index": context.tool_call_index,
     }
+
+
+async def test_subagent_tool_emits_session_started_before_blocking_result(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    emitted_events: list[tuple[str, JsonObject]] = []
+    context = make_context(
+        emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload))
+    )
+
+    # Act
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "blocking": True},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+
+    # Assert
+    assert manager.started
+    session_id = manager.started[0][1]
+    run = manager.started[0][3]
+    assert emitted_events[:2] == [
+        (
+            subagent_module.SUBAGENT_SESSION_STARTED_EVENT,
+            {
+                "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
+                "data": {
+                    "agent_id": "parent",
+                    "session_id": session_id,
+                    "status": "running",
+                },
+            },
+        ),
+        (
+            subagent_module.SUBAGENT_SESSION_STARTED_EVENT,
+            {
+                "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
+                "data": {
+                    "agent_id": "parent",
+                    "session_id": session_id,
+                    "run_id": run.id,
+                    "status": "running",
+                },
+            },
+        ),
+    ]
+
+    run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    result = await task
+    assert result["ok"] is True
 
 
 async def test_subagent_tool_routes_into_existing_session_when_session_id_provided(

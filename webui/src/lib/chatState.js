@@ -1024,6 +1024,11 @@ function appendLiveRunEvent(assistantRun, event) {
 
   if (event.type === 'tool_call_result') {
     mergeToolResult(assistantRun, event);
+    return;
+  }
+
+  if (event.type === 'subagent_session_started') {
+    mergeSubAgentSessionStarted(assistantRun, event);
   }
 }
 
@@ -1316,6 +1321,31 @@ function mergeToolResult(assistantRun, event) {
   syncAssistantRunCollections(assistantRun);
 }
 
+function mergeSubAgentSessionStarted(assistantRun, event) {
+  const toolCall = event.payload?.tool_call ?? {};
+  const data = event.payload?.data ?? {};
+  const tool = upsertToolRow(
+    assistantRun,
+    toolKeyFromToolCall(toolCall),
+    event,
+    toolCall,
+  );
+  tool.toolCall = {
+    ...(tool.toolCall ?? {}),
+    ...toolCall,
+  };
+  tool.toolCallId = toolCall.id ?? tool.toolCallId;
+  tool.index = toolCall.index ?? tool.index;
+  tool.name = toolCall.name ?? tool.name;
+  tool.subAgentSession = {
+    ...(tool.subAgentSession ?? {}),
+    ...(isPlainObject(data) ? data : {}),
+  };
+  tool.status = tool.resultEvent ? tool.status : CHAT_STATUS_RUNNING;
+  tool.events = [...tool.events, event];
+  syncAssistantRunCollections(assistantRun);
+}
+
 function upsertToolRow(assistantRun, key, event, toolCall = {}) {
   const existingTool = assistantRun.items.find(
     (item) =>
@@ -1419,6 +1449,7 @@ function isAssistantRunEvent(event) {
     RUN_EVENT_TOOL_CALL_STDOUT,
     RUN_EVENT_TOOL_CALL_STDERR,
     'tool_call_result',
+    'subagent_session_started',
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     'assistant_output',
     'run_completed',
@@ -1610,6 +1641,10 @@ function parseResult(result) {
   } catch {
     return result;
   }
+}
+
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === '[object Object]';
 }
 
 function updateStreamingItems(sessionState, event) {
