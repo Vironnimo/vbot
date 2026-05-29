@@ -1564,7 +1564,6 @@
                   {#if isSubAgentTool(child)}
                     <details
                       class="tool-event run-tool-event subagent-tool-event"
-                      open={subAgentDotStatus(child, item) === 'running'}
                     >
                       <summary class="tool-event-line subagent-line">
                         <span

@@ -2018,7 +2018,7 @@ describe('chat state helpers', () => {
     ).toBe(false);
   });
 
-  it('keeps render selector tool-call deltas as streaming wrappers without duplicating live text', () => {
+  it('keeps render selector tool-call deltas out of standalone streaming wrappers', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -2044,10 +2044,7 @@ describe('chat state helpers', () => {
 
     const renderItems = visibleTimelineItemsForRender(sessionState);
 
-    expect(renderItems.map((item) => item.type)).toEqual([
-      'assistant_run',
-      'streaming',
-    ]);
+    expect(renderItems.map((item) => item.type)).toEqual(['assistant_run']);
     expect(renderItems[0]).toEqual(
       expect.objectContaining({
         runId: 'run-render-selector-tool-delta',
@@ -2059,21 +2056,10 @@ describe('chat state helpers', () => {
         ],
       }),
     );
-    expect(renderItems[1]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'tool_call',
-          toolCallId: 'call-one',
-          name: 'read',
-        }),
-      }),
-    );
     expect(
       renderItems.some(
         (item) =>
-          item.type === 'streaming' &&
-          ['assistant', 'reasoning'].includes(item.streamingItem?.type),
+          item.type === 'streaming' && item.streamingItem?.type === 'tool_call',
       ),
     ).toBe(false);
   });
