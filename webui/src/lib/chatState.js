@@ -383,7 +383,7 @@ export function visibleTimelineItemsForRender(sessionState) {
     ],
     {
       includeStreamingAssistantAndReasoning: false,
-      includeStreamingToolCalls: true,
+      includeStreamingToolCalls: false,
     },
   );
 }

@@ -262,6 +262,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Merges live `subagent_session_started` Run events into the matching
     `subagent` tool row so `view session` is available while a blocking child
     Session is still running, before the final tool result has returned.
+  - Keeps Sub-Agent tool rows collapsed by default, including while running;
+    the row itself remains visible with status and `view session`, and details
+    open only when the user asks for them.
+  - Does not render streamed tool-call preparation as a standalone timeline
+    card. Tool-call deltas stay inside the live assistant-run model until the
+    real tool row is available.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
   - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.
   - Renders assistant streaming output through `renderMarkdownStreaming(...)` and settled assistant run output plus persisted assistant messages through `renderMarkdown(...)`, all inside a scoped `.msg-markdown` container so normal agent replies display headings, lists, links, tables, and code fences as Markdown instead of raw source while long open fenced blocks remain inspectable during streaming.

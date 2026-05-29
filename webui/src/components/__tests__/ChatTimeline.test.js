@@ -3033,6 +3033,10 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
+    const subAgentDetails = document.querySelector('.subagent-tool-event');
+    expect(subAgentDetails).toBeTruthy();
+    expect(subAgentDetails.open).toBe(false);
+
     const viewSessionButton = document.querySelector('.subagent-link');
     expect(viewSessionButton).toBeTruthy();
 
@@ -3109,6 +3113,37 @@ describe('ChatTimeline', () => {
       agentId: 'beta',
       sessionId: 'sub-session-running',
     });
+  });
+
+  it('does not render streaming tool preparation as a standalone card', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-streaming-tool-preparation',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-streaming-tool-preparation',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-streaming-tool-preparation',
+        name_delta: 'subagent',
+        arguments_delta: '{"agent_id":"beta"',
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.streaming-tool-event')).toBeNull();
+    expect(document.body.textContent).not.toContain('PREPARING TOOL');
   });
 });
 
