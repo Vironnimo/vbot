@@ -272,6 +272,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Does not render streamed tool-call preparation as a standalone timeline
     card. Tool-call deltas stay inside the live assistant-run model until the
     real tool row is available.
+  - Shows a compact `New run` timeline separator before an Assistant Run that
+    starts immediately after prior Assistant output without a visible user
+    message, so automatic follow-up Runs triggered by Sub-Agent batch completion
+    are visually distinct from the previous Run.
   - Renders `model_fallback` assistant-run children as a small inline informational notice using i18n text.
   - Renders `compaction_separator` timeline items as a date-separator-style inline notice using the `chat.compacted` i18n label.
   - Renders assistant streaming output through `renderMarkdownStreaming(...)` and settled assistant run output plus persisted assistant messages through `renderMarkdown(...)`, all inside a scoped `.msg-markdown` container so normal agent replies display headings, lists, links, tables, and code fences as Markdown instead of raw source while long open fenced blocks remain inspectable during streaming.

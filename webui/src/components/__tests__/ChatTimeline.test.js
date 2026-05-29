@@ -455,6 +455,119 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.retry-btn')).toBeNull();
   });
 
+  it('shows a run boundary before an automatic assistant follow-up run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-automatic-follow-up-boundary',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-parent',
+      sequence: 1,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-parent',
+      sequence: 2,
+      payload: {
+        message: { role: 'assistant', content: 'Waiting on sub-agents.' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-parent',
+      sequence: 3,
+      payload: { status: 'completed' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-follow-up',
+      sequence: 4,
+      payload: { status: 'running' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-follow-up',
+      sequence: 5,
+      payload: { content_delta: 'Sub-agent batch finished.' },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const assistantRuns = document.querySelectorAll('.assistant-run');
+    expect(assistantRuns).toHaveLength(2);
+
+    const boundary = document.querySelector('.run-boundary-sep');
+    expect(boundary).toBeTruthy();
+    expect(boundary.textContent.trim()).toBe('New run');
+
+    const runBoundaryOrder = Array.from(
+      document.querySelectorAll('.assistant-run, .run-boundary-sep'),
+    ).map((node) =>
+      node.classList.contains('run-boundary-sep') ? 'boundary' : 'run',
+    );
+    expect(runBoundaryOrder).toEqual(['run', 'boundary', 'run']);
+  });
+
+  it('does not show a run boundary between normal user turns', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-normal-user-turns-no-boundary',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: {
+        message: { id: 'user-one', role: 'user', content: 'First request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { message: { role: 'assistant', content: 'First answer.' } },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-two',
+      sequence: 3,
+      payload: {
+        message: { id: 'user-two', role: 'user', content: 'Second request' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-two',
+      sequence: 4,
+      payload: { message: { role: 'assistant', content: 'Second answer.' } },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelectorAll('.assistant-run')).toHaveLength(2);
+    expect(document.querySelector('.run-boundary-sep')).toBeNull();
+  });
+
   it('renders error history messages with an error label and content', () => {
     const sessionState = ensureSessionState(
       createChatState(),
