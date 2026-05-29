@@ -17,11 +17,6 @@ required files, read those in full too.
 When working on a domain, read its spec from `.vorch/specs/` before changing
 that domain. Treat listed specs as a starting point, not a ceiling.
 
-## Subagents
-
-Do not use subagents unless the user explicitly asks for them. If subagents are
-forbidden or unavailable, do all work yourself.
-
 ## Working Loop
 
 1. Plan: for non-trivial work, keep a short visible checklist and update it as
@@ -35,11 +30,9 @@ forbidden or unavailable, do all work yourself.
 5. Update docs/specs: if behavior, contracts, architecture, setup, tests, or UI
    conventions changed, update the relevant `.vorch` docs in the same task.
 6. Commit: commit the completed logical unit unless the user tells you not to.
-7. Ask: before ending the turn, call `vscode_askQuestions` with concrete next
-   choices.
 
 If the user asks only for analysis, review, or a summary, do not edit code
-unless they ask you to proceed. Still end with `vscode_askQuestions`.
+unless they ask you to proceed.
 
 ## Git
 
@@ -185,21 +178,3 @@ If a task appears to require a new dependency:
 2. Ask the user before adding it unless they already approved the dependency.
 3. If approved, update manifests and lock files together.
 4. Report new dependencies in the completion summary.
-
-## Hard Stop: Required AskQuestions Tool Call
-
-Before ending every assistant turn, call `vscode_askQuestions`.
-
-This is mandatory after every completed task, and at the latest after every
-commit. It is also mandatory for explanations, analysis, review, wording
-suggestions, status updates, and blocked reports.
-
-The assistant's last action in the turn must be the `vscode_askQuestions` tool
-call. A prose answer without that tool call violates this repository's rules.
-
-Immediately before that tool call, explicitly repeat this reminder in the
-visible response: after every completed task, and at the latest after every
-commit, call `vscode_askQuestions`.
-
-The question must offer concrete next-step choices relevant to the just-completed
-work.

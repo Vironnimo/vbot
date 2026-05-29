@@ -40,7 +40,7 @@ extensions later
 - [x] Phase 3: Improve JSONL `session_search` with anchored windows and bookends.
 - [x] Phase 4: Update specs/docs for memory, prompts, tools, sessions, agent, runtime.
 - [x] Phase 5: Run focused and full backend quality gates.
-- [ ] Phase 6: Review diff and commit the completed logical unit.
+- [x] Phase 6: Review diff and commit the completed logical unit.
 
 ## Phase 1 Details: Pinned Memory Service And Tool
 
