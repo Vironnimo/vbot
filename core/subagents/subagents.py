@@ -32,7 +32,6 @@ DEFAULT_MAX_SUBAGENT_DEPTH = 4
 DEFAULT_MAX_SUBAGENTS_PER_TURN = 8
 DEFAULT_SUBAGENT_TIMEOUT_MINUTES = 60
 SECONDS_PER_MINUTE = 60
-RESULT_PREVIEW_LIMIT = 300
 SESSION_RESULT_RETRY_ATTEMPTS = 3
 SESSION_RESULT_RETRY_DELAY_SECONDS = 0.05
 SUBAGENT_STATUS_QUEUED = "queued"
@@ -775,15 +774,37 @@ def _last_assistant_with_content(messages: list[ChatMessage]) -> ChatMessage | N
 
 
 def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
-    lines = ["Sub-agent batch completed.", "", "Results:"]
+    lines = [
+        "Sub-agent batch completed. The complete final output of each sub-agent is "
+        "included below. Do not call subagent_result to fetch these again.",
+        "",
+        "Results:",
+    ]
     for entry in entries:
-        result_text = "(no output)"
-        if entry.result is not None:
-            result = entry.result.get("result")
-            if isinstance(result, str) and result:
-                result_text = result[:RESULT_PREVIEW_LIMIT]
-        lines.append(f"- {entry.agent_id}/{entry.session_id}: {result_text}")
+        lines.append("")
+        lines.append(f"### {entry.agent_id} (session {entry.session_id}) — {_entry_status(entry)}")
+        lines.append(_entry_result_text(entry))
     return "\n".join(lines)
+
+
+def _entry_status(entry: _SubAgentEntry) -> str:
+    if entry.result is not None:
+        status = entry.result.get("status")
+        if isinstance(status, str) and status:
+            return status
+    return RunStatus.COMPLETED.value
+
+
+def _entry_result_text(entry: _SubAgentEntry) -> str:
+    if entry.result is None:
+        return "(no output)"
+    result = entry.result.get("result")
+    if isinstance(result, str) and result:
+        return result
+    note = entry.result.get("note")
+    if isinstance(note, str) and note:
+        return f"(no output) {note}"
+    return "(no output)"
 
 
 def _load_subagent_settings(runtime: Any) -> dict[str, int]:

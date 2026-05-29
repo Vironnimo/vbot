@@ -10,7 +10,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 
 - `SubAgentCoordinator`: runtime-facing service with `spawn(context, arguments)` and `result(context, arguments)` handlers.
 - `SubAgentBatchTracker`: process-local tracker keyed by parent `(agent_id, session_id, run_id)`.
-- Batch entries identify child `agent_id`, `session_id`, optional live `run_id`, optional `queue_item_id`, completion state, fetched state, and result preview data.
+- Batch entries identify child `agent_id`, `session_id`, optional live `run_id`, optional `queue_item_id`, completion state, fetched state, and the captured result envelope.
 - Batch tracking does not persist across restarts.
 - The tracker reserves a per-turn slot before async spawn work begins, so sibling tool calls cannot bypass `max_subagents_per_turn` while they are waiting on session or queue state.
 
@@ -36,5 +36,6 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 - Depth and per-turn limits are enforced from runtime settings.
 - Parent cancellation removes queued child Runs when possible and cancels already-started child Runs.
 - Completed entries that were fetched are pruned from the in-memory tracker.
-- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note.
+- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note carries each sub-agent's complete final output (untruncated) plus its run status, so the parent does not need a `subagent_result` fetch to read batch results.
+- Tool descriptions instruct callers to end their turn after a non-blocking spawn and rely on the automatic completion note; `subagent_result` is only for explicit user-requested status checks before the batch finishes.
 - `SubAgentCoordinator` still starts child Runs through ChatLoop internals; keep this boundary narrow until Runs exposes a cleaner child-run API.

@@ -10,10 +10,17 @@ SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
 
 SUBAGENT_TOOL_DESCRIPTION = (
     "Spawn a sub-agent run in a persisted session. Use non-blocking mode for "
-    "parallel work, or blocking mode when the caller must wait for the result."
+    "parallel work, or blocking mode when the caller must wait for the result. "
+    "After a non-blocking spawn, end your turn instead of polling: when every "
+    "sub-agent in the batch finishes, their complete final outputs are delivered "
+    "to you automatically. Only check on a running sub-agent before then if the "
+    "user explicitly asks for its status."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
-    "Fetch the latest result from a spawned sub-agent session and mark it as retrieved."
+    "Fetch the latest result from a spawned sub-agent session and mark it as "
+    "retrieved. You normally do not need this: completed non-blocking batches are "
+    "delivered to you automatically. Use it only when the user explicitly asks to "
+    "check a sub-agent's status or result before the batch finishes."
 )
 
 SUBAGENT_TOOL_PARAMETERS: JsonObject = {

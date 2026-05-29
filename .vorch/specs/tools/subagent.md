@@ -37,4 +37,5 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 - Parent cancellation removes queued child Runs when possible and cancels
   already-started child Runs.
 - Completed entries that were fetched are pruned from the in-memory tracker.
-- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note.
+- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note includes each sub-agent's complete final output (untruncated) and run status, so no follow-up `subagent_result` call is needed to read batch results.
+- Tool descriptions tell callers to end their turn after a non-blocking spawn and wait for the automatic completion note; `subagent_result` is reserved for explicit user-requested status checks before a batch finishes.
