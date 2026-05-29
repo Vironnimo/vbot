@@ -45,8 +45,7 @@ as a read-only fallback credential source.
 - `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
 - `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
 - `load_defaults() -> dict[str, Any]` / `update_defaults(section, values) -> dict[str, Any]` — read/write validated `settings.json` defaults blocks. Currently only `section="agent"` is supported.
-- `load_recall_settings() -> dict[str, str]` — reads normalized raw recall
-  backend settings, defaulting to `{"backend": "jsonl_scan"}`.
+- `load_recall_settings() -> dict[str, str]` / `update_recall_settings(recall)` — read/write normalized recall backend settings, defaulting to `{"backend": "jsonl_scan"}`.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 

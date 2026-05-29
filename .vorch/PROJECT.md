@@ -61,6 +61,8 @@ unset values inherit these defaults at load time without rewriting their
 fallback resolution. `settings.json` may also include `recall.backend` for raw
 configuration of the Session recall backend; `jsonl_scan` is default and
 `sqlite_fts` uses a disposable SQLite FTS5 index under `<data_dir>/recall/`.
+The Settings UI exposes the first-party recall backends and applies changes by
+reloading the runtime `session_search` backend without restart.
 User-editable JSON configuration is validated through the central
 `core/settings/validation.py` layer before runtime code consumes it:
 `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and

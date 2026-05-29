@@ -31,6 +31,15 @@ Built-in backend names:
 - `sqlite_fts` - optional derived SQLite FTS5 index under
   `<data_dir>/recall/session_index.sqlite`.
 
+Backend selection:
+
+- Raw config uses `settings.json` `recall.backend`.
+- `settings.get` exposes `{ backend, available_backends }` for the Settings
+  Recall panel.
+- `settings.update({ recall: { backend } })` accepts first-party backend names
+  and calls `Runtime.reload_recall_backend()` so `session_search` uses the new
+  backend without an app restart.
+
 ## JSONL Backend
 
 `JsonlSessionRecallBackend` owns the current browse/search/anchored-view

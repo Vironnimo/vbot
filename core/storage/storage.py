@@ -255,6 +255,23 @@ class StorageManager:
         settings = self.load_settings()
         return self._normalize_recall_settings(settings.get("recall"))
 
+    def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
+        """Persist the supported recall settings subset and return it."""
+
+        if not isinstance(recall, Mapping):
+            raise StorageError("Recall settings must be a mapping")
+
+        unsupported_fields = sorted(set(recall) - {"backend"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported recall settings: {', '.join(unsupported_fields)}")
+
+        normalized_recall = self._normalize_recall_settings(recall)
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        merged_settings["recall"] = normalized_recall
+        self.save_settings(merged_settings)
+        return dict(normalized_recall)
+
     def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         """Persist normalized defaults for a single section and return persisted values."""
 

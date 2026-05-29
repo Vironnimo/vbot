@@ -59,8 +59,9 @@ stores normal Sessions directly in SQLite, that should be a separate
 - Do not add vector search or semantic embeddings.
 - Do not combine curated memory CRUD with Session recall.
 - Do not add WebUI controls for recall backend selection in the first pass unless
-  explicitly requested; raw `settings.json` support is enough for the backend
-  work.
+  explicitly requested; raw `settings.json` support was enough for the initial
+  backend work. Follow-up: the Settings Recall panel now exposes first-party
+  backend selection.
 - Do not silently migrate old config. Unknown or invalid current config should
   follow the existing validation rules.
 
@@ -79,9 +80,8 @@ Relevant current implementation details:
   the requested roles.
 - `settings.json` raw validation currently warns for unknown top-level keys, but
   storage read paths reject schema errors.
-- `settings.update` only supports explicit public sections. Recall backend
-  selection does not need to be in the public Settings UI/RPC in the first
-  implementation.
+- `settings.update` supports explicit public sections. Follow-up work added the
+  `recall` section so the Settings UI can switch the `session_search` backend.
 - Runtime registers `session_search` with `ChatSessionManager` directly today.
   This is the seam to replace with a recall backend.
 
@@ -282,9 +282,8 @@ Implementation details:
   non-empty string and let runtime resolve against the registry.
 - Add `StorageManager.load_recall_settings()` returning
   `{"backend": "jsonl_scan"}` by default.
-- Do not add `settings.update` support in the first pass unless UI/API control
-  is requested. This avoids new public Settings surface area before the backend
-  proves itself.
+- Follow-up UI/API control adds `settings.update({ "recall": { "backend": ... } })`
+  for first-party backend names and reloads `session_search` without restart.
 
 ## SQLite Index Location
 
@@ -598,6 +597,8 @@ Settings/runtime:
 
 - Missing `settings.recall` defaults to `jsonl_scan`.
 - `{"recall": {"backend": "sqlite_fts"}}` selects SQLite backend.
+- `settings.get` exposes `{ backend, available_backends }`; `settings.update`
+  accepts `recall.backend` for first-party names and reloads runtime recall.
 - Invalid raw settings shape is reported by config validation.
 - Unknown backend logs warning and falls back to JSONL at runtime, unless raw
   validation chooses to reject it before runtime.
@@ -618,7 +619,7 @@ Settings/runtime:
 - `.vorch/specs/runtime.md`
   - Document recall registry/backend startup wiring.
 - `.vorch/specs/settings.md`
-  - Document raw `settings.recall.backend`.
+  - Document raw and public `settings.recall.backend`.
 - `.vorch/specs/sessions.md`
   - Clarify JSONL remains canonical while recall indexes are derived.
 - `.vorch/specs/memory.md`

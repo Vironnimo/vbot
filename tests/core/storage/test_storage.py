@@ -349,6 +349,26 @@ def test_load_recall_settings_reads_configured_backend(tmp_path: Path) -> None:
     assert storage.load_recall_settings() == {"backend": "sqlite_fts"}
 
 
+def test_update_recall_settings_persists_under_recall_key(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500})
+
+    updated = storage.update_recall_settings({"backend": " sqlite_fts "})
+
+    assert updated == {"backend": "sqlite_fts"}
+    assert storage.load_settings() == {
+        "server_port": 8500,
+        "recall": {"backend": "sqlite_fts"},
+    }
+
+
+def test_update_recall_settings_rejects_unsupported_fields(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match="Unsupported recall settings: unknown"):
+        storage.update_recall_settings({"backend": "sqlite_fts", "unknown": True})
+
+
 def test_load_recall_settings_rejects_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()

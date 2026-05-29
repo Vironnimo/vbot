@@ -81,6 +81,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   triggers rooted at `<data_dir>/cron/jobs.json`.
 - `system_prompts` — `core.prompts.SystemPromptManager` using runtime storage/tools/skills.
 - `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
+- `reload_recall_backend()` — reloads the configured Recall backend from
+  `settings.recall.backend` and re-registers `session_search` so Settings UI
+  backend changes take effect without restarting the app.
 - `reload_channel_tool()` — unregisters `channel_send` and re-registers it when
   `channel_service.has_active_channels()` is true so runtime channel
   enable/disable changes keep tool visibility in sync.

@@ -317,6 +317,31 @@ describe('SettingsView', () => {
     });
   });
 
+  it('renders and saves the Recall backend dropdown', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openRecallPanel();
+
+    expect(document.body.textContent).toContain('Recall backend');
+    expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
+      'JSONL scan',
+    );
+
+    openSimpleDropdown('settings-recall-backend');
+    selectSimpleOption('settings-recall-backend', 'SQLite FTS');
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      recall: {
+        backend: 'sqlite_fts',
+      },
+    });
+  });
+
   it('loads channels panel and resolves running status for each channel', async () => {
     rpcMock.mockImplementation(
       createSettingsRpcMock({
@@ -667,6 +692,15 @@ async function openCompactionPanel() {
   flushSync();
   await waitForCondition(() =>
     document.body.textContent.includes('Summary model'),
+  );
+}
+
+async function openRecallPanel() {
+  await waitForCondition(() => buttonByText('Recall'));
+  buttonByText('Recall').click();
+  flushSync();
+  await waitForCondition(() =>
+    document.body.textContent.includes('Recall backend'),
   );
 }
 
@@ -1066,6 +1100,13 @@ function mergeSettingsPayload(currentSettings, patch) {
     };
   }
 
+  if (patch?.recall && typeof patch.recall === 'object') {
+    nextSettings.recall = {
+      ...(nextSettings.recall ?? {}),
+      ...patch.recall,
+    };
+  }
+
   if (patch?.defaults && typeof patch.defaults === 'object') {
     nextSettings.defaults = {
       ...(nextSettings.defaults ?? {}),
@@ -1202,6 +1243,10 @@ function settingsPayload(options = {}) {
       threshold: 0.8,
       tail_tokens: 15000,
       summary_model: null,
+    },
+    recall: {
+      backend: 'jsonl_scan',
+      available_backends: ['jsonl_scan', 'sqlite_fts'],
     },
     defaults: {
       agent: {},

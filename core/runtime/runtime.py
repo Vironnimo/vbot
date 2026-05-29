@@ -559,6 +559,15 @@ class Runtime:
         self._ensure_started()
         self._sync_channel_tool_registration()
 
+    def reload_recall_backend(self) -> None:
+        """Reload session_search from the current persisted recall backend setting."""
+        self._ensure_started()
+        recall_registry = RecallBackendRegistry.with_builtins()
+        self._recall_backend = self._create_recall_backend(recall_registry)
+        if self._tools is not None:
+            self._tools.unregister("session_search")
+            register_session_search_tool(self._tools, self._recall_backend)
+
     def reload_skills(self) -> None:
         """Reload the runtime skill registry from current persisted settings."""
         self._ensure_started()

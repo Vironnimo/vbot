@@ -30,6 +30,13 @@ export const AGENT_DEFAULTS_FIELDS = Object.freeze([
 ]);
 export const AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT =
   '__thinking_effort_no_default__';
+export const RECALL_BACKEND_JSONL_SCAN = 'jsonl_scan';
+export const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
+
+const RECALL_BACKEND_DEFAULTS = Object.freeze([
+  RECALL_BACKEND_JSONL_SCAN,
+  RECALL_BACKEND_SQLITE_FTS,
+]);
 
 const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'none',
@@ -326,6 +333,42 @@ export function getCompactionSettings(settings) {
   return normalizeCompactionSettings(settings);
 }
 
+export function normalizeRecallSettings(rawSettings) {
+  const recall = rawSettings?.recall ?? {};
+  const availableBackends = normalizeRecallBackends(recall.available_backends);
+  const backend =
+    typeof recall.backend === 'string' &&
+    availableBackends.includes(recall.backend)
+      ? recall.backend
+      : RECALL_BACKEND_JSONL_SCAN;
+
+  return {
+    backend,
+    available_backends: availableBackends,
+  };
+}
+
+export function getRecallSettings(settings) {
+  return normalizeRecallSettings(settings);
+}
+
+export function buildRecallSettingsPayload(formValues) {
+  return {
+    recall: {
+      backend: normalizeRecallSettings({ recall: formValues }).backend,
+    },
+  };
+}
+
+export function buildRecallBackendOptions(recallSettings, translate) {
+  return normalizeRecallBackends(recallSettings?.available_backends).map(
+    (backend) => ({
+      value: backend,
+      label: translate(`settings.recall.backends.${backend}`, backend),
+    }),
+  );
+}
+
 export function buildSubAgentSettingsPayload(formValues) {
   return {
     subagents: normalizeSubAgentSettings({
@@ -544,6 +587,17 @@ function textOrFallback(value, fallback) {
   const normalized = textOrEmpty(value);
 
   return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizeRecallBackends(backends) {
+  const values = Array.isArray(backends) ? backends : RECALL_BACKEND_DEFAULTS;
+  const normalized = values
+    .map((backend) => textOrEmpty(backend))
+    .filter((backend) => backend.length > 0);
+
+  return normalized.length > 0
+    ? Array.from(new Set(normalized))
+    : [...RECALL_BACKEND_DEFAULTS];
 }
 
 function resolveAgentDefaultsSource(rawSettings) {

@@ -9,12 +9,15 @@ import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
   buildAgentDefaultsPayload,
   buildLanguageOptions,
+  buildRecallBackendOptions,
+  buildRecallSettingsPayload,
   buildSubAgentSettingsPayload,
   createLanguageUpdatePayload,
   createSkillDirectoriesUpdatePayload,
   describeProvider,
   formatServerHost,
   getDefaultSkillDirectoryValue,
+  getRecallSettings,
   getSkillDirectories,
   normalizeAgentDefaultsSettings,
   normalizeSubAgentSettings,
@@ -205,6 +208,59 @@ describe('SettingsView', () => {
     );
   });
 
+  it('selects and saves the recall backend', async () => {
+    const toastMock = vi.fn();
+    rpcMock
+      .mockResolvedValueOnce(createSettingsPayload())
+      .mockImplementationOnce(async (_method, params) =>
+        createSettingsPayload({
+          recall: {
+            backend: params.recall.backend,
+            available_backends: ['jsonl_scan', 'sqlite_fts'],
+          },
+        }),
+      );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+
+    await waitForText('0.0.0.0:9001');
+    clickButton('Recall');
+
+    expect(document.body.textContent).toContain('Recall backend');
+
+    const trigger = document.body.querySelector('#settings-recall-backend');
+    expect(trigger).not.toBeNull();
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    const sqliteOption = Array.from(
+      document.body.querySelectorAll('.dropdown-option'),
+    ).find((option) => option.textContent.trim() === 'SQLite FTS');
+    expect(sqliteOption).toBeTruthy();
+    sqliteOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    clickButton('Save');
+
+    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+      recall: {
+        backend: 'sqlite_fts',
+      },
+    });
+
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Recall backend updated.',
+        variant: 'success',
+      }),
+    );
+  });
+
   it('renders load failures and retries settings.get successfully', async () => {
     rpcMock
       .mockRejectedValueOnce(new Error('server offline'))
@@ -360,6 +416,32 @@ describe('settingsView helpers', () => {
         subagent_timeout_minutes: 30,
       },
     });
+    expect(getRecallSettings({})).toEqual({
+      backend: 'jsonl_scan',
+      available_backends: ['jsonl_scan', 'sqlite_fts'],
+    });
+    expect(
+      getRecallSettings({
+        recall: {
+          backend: 'sqlite_fts',
+          available_backends: ['jsonl_scan', 'sqlite_fts'],
+        },
+      }),
+    ).toEqual({
+      backend: 'sqlite_fts',
+      available_backends: ['jsonl_scan', 'sqlite_fts'],
+    });
+    expect(buildRecallSettingsPayload({ backend: 'sqlite_fts' })).toEqual({
+      recall: {
+        backend: 'sqlite_fts',
+      },
+    });
+    expect(buildRecallBackendOptions(getRecallSettings({}), translate)).toEqual(
+      [
+        { value: 'jsonl_scan', label: 'JSONL scan' },
+        { value: 'sqlite_fts', label: 'SQLite FTS' },
+      ],
+    );
     expect(
       getDefaultSkillDirectoryValue(createSettingsPayload(), translate),
     ).toBe('C:/Users/test/.vbot/skills');
@@ -496,6 +578,10 @@ function createSettingsPayload(overrides = {}) {
       max_subagents_per_turn: 8,
       subagent_timeout_minutes: 60,
     },
+    recall: {
+      backend: 'jsonl_scan',
+      available_backends: ['jsonl_scan', 'sqlite_fts'],
+    },
   };
 
   return mergeSettings(base, overrides);
@@ -580,6 +666,8 @@ function translate(key, fallback, values) {
     'settings.providers.status.configured': 'Configured',
     'settings.providers.status.missingCredentials': 'Missing credentials',
     'settings.providers.status.placeholder': 'Placeholder',
+    'settings.recall.backends.jsonl_scan': 'JSONL scan',
+    'settings.recall.backends.sqlite_fts': 'SQLite FTS',
   };
   const template = templates[key] ?? fallback ?? key;
 

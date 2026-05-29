@@ -42,6 +42,7 @@ from core.models.models import ModelRegistry
 from core.prompts import PromptError, PromptFragmentManager
 from core.providers.auth_flow import DeviceFlowEngine
 from core.providers.token_getter import OAuthTokenGetter
+from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
@@ -1743,6 +1744,7 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
     storage = state.runtime.storage
     original_settings: JsonObject | None = None
+    should_reload_recall_backend = False
     should_reload_skills = False
 
     try:
@@ -1760,10 +1762,17 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             defaults_update = cast(JsonObject, settings_update["defaults"])
             if "agent" in defaults_update:
                 storage.update_defaults("agent", defaults_update["agent"])
+        if "recall" in settings_update:
+            storage.update_recall_settings(settings_update["recall"])
+            should_reload_recall_backend = True
         if should_reload_skills:
             reload_skills = getattr(state.runtime, "reload_skills", None)
             if callable(reload_skills):
                 reload_skills()
+        if should_reload_recall_backend:
+            reload_recall_backend = getattr(state.runtime, "reload_recall_backend", None)
+            if callable(reload_recall_backend):
+                reload_recall_backend()
         return _settings_response(state)
     except Exception as exc:
         if original_settings is not None:
@@ -1977,6 +1986,7 @@ def _settings_response(state: Any) -> JsonObject:
     appearance = runtime.storage.load_appearance_settings()
     subagents = runtime.storage.load_subagent_settings()
     compaction = runtime.storage.load_compaction_settings()
+    recall = runtime.storage.load_recall_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
 
@@ -2002,6 +2012,10 @@ def _settings_response(state: Any) -> JsonObject:
         "defaults": defaults,
         "subagents": {field: subagents[field] for field in SUBAGENT_SETTING_FIELDS},
         "compaction": dict(compaction),
+        "recall": {
+            "backend": recall["backend"],
+            "available_backends": sorted(FIRST_PARTY_RECALL_BACKENDS),
+        },
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
     if callable(skill_directory_loader):
