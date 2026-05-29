@@ -40,6 +40,7 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderRateLimitError,
+    ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
 )
 from core.runs import (
@@ -56,8 +57,8 @@ from core.runs import (
     Run,
 )
 from core.sessions import ChatSession, ChatSessionManager, is_skill_context_note
-from core.tools import ToolCall as ScheduledToolCall
 from core.tools import (
+    InvalidToolResultError,
     ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
@@ -67,6 +68,7 @@ from core.tools import (
     is_tool_result_envelope,
     tool_failure,
 )
+from core.tools import ToolCall as ScheduledToolCall
 from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -494,11 +496,10 @@ class _EmittingToolRegistry(ToolRegistry):
             return tool_failure("tool_not_found", str(error))
         except ToolNotAllowedError as error:
             return tool_failure("tool_not_allowed", str(error))
+        except InvalidToolResultError as error:
+            return tool_failure("invalid_tool_result", str(error))
         except ValueError as error:
-            return tool_failure(
-                "invalid_tool_result" if "return" in str(error) else "invalid_arguments",
-                str(error),
-            )
+            return tool_failure("invalid_arguments", str(error))
         except Exception as error:
             return tool_failure("tool_execution_error", str(error))
 
@@ -972,7 +973,7 @@ class ChatLoop:
             session.append(assistant_message)
             if not self._streaming:
                 _emit_assistant_events(run, assistant_message)
-            messages.append(assistant_message.to_dict())
+            messages.append(_assistant_continuation_dict(assistant_message))
 
             if not assistant_message.tool_calls:
                 if self._compaction_service is not None:
@@ -1501,10 +1502,7 @@ def _emit_message_event(run: Run, event_type: str, message: ChatMessage) -> None
 
 
 def _is_streaming_fallback_error(error: ProviderError) -> bool:
-    if error.retryable:
-        return False
-    message = str(error).lower()
-    return all(token in message for token in ("stream", "support"))
+    return isinstance(error, ProviderStreamingUnsupportedError)
 
 
 def _maybe_persist_partial_thinking(
@@ -1530,9 +1528,11 @@ def _emit_tool_context_event(run: Run, event_type: str, payload: JsonObject) -> 
 
 def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
     if not isinstance(result, dict):
-        raise ValueError(f"Tool handler must return a JSON object: {tool_name}")
+        raise InvalidToolResultError(f"Tool handler must return a JSON object: {tool_name}")
     if not is_tool_result_envelope(result):
-        raise ValueError(f"Tool handler must return a valid result envelope: {tool_name}")
+        raise InvalidToolResultError(
+            f"Tool handler must return a valid result envelope: {tool_name}"
+        )
     return result
 
 
@@ -1777,6 +1777,18 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
         data.pop("usage", None)
+    return data
+
+
+def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
+    """Return the live current-turn assistant dict for provider continuation.
+
+    Keeps readable ``reasoning`` and opaque ``reasoning_meta`` so reasoning-aware
+    adapters can round-trip the active tool-use turn, but drops ``usage`` because
+    token accounting is never part of the provider request contract.
+    """
+    data = message.to_dict()
+    data.pop("usage", None)
     return data
 
 

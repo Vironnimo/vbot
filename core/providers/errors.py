@@ -30,6 +30,18 @@ class ProviderAuthError(ProviderError):
         super().__init__(message, retryable=False)
 
 
+class ProviderStreamingUnsupportedError(ProviderError):
+    """The provider/model cannot serve this request as a stream.
+
+    Not retryable — retrying the same streaming request will fail again. The
+    chat loop catches this specific type to transparently fall back to a
+    non-streaming request before any visible output has been emitted.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(message, retryable=False)
+
+
 class ProviderRateLimitError(ProviderError):
     """Rate-limit error (HTTP 429).
 

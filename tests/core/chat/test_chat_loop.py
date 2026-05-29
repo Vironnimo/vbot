@@ -20,7 +20,12 @@ from core.chat import (
     ToolCall,
 )
 from core.chat.streaming import StreamingDeltaError
-from core.providers.errors import NetworkError, ProviderAuthError, ProviderRateLimitError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderRateLimitError,
+    ProviderStreamingUnsupportedError,
+)
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -1547,6 +1552,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
                 "content": None,
                 "reasoning": "Need weather.",
                 "reasoning_meta": {"encrypted_content": "opaque-current-turn"},
+                "usage": {"input_tokens": 11, "output_tokens": 7},
                 "tool_calls": [
                     {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
                 ],
@@ -1584,6 +1590,9 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         "encrypted_content": "opaque-current-turn"
     }
     assert adapter.requests[1]["messages"][2]["reasoning"] == "Need weather."
+    # usage is persisted on the assistant turn but never sent to the provider.
+    assert persisted[1]["usage"] == {"input_tokens": 11, "output_tokens": 7}
+    assert "usage" not in adapter.requests[1]["messages"][2]
 
 
 @pytest.mark.asyncio
@@ -1799,7 +1808,7 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
         [{"content": "Fallback answer", "tool_calls": None}],
-        stream_responses=[ProviderError("streaming is not supported", retryable=False)],
+        stream_responses=[ProviderStreamingUnsupportedError("streaming is not supported")],
     )
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
@@ -1822,6 +1831,28 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_streaming_mode_does_not_fallback_on_generic_provider_error(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [{"content": "Should not use", "tool_calls": None}],
+        stream_responses=[ProviderError("provider failed", retryable=False)],
+    )
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ProviderError, match="provider failed"):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.FAILED
+    assert [message.role for message in messages] == ["user", "error"]
+    assert messages[1].error_kind == "provider_fatal"
+    # No non-streaming fallback request was issued for a generic provider error.
+    assert len(adapter.stream_requests) == 1
+    assert len(adapter.requests) == 0
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -1829,7 +1860,7 @@ async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Pa
         stream_responses=[
             [
                 {"type": "content_delta", "text": "partial"},
-                ProviderError("streaming is not supported", retryable=False),
+                ProviderStreamingUnsupportedError("streaming is not supported"),
             ]
         ],
     )

@@ -24,6 +24,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolRegistry.provider_definitions(...) -> list[dict]` returns provider-visible `name`, `description`, and JSON Schema only.
 - `ToolRegistry.prompt_definitions(...) -> list[dict]` returns prompt-visible name/description pairs.
 - `ToolRegistry.dispatch(context, arguments, allowed_tools=None) -> dict` executes a tool and validates the result envelope.
+- Result-envelope validation failures raise `InvalidToolResultError` (a `ValueError` subclass), distinct from plain `ValueError` argument failures. The chat loop maps the former to an `invalid_tool_result` failure envelope and the latter to `invalid_arguments`, without inspecting error message text.
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
 
 ## Specific Specs
