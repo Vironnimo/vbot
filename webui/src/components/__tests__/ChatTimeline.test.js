@@ -3146,6 +3146,69 @@ describe('ChatTimeline', () => {
     expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
   });
 
+  it('marks a spawned background sub-agent tool row done after spawn succeeds', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-spawn-dot',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-spawn-dot',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: false,
+            content: 'Inspect in the background',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-spawn-dot',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-running',
+            status: 'running',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const subagentLine = document.querySelector(
+      '.subagent-tool-event .subagent-line',
+    );
+
+    expect(subagentLine?.textContent).toContain('view session');
+    expect(subagentLine?.querySelector('.te-dot.done')).not.toBeNull();
+    expect(subagentLine?.querySelector('.te-dot.running')).toBeNull();
+  });
+
   it('calls the sub-agent navigation callback with a spawned session target', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = ensureSessionState(
