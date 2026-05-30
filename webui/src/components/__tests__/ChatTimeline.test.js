@@ -3207,6 +3207,72 @@ describe('ChatTimeline', () => {
     expect(subagentLine?.querySelector('.te-dot.done')).toBeNull();
   });
 
+  it('marks a spawned background sub-agent row done after the child run completes', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-child-complete-dot',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-child-complete-dot',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: false,
+            content: 'Inspect in the background',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-child-complete-dot',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+        },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-running',
+            run_id: 'sub-run-completed',
+            status: 'running',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        subAgentStatuses: {
+          'run:sub-run-completed': 'completed',
+        },
+      },
+    });
+    flushSync();
+
+    const subagentLine = document.querySelector(
+      '.subagent-tool-event .subagent-line',
+    );
+
+    expect(subagentLine?.querySelector('.te-dot.done')).not.toBeNull();
+    expect(subagentLine?.querySelector('.te-dot.running')).toBeNull();
+  });
+
   it('calls the sub-agent navigation callback with a spawned session target', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = ensureSessionState(

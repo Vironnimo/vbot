@@ -62,6 +62,7 @@
   let viewingSubAgentSession = $state(false);
   let submittedTurnScrollKey = $state(0);
   let submittedTurnScrollRunId = $state('');
+  let subAgentRunStatuses = $state({});
   let handledSubAgentNavigationKey = '';
   const activeSubscriptions = {};
   const pendingReconnects = {};
@@ -200,8 +201,9 @@
   $effect(() => {
     const agentId = pendingSubAgentNavigation?.agentId;
     const sessionId = pendingSubAgentNavigation?.sessionId;
+    const requestId = pendingSubAgentNavigation?.requestId ?? '';
     const navigationKey =
-      agentId && sessionId ? `${agentId}::${sessionId}` : '';
+      agentId && sessionId ? `${agentId}::${sessionId}::${requestId}` : '';
     if (!navigationKey || navigationKey === handledSubAgentNavigationKey) {
       return;
     }
@@ -691,6 +693,7 @@
     if (!event) {
       return;
     }
+    trackSubAgentRunStatus(event);
     if (event.type === 'compaction_completed' && event.payload?.message) {
       appendCompactionCheckpoint(sessionState, event.payload.message);
     }
@@ -702,6 +705,40 @@
       }
       void syncSessionQueue(sessionState);
     }
+  };
+
+  const trackSubAgentRunStatus = (event) => {
+    const status = statusFromRunEvent(event);
+    if (!status) {
+      return;
+    }
+
+    const updates = {};
+    if (event.run_id) {
+      updates[`run:${event.run_id}`] = status;
+    }
+    if (event.agent_id && event.session_id) {
+      updates[`session:${event.agent_id}::${event.session_id}`] = status;
+    }
+    if (Object.keys(updates).length > 0) {
+      subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
+    }
+  };
+
+  const statusFromRunEvent = (event) => {
+    if (event.type === 'run_started') {
+      return 'running';
+    }
+    if (event.type === 'run_completed') {
+      return 'completed';
+    }
+    if (event.type === 'run_failed') {
+      return 'failed';
+    }
+    if (event.type === 'run_cancelled') {
+      return 'cancelled';
+    }
+    return '';
   };
 
   const recoverRunStream = (sessionState, sseUrl, retryAttempt, error) => {
@@ -1087,6 +1124,7 @@
             hasOlderHistory={activeSessionState?.hasOlderHistory === true}
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
               true}
+            subAgentStatuses={subAgentRunStatuses}
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={navigateToSubAgent}
             onRetry={handleRetry}

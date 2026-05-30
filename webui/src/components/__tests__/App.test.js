@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 const rpcMock = vi.fn();
+const listQueueMock = vi.fn(() => Promise.resolve({ items: [] }));
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
 const subscribeLogEventsMock = vi.fn(() => ({
@@ -24,6 +25,7 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
+  listQueue: (...args) => listQueueMock(...args),
   listLogs: (...args) => listLogsMock(...args),
   readLogFile: (...args) => readLogFileMock(...args),
   subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
@@ -42,6 +44,8 @@ describe('App', () => {
     init('en');
     mountedComponent = null;
     listLogsMock.mockReset();
+    listQueueMock.mockReset();
+    listQueueMock.mockResolvedValue({ items: [] });
     readLogFileMock.mockReset();
     subscribeLogEventsMock.mockClear();
     subscribeRunEventsMock.mockClear();
@@ -193,6 +197,55 @@ describe('App', () => {
       ),
     ).toBeTruthy();
   });
+
+  it('opens the same sub-agent session again after returning to the parent', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createSubAgentNavigationRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+    });
+
+    const firstViewSessionButton = viewSessionButton();
+    expect(firstViewSessionButton).toBeTruthy();
+    firstViewSessionButton?.click();
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Sub-agent response');
+    });
+
+    returnToCurrentSessionButton()?.click();
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain('Inspect again');
+      expect(document.body.textContent).not.toContain('Sub-agent response');
+    });
+
+    viewSessionButton()?.click();
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(
+        rpcMock.mock.calls.filter(
+          ([method, params]) =>
+            method === 'chat.history' &&
+            params?.session_id === 'sub-session-repeat',
+        ),
+      ).toHaveLength(2);
+      expect(document.body.textContent).toContain('Sub-agent response');
+    });
+  });
 });
 
 async function waitForAssertion(assertion) {
@@ -257,6 +310,84 @@ function createChatRpcMock(agents) {
   };
 }
 
+function createSubAgentNavigationRpcMock(agents) {
+  const messagesBySession = {
+    'session-parent': [
+      {
+        id: 'parent-user',
+        role: 'user',
+        content: 'Start sub-agent',
+      },
+      {
+        id: 'parent-assistant-tool',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent-repeat',
+            name: 'subagent',
+            arguments: {
+              agent_id: 'alpha',
+              blocking: false,
+              content: 'Inspect again',
+            },
+          },
+        ],
+      },
+      {
+        id: 'parent-tool-result',
+        role: 'tool',
+        tool_call_id: 'call-subagent-repeat',
+        name: 'subagent',
+        content: JSON.stringify({
+          ok: true,
+          data: {
+            agent_id: 'alpha',
+            session_id: 'sub-session-repeat',
+            run_id: 'sub-run-repeat',
+            status: 'completed',
+          },
+        }),
+      },
+    ],
+    'sub-session-repeat': [
+      {
+        id: 'sub-agent-assistant',
+        role: 'assistant',
+        content: 'Sub-agent response',
+      },
+    ],
+  };
+
+  return async (method, params) => {
+    if (method === 'agent.list') {
+      return { agents };
+    }
+
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+
+    if (method === 'chat.history') {
+      return {
+        agent_id: params?.agent_id ?? '',
+        session_id: params?.session_id ?? '',
+        messages: messagesBySession[params?.session_id] ?? [],
+      };
+    }
+
+    if (method === 'chat.queue_list') {
+      return { items: [] };
+    }
+
+    if (method === 'skill.list') {
+      return { skills: [], invalid_skills: [] };
+    }
+
+    throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
 function agentTabByName(name) {
   return Array.from(document.querySelectorAll('.agent-tabs .agent-tab')).find(
     (button) => button.textContent?.includes(name),
@@ -265,4 +396,16 @@ function agentTabByName(name) {
 
 function activeAgentTab() {
   return document.querySelector('.agent-tabs .agent-tab.active');
+}
+
+function viewSessionButton() {
+  return Array.from(document.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === 'view session',
+  );
+}
+
+function returnToCurrentSessionButton() {
+  return Array.from(document.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === 'Return to current session',
+  );
 }

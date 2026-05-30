@@ -134,6 +134,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Sub-agent session links keep the globally selected Agent on the parent Agent
     and route the displayed child Session through a local Agent/Session override,
     so “Return to current session” returns to the parent Agent's current Session.
+    Repeated clicks on the same sub-agent session link are treated as distinct
+    navigation requests, so returning to the parent and opening that same child
+    Session again reloads it.
 - `webui/src/components/QueuedMessages.svelte`
   - Renders queued server-backed messages with remove and inline edit controls. Edit mode is local UI state; save persists through `chat.queue_update` and cancel only exits the local editor.
 - `webui/src/components/SessionListDrawer.svelte`
@@ -267,11 +270,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Keeps Sub-Agent tool rows collapsed by default, including while running;
     the row itself remains visible with status and `view session`, and details
     open only when the user asks for them.
-  - The Sub-Agent row dot reflects child work status when the tool result or
-    live session event exposes it: queued/running stays orange, completed is
-    green, and failed/cancelled use the corresponding error/cancelled states.
-    If no child status is available, it falls back to the parent tool-call
-    status.
+  - The Sub-Agent row dot reflects child work status when the tool result,
+    matching `subagent_result`, or live child Run lifecycle event exposes it:
+    queued/running stays orange, completed is green, and failed/cancelled use
+    the corresponding error/cancelled states. If no child status is available,
+    it falls back to the parent tool-call status.
   - Does not render streamed/provisional Sub-Agent rows while tool arguments are
     still streaming. Once a blocking `subagent` tool call has started, the row
     appears immediately as `starting`; `view session` appears as soon as the
