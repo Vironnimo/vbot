@@ -52,6 +52,7 @@ from core.tools import (
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
+    register_homeassistant_tools,
     register_memory_tool,
     register_process_tool,
     register_read_tool,
@@ -214,6 +215,7 @@ class Runtime:
         register_memory_tool(self._tools, self._memory_service)
         register_web_fetch_tool(self._tools)
         register_web_search_tool(self._tools, self.resolve_environment_credential)
+        register_homeassistant_tools(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
