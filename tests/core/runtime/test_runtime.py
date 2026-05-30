@@ -113,6 +113,14 @@ def test_runtime_start_no_error(tmp_path: Path):
     assert runtime.logger is not None
 
 
+def test_runtime_wires_trigger_service_to_streaming_chat_loop(config: Config) -> None:
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert runtime.trigger_service._trigger_chat_loop is runtime.streaming_chat_loop
+
+
 def test_runtime_logger_exists_after_start(tmp_path: Path):
     """After start(), runtime.logger is a valid logger object."""
     # Arrange

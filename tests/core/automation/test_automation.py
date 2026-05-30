@@ -73,6 +73,38 @@ async def test_trigger_run_starts_existing_idle_session_immediately() -> None:
     assert run.id == "run-one"
 
 
+async def test_trigger_run_uses_trigger_chat_loop_when_provided() -> None:
+    # Arrange
+    runtime = Mock()
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(),
+        queue_run=AsyncMock(),
+    )
+    trigger_chat_loop = SimpleNamespace(
+        start_run=AsyncMock(return_value=make_run("run-streaming", "coder", "existing")),
+        queue_run=AsyncMock(),
+    )
+    chat_run_manager = Mock()
+    trigger_service = TriggerService(
+        cast(Any, chat_loop),
+        cast(Any, chat_run_manager),
+        cast(Any, runtime),
+        trigger_chat_loop=cast(Any, trigger_chat_loop),
+    )
+
+    # Act
+    run = await trigger_service.trigger_run("coder", "Continue", session_id="existing")
+
+    # Assert
+    trigger_chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "Continue",
+        session_id="existing",
+    )
+    chat_loop.start_run.assert_not_awaited()
+    assert run.id == "run-streaming"
+
+
 async def test_trigger_run_can_start_internal_run_without_visible_user_turn() -> None:
     # Arrange
     runtime = Mock()

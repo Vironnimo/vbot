@@ -766,9 +766,9 @@ describe('ChatView', () => {
     });
     flushSync();
 
-    const completedRow = document.querySelector('.subagent-tool-event');
-    expect(completedRow?.querySelector('.te-dot.done')).not.toBeNull();
-    expect(completedRow?.querySelector('.te-dot.running')).toBeNull();
+    const spawnedRow = document.querySelector('.subagent-tool-event');
+    expect(spawnedRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(spawnedRow?.querySelector('.te-dot.done')).toBeNull();
   });
 
   it('coalesces repeated run stream errors into one reconnect', async () => {

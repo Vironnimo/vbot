@@ -36,7 +36,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   `session_search` against that backend, creates the
   shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in
   slash commands, creates resolver-wired non-streaming and streaming
-  `ChatLoop` instances, wires `TriggerService`, wires and starts `ChannelService` when an event loop is active,
+  `ChatLoop` instances, wires `TriggerService` with the streaming loop for
+  programmatic Run execution and the non-streaming loop for command helpers,
+  wires and starts `ChannelService` when an event loop is active,
   registers the `channel_send` tool when at least one channel is active, wires
   and starts `CronService` when an event loop is active, registers the `cron`
   tool, creates the in-memory `SubAgentBatchTracker`, registers

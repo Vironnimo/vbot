@@ -41,6 +41,6 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 - Depth and per-turn limits are enforced from runtime settings.
 - Parent cancellation removes queued child Runs when possible and cancels already-started child Runs.
 - Completed entries that were fetched are pruned from the in-memory tracker.
-- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note carries each sub-agent's complete final output (untruncated) plus its run status, so the parent does not need a `subagent_result` fetch to read batch results.
+- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note carries each sub-agent's complete final output (untruncated) plus its run status, so the parent does not need a `subagent_result` fetch to read batch results. Runtime automation triggers use the streaming Chat loop, so this follow-up Run emits the same SSE delta timeline as a normal streamed chat turn.
 - Tool descriptions instruct callers to end their turn after a non-blocking spawn and rely on the automatic completion note; `subagent_result` is only for explicit user-requested status checks before the batch finishes.
 - `SubAgentCoordinator` still starts child Runs through ChatLoop internals; keep this boundary narrow until Runs exposes a cleaner child-run API.

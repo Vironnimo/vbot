@@ -267,11 +267,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Keeps Sub-Agent tool rows collapsed by default, including while running;
     the row itself remains visible with status and `view session`, and details
     open only when the user asks for them.
-  - The Sub-Agent row dot reflects the parent tool-call status: orange while
-    the `subagent`/`subagent_result` tool call is executing, green when that
-    tool call returns successfully, red/cancelled for failed/cancelled tool
-    calls. A background child Session's own `status: running` must not keep the
-    parent tool-call dot orange after the spawn tool has succeeded.
+  - The Sub-Agent row dot reflects child work status when the tool result or
+    live session event exposes it: queued/running stays orange, completed is
+    green, and failed/cancelled use the corresponding error/cancelled states.
+    If no child status is available, it falls back to the parent tool-call
+    status.
   - Does not render streamed/provisional Sub-Agent rows while tool arguments are
     still streaming. Once a blocking `subagent` tool call has started, the row
     appears immediately as `starting`; `view session` appears as soon as the

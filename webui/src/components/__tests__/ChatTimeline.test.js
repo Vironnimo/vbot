@@ -3144,7 +3144,7 @@ describe('ChatTimeline', () => {
     expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
   });
 
-  it('marks a spawned background sub-agent tool row done after spawn succeeds', () => {
+  it('keeps a spawned background sub-agent tool row running while the child runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -3203,8 +3203,8 @@ describe('ChatTimeline', () => {
     );
 
     expect(subagentLine?.textContent).toContain('view session');
-    expect(subagentLine?.querySelector('.te-dot.done')).not.toBeNull();
-    expect(subagentLine?.querySelector('.te-dot.running')).toBeNull();
+    expect(subagentLine?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(subagentLine?.querySelector('.te-dot.done')).toBeNull();
   });
 
   it('calls the sub-agent navigation callback with a spawned session target', () => {

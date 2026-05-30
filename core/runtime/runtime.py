@@ -252,7 +252,12 @@ class Runtime:
         resolver = ContentBlockResolver(self._attachment_store)
         self._chat_loop = ChatLoop(self, streaming=False, attachment_resolver=resolver)
         self._streaming_chat_loop = ChatLoop(self, streaming=True, attachment_resolver=resolver)
-        self._trigger_service = TriggerService(self._chat_loop, self._chat_run_manager, self)
+        self._trigger_service = TriggerService(
+            self._chat_loop,
+            self._chat_run_manager,
+            self,
+            trigger_chat_loop=self._streaming_chat_loop,
+        )
         self._channel_service = ChannelService(
             self._trigger_service,
             self._chat_sessions,
