@@ -15,6 +15,7 @@
     agentName = '',
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
+    subAgentStatuses = {},
     onNavigateToSubAgent = () => {},
     onRetry = () => {},
     hasOlderHistory = false,
@@ -725,6 +726,11 @@
       return fetchedStatus;
     }
 
+    const externalStatus = externalSubAgentStatus(tool);
+    if (externalStatus) {
+      return externalStatus;
+    }
+
     const childStatus = subAgentChildStatus(tool);
     if (['running', 'queued'].includes(childStatus)) {
       return 'running';
@@ -763,6 +769,32 @@
     }
 
     return subAgentStatusToDotStatus(subAgentChildStatus(matchingResultTool));
+  };
+
+  const externalSubAgentStatus = (tool) => {
+    const args = subAgentArguments(tool);
+    const data = subAgentResultData(tool);
+    const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
+    if (runId) {
+      const runStatus = subAgentStatusToDotStatus(
+        trimmedString(subAgentStatuses[`run:${runId}`]).toLowerCase(),
+      );
+      if (runStatus) {
+        return runStatus;
+      }
+    }
+
+    const agentId =
+      trimmedString(data.agent_id) || trimmedString(args.agent_id);
+    const sessionId = subAgentSessionId(tool);
+    if (!agentId || !sessionId) {
+      return '';
+    }
+    return subAgentStatusToDotStatus(
+      trimmedString(
+        subAgentStatuses[`session:${agentId}::${sessionId}`],
+      ).toLowerCase(),
+    );
   };
 
   const subAgentChildStatus = (tool) => {

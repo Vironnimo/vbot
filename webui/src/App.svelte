@@ -85,6 +85,7 @@
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvent = $state(null);
+  let subAgentNavigationRequestId = 0;
   const toastDismissTimers = new SvelteMap();
 
   $effect(() => {
@@ -137,7 +138,12 @@
     }
 
     selectView('chat');
-    pendingSubAgentNavigation = { agentId, sessionId };
+    subAgentNavigationRequestId += 1;
+    pendingSubAgentNavigation = {
+      agentId,
+      sessionId,
+      requestId: subAgentNavigationRequestId,
+    };
   };
 
   const refreshAgents = (nextAgents = []) => {
