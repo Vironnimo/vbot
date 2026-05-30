@@ -23,7 +23,7 @@ from core.runs import ChatRunManager, RunNotFoundError
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
-from server.delegates import dispatch_rpc
+from server.delegates import bridge_run_to_event_bus, dispatch_rpc
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
@@ -108,6 +108,7 @@ def create_app(
             yield
         finally:
             server_logger.info("Server application stopping")
+            _unregister_run_event_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
                 getattr(app.state, "device_flow_engine", None),
@@ -209,6 +210,9 @@ def _initialize_app_state(
 ) -> None:
     app.state.runtime = runtime
     app.state.chat_runs = _runtime_chat_runs(runtime)
+    app.state.event_bus = ServerEventBus()
+    app.state.run_event_bridge_run_ids = set()
+    app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.compaction_service = CompactionService(SummarizationStrategy())
     chat_loop = _runtime_chat_loop(runtime)
     chat_loop._compaction_service = app.state.compaction_service
@@ -219,10 +223,24 @@ def _initialize_app_state(
         streaming_chat_loop._compaction_service = app.state.compaction_service
 
     app.state.command_dispatcher = _runtime_command_dispatcher(runtime)
-    app.state.event_bus = ServerEventBus()
     app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
+
+
+def _register_run_event_bridge(state: Any) -> Any:
+    chat_runs = _app_chat_runs(state)
+    add_callback = getattr(chat_runs, "add_run_started_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(lambda run: bridge_run_to_event_bus(state, run))
+
+
+def _unregister_run_event_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "run_event_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.run_event_bridge_unsubscribe = None
 
 
 def _runtime_chat_runs(runtime: Any) -> ChatRunManager:

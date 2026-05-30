@@ -43,6 +43,9 @@ to render without re-inferring tool semantics from raw arguments.
 - `ChatRunManager.enqueue(...)` starts immediately when idle, otherwise stores a FIFO `QueuedRunItem`.
 - `ChatRunManager.list_queued(...)`, `remove_queued(...)`, and `update_queued(...)` are the public queue controls used by server RPCs.
 - `ChatRunManager.cancel(run_id)` and `cancel_by_session(agent_id, session_id)` request cancellation through the Run object.
+- `ChatRunManager.add_run_started_callback(callback)` registers a process-local
+  observer for every Run the manager starts, including queued and internal Runs;
+  the returned callable unregisters it.
 
 ## Cross-Domain Contracts
 

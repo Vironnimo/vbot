@@ -667,6 +667,110 @@ describe('ChatView', () => {
     );
   });
 
+  it('flushes stable run events immediately so a fast sub-agent starts as running', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamResponse: {
+          run_id: 'run-fast-subagent',
+          sse_url: '/api/runs/run-fast-subagent/events',
+          status: 'running',
+          events: [],
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start fast sub-agent');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-fast-subagent',
+        sequence: 1,
+        payload: {
+          tool_call: {
+            id: 'call-subagent',
+            index: 0,
+            name: 'subagent',
+            arguments: {
+              agent_id: 'beta',
+              blocking: false,
+              content: 'Inspect in the background',
+            },
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'subagent_session_started',
+        run_id: 'run-fast-subagent',
+        sequence: 2,
+        payload: {
+          tool_call: {
+            id: 'call-subagent',
+            index: 0,
+            name: 'subagent',
+          },
+          data: {
+            agent_id: 'beta',
+            session_id: 'beta-session',
+            run_id: 'beta-run',
+            status: 'running',
+          },
+        },
+      },
+    });
+    flushSync();
+
+    const runningRow = document.querySelector('.subagent-tool-event');
+    expect(runningRow).not.toBeNull();
+    expect(runningRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(runningRow?.querySelector('.te-dot.done')).toBeNull();
+
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_result',
+        run_id: 'run-fast-subagent',
+        sequence: 3,
+        payload: {
+          tool_call: {
+            id: 'call-subagent',
+            index: 0,
+            name: 'subagent',
+          },
+          result: JSON.stringify({
+            ok: true,
+            data: {
+              agent_id: 'beta',
+              session_id: 'beta-session',
+              run_id: 'beta-run',
+              status: 'running',
+            },
+          }),
+        },
+      },
+    });
+    flushSync();
+
+    const completedRow = document.querySelector('.subagent-tool-event');
+    expect(completedRow?.querySelector('.te-dot.done')).not.toBeNull();
+    expect(completedRow?.querySelector('.te-dot.running')).toBeNull();
+  });
+
   it('coalesces repeated run stream errors into one reconnect', async () => {
     const firstCloseSubscription = vi.fn();
     const secondCloseSubscription = vi.fn();

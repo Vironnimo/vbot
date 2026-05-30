@@ -725,6 +725,32 @@ async def test_run_completed_omits_usage_when_result_has_no_usage() -> None:
     assert completed_events[0].payload == {"status": "completed"}
 
 
+async def test_run_started_callbacks_are_notified_and_removable() -> None:
+    manager = ChatRunManager()
+    observed_runs: list[Run] = []
+
+    async def execute(_run: Run) -> str:
+        return "done"
+
+    remove_callback = manager.add_run_started_callback(observed_runs.append)
+    first_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+    )
+    await first_run.wait()
+    remove_callback()
+
+    second_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+    )
+    await second_run.wait()
+
+    assert observed_runs == [first_run]
+
+
 async def test_run_completed_omits_usage_when_usage_is_none() -> None:
     """When the result has usage=None, no usage key appears in run_completed."""
 

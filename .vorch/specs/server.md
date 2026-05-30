@@ -228,6 +228,12 @@ Clients call the vBot server contract; provider wire details stay behind
 - WebSocket is the persistent signalling channel for app-wide events (connection
   status, agent CRUD, run lifecycle summaries). It is server-push only; clients
   send requests via `POST /api/rpc`.
+- During app state initialization, the server registers a Run-start observer on
+  the shared `ChatRunManager` and bridges every started Run into the WebSocket
+  event bus. This includes RPC-started Runs, queued Runs that start later, and
+  internal automation/sub-agent follow-up Runs. The bridge is idempotent per
+  Run so explicit RPC bridge calls and the manager observer cannot duplicate
+  lifecycle summaries.
 - The dedicated `/ws/logs` socket is not part of the shared server event bus.
   It is a file-specific transport for log viewing only.
 - `log.read` plus `/ws/logs` form one handoff contract: callers should pass the

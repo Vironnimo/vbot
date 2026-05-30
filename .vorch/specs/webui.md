@@ -367,6 +367,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   provider-visible order of reasoning, assistant text, and tool-call deltas;
   the final `assistant_output` event clears the buffer and becomes the
   authoritative rendered message.
+- ChatView batches only high-frequency SSE delta events before updating local
+  state. Stable Run lifecycle events such as tool start/result, sub-agent
+  session links, assistant output, and terminal events flush immediately so
+  short-lived tool states are visible in order.
 - Assistant output Markdown rendering is accessor-side only. It applies to live
   streaming assistant text, completed assistant output, and persisted assistant
   history messages. User text, reasoning bodies, tool details, and error

@@ -2539,8 +2539,18 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     event_bus = getattr(state, "event_bus", None)
     if event_bus is None:
         return
+    bridged_run_ids = getattr(state, "run_event_bridge_run_ids", None)
+    if isinstance(bridged_run_ids, set):
+        if run.id in bridged_run_ids:
+            return
+        bridged_run_ids.add(run.id)
     task = asyncio.create_task(_publish_run_events(event_bus, run))
     task.add_done_callback(_on_run_event_bridge_done)
+
+
+def bridge_run_to_event_bus(state: Any, run: Run) -> None:
+    """Bridge one Run timeline into the server WebSocket event bus."""
+    _bridge_run_to_event_bus(state, run)
 
 
 def _on_run_event_bridge_done(task: asyncio.Task[None]) -> None:
