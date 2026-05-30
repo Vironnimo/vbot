@@ -36,6 +36,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/grep.md` - `grep`
 - `tools/web_fetch.md` - `web_fetch`
 - `tools/web_search.md` - `web_search`
+- `tools/homeassistant.md` - `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`
 - `tools/bash.md` - `bash`
 - `tools/process.md` - `process` and `ProcessManager`
 - `tools/status.md` - `status`
