@@ -43,6 +43,13 @@ from core.tools.homeassistant import (
     HA_LIST_SERVICES_PARAMETERS,
     register_homeassistant_tools,
 )
+from core.tools.image import (
+    IMAGE_GENERATION_TOOL_DESCRIPTION,
+    IMAGE_GENERATION_TOOL_NAME,
+    IMAGE_GENERATION_TOOL_PARAMETERS,
+    make_image_generation_handler,
+    register_image_generation_tool,
+)
 from core.tools.memory import (
     MEMORY_TOOL_DESCRIPTION,
     MEMORY_TOOL_NAME,
@@ -174,6 +181,9 @@ __all__ = [
     "HA_LIST_SERVICES_DESCRIPTION",
     "HA_LIST_SERVICES_NAME",
     "HA_LIST_SERVICES_PARAMETERS",
+    "IMAGE_GENERATION_TOOL_DESCRIPTION",
+    "IMAGE_GENERATION_TOOL_NAME",
+    "IMAGE_GENERATION_TOOL_PARAMETERS",
     "InvalidToolResultError",
     "JsonObject",
     "MEMORY_TOOL_DESCRIPTION",
@@ -228,6 +238,7 @@ __all__ = [
     "make_process_handler",
     "make_skill_handler",
     "make_text_to_speech_handler",
+    "make_image_generation_handler",
     "read_handler",
     "make_session_search_handler",
     "register_edit_tool",
@@ -243,6 +254,7 @@ __all__ = [
     "register_skill_tool",
     "register_subagent_tools",
     "register_text_to_speech_tool",
+    "register_image_generation_tool",
     "register_web_fetch_tool",
     "register_web_search_tool",
     "register_write_tool",
@@ -253,4 +265,6 @@ __all__ = [
     "web_fetch_handler",
     "web_search_handler",
     "write_handler",
+    "make_image_generation_handler",
+    "register_image_generation_tool",
 ]

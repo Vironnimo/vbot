@@ -19,6 +19,12 @@ from core.attachments.attachments import (
 )
 from core.chat import ChatLoop, CommandDispatcher
 from core.compaction import CompactionService, SummarizationStrategy
+from core.image import (
+    ImageConfigurationError,
+    ImageError,
+    ImageExecutionError,
+    ImageUnsupportedTargetError,
+)
 from core.runs import ChatRunManager, RunNotFoundError
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.speech import (
@@ -211,6 +217,19 @@ def create_app(
             filename=artifact.filename,
         )
 
+    @app.get("/api/images/artifacts/{artifact_id}")
+    async def get_image_artifact(request: Request, artifact_id: str) -> FileResponse:
+        image_service = _runtime_image_service(request.app.state.runtime)
+        try:
+            artifact = image_service.get_artifact(artifact_id)
+        except ImageError as exc:
+            raise _image_http_exception(exc) from exc
+        return FileResponse(
+            artifact.file_path,
+            media_type=artifact.media_type,
+            filename=artifact.filename,
+        )
+
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
         chat_runs = _app_chat_runs(request.app.state)
@@ -378,6 +397,23 @@ def _speech_http_exception(error: SpeechError) -> HTTPException:
     if isinstance(error, SpeechUnsupportedTargetError):
         return HTTPException(status_code=422, detail=str(error))
     if isinstance(error, SpeechExecutionError):
+        return HTTPException(status_code=502, detail=str(error))
+    return HTTPException(status_code=400, detail=str(error))
+
+
+def _runtime_image_service(runtime: Any) -> Any:
+    try:
+        return runtime.image
+    except (AttributeError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Image service is unavailable") from exc
+
+
+def _image_http_exception(error: ImageError) -> HTTPException:
+    if isinstance(error, ImageConfigurationError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, ImageUnsupportedTargetError):
+        return HTTPException(status_code=422, detail=str(error))
+    if isinstance(error, ImageExecutionError):
         return HTTPException(status_code=502, detail=str(error))
     return HTTPException(status_code=400, detail=str(error))
 

@@ -24,7 +24,7 @@ desktop/       ← pywebview shell. Imports nothing from the project — HTTP on
 ```
 
 **Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
-speech, skills, automation, storage, utils. Each is a folder with a main file as
+speech, image, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. `model_tasks/` owns specialized
 task-model bindings and target discovery; task-specific execution stays in
 domains such as `speech/`. Providers has a subfolder structure:
@@ -107,6 +107,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, Telegram-first routing, metadata, outbound send |
 | `.vorch/specs/speech.md` | `core/speech/` | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
+| `.vorch/specs/image.md` | `core/image/` | Image generation execution, artifacts, provider wire behavior |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
