@@ -359,6 +359,7 @@ describe('subscribeRunEvents()', () => {
     expect(RUN_EVENT_TYPES).toContain('model_fallback_activated');
     expect(RUN_EVENT_TYPES).toContain('error_message_persisted');
     expect(RUN_EVENT_TYPES).toContain('compaction_completed');
+    expect(RUN_EVENT_TYPES).toContain('subagent_session_started');
   });
 
   it('subscribes to named SSE run events and closes on terminal events', () => {
@@ -424,6 +425,43 @@ describe('subscribeRunEvents()', () => {
       type: RUN_EVENT_TOOL_CALL_DELTA,
       data: {
         payload: { tool_call_id: 'tool-one', name_delta: 'read' },
+      },
+      rawEvent: expect.any(Object),
+    });
+  });
+
+  it('subscribes to sub-agent session started SSE run events', () => {
+    const onEvent = vi.fn();
+    const connection = subscribeRunEvents(
+      '/api/runs/run-subagent/events',
+      { onEvent },
+      { EventSource: MockEventSource },
+    );
+
+    connection.source.emit('subagent_session_started', {
+      data: JSON.stringify({
+        payload: {
+          tool_call: { id: 'call-subagent', index: 0, name: 'subagent' },
+          data: {
+            agent_id: 'beta',
+            session_id: 'child-session',
+            status: 'running',
+          },
+        },
+      }),
+    });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: 'subagent_session_started',
+      data: {
+        payload: {
+          tool_call: { id: 'call-subagent', index: 0, name: 'subagent' },
+          data: {
+            agent_id: 'beta',
+            session_id: 'child-session',
+            status: 'running',
+          },
+        },
       },
       rawEvent: expect.any(Object),
     });
