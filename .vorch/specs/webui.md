@@ -328,6 +328,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - `webui/src/App.svelte`
   - Owns app shell navigation and shares Agent selection/refresh state between
     Chat and Agents views.
+  - Queues WebSocket Run lifecycle summaries before passing them into
+    `ChatView`, so rapid internal follow-up Runs cannot overwrite earlier
+    `run_started` or `run_output` events in the same render tick.
   - Routes the top-level `Cron` navigation item to `CronView` between Agents and
     System Prompt.
   - Routes the top-level `Logs` navigation item to `LogsView`.

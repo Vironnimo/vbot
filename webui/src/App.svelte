@@ -57,6 +57,7 @@
   const navigationItems = NAVIGATION_ITEMS;
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const TOAST_AUTO_DISMISS_MS = 3200;
+  const MAX_RUN_SERVER_EVENTS = 500;
   const RUN_SERVER_EVENT_TYPES = new Set([
     'run_started',
     'run_output',
@@ -84,7 +85,7 @@
   let toastState = $state(createToastState());
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
-  let runServerEvent = $state(null);
+  let runServerEvents = $state([]);
   let subAgentNavigationRequestId = 0;
   const toastDismissTimers = new SvelteMap();
 
@@ -208,7 +209,9 @@
     }
 
     if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
-      runServerEvent = event;
+      runServerEvents = [...runServerEvents, event].slice(
+        -MAX_RUN_SERVER_EVENTS,
+      );
       return;
     }
 
@@ -248,7 +251,7 @@
       onAgentSelected={selectAgent}
       {navigateToSubAgent}
       {pendingSubAgentNavigation}
-      {runServerEvent}
+      {runServerEvents}
     />
   {:else if activeViewId === 'agents'}
     <AgentsView

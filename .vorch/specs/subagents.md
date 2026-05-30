@@ -20,6 +20,8 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 - `SubAgentCoordinator.spawn(context, arguments) -> JsonObject`
 - `SubAgentCoordinator.result(context, arguments) -> JsonObject`
 - `SubAgentCoordinator.batch_tracker -> SubAgentBatchTracker`
+- `SUBAGENT_SESSION_STARTED_EVENT` is exported for transport layers that need
+  to bridge the live child-Session navigation event.
 
 ## Conventions
 

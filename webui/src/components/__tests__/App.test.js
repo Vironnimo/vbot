@@ -24,6 +24,11 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
+  RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
+  RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
+  RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
+  RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
   rpc: (...args) => rpcMock(...args),
   listQueue: (...args) => listQueueMock(...args),
   listLogs: (...args) => listLogsMock(...args),
@@ -91,6 +96,104 @@ describe('App', () => {
     expect(toast).toBeTruthy();
     expect(toast.textContent).toContain('Error');
     expect(toast.textContent).toContain('Provider credentials are missing.');
+  });
+
+  it('processes rapid run WebSocket events without dropping the assistant output', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Alpha');
+    });
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    await Promise.all([
+      handlers.onEvent(
+        runServerEvent('run_started', 'run-follow-up', 1, {
+          run_event_type: 'run_started',
+          status: 'running',
+        }),
+      ),
+      handlers.onEvent(
+        runServerEvent('run_output', 'run-follow-up', 2, {
+          run_event_type: 'assistant_output',
+          output: {
+            message: {
+              role: 'assistant',
+              content: 'Background sub-agent finished.',
+            },
+          },
+        }),
+      ),
+      handlers.onEvent(
+        runServerEvent('run_completed', 'run-follow-up', 3, {
+          run_event_type: 'run_completed',
+          status: 'completed',
+        }),
+      ),
+    ]);
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.body.textContent).toContain(
+        'Background sub-agent finished.',
+      );
+    });
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/run-follow-up/events',
+      expect.any(Object),
+      { afterSequence: 1 },
+    );
+  });
+
+  it('updates a background sub-agent row when the child completion event arrives rapidly', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createRunningSubAgentRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(document.querySelector('.subagent-tool-event')).toBeTruthy();
+      expect(
+        document.querySelector('.subagent-tool-event .te-dot.running'),
+      ).toBeTruthy();
+    });
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    await handlers.onEvent(
+      runServerEvent('run_completed', 'sub-run-running', 1, {
+        agent_id: 'alpha',
+        session_id: 'sub-session-running',
+        run_event_type: 'run_completed',
+        status: 'completed',
+      }),
+    );
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(
+        document.querySelector('.subagent-tool-event .te-dot.done'),
+      ).toBeTruthy();
+      expect(
+        document.querySelector('.subagent-tool-event .te-dot.running'),
+      ).toBeFalsy();
+    });
   });
 
   it('renders Logs as a live view from the app shell', async () => {
@@ -385,6 +488,86 @@ function createSubAgentNavigationRpcMock(agents) {
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
+function createRunningSubAgentRpcMock(agents) {
+  return async (method, params) => {
+    if (method === 'agent.list') {
+      return { agents };
+    }
+
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+
+    if (method === 'chat.history') {
+      return {
+        agent_id: params?.agent_id ?? '',
+        session_id: params?.session_id ?? '',
+        messages:
+          params?.session_id === 'session-parent'
+            ? [
+                {
+                  id: 'parent-assistant-tool',
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'call-subagent-running',
+                      name: 'subagent',
+                      arguments: {
+                        agent_id: 'alpha',
+                        blocking: false,
+                        content: 'Inspect in the background',
+                      },
+                    },
+                  ],
+                },
+                {
+                  id: 'parent-tool-result',
+                  role: 'tool',
+                  tool_call_id: 'call-subagent-running',
+                  name: 'subagent',
+                  content: JSON.stringify({
+                    ok: true,
+                    data: {
+                      agent_id: 'alpha',
+                      session_id: 'sub-session-running',
+                      run_id: 'sub-run-running',
+                      status: 'running',
+                    },
+                  }),
+                },
+              ]
+            : [],
+      };
+    }
+
+    if (method === 'chat.queue_list') {
+      return { items: [] };
+    }
+
+    if (method === 'skill.list') {
+      return { skills: [], invalid_skills: [] };
+    }
+
+    throw new Error(`Unexpected RPC method: ${method}`);
+  };
+}
+
+function runServerEvent(type, runId, sequence, payload = {}) {
+  return {
+    type,
+    sequence,
+    payload: {
+      run_id: runId,
+      agent_id: payload.agent_id ?? 'alpha',
+      session_id: payload.session_id ?? 'session-parent',
+      run_event_timestamp: `2026-05-26T00:00:0${sequence}+00:00`,
+      ...payload,
+      run_event_sequence: sequence,
+    },
   };
 }
 
