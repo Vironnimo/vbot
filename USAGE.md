@@ -484,7 +484,78 @@ Frontend:
 python scripts/quality-frontend.py
 ```
 
-## 13. Notes and Limitations
+## 13. Home Assistant Integration
+
+vBot can talk to your local Home Assistant instance through four LLM-callable
+tools. They wrap HA's built-in REST API — no custom addons needed.
+
+### Prerequisites
+
+A **Long-Lived Access Token** from your Home Assistant profile page:
+
+HA → your profile (bottom left) → Security → Long-Lived Access Tokens → Create Token
+
+### Configuration
+
+Add to `~/.vbot/.env`:
+
+```env
+HASS_TOKEN=eyJhbGciOi...   # your long-lived access token
+HASS_URL=http://homeassistant.local:8123  # optional, this is the default
+```
+
+Without `HASS_TOKEN` the tools are **not registered** — they won't appear in
+any agent's allowlist. Set the token and restart the server to activate them.
+
+### The Four Tools
+
+| Tool | What it does |
+|---|---|
+| `ha_list_entities` | List all entities, optionally filtered by domain or area |
+| `ha_get_state` | Get the full state of a single entity |
+| `ha_list_services` | Discover available services and their parameters |
+| `ha_call_service` | Call a service (turn on a light, set temperature, etc.) |
+
+### Example Session
+
+```
+User: What lights are on right now?
+
+Agent calls ha_list_entities with domain=light
+→ Light.living_room: on, Light.kitchen: off
+
+Agent: The living room light is on. The kitchen light is off.
+
+User: Turn off the living room light.
+
+Agent calls ha_list_services with domain=light
+→ sees turn_off service
+
+Agent calls ha_call_service with domain=light, service=turn_off,
+     entity_id=light.living_room
+→ success
+
+Agent: Done. The living room light is now off.
+```
+
+### Security
+
+Six HA domains are blocked on `ha_call_service` because they can execute
+arbitrary code or make outbound HTTP requests: `shell_command`, `command_line`,
+`python_script`, `pyscript`, `hassio`, and `rest_command`. All other domains
+work normally. Entity IDs, domain names, and service names are validated
+against Home Assistant's own format rules before any request is sent.
+
+### Troubleshooting
+
+- **Tools not showing up:** Make sure `HASS_TOKEN` is set and the server was
+  restarted after adding it.
+- **Connection refused:** Check that `HASS_URL` points to your HA instance and
+  that HA is running.
+- **401 Unauthorized:** The token is invalid or has been revoked. Create a new
+  one in your HA profile.
+
+## 14. Notes and Limitations
 
 - A healthy server can exist without built WebUI assets. In that case `/health` works, but `/` may not.
 - The CLI is automation-safe and does not open a browser.
