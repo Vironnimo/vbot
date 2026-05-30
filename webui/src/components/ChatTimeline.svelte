@@ -714,7 +714,81 @@
     return [agentId, preview].filter(Boolean).join(' · ');
   };
 
-  const subAgentDotStatus = (tool) => toolStatus(tool);
+  const subAgentDotStatus = (tool, assistantRun = null) => {
+    const parentStatus = toolStatus(tool);
+    if (['failed', 'cancelled'].includes(parentStatus)) {
+      return parentStatus;
+    }
+
+    const fetchedStatus = matchingSubAgentResultStatus(tool, assistantRun);
+    if (fetchedStatus) {
+      return fetchedStatus;
+    }
+
+    const childStatus = subAgentChildStatus(tool);
+    if (['running', 'queued'].includes(childStatus)) {
+      return 'running';
+    }
+    if (['failed', 'error'].includes(childStatus)) {
+      return 'failed';
+    }
+    if (childStatus === 'cancelled') {
+      return 'cancelled';
+    }
+    if (['completed', 'success'].includes(childStatus)) {
+      return 'success';
+    }
+
+    return parentStatus;
+  };
+
+  const matchingSubAgentResultStatus = (tool, assistantRun) => {
+    if (toolNameForRunTool(tool) !== 'subagent') {
+      return '';
+    }
+
+    const sessionId = subAgentSessionId(tool);
+    if (!sessionId) {
+      return '';
+    }
+
+    const matchingResultTool = (assistantRun?.tools ?? []).find(
+      (candidate) =>
+        toolNameForRunTool(candidate) === 'subagent_result' &&
+        subAgentSessionId(candidate) === sessionId &&
+        candidate.resultEvent,
+    );
+    if (!matchingResultTool) {
+      return '';
+    }
+
+    return subAgentStatusToDotStatus(subAgentChildStatus(matchingResultTool));
+  };
+
+  const subAgentChildStatus = (tool) => {
+    const data = subAgentResultData(tool);
+    const status = trimmedString(data.status).toLowerCase();
+    if (status) {
+      return status;
+    }
+    return trimmedString(tool.subAgentSession?.status).toLowerCase();
+  };
+
+  const subAgentStatusToDotStatus = (status) => {
+    if (['running', 'queued'].includes(status)) {
+      return 'running';
+    }
+    if (['failed', 'error'].includes(status)) {
+      return 'failed';
+    }
+    if (status === 'cancelled') {
+      return 'cancelled';
+    }
+    if (['completed', 'success'].includes(status)) {
+      return 'success';
+    }
+    return '';
+  };
 
   const subAgentNavigationTarget = (tool) => {
     const data = subAgentResultData(tool);
