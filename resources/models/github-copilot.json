@@ -1,126 +1,6 @@
 {
-  "fetched_at": "2026-05-20T12:22:18.795053+00:00",
+  "fetched_at": "2026-05-30T17:13:27.627915+00:00",
   "models": {
-    "accounts/msft/routers/f185i3v4": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "tool_calls"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 256000,
-      "max_output_tokens": 1024,
-      "metadata": {
-        "github_copilot": {
-          "family": "search-agent",
-          "parallel_tool_calls": true,
-          "streaming": true,
-          "supported_endpoints": [
-            "/chat/completions"
-          ],
-          "tool_calls": true,
-          "vendor": "Experimental",
-          "version": "accounts/msft/routers/f185i3v4"
-        }
-      },
-      "name": "Search Agent A"
-    },
-    "accounts/msft/routers/fmfeto88": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "tool_calls"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 256000,
-      "max_output_tokens": 1024,
-      "metadata": {
-        "github_copilot": {
-          "family": "search-agent",
-          "parallel_tool_calls": true,
-          "streaming": true,
-          "supported_endpoints": [
-            "/chat/completions"
-          ],
-          "tool_calls": true,
-          "vendor": "Fireworks",
-          "version": "accounts/msft/routers/fmfeto88"
-        }
-      },
-      "name": "Search Agent B"
-    },
-    "accounts/msft/routers/gdjv4v2v": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "tool_calls"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 256000,
-      "max_output_tokens": 1024,
-      "metadata": {
-        "github_copilot": {
-          "family": "search-agent",
-          "parallel_tool_calls": true,
-          "streaming": true,
-          "supported_endpoints": [
-            "/chat/completions"
-          ],
-          "tool_calls": true,
-          "vendor": "Fireworks",
-          "version": "accounts/msft/routers/gdjv4v2v"
-        }
-      },
-      "name": "Search Agent C"
-    },
     "claude-haiku-4.5": {
       "capabilities": {
         "input_modalities": [
@@ -267,6 +147,59 @@
         }
       },
       "name": "Claude Opus 4.7"
+    },
+    "claude-opus-4.8": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 64000,
+      "metadata": {
+        "github_copilot": {
+          "adaptive_thinking": true,
+          "family": "claude-opus-4.8",
+          "max_thinking_budget": 32000,
+          "min_thinking_budget": 1024,
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "medium"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/v1/messages",
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Anthropic",
+          "version": "claude-opus-4.8"
+        }
+      },
+      "name": "Claude Opus 4.8"
     },
     "claude-sonnet-4.5": {
       "capabilities": {
@@ -1605,6 +1538,46 @@
         }
       },
       "name": "Embedding V2 Ada"
+    },
+    "trajectory-compaction": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 2508192,
+      "max_output_tokens": 8192,
+      "metadata": {
+        "github_copilot": {
+          "family": "trajectory-compaction",
+          "parallel_tool_calls": true,
+          "streaming": true,
+          "supported_endpoints": [
+            "/chat/completions"
+          ],
+          "tool_calls": true,
+          "vendor": "Experimental",
+          "version": "trajectory-compaction"
+        }
+      },
+      "name": "Trajectory Compaction"
     }
   },
   "provider_id": "github-copilot",
