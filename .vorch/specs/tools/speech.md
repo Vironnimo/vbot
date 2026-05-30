@@ -71,6 +71,16 @@ Runtime registers the tool at startup with the runtime-owned `SpeechService`.
 The tool uses `SpeechService.synthesize_artifact()` and never calls providers
 directly.
 
+## UI Rendering
+
+When the Chat UI receives a `text_to_speech` tool result with `ok: true` and a
+`data.artifact` whose `kind` is `"speech"`, it renders an HTML5 `<audio>`
+element with `controls` and `autoplay` attributes, sourcing audio from the
+artifact's `url` field. The audio player is rendered outside the collapsible
+`<details>` element so it is immediately visible without expanding the tool
+event. This lets the agent's spoken response play immediately while still giving
+the user playback controls.
+
 ## Constraints & Gotchas
 
 - Do not add provider/model/voice fields to the tool schema.
