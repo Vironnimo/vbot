@@ -98,7 +98,6 @@ class TestCapabilities:
             "image_input",
             "image_understanding",
             "image_generation",
-            "image_edit",
         )
         # Generic "audio" output does NOT imply text_to_speech —
         # only "speech" output does.

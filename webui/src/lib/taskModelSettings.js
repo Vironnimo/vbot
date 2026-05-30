@@ -1,7 +1,8 @@
 export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
+export const TASK_IMAGE_GENERATION = 'image_generation';
 
-export const SPEECH_TASK_ROWS = Object.freeze([
+const SPEECH_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_SPEECH_TO_TEXT,
     titleKey: 'settings.specializedModels.speechToText',
@@ -18,6 +19,21 @@ export const SPEECH_TASK_ROWS = Object.freeze([
   },
 ]);
 
+const IMAGE_TASK_ROWS = Object.freeze([
+  {
+    taskType: TASK_IMAGE_GENERATION,
+    titleKey: 'settings.specializedModels.imageGeneration',
+    titleFallback: 'Image generation',
+    descriptionKey: 'settings.specializedModels.imageGenerationDescription',
+    descriptionFallback: 'Used for image generation requests.',
+  },
+]);
+
+export const TASK_MODEL_ROWS = Object.freeze([
+  ...SPEECH_TASK_ROWS,
+  ...IMAGE_TASK_ROWS,
+]);
+
 export function normalizeTaskModelSettings(settings) {
   const source = settings?.model_tasks ?? settings ?? {};
   if (!source || typeof source !== 'object' || Array.isArray(source)) {
@@ -25,7 +41,7 @@ export function normalizeTaskModelSettings(settings) {
   }
 
   const normalized = {};
-  for (const row of SPEECH_TASK_ROWS) {
+  for (const row of TASK_MODEL_ROWS) {
     const binding = source[row.taskType];
     normalized[row.taskType] = normalizeBinding(binding);
   }
@@ -83,7 +99,7 @@ export function applyOptionDefaults(binding, fields) {
 
 export function createTaskModelUpdatePayload(bindings) {
   const payload = {};
-  for (const row of SPEECH_TASK_ROWS) {
+  for (const row of TASK_MODEL_ROWS) {
     const binding = normalizeBinding(bindings?.[row.taskType]);
     payload[row.taskType] = {
       target: binding.target,

@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
+from core.model_tasks.constants import (
+    TASK_IMAGE_GENERATION,
+    TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_TO_SPEECH,
+)
 
 JsonObject = dict[str, Any]
 
@@ -96,6 +100,12 @@ def option_schema_for(task_type: str, provider_id: str, target: str) -> TaskMode
             task_type=task_type,
             target=target,
             fields=_text_to_speech_fields(provider_id),
+        )
+    if task_type == TASK_IMAGE_GENERATION:
+        return TaskModelOptionSchema(
+            task_type=task_type,
+            target=target,
+            fields=_image_generation_fields(provider_id),
         )
     return TaskModelOptionSchema(task_type=task_type, target=target)
 
@@ -192,6 +202,43 @@ def _text_to_speech_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]
             label="Instructions",
             default="",
             description="Optional speaking style instructions when the selected model supports it.",
+        ),
+    )
+
+
+def _image_generation_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]:
+    if provider_id != "openrouter":
+        return ()
+
+    return (
+        TaskModelOptionField(
+            name="aspect_ratio",
+            type="select",
+            label="Aspect ratio",
+            default="1:1",
+            options=(
+                _choice("1:1", "1:1 (1024×1024)"),
+                _choice("2:3", "2:3 (832×1248)"),
+                _choice("3:2", "3:2 (1248×832)"),
+                _choice("3:4", "3:4 (864×1184)"),
+                _choice("4:3", "4:3 (1184×864)"),
+                _choice("4:5", "4:5 (896×1152)"),
+                _choice("5:4", "5:4 (1152×896)"),
+                _choice("9:16", "9:16 (768×1344)"),
+                _choice("16:9", "16:9 (1344×768)"),
+                _choice("21:9", "21:9 (1536×672)"),
+            ),
+        ),
+        TaskModelOptionField(
+            name="image_size",
+            type="select",
+            label="Image size",
+            default="1K",
+            options=(
+                _choice("1K", "1K (standard)"),
+                _choice("2K", "2K"),
+                _choice("4K", "4K"),
+            ),
         ),
     )
 

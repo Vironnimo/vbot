@@ -436,6 +436,9 @@ export const englishCatalog = Object.freeze({
   'settings.specializedModels.textToSpeech': 'Text to speech',
   'settings.specializedModels.textToSpeechDescription':
     'Used by the agent text_to_speech tool.',
+  'settings.specializedModels.imageGeneration': 'Image generation',
+  'settings.specializedModels.imageGenerationDescription':
+    'Used for image generation requests.',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.noOptions':

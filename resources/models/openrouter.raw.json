@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T17:29:36.367356+00:00",
+  "fetched_at": "2026-05-30T20:01:20.662464+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -22086,6 +22086,1950 @@
         "top_provider": {
           "context_length": 4096,
           "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Grok"
+        },
+        "canonical_slug": "x-ai/grok-imagine-image-quality-20260512",
+        "context_length": 65536,
+        "created": 1779117584,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Grok Imagine Image Quality is xAI's fast, high-fidelity image generation and editing model. It accepts text prompts and optional reference images, producing photorealistic outputs at 1K or 2K across a...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "x-ai/grok-imagine-image-quality",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/x-ai/grok-imagine-image-quality-20260512/endpoints"
+        },
+        "name": "xAI: Grok Imagine Image Quality",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "image": "0.01",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Grok"
+        },
+        "canonical_slug": "x-ai/grok-imagine-image-quality-20260512",
+        "context_length": 65536,
+        "created": 1779117584,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Grok Imagine Image Quality is xAI's fast, high-fidelity image generation and editing model. It accepts text prompts and optional reference images, producing photorealistic outputs at 1K or 2K across a...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "x-ai/grok-imagine-image-quality",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/x-ai/grok-imagine-image-quality-20260512/endpoints"
+        },
+        "name": "xAI: Grok Imagine Image Quality",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "image": "0.01",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-pro-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707395,
+        "default_parameters": {},
+        "description": "Recraft V4.1 Pro Vector is the vector (SVG) variant of Recraft V4.1 Pro, tuned for high aesthetics. It supports text and image inputs and produces higher-resolution SVG image output across...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-pro-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-pro-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Pro Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-pro-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707395,
+        "default_parameters": {},
+        "description": "Recraft V4.1 Pro Vector is the vector (SVG) variant of Recraft V4.1 Pro, tuned for high aesthetics. It supports text and image inputs and produces higher-resolution SVG image output across...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-pro-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-pro-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Pro Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707392,
+        "default_parameters": {},
+        "description": "Recraft V4.1 Vector is the vector (SVG) variant of Recraft V4.1, tuned for high aesthetics. It supports text and image inputs and produces SVG image output across multiple aspect ratios,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707392,
+        "default_parameters": {},
+        "description": "Recraft V4.1 Vector is the vector (SVG) variant of Recraft V4.1, tuned for high aesthetics. It supports text and image inputs and produces SVG image output across multiple aspect ratios,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-utility-pro-20260514",
+        "context_length": 65536,
+        "created": 1778707389,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Utility Pro is a general-purpose image generation model from Recraft. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios \u2014 double...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-utility-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-utility-pro-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Utility Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-utility-pro-20260514",
+        "context_length": 65536,
+        "created": 1778707389,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Utility Pro is a general-purpose image generation model from Recraft. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios \u2014 double...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-utility-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-utility-pro-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Utility Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-utility-20260514",
+        "context_length": 65536,
+        "created": 1778707387,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Utility is a general-purpose image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios, with typical generation...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-utility",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-utility-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Utility",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-utility-20260514",
+        "context_length": 65536,
+        "created": 1778707387,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Utility is a general-purpose image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios, with typical generation...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-utility",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-utility-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Utility",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-pro-20260514",
+        "context_length": 65536,
+        "created": 1778707384,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Pro is an image generation model from Recraft tuned for high aesthetics. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-pro-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-pro-20260514",
+        "context_length": 65536,
+        "created": 1778707384,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4.1 Pro is an image generation model from Recraft tuned for high aesthetics. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-pro-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-20260514",
+        "context_length": 65536,
+        "created": 1778707381,
+        "default_parameters": {},
+        "description": "Recraft V4.1 is an image generation model from Recraft tuned for high aesthetics. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios, with...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4.1-20260514",
+        "context_length": 65536,
+        "created": 1778707381,
+        "default_parameters": {},
+        "description": "Recraft V4.1 is an image generation model from Recraft tuned for high aesthetics. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios, with...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4.1",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4.1-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4.1",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-pro-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707334,
+        "default_parameters": {},
+        "description": "Recraft V4 Pro Vector is the vector (SVG) variant of Recraft V4 Pro. It supports text and image inputs and produces vector image output across multiple aspect ratios at the...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-pro-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-pro-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Pro Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-pro-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707334,
+        "default_parameters": {},
+        "description": "Recraft V4 Pro Vector is the vector (SVG) variant of Recraft V4 Pro. It supports text and image inputs and produces vector image output across multiple aspect ratios at the...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-pro-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-pro-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Pro Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707333,
+        "default_parameters": {},
+        "description": "Recraft V4 Vector is the vector (SVG) variant of Recraft V4. It supports text and image inputs and produces vector image output across multiple aspect ratios. Compared to the raster...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-vector-20260514",
+        "context_length": 65536,
+        "created": 1778707333,
+        "default_parameters": {},
+        "description": "Recraft V4 Vector is the vector (SVG) variant of Recraft V4. It supports text and image inputs and produces vector image output across multiple aspect ratios. Compared to the raster...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-vector",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-vector-20260514/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Vector",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-pro-20260413",
+        "context_length": 65536,
+        "created": 1778185441,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4 Pro is an image generation model from Recraft. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios, double the resolution of...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-pro-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-pro-20260413",
+        "context_length": 65536,
+        "created": 1778185441,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4 Pro is an image generation model from Recraft. It supports text and image inputs with image output at ~2K resolution across multiple aspect ratios, double the resolution of...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-pro-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V4 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-20260413",
+        "context_length": 65536,
+        "created": 1778185437,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4 is an image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios. It delivers stronger compositional judgment,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V4",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v4-20260413",
+        "context_length": 65536,
+        "created": 1778185437,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V4 is an image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios. It delivers stronger compositional judgment,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v4",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v4-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V4",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v3-20260413",
+        "context_length": 65536,
+        "created": 1778185433,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V3 is an image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios. Supports the following `image_config` parameters:...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v3-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "recraft/recraft-v3-20260413",
+        "context_length": 65536,
+        "created": 1778185433,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Recraft V3 is an image generation model from Recraft. It supports text and image inputs with image output at ~1K resolution across multiple aspect ratios. Supports the following `image_config` parameters:...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "recraft/recraft-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/recraft/recraft-v3-20260413/endpoints"
+        },
+        "name": "Recraft: Recraft V3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 65536,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-pro-20260130",
+        "context_length": 8192,
+        "created": 1770051427,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Pro is the most powerful variant of Sourceful's Riverflow 2.0 lineup, best for top-tier control and perfect text rendering. The Riverflow 2.0 series represents SOTA performance on image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-pro-20260130/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-pro-20260130",
+        "context_length": 8192,
+        "created": 1770051427,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Pro is the most powerful variant of Sourceful's Riverflow 2.0 lineup, best for top-tier control and perfect text rendering. The Riverflow 2.0 series represents SOTA performance on image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-pro-20260130/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-fast-20260130",
+        "context_length": 8192,
+        "created": 1770051423,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Fast is the fastest variant of Sourceful's Riverflow 2.0 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.0 series represents SOTA performance on image generation and...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-fast",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-fast-20260130/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Fast",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-fast-20260130",
+        "context_length": 8192,
+        "created": 1770051423,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Fast is the fastest variant of Sourceful's Riverflow 2.0 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.0 series represents SOTA performance on image generation and...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-fast",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-fast-20260130/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Fast",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-klein-4b",
+        "context_length": 40960,
+        "created": 1768429228,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [klein] 4B is the fastest and most cost-effective model in the FLUX.2 family, optimized for high-throughput use cases while maintaining excellent image quality. Pricing is based on the output...",
+        "expiration_date": null,
+        "hugging_face_id": "black-forest-labs/FLUX.2-klein-4B",
+        "id": "black-forest-labs/flux.2-klein-4b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-klein-4b/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Klein 4B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 40960,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-klein-4b",
+        "context_length": 40960,
+        "created": 1768429228,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [klein] 4B is the fastest and most cost-effective model in the FLUX.2 family, optimized for high-throughput use cases while maintaining excellent image quality. Pricing is based on the output...",
+        "expiration_date": null,
+        "hugging_face_id": "black-forest-labs/FLUX.2-klein-4B",
+        "id": "black-forest-labs/flux.2-klein-4b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-klein-4b/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Klein 4B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 40960,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "bytedance-seed/seedream-4.5-20251203",
+        "context_length": 4096,
+        "created": 1766519506,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Seedream 4.5 is the latest in-house image generation model developed by ByteDance. Compared with Seedream 4.0, it delivers comprehensive improvements, especially in editing consistency, including better preservation of subject details,...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "bytedance-seed/seedream-4.5",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/bytedance-seed/seedream-4.5-20251203/endpoints"
+        },
+        "name": "ByteDance Seed: Seedream 4.5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "image",
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "bytedance-seed/seedream-4.5-20251203",
+        "context_length": 4096,
+        "created": 1766519506,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Seedream 4.5 is the latest in-house image generation model developed by ByteDance. Compared with Seedream 4.0, it delivers comprehensive improvements, especially in editing consistency, including better preservation of subject details,...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "bytedance-seed/seedream-4.5",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/bytedance-seed/seedream-4.5-20251203/endpoints"
+        },
+        "name": "ByteDance Seed: Seedream 4.5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-max",
+        "context_length": 46864,
+        "created": 1765857570,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [max] is the new top-tier image model from Black Forest Labs, pushing image quality, prompt understanding, and editing consistency to the highest level yet. Pricing is as follows, [per...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-max",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-max/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Max",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 46864,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-max",
+        "context_length": 46864,
+        "created": 1765857570,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [max] is the new top-tier image model from Black Forest Labs, pushing image quality, prompt understanding, and editing consistency to the highest level yet. Pricing is as follows, [per...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-max",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-max/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Max",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 46864,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-max-preview",
+        "context_length": 8192,
+        "created": 1765237849,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Max Preview is the most powerful variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-max-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-max-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Max Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-max-preview",
+        "context_length": 8192,
+        "created": 1765237849,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Max Preview is the most powerful variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-max-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-max-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Max Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-standard-preview",
+        "context_length": 8192,
+        "created": 1765237836,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Standard Preview is the standard variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified text-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-standard-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-standard-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Standard Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-standard-preview",
+        "context_length": 8192,
+        "created": 1765237836,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Standard Preview is the standard variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified text-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-standard-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-standard-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Standard Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-fast-preview",
+        "context_length": 8192,
+        "created": 1765237820,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Fast Preview is the fastest variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified text-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-fast-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-fast-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Fast Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2-fast-preview",
+        "context_length": 8192,
+        "created": 1765237820,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2 Fast Preview is the fastest variant of Sourceful's Riverflow V2 preview lineup. This preview version exceeds the performance of Riverflow 1 Family and is Sourceful's first unified text-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "sourceful/riverflow-v2-fast-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2-fast-preview/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2 Fast Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-flex",
+        "context_length": 67344,
+        "created": 1764045987,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [flex] excels at rendering complex text, typography, and fine details, and supports multi-reference editing in the same unified architecture. Pricing is as follows, [per the docs](https://bfl.ai/pricing?category=flux.2): We charge $0.06...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-flex",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-flex/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Flex",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 67344,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-flex",
+        "context_length": 67344,
+        "created": 1764045987,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "FLUX.2 [flex] excels at rendering complex text, typography, and fine details, and supports multi-reference editing in the same unified architecture. Pricing is as follows, [per the docs](https://bfl.ai/pricing?category=flux.2): We charge $0.06...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-flex",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-flex/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Flex",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 67344,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-pro",
+        "context_length": 46864,
+        "created": 1764030274,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "A high-end image generation and editing model focused on frontier-level visual quality and reliability. It delivers strong prompt adherence, stable lighting, sharp textures, and consistent character/style reproduction across multi-reference inputs....",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-pro/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 46864,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "black-forest-labs/flux.2-pro",
+        "context_length": 46864,
+        "created": 1764030274,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "A high-end image generation and editing model focused on frontier-level visual quality and reliability. It delivers strong prompt adherence, stable lighting, sharp textures, and consistent character/style reproduction across multi-reference inputs....",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "black-forest-labs/flux.2-pro",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/black-forest-labs/flux.2-pro/endpoints"
+        },
+        "name": "Black Forest Labs: FLUX.2 Pro",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 46864,
+          "is_moderated": false,
           "max_completion_tokens": null
         }
       }

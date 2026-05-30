@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T17:29:36.367356+00:00",
+  "fetched_at": "2026-05-30T20:01:20.662464+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -1653,6 +1653,134 @@
       },
       "name": "Baidu: ERNIE 4.5 VL 424B A47B "
     },
+    "black-forest-labs/flux.2-flex": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 67344,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.2 Flex"
+    },
+    "black-forest-labs/flux.2-klein-4b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 40960,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.2 Klein 4B"
+    },
+    "black-forest-labs/flux.2-max": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 46864,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.2 Max"
+    },
+    "black-forest-labs/flux.2-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 46864,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.2 Pro"
+    },
     "bytedance-seed/seed-1.6": {
       "capabilities": {
         "input_modalities": [
@@ -1840,6 +1968,41 @@
         }
       },
       "name": "ByteDance Seed: Seed-2.0-Mini"
+    },
+    "bytedance-seed/seedream-4.5": {
+      "capabilities": {
+        "input_modalities": [
+          "image",
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "ByteDance Seed: Seedream 4.5"
     },
     "bytedance/ui-tars-1.5-7b": {
       "capabilities": {
@@ -3026,8 +3189,7 @@
           "text_output",
           "image_input",
           "image_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -3386,8 +3548,7 @@
           "text_output",
           "image_input",
           "image_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -3431,8 +3592,7 @@
           "text_output",
           "image_input",
           "image_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -9331,8 +9491,7 @@
           "image_understanding",
           "file_input",
           "file_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -9384,8 +9543,7 @@
           "image_understanding",
           "file_input",
           "file_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -10090,8 +10248,7 @@
           "image_understanding",
           "file_input",
           "file_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": false,
         "vision": true
@@ -11311,8 +11468,7 @@
           "speech_to_text",
           "video_input",
           "video_understanding",
-          "image_generation",
-          "image_edit"
+          "image_generation"
         ],
         "tools": true,
         "vision": true
@@ -14077,6 +14233,336 @@
       },
       "name": "Qwen: Qwen3.7 Max"
     },
+    "recraft/recraft-v3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V3"
+    },
+    "recraft/recraft-v4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4"
+    },
+    "recraft/recraft-v4-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4 Pro"
+    },
+    "recraft/recraft-v4-pro-vector": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4 Pro Vector"
+    },
+    "recraft/recraft-v4-vector": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4 Vector"
+    },
+    "recraft/recraft-v4.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1"
+    },
+    "recraft/recraft-v4.1-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Pro"
+    },
+    "recraft/recraft-v4.1-pro-vector": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Pro Vector"
+    },
+    "recraft/recraft-v4.1-utility": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Utility"
+    },
+    "recraft/recraft-v4.1-utility-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Utility Pro"
+    },
+    "recraft/recraft-v4.1-vector": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Recraft: Recraft V4.1 Vector"
+    },
     "rekaai/reka-edge": {
       "capabilities": {
         "input_modalities": [
@@ -14486,6 +14972,156 @@
         }
       },
       "name": "Sesame: CSM 1B"
+    },
+    "sourceful/riverflow-v2-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2 Fast"
+    },
+    "sourceful/riverflow-v2-fast-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2 Fast Preview"
+    },
+    "sourceful/riverflow-v2-max-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2 Max Preview"
+    },
+    "sourceful/riverflow-v2-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2 Pro"
+    },
+    "sourceful/riverflow-v2-standard-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2 Standard Preview"
     },
     "stepfun/step-3.5-flash": {
       "capabilities": {
@@ -15179,6 +15815,47 @@
         }
       },
       "name": "xAI: Grok Build 0.1"
+    },
+    "x-ai/grok-imagine-image-quality": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "max_output_tokens": 4096,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "xAI: Grok Imagine Image Quality"
     },
     "x-ai/grok-voice-tts-1.0": {
       "capabilities": {

@@ -18,7 +18,7 @@
   } from '$lib/modelSelection.js';
   import * as settingsViewHelpers from '$lib/settingsView.js';
   import {
-    SPEECH_TASK_ROWS,
+    TASK_MODEL_ROWS,
     applyOptionDefaults,
     createTaskModelUpdatePayload,
     normalizeOptionSchema,
@@ -804,7 +804,7 @@
 
     try {
       const targetEntries = await Promise.all(
-        SPEECH_TASK_ROWS.map(async (row) => {
+        TASK_MODEL_ROWS.map(async (row) => {
           const result = await listTaskModelTargets(row.taskType);
           return [row.taskType, normalizeTargets(result)];
         }),
@@ -812,7 +812,7 @@
       taskModelTargetsByType = Object.fromEntries(targetEntries);
       taskModelPanelLoaded = true;
 
-      for (const row of SPEECH_TASK_ROWS) {
+      for (const row of TASK_MODEL_ROWS) {
         const target = taskModelBindings[row.taskType]?.target ?? '';
         if (target) {
           await loadTaskModelSchema(row.taskType, target);
@@ -2420,7 +2420,7 @@
           {/if}
 
           <div class="s-task-model-list">
-            {#each SPEECH_TASK_ROWS as row (row.taskType)}
+            {#each TASK_MODEL_ROWS as row (row.taskType)}
               {@const binding = taskModelBindings[row.taskType] ?? {
                 target: '',
                 options: {},

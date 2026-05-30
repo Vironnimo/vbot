@@ -31,7 +31,6 @@ MODEL_TASK_ORDER = (
     "video_input",
     "video_understanding",
     "image_generation",
-    "image_edit",
     "audio_generation",
     "text_to_speech",
     "video_generation",
@@ -135,8 +134,6 @@ def derive_model_task_types(
             tasks.add("video_understanding")
     if "image" in outputs:
         tasks.add("image_generation")
-        if "image" in inputs:
-            tasks.add("image_edit")
     if has_audio:
         tasks.add("audio_generation")
     if has_speech:
