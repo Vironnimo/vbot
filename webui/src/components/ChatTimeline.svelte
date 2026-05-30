@@ -1815,7 +1815,8 @@
                           class="speech-audio-player"
                           src={speechArtifact.url}
                           controls
-                          autoplay
+                          oncanplay={(e) =>
+                            e.currentTarget.play().catch(() => {})}
                         ></audio>
                       {/if}
                     {/if}
@@ -1965,7 +1966,7 @@
                       class="speech-audio-player"
                       src={speechArtifact.url}
                       controls
-                      autoplay
+                      oncanplay={(e) => e.currentTarget.play().catch(() => {})}
                     ></audio>
                   {/if}
                 {/if}
