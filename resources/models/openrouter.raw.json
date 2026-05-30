@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T17:13:29.837440+00:00",
+  "fetched_at": "2026-05-30T17:29:36.367356+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -19913,6 +19913,2180 @@
           "context_length": 16385,
           "is_moderated": true,
           "max_completion_tokens": 4096
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/parakeet-tdt-0.6b-v3",
+        "context_length": 0,
+        "created": 1779848335,
+        "default_parameters": {},
+        "description": "Parakeet TDT 0.6B v3 is NVIDIA's 600M-parameter multilingual speech-to-text model built on the FastConformer-TDT architecture. Trained on the Granary dataset (670,000+ hours of audio), it supports automatic language detection across...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "nvidia/parakeet-tdt-0.6b-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/parakeet-tdt-0.6b-v3/endpoints"
+        },
+        "name": "NVIDIA: Parakeet TDT 0.6B v3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/parakeet-tdt-0.6b-v3",
+        "context_length": 0,
+        "created": 1779848335,
+        "default_parameters": {},
+        "description": "Parakeet TDT 0.6B v3 is NVIDIA's 600M-parameter multilingual speech-to-text model built on the FastConformer-TDT architecture. Trained on the Granary dataset (670,000+ hours of audio), it supports automatic language detection across...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "nvidia/parakeet-tdt-0.6b-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/parakeet-tdt-0.6b-v3/endpoints"
+        },
+        "name": "NVIDIA: Parakeet TDT 0.6B v3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/voxtral-mini-transcribe-2602",
+        "context_length": 0,
+        "created": 1778877024,
+        "default_parameters": {},
+        "description": "Voxtral Mini Transcribe is Mistral's speech-to-text model, derived from the Voxtral Mini family. It accepts audio input and returns transcribed text via the standard transcription API. Suited for transcribing meetings,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "mistralai/voxtral-mini-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/voxtral-mini-transcribe-2602/endpoints"
+        },
+        "name": "Mistral: Voxtral Mini Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.003"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/voxtral-mini-transcribe-2602",
+        "context_length": 0,
+        "created": 1778877024,
+        "default_parameters": {},
+        "description": "Voxtral Mini Transcribe is Mistral's speech-to-text model, derived from the Voxtral Mini family. It accepts audio input and returns transcribed text via the standard transcription API. Suited for transcribing meetings,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "mistralai/voxtral-mini-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/voxtral-mini-transcribe-2602/endpoints"
+        },
+        "name": "Mistral: Voxtral Mini Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.003"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Qwen3"
+        },
+        "canonical_slug": "qwen/qwen3-asr-flash-2026-02-10",
+        "context_length": 0,
+        "created": 1778732776,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Qwen3-ASR-Flash is Alibaba's automatic speech recognition service, built on the Qwen3-Omni foundation and trained on tens of millions of hours of multimodal speech data. The model handles 11 languages \u2014...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "qwen/qwen3-asr-flash-2026-02-10",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/qwen/qwen3-asr-flash-2026-02-10/endpoints"
+        },
+        "name": "Qwen: Qwen3 ASR Flash",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000035"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Qwen3"
+        },
+        "canonical_slug": "qwen/qwen3-asr-flash-2026-02-10",
+        "context_length": 0,
+        "created": 1778732776,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Qwen3-ASR-Flash is Alibaba's automatic speech recognition service, built on the Qwen3-Omni foundation and trained on tens of millions of hours of multimodal speech data. The model handles 11 languages \u2014...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "qwen/qwen3-asr-flash-2026-02-10",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/qwen/qwen3-asr-flash-2026-02-10/endpoints"
+        },
+        "name": "Qwen: Qwen3 ASR Flash",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000035"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "google/chirp-3",
+        "context_length": 0,
+        "created": 1777997783,
+        "default_parameters": {},
+        "description": "Chirp 3 is Google's latest multilingual speech-to-text model. It offers enhanced transcription accuracy across 24 GA languages and 77+ preview languages, with support for automatic language detection, automatic punctuation, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/chirp-3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/chirp-3/endpoints"
+        },
+        "name": "Google: Chirp 3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.016"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "google/chirp-3",
+        "context_length": 0,
+        "created": 1777997783,
+        "default_parameters": {},
+        "description": "Chirp 3 is Google's latest multilingual speech-to-text model. It offers enhanced transcription accuracy across 24 GA languages and 77+ preview languages, with support for automatic language detection, automatic punctuation, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/chirp-3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/chirp-3/endpoints"
+        },
+        "name": "Google: Chirp 3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.016"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-mini-transcribe",
+        "context_length": 128000,
+        "created": 1777658151,
+        "default_parameters": {},
+        "description": "GPT-4o Mini Transcribe is OpenAI's smaller, cost-efficient speech-to-text model built on GPT-4o Mini audio capabilities. It's priced per token (input and output), making it suitable for high-volume transcription workflows that...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-mini-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-mini-transcribe/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Mini Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.000005",
+          "prompt": "0.00000125"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-mini-transcribe",
+        "context_length": 128000,
+        "created": 1777658151,
+        "default_parameters": {},
+        "description": "GPT-4o Mini Transcribe is OpenAI's smaller, cost-efficient speech-to-text model built on GPT-4o Mini audio capabilities. It's priced per token (input and output), making it suitable for high-volume transcription workflows that...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-mini-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-mini-transcribe/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Mini Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.000005",
+          "prompt": "0.00000125"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-large-v3-turbo",
+        "context_length": 0,
+        "created": 1777642266,
+        "default_parameters": {},
+        "description": "Whisper Large V3 Turbo is an optimized version of OpenAI's Whisper Large V3 speech recognition model, designed for speed and cost efficiency. It supports transcription across 99+ languages with a...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-large-v3-turbo",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-large-v3-turbo/endpoints"
+        },
+        "name": "OpenAI: Whisper Large V3 Turbo",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.04"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-large-v3-turbo",
+        "context_length": 0,
+        "created": 1777642266,
+        "default_parameters": {},
+        "description": "Whisper Large V3 Turbo is an optimized version of OpenAI's Whisper Large V3 speech recognition model, designed for speed and cost efficiency. It supports transcription across 99+ languages with a...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-large-v3-turbo",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-large-v3-turbo/endpoints"
+        },
+        "name": "OpenAI: Whisper Large V3 Turbo",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.04"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-large-v3",
+        "context_length": 0,
+        "created": 1777642266,
+        "default_parameters": {},
+        "description": "Whisper Large V3 is OpenAI's open-source automatic speech recognition model offering both audio transcription and translation. It supports 99+ languages and accepts common audio formats including mp3, mp4, wav, webm,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-large-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-large-v3/endpoints"
+        },
+        "name": "OpenAI: Whisper Large V3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-large-v3",
+        "context_length": 0,
+        "created": 1777642266,
+        "default_parameters": {},
+        "description": "Whisper Large V3 is OpenAI's open-source automatic speech recognition model offering both audio transcription and translation. It supports 99+ languages and accepts common audio formats including mp3, mp4, wav, webm,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-large-v3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-large-v3/endpoints"
+        },
+        "name": "OpenAI: Whisper Large V3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-1",
+        "context_length": 0,
+        "created": 1777332905,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Whisper is OpenAI's open-source automatic speech recognition model, available via API as `whisper-1`. It supports transcription and translation across 50+ languages from audio files up to 25 MB. Accepts formats...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-1",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-1/endpoints"
+        },
+        "name": "OpenAI: Whisper 1",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.006"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/whisper-1",
+        "context_length": 0,
+        "created": 1777332905,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Whisper is OpenAI's open-source automatic speech recognition model, available via API as `whisper-1`. It supports transcription and translation across 50+ languages from audio files up to 25 MB. Accepts formats...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/whisper-1",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/whisper-1/endpoints"
+        },
+        "name": "OpenAI: Whisper 1",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.006"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-transcribe",
+        "context_length": 128000,
+        "created": 1777332895,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "GPT-4o Transcribe is OpenAI's high-quality speech-to-text model built on GPT-4o audio capabilities. It's priced per token (input and output), making it suitable for workflows that benefit from token-level billing transparency.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-transcribe/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00001",
+          "prompt": "0.0000025"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-transcribe",
+        "context_length": 128000,
+        "created": 1777332895,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "GPT-4o Transcribe is OpenAI's high-quality speech-to-text model built on GPT-4o audio capabilities. It's priced per token (input and output), making it suitable for workflows that benefit from token-level billing transparency.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-transcribe",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-transcribe/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Transcribe",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00001",
+          "prompt": "0.0000025"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Grok"
+        },
+        "canonical_slug": "x-ai/grok-voice-tts-1.0",
+        "context_length": 15000,
+        "created": 1778805456,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Grok Voice TTS 1.0 is a text-to-speech model from xAI. It converts text into spoken audio across 20+ languages with automatic language detection, and offers five built-in voices (Eve, Ara,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "x-ai/grok-voice-tts-1.0",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/x-ai/grok-voice-tts-1.0/endpoints"
+        },
+        "name": "xAI: Grok Voice TTS 1.0",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [
+          "eve",
+          "ara",
+          "rex",
+          "sal",
+          "leo"
+        ],
+        "top_provider": {
+          "context_length": 15000,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Grok"
+        },
+        "canonical_slug": "x-ai/grok-voice-tts-1.0",
+        "context_length": 15000,
+        "created": 1778805456,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Grok Voice TTS 1.0 is a text-to-speech model from xAI. It converts text into spoken audio across 20+ languages with automatic language detection, and offers five built-in voices (Eve, Ara,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "x-ai/grok-voice-tts-1.0",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/x-ai/grok-voice-tts-1.0/endpoints"
+        },
+        "name": "xAI: Grok Voice TTS 1.0",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [
+          "eve",
+          "ara",
+          "rex",
+          "sal",
+          "leo"
+        ],
+        "top_provider": {
+          "context_length": 15000,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-3.1-flash-tts-preview",
+        "context_length": 8192,
+        "created": 1776999308,
+        "default_parameters": {
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Gemini 3.1 Flash TTS Preview is a text-to-speech model from Google, and a substantial generational step up from Gemini 2.5 Flash TTS. It takes text input and produces audio output...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/gemini-3.1-flash-tts-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/gemini-3.1-flash-tts-preview/endpoints"
+        },
+        "name": "Google: Gemini 3.1 Flash TTS Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00002",
+          "prompt": "0.000001"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "Zephyr",
+          "Puck",
+          "Charon",
+          "Kore",
+          "Fenrir",
+          "Leda",
+          "Orus",
+          "Aoede",
+          "Callirrhoe",
+          "Autonoe",
+          "Enceladus",
+          "Iapetus",
+          "Umbriel",
+          "Algieba",
+          "Despina",
+          "Erinome",
+          "Algenib",
+          "Rasalgethi",
+          "Laomedeia",
+          "Achernar",
+          "Alnilam",
+          "Schedar",
+          "Gacrux",
+          "Pulcherrima",
+          "Achird",
+          "Zubenelgenubi",
+          "Vindemiatrix",
+          "Sadachbia",
+          "Sadaltager",
+          "Sulafat"
+        ],
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-3.1-flash-tts-preview",
+        "context_length": 8192,
+        "created": 1776999308,
+        "default_parameters": {
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Gemini 3.1 Flash TTS Preview is a text-to-speech model from Google, and a substantial generational step up from Gemini 2.5 Flash TTS. It takes text input and produces audio output...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/gemini-3.1-flash-tts-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/gemini-3.1-flash-tts-preview/endpoints"
+        },
+        "name": "Google: Gemini 3.1 Flash TTS Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00002",
+          "prompt": "0.000001"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "Zephyr",
+          "Puck",
+          "Charon",
+          "Kore",
+          "Fenrir",
+          "Leda",
+          "Orus",
+          "Aoede",
+          "Callirrhoe",
+          "Autonoe",
+          "Enceladus",
+          "Iapetus",
+          "Umbriel",
+          "Algieba",
+          "Despina",
+          "Erinome",
+          "Algenib",
+          "Rasalgethi",
+          "Laomedeia",
+          "Achernar",
+          "Alnilam",
+          "Schedar",
+          "Gacrux",
+          "Pulcherrima",
+          "Achird",
+          "Zubenelgenubi",
+          "Vindemiatrix",
+          "Sadachbia",
+          "Sadaltager",
+          "Sulafat"
+        ],
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "zyphra/zonos-v0.1-transformer",
+        "context_length": 4096,
+        "created": 1776983170,
+        "default_parameters": {},
+        "description": "Zonos v0.1 Transformer is a text-to-speech model from Zyphra built on a pure transformer architecture. It offers the same American and British English voice coverage as the Hybrid variant, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "zyphra/zonos-v0.1-transformer",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/zyphra/zonos-v0.1-transformer/endpoints"
+        },
+        "name": "Zyphra: Zonos v0.1 Transformer",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "zyphra/zonos-v0.1-transformer",
+        "context_length": 4096,
+        "created": 1776983170,
+        "default_parameters": {},
+        "description": "Zonos v0.1 Transformer is a text-to-speech model from Zyphra built on a pure transformer architecture. It offers the same American and British English voice coverage as the Hybrid variant, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "zyphra/zonos-v0.1-transformer",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/zyphra/zonos-v0.1-transformer/endpoints"
+        },
+        "name": "Zyphra: Zonos v0.1 Transformer",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "zyphra/zonos-v0.1-hybrid",
+        "context_length": 4096,
+        "created": 1776983169,
+        "default_parameters": {},
+        "description": "Zonos v0.1 Hybrid is a text-to-speech model from Zyphra built on a hybrid architecture. It produces English speech output with coverage across American and British accents in male and female...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "zyphra/zonos-v0.1-hybrid",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/zyphra/zonos-v0.1-hybrid/endpoints"
+        },
+        "name": "Zyphra: Zonos v0.1 Hybrid",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "zyphra/zonos-v0.1-hybrid",
+        "context_length": 4096,
+        "created": 1776983169,
+        "default_parameters": {},
+        "description": "Zonos v0.1 Hybrid is a text-to-speech model from Zyphra built on a hybrid architecture. It produces English speech output with coverage across American and British accents in male and female...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "zyphra/zonos-v0.1-hybrid",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/zyphra/zonos-v0.1-hybrid/endpoints"
+        },
+        "name": "Zyphra: Zonos v0.1 Hybrid",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sesame/csm-1b",
+        "context_length": 4096,
+        "created": 1776983168,
+        "default_parameters": {},
+        "description": "CSM 1B is a conversational speech model from Sesame. It accepts text input and produces English speech output, with voice options spanning conversational and read-speech styles. At 1B parameters, it...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sesame/csm-1b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sesame/csm-1b/endpoints"
+        },
+        "name": "Sesame: CSM 1B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "conversational_a",
+          "conversational_b",
+          "read_speech_a",
+          "read_speech_b",
+          "read_speech_c",
+          "read_speech_d",
+          "none"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sesame/csm-1b",
+        "context_length": 4096,
+        "created": 1776983168,
+        "default_parameters": {},
+        "description": "CSM 1B is a conversational speech model from Sesame. It accepts text input and produces English speech output, with voice options spanning conversational and read-speech styles. At 1B parameters, it...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sesame/csm-1b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sesame/csm-1b/endpoints"
+        },
+        "name": "Sesame: CSM 1B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "conversational_a",
+          "conversational_b",
+          "read_speech_a",
+          "read_speech_b",
+          "read_speech_c",
+          "read_speech_d",
+          "none"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "canopylabs/orpheus-3b-0.1-ft",
+        "context_length": 4096,
+        "created": 1776983168,
+        "default_parameters": {},
+        "description": "Orpheus 3B is an English text-to-speech model from Canopy Labs, fine-tuned for natural prosody and expressive delivery. It offers 7 preset voices and is suited for narration, voice assistants, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "canopylabs/orpheus-3b-0.1-ft",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/canopylabs/orpheus-3b-0.1-ft/endpoints"
+        },
+        "name": "Canopy Labs: Orpheus 3B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "tara",
+          "leah",
+          "jess",
+          "leo",
+          "dan",
+          "mia",
+          "zac"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "canopylabs/orpheus-3b-0.1-ft",
+        "context_length": 4096,
+        "created": 1776983168,
+        "default_parameters": {},
+        "description": "Orpheus 3B is an English text-to-speech model from Canopy Labs, fine-tuned for natural prosody and expressive delivery. It offers 7 preset voices and is suited for narration, voice assistants, and...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "canopylabs/orpheus-3b-0.1-ft",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/canopylabs/orpheus-3b-0.1-ft/endpoints"
+        },
+        "name": "Canopy Labs: Orpheus 3B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000007"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "tara",
+          "leah",
+          "jess",
+          "leo",
+          "dan",
+          "mia",
+          "zac"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "hexgrad/kokoro-82m",
+        "context_length": 4096,
+        "created": 1776983167,
+        "default_parameters": {},
+        "description": "Kokoro 82M is a lightweight, open-weight text-to-speech model from hexgrad. It converts text to speech across 8 languages (American and British English, Spanish, French, Hindi, Italian, Japanese, Portuguese, and Chinese)...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "hexgrad/kokoro-82m",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/hexgrad/kokoro-82m/endpoints"
+        },
+        "name": "hexgrad: Kokoro 82M",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000062"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "af_alloy",
+          "af_aoede",
+          "af_bella",
+          "af_heart",
+          "af_jessica",
+          "af_kore",
+          "af_nicole",
+          "af_nova",
+          "af_river",
+          "af_sarah",
+          "af_sky",
+          "am_adam",
+          "am_echo",
+          "am_eric",
+          "am_fenrir",
+          "am_liam",
+          "am_michael",
+          "am_onyx",
+          "am_puck",
+          "am_santa",
+          "bf_alice",
+          "bf_emma",
+          "bf_isabella",
+          "bf_lily",
+          "bm_daniel",
+          "bm_fable",
+          "bm_george",
+          "bm_lewis",
+          "ef_dora",
+          "em_alex",
+          "em_santa",
+          "ff_siwis",
+          "hf_alpha",
+          "hf_beta",
+          "hm_omega",
+          "hm_psi",
+          "if_sara",
+          "im_nicola",
+          "jf_alpha",
+          "jf_gongitsune",
+          "jf_nezumi",
+          "jf_tebukuro",
+          "jm_kumo",
+          "pf_dora",
+          "pm_alex",
+          "pm_santa",
+          "zf_xiaobei",
+          "zf_xiaoni",
+          "zf_xiaoxiao",
+          "zf_xiaoyi",
+          "zm_yunjian",
+          "zm_yunxi",
+          "zm_yunxia",
+          "zm_yunyang"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "hexgrad/kokoro-82m",
+        "context_length": 4096,
+        "created": 1776983167,
+        "default_parameters": {},
+        "description": "Kokoro 82M is a lightweight, open-weight text-to-speech model from hexgrad. It converts text to speech across 8 languages (American and British English, Spanish, French, Hindi, Italian, Japanese, Portuguese, and Chinese)...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "hexgrad/kokoro-82m",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/hexgrad/kokoro-82m/endpoints"
+        },
+        "name": "hexgrad: Kokoro 82M",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000062"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [
+          "af_alloy",
+          "af_aoede",
+          "af_bella",
+          "af_heart",
+          "af_jessica",
+          "af_kore",
+          "af_nicole",
+          "af_nova",
+          "af_river",
+          "af_sarah",
+          "af_sky",
+          "am_adam",
+          "am_echo",
+          "am_eric",
+          "am_fenrir",
+          "am_liam",
+          "am_michael",
+          "am_onyx",
+          "am_puck",
+          "am_santa",
+          "bf_alice",
+          "bf_emma",
+          "bf_isabella",
+          "bf_lily",
+          "bm_daniel",
+          "bm_fable",
+          "bm_george",
+          "bm_lewis",
+          "ef_dora",
+          "em_alex",
+          "em_santa",
+          "ff_siwis",
+          "hf_alpha",
+          "hf_beta",
+          "hm_omega",
+          "hm_psi",
+          "if_sara",
+          "im_nicola",
+          "jf_alpha",
+          "jf_gongitsune",
+          "jf_nezumi",
+          "jf_tebukuro",
+          "jm_kumo",
+          "pf_dora",
+          "pm_alex",
+          "pm_santa",
+          "zf_xiaobei",
+          "zf_xiaoni",
+          "zf_xiaoxiao",
+          "zf_xiaoyi",
+          "zm_yunjian",
+          "zm_yunxi",
+          "zm_yunxia",
+          "zm_yunyang"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/voxtral-mini-tts-2603",
+        "context_length": 4096,
+        "created": 1776571337,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Voxtral Mini TTS is Mistral's text-to-speech model featuring zero-shot voice cloning and multilingual support. It converts text input into natural-sounding audio output.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "mistralai/voxtral-mini-tts-2603",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/voxtral-mini-tts-2603/endpoints"
+        },
+        "name": "Mistral: Voxtral Mini TTS",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000016"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "en_paul_sad",
+          "en_paul_neutral",
+          "en_paul_happy",
+          "en_paul_frustrated",
+          "en_paul_excited",
+          "en_paul_confident",
+          "en_paul_cheerful",
+          "en_paul_angry",
+          "gb_oliver_neutral",
+          "gb_oliver_sad",
+          "gb_oliver_excited",
+          "gb_oliver_curious",
+          "gb_oliver_confident",
+          "gb_oliver_cheerful",
+          "gb_oliver_angry",
+          "gb_jane_sarcasm",
+          "gb_jane_confused",
+          "gb_jane_shameful",
+          "gb_jane_sad",
+          "gb_jane_neutral",
+          "gb_jane_jealousy",
+          "gb_jane_frustrated",
+          "gb_jane_curious",
+          "gb_jane_confident",
+          "fr_marie_sad",
+          "fr_marie_neutral",
+          "fr_marie_happy",
+          "fr_marie_excited",
+          "fr_marie_curious",
+          "fr_marie_angry"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/voxtral-mini-tts-2603",
+        "context_length": 4096,
+        "created": 1776571337,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Voxtral Mini TTS is Mistral's text-to-speech model featuring zero-shot voice cloning and multilingual support. It converts text input into natural-sounding audio output.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "mistralai/voxtral-mini-tts-2603",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/voxtral-mini-tts-2603/endpoints"
+        },
+        "name": "Mistral: Voxtral Mini TTS",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000016"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "en_paul_sad",
+          "en_paul_neutral",
+          "en_paul_happy",
+          "en_paul_frustrated",
+          "en_paul_excited",
+          "en_paul_confident",
+          "en_paul_cheerful",
+          "en_paul_angry",
+          "gb_oliver_neutral",
+          "gb_oliver_sad",
+          "gb_oliver_excited",
+          "gb_oliver_curious",
+          "gb_oliver_confident",
+          "gb_oliver_cheerful",
+          "gb_oliver_angry",
+          "gb_jane_sarcasm",
+          "gb_jane_confused",
+          "gb_jane_shameful",
+          "gb_jane_sad",
+          "gb_jane_neutral",
+          "gb_jane_jealousy",
+          "gb_jane_frustrated",
+          "gb_jane_curious",
+          "gb_jane_confident",
+          "fr_marie_sad",
+          "fr_marie_neutral",
+          "fr_marie_happy",
+          "fr_marie_excited",
+          "fr_marie_curious",
+          "fr_marie_angry"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-mini-tts-2025-12-15",
+        "context_length": 4096,
+        "created": 1776552477,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "GPT-4o Mini TTS is OpenAI's cost-efficient text-to-speech model. It converts text input into natural-sounding audio output, supporting a variety of voices and tones.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-mini-tts-2025-12-15",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-mini-tts-2025-12-15/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Mini TTS",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0000006"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "fable",
+          "onyx",
+          "nova",
+          "sage",
+          "shimmer",
+          "verse",
+          "marin",
+          "cedar"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o-mini-tts-2025-12-15",
+        "context_length": 4096,
+        "created": 1776552477,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "GPT-4o Mini TTS is OpenAI's cost-efficient text-to-speech model. It converts text input into natural-sounding audio output, supporting a variety of voices and tones.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o-mini-tts-2025-12-15",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o-mini-tts-2025-12-15/endpoints"
+        },
+        "name": "OpenAI: GPT-4o Mini TTS",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0000006"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "fable",
+          "onyx",
+          "nova",
+          "sage",
+          "shimmer",
+          "verse",
+          "marin",
+          "cedar"
+        ],
+        "top_provider": {
+          "context_length": 4096,
+          "is_moderated": true,
+          "max_completion_tokens": null
         }
       }
     ]
