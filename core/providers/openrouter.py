@@ -20,10 +20,11 @@ OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhi
 
 # OpenRouter uses the ``output_modalities`` query parameter to filter models
 # by their output capability.  The default ``/models`` call returns only
-# text-output models.  Dedicated STT and TTS models require separate fetches
-# with ``?output_modalities=transcription`` and ``?output_modalities=speech``
+# text-output models.  Dedicated STT, TTS, and image-generation models
+# require separate fetches with ``?output_modalities=transcription``,
+# ``?output_modalities=speech``, and ``?output_modalities=image``
 # respectively.
-SUPPLEMENTARY_OUTPUT_MODALITIES = ("transcription", "speech")
+SUPPLEMENTARY_OUTPUT_MODALITIES = ("transcription", "speech", "image")
 
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
@@ -34,9 +35,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         """Return query-parameter dicts for supplementary model fetches.
 
         The OpenRouter ``/models`` endpoint defaults to returning only
-        text-output models.  Dedicated STT and TTS models are excluded
-        unless the ``output_modalities`` query parameter is set to
-        ``transcription`` or ``speech`` respectively.
+        text-output models.  Dedicated STT, TTS, and image-generation
+        models are excluded unless the ``output_modalities`` query
+        parameter is set to ``transcription``, ``speech``, or ``image``
+        respectively.
 
         Each dict returned here is appended as query parameters to the
         models endpoint URL during discovery, and the resulting models
