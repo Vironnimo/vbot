@@ -1072,6 +1072,70 @@
     event.payload?.error ??
     messageFromEvent(event)?.content;
 
+  const isTextToSpeechResult = (event) => {
+    if (toolNameForEvent(event) !== 'text_to_speech') {
+      return false;
+    }
+    const result = event.payload?.result;
+    if (!isPlainObject(result) || result.ok !== true) {
+      return false;
+    }
+    const artifact = result.data?.artifact;
+    return (
+      isPlainObject(artifact) &&
+      artifact.kind === 'speech' &&
+      typeof artifact.url === 'string'
+    );
+  };
+
+  const speechArtifactFromResult = (event) => {
+    const result = event.payload?.result;
+    if (!isPlainObject(result)) {
+      return null;
+    }
+    const artifact = result.data?.artifact;
+    if (
+      !isPlainObject(artifact) ||
+      artifact.kind !== 'speech' ||
+      typeof artifact.url !== 'string'
+    ) {
+      return null;
+    }
+    return artifact;
+  };
+
+  const isTextToSpeechTool = (tool) => {
+    if (toolNameForRunTool(tool) !== 'text_to_speech') {
+      return false;
+    }
+    const result = tool.result;
+    if (!isPlainObject(result) || result.ok !== true) {
+      return false;
+    }
+    const artifact = result.data?.artifact;
+    return (
+      isPlainObject(artifact) &&
+      artifact.kind === 'speech' &&
+      typeof artifact.url === 'string'
+    );
+  };
+
+  const speechArtifactFromTool = (tool) => {
+    const result = tool.result;
+    if (!isPlainObject(result)) {
+      return null;
+    }
+    const artifact = result.data?.artifact;
+    if (
+      !isPlainObject(artifact) ||
+      artifact.kind !== 'speech' ||
+      typeof artifact.url !== 'string'
+    ) {
+      return null;
+    }
+    return artifact;
+  };
+
   const formatTime = (timestamp) => {
     if (!timestamp) {
       return '';
@@ -1744,6 +1808,17 @@
                         )}
                       </div>
                     </details>
+                    {#if isTextToSpeechTool(child)}
+                      {@const speechArtifact = speechArtifactFromTool(child)}
+                      {#if speechArtifact}
+                        <audio
+                          class="speech-audio-player"
+                          src={speechArtifact.url}
+                          controls
+                          autoplay
+                        ></audio>
+                      {/if}
+                    {/if}
                   {/if}
                 {:else if child.type === 'assistant_output'}
                   <div
@@ -1883,6 +1958,17 @@
                     {/if}
                   </div>
                 </details>
+                {#if isTextToSpeechResult(item.event)}
+                  {@const speechArtifact = speechArtifactFromResult(item.event)}
+                  {#if speechArtifact}
+                    <audio
+                      class="speech-audio-player"
+                      src={speechArtifact.url}
+                      controls
+                      autoplay
+                    ></audio>
+                  {/if}
+                {/if}
               </div>
             </article>
           {:else if isTerminalEvent(item.event)}
@@ -2098,6 +2184,15 @@
     min-width: 0;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
+  }
+
+  .speech-audio-player {
+    display: block;
+    width: 100%;
+    max-width: 280px;
+    height: 36px;
+    margin-top: 6px;
+    border-radius: 6px;
   }
 
   .chat-terminal-event {
