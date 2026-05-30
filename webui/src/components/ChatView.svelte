@@ -46,6 +46,7 @@
     navigateToSubAgent = () => {},
     pendingSubAgentNavigation = null,
     runServerEvent = null,
+    runServerEvents = [],
   } = $props();
 
   const chatState = $state(createChatState());
@@ -90,7 +91,7 @@
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
   let actionInfoTimeoutId = null;
-  let lastRunServerEventKey = '';
+  const handledRunServerEventKeys = Object.create(null);
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
@@ -224,12 +225,15 @@
   });
 
   $effect(() => {
-    const eventKey = runServerEventKey(runServerEvent);
-    if (!eventKey || eventKey === lastRunServerEventKey) {
-      return;
+    const events = normalizedRunServerEvents(runServerEvent, runServerEvents);
+    for (const event of events) {
+      const eventKey = runServerEventKey(event);
+      if (!eventKey || handledRunServerEventKeys[eventKey]) {
+        continue;
+      }
+      handledRunServerEventKeys[eventKey] = true;
+      handleRunServerEvent(event);
     }
-    lastRunServerEventKey = eventKey;
-    handleRunServerEvent(runServerEvent);
   });
 
   onMount(() => {
@@ -689,7 +693,7 @@
     return terminalEvent;
   };
 
-  const handleAppendedRunEvent = (sessionState, event) => {
+  const handleAppendedRunEvent = (sessionState, event, options = {}) => {
     if (!event) {
       return;
     }
@@ -699,7 +703,9 @@
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
       clearPendingReconnect(sessionState.key);
-      closeRunSubscription(sessionState.key);
+      if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
+        closeRunSubscription(sessionState.key);
+      }
       if (event.type !== 'run_failed') {
         actionError = '';
       }
@@ -788,7 +794,7 @@
     );
     flushPendingRunEvents(sessionState.key);
     const appended = appendRunEvent(sessionState, event);
-    handleAppendedRunEvent(sessionState, appended);
+    handleAppendedRunEvent(sessionState, appended, { fromServerEvent: true });
     if (
       event.type === 'run_started' &&
       isDisplayedSession(event.agent_id, event.session_id)
@@ -804,6 +810,16 @@
         { afterSequence: highestRunEventSequence(sessionState) },
       );
     }
+  };
+
+  const normalizedRunServerEvents = (singleEvent, events) => {
+    const normalizedEvents = Array.isArray(events)
+      ? events.filter(Boolean)
+      : [];
+    if (singleEvent) {
+      normalizedEvents.push(singleEvent);
+    }
+    return normalizedEvents;
   };
 
   const runEventFromServerEvent = (serverEvent) => {

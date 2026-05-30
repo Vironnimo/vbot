@@ -22,7 +22,7 @@ The chat loop creates and executes Runs. Server, channels, automation, tools, an
 
 Stable Run event constants live in `core.runs`:
 - lifecycle: `run_started`, `run_completed`, `run_failed`, `run_cancelled`
-- persisted/visible output: `user_message_persisted`, `reasoning`, `tool_call_started`, `tool_call_result`, `assistant_output`, `error_message_persisted`, `model_fallback_activated`, `compaction_completed`
+- persisted/visible output: `user_message_persisted`, `reasoning`, `tool_call_started`, `tool_call_result`, `subagent_session_started`, `assistant_output`, `error_message_persisted`, `model_fallback_activated`, `compaction_completed`
 - transient SSE-only deltas: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, `tool_call_stderr`
 
 Every emitted event increments the Run-local `sequence`, including transient delta events. Subscribers can replay events after a sequence number and then follow live events until a terminal event.

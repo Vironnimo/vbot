@@ -165,6 +165,7 @@ Clients call the vBot server contract; provider wire details stay behind
   update responses/events use effective resolved Agent values even when raw
   persisted fields remain unset. Run output
   includes persisted error-message events bridged as `run_output`, plus
+  `subagent_session_started` events with their child Session payload and
   `model_fallback_activated` with payload `{ from_model, to_model }` when a Run
   switches to an Agent fallback model. App-level background failures use
   `compaction_completed` with payload `{ message }` when auto-compaction appends a checkpoint during a Run, and

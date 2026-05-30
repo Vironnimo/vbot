@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
 from server.app import _parse_after_sequence, create_app
 from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
@@ -118,6 +119,10 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
 def test_websocket_output_mappings_exclude_streaming_delta_event_types() -> None:
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(RUN_OUTPUT_EVENT_TYPES)
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(SERVER_EVENT_TYPES)
+
+
+def test_websocket_output_mappings_include_subagent_session_started() -> None:
+    assert SUBAGENT_SESSION_STARTED_EVENT in RUN_OUTPUT_EVENT_TYPES
 
 
 def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> None:
