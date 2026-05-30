@@ -53,6 +53,18 @@ OPENROUTER_API_KEY=...
 ANTHROPIC_API_KEY=...
 ```
 
+### 3b. Home Assistant (optional)
+
+Add to `~/.vbot/.env`:
+
+```env
+HASS_TOKEN=...          # Long-Lived Access Token from your HA profile
+HASS_URL=http://homeassistant.local:8123  # optional, this is the default
+```
+
+With a valid token, vBot registers 4 LLM-callable tools: `ha_list_entities`,
+`ha_get_state`, `ha_list_services`, and `ha_call_service`.
+
 ### 4. Start the server
 
 Managed background start via CLI:
