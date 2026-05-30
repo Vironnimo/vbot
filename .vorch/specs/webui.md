@@ -49,7 +49,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `{ file, entries, cursor }` for one selected daily log file.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
     one Run timeline and returns `{ close, source }`. It subscribes to whole
-    Run events plus streaming delta events and supports optional
+    Run events, including `subagent_session_started`, plus streaming delta
+    events and supports optional
     `afterSequence` URL construction for manual replay; native reconnect uses
     SSE event IDs / `Last-Event-ID` from the server.
   - `subscribeServerEvents(handlers, options?)` opens `/ws` and returns
