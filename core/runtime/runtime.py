@@ -17,6 +17,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.extensions import ExtensionRegistry
+from core.image import ImageService
 from core.memory import MemoryService
 from core.model_tasks import TaskModelService
 from core.models.models import Model, ModelRegistry
@@ -55,6 +56,7 @@ from core.tools import (
     register_glob_tool,
     register_grep_tool,
     register_homeassistant_tools,
+    register_image_generation_tool,
     register_memory_tool,
     register_process_tool,
     register_read_tool,
@@ -139,6 +141,7 @@ class Runtime:
         self._models: ModelRegistry | None = None
         self._model_tasks: TaskModelService | None = None
         self._speech: SpeechService | None = None
+        self._image: ImageService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._agents: AgentStore | None = None
@@ -210,6 +213,7 @@ class Runtime:
             self._storage,
         )
         self._speech = SpeechService(self._model_tasks, self, self._storage.data_dir)
+        self._image = ImageService(self._model_tasks, self, self._storage.data_dir)
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
@@ -230,6 +234,7 @@ class Runtime:
         register_homeassistant_tools(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
         register_text_to_speech_tool(self._tools, self._speech)
+        register_image_generation_tool(self._tools, self._image)
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
             self._storage.data_dir / "skills",
@@ -358,6 +363,7 @@ class Runtime:
         self._models = None
         self._model_tasks = None
         self._speech = None
+        self._image = None
         self._storage = None
         self._attachment_store = None
         self._agents = None
@@ -685,6 +691,14 @@ class Runtime:
         if self._speech is None:
             raise RuntimeError("Speech service not available")
         return self._speech
+
+    @property
+    def image(self) -> ImageService:
+        """Access to image generation execution."""
+        self._ensure_started()
+        if self._image is None:
+            raise RuntimeError("Image service not available")
+        return self._image
 
     @property
     def token_store(self) -> TokenStore:
