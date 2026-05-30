@@ -39,7 +39,10 @@ task values include `chat`, `text_output`, `image_input`,
 `speech_to_text`, `video_input`, `video_understanding`, `image_generation`,
 `image_edit`, `audio_generation`, `text_to_speech`, and `video_generation`.
 Missing modality data defaults to text-in/text-out so sparse OpenAI-compatible
-catalogs remain usable as chat model catalogs.
+catalogs remain usable as chat model catalogs. Output modality aliases from
+speech catalogs are normalized for task filtering: `transcription` is treated
+as text output for `speech_to_text`, and `speech` is treated as audio output for
+`text_to_speech`/`audio_generation`.
 
 ### Model
 

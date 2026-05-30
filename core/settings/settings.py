@@ -6,6 +6,7 @@ import math
 from collections.abc import Mapping
 from typing import Any, cast
 
+from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 
 JsonObject = dict[str, Any]
@@ -17,7 +18,7 @@ AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thi
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 SETTINGS_UPDATE_SECTIONS = frozenset(
-    {"appearance", "skills", "subagents", "compaction", "defaults", "recall"}
+    {"appearance", "skills", "subagents", "compaction", "defaults", "recall", "model_tasks"}
 )
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
@@ -61,7 +62,57 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "recall" in params:
         parsed_update["recall"] = _parse_recall_update(params["recall"])
 
+    if "model_tasks" in params:
+        parsed_update["model_tasks"] = _parse_model_tasks_update(params["model_tasks"])
+
     return parsed_update
+
+
+def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
+    if not isinstance(model_tasks, dict):
+        raise SettingsValidationError("params.model_tasks must be an object")
+
+    parsed: JsonObject = {}
+    for task_type, raw_binding in model_tasks.items():
+        if not isinstance(task_type, str) or task_type not in SUPPORTED_TASK_TYPES:
+            allowed = ", ".join(sorted(SUPPORTED_TASK_TYPES))
+            raise SettingsValidationError(
+                f"params.model_tasks contains unsupported task type {task_type!r}; "
+                f"supported: {allowed}"
+            )
+        if not isinstance(raw_binding, dict):
+            raise SettingsValidationError(f"params.model_tasks.{task_type} must be an object")
+
+        unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+        if unsupported_fields:
+            raise SettingsValidationError(
+                f"unsupported model task settings for {task_type}: {', '.join(unsupported_fields)}"
+            )
+
+        parsed_binding: JsonObject = {}
+        if "target" in raw_binding:
+            target = raw_binding["target"]
+            if not isinstance(target, str):
+                raise SettingsValidationError(
+                    f"params.model_tasks.{task_type}.target must be a string"
+                )
+            parsed_binding["target"] = target.strip()
+
+        if "options" in raw_binding:
+            options = raw_binding["options"]
+            if not isinstance(options, dict):
+                raise SettingsValidationError(
+                    f"params.model_tasks.{task_type}.options must be an object"
+                )
+            parsed_binding["options"] = dict(options)
+
+        if not parsed_binding:
+            raise SettingsValidationError(
+                f"params.model_tasks.{task_type} must include target or options"
+            )
+        parsed[task_type] = parsed_binding
+
+    return parsed
 
 
 def _parse_recall_update(recall: Any) -> JsonObject:

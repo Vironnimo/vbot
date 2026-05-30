@@ -6,6 +6,8 @@ import {
 const RPC_ENDPOINT = '/api/rpc';
 const ATTACHMENT_UPLOAD_ENDPOINT = '/api/upload';
 const ATTACHMENT_BASE_ENDPOINT = '/api/attachments';
+const SPEECH_TRANSCRIBE_ENDPOINT = '/api/speech/transcribe';
+const SPEECH_SYNTHESIZE_ENDPOINT = '/api/speech/synthesize';
 const WEBSOCKET_ENDPOINT = '/ws';
 const LOGS_WEBSOCKET_ENDPOINT = '/ws/logs';
 
@@ -243,6 +245,188 @@ export async function uploadAttachment(file, options = {}) {
     size_bytes: payload.size_bytes,
     text_content,
   };
+}
+
+export function getTaskModelSettings(options = {}) {
+  return rpc('task_model.settings', {}, options);
+}
+
+export function updateTaskModelSettings(modelTasks, options = {}) {
+  if (!isPlainObject(modelTasks)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Task model settings must be an object',
+      {
+        method: 'task_model.update',
+      },
+    );
+  }
+  return rpc('task_model.update', { model_tasks: modelTasks }, options);
+}
+
+export function listTaskModelTargets(taskType, options = {}) {
+  if (!isNonEmptyString(taskType)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Task type must be a non-empty string',
+      {
+        method: 'task_model.list_targets',
+      },
+    );
+  }
+  return rpc('task_model.list_targets', { task_type: taskType }, options);
+}
+
+export function getTaskModelOptions(taskType, target, options = {}) {
+  if (!isNonEmptyString(taskType) || !isNonEmptyString(target)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Task type and target must be non-empty strings',
+      {
+        method: 'task_model.options',
+      },
+    );
+  }
+  return rpc('task_model.options', { task_type: taskType, target }, options);
+}
+
+export async function transcribeSpeech(audioBlob, options = {}) {
+  if (!audioBlob || typeof audioBlob !== 'object') {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Audio blob must be provided',
+      {
+        method: 'speech.transcribe',
+      },
+    );
+  }
+
+  const fetchFunction = options.fetch ?? globalThis.fetch;
+  if (typeof fetchFunction !== 'function') {
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'fetch is not available', {
+      method: 'speech.transcribe',
+    });
+  }
+
+  const formData = new FormData();
+  const filename = isNonEmptyString(options.filename)
+    ? options.filename
+    : filenameForAudioBlob(audioBlob);
+  formData.append('file', audioBlob, filename);
+
+  let response;
+  try {
+    response = await fetchFunction(
+      buildHttpUrl(
+        options.transcribePath ?? SPEECH_TRANSCRIBE_ENDPOINT,
+        options.baseUrl,
+      ),
+      {
+        method: 'POST',
+        body: formData,
+        signal: options.signal,
+      },
+    );
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_NETWORK,
+      'Speech transcription failed before a response arrived',
+      {
+        method: 'speech.transcribe',
+        cause: error,
+      },
+    );
+  }
+
+  const payload = await readJsonHttpPayload(response, 'speech.transcribe');
+  if (!response.ok) {
+    throw new ApiClientError(
+      RPC_ERROR_HTTP,
+      isNonEmptyString(payload?.detail)
+        ? payload.detail
+        : `Speech transcription failed with HTTP ${response.status}`,
+      {
+        method: 'speech.transcribe',
+        status: response.status,
+        details: isPlainObject(payload) ? payload : null,
+      },
+    );
+  }
+  if (!isPlainObject(payload) || typeof payload.text !== 'string') {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'Speech transcription response has an invalid shape',
+      {
+        method: 'speech.transcribe',
+        status: response.status,
+        details: payload,
+      },
+    );
+  }
+  return payload;
+}
+
+export async function synthesizeSpeech(text, options = {}) {
+  if (!isNonEmptyString(text)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Text must be a non-empty string',
+      {
+        method: 'speech.synthesize',
+      },
+    );
+  }
+
+  const fetchFunction = options.fetch ?? globalThis.fetch;
+  if (typeof fetchFunction !== 'function') {
+    throw new ApiClientError(RPC_ERROR_NETWORK, 'fetch is not available', {
+      method: 'speech.synthesize',
+    });
+  }
+
+  let response;
+  try {
+    response = await fetchFunction(
+      buildHttpUrl(
+        options.synthesizePath ?? SPEECH_SYNTHESIZE_ENDPOINT,
+        options.baseUrl,
+      ),
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(options.headers ?? {}),
+        },
+        body: JSON.stringify({ text }),
+        signal: options.signal,
+      },
+    );
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_NETWORK,
+      'Speech synthesis failed before a response arrived',
+      {
+        method: 'speech.synthesize',
+        cause: error,
+      },
+    );
+  }
+
+  if (!response.ok) {
+    const payload = await readOptionalJsonHttpPayload(response);
+    throw new ApiClientError(
+      RPC_ERROR_HTTP,
+      isNonEmptyString(payload?.detail)
+        ? payload.detail
+        : `Speech synthesis failed with HTTP ${response.status}`,
+      {
+        method: 'speech.synthesize',
+        status: response.status,
+        details: isPlainObject(payload) ? payload : null,
+      },
+    );
+  }
+  return response.blob();
 }
 
 export function getAttachmentUrl(attachmentId) {
@@ -855,6 +1039,50 @@ async function readRpcPayload(response, method) {
       },
     );
   }
+}
+
+async function readJsonHttpPayload(response, method) {
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new ApiClientError(
+      RPC_ERROR_RESPONSE,
+      'HTTP response body must be valid JSON',
+      {
+        method,
+        status: response.status,
+        cause: error,
+      },
+    );
+  }
+}
+
+async function readOptionalJsonHttpPayload(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function filenameForAudioBlob(audioBlob) {
+  if (isNonEmptyString(audioBlob.name)) {
+    return audioBlob.name;
+  }
+  const type = isNonEmptyString(audioBlob.type) ? audioBlob.type : '';
+  if (type.includes('webm')) {
+    return 'recording.webm';
+  }
+  if (type.includes('ogg')) {
+    return 'recording.ogg';
+  }
+  if (type.includes('mpeg') || type.includes('mp3')) {
+    return 'recording.mp3';
+  }
+  if (type.includes('wav')) {
+    return 'recording.wav';
+  }
+  return 'recording.webm';
 }
 
 function parseJsonEventData(data, code, message) {

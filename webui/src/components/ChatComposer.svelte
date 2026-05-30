@@ -1,7 +1,8 @@
 <script>
   import { onDestroy, tick } from 'svelte';
 
-  import { uploadAttachment } from '$lib/api.js';
+  import { transcribeSpeech, uploadAttachment } from '$lib/api.js';
+  import { createAudioRecorder } from '$lib/audioRecorder.js';
   import { t } from '$lib/i18n.js';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
 
@@ -14,6 +15,7 @@
     isRunning = false,
     availableSkills = [],
     onSendMessage,
+    onTranscriptionError,
   } = $props();
   let content = $state('');
   let inputElement = $state(null);
@@ -24,6 +26,8 @@
   let pendingAttachments = $state([]);
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
+  let recordingState = $state('idle');
+  let activeRecorder = null;
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
   let _triggerClosed = false;
@@ -45,12 +49,17 @@
   let hasUploadingAttachments = $derived(
     pendingAttachments.some((attachment) => attachment.uploading),
   );
+  let voiceBusy = $derived(
+    recordingState === 'requesting' || recordingState === 'transcribing',
+  );
+  let isRecording = $derived(recordingState === 'recording');
 
   onDestroy(() => {
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
       attachmentToastTimeoutId = null;
     }
+    cancelActiveRecording();
     clearPendingAttachments();
   });
 
@@ -72,11 +81,8 @@
     pendingAttachments = [];
   };
 
-  const showAttachmentUploadErrorToast = () => {
-    attachmentToastMessage = t(
-      'chat.attachment.uploadFailed',
-      'Attachment upload failed.',
-    );
+  const showComposerErrorToast = (message) => {
+    attachmentToastMessage = message;
     if (attachmentToastTimeoutId !== null) {
       clearTimeout(attachmentToastTimeoutId);
     }
@@ -84,6 +90,21 @@
       attachmentToastMessage = '';
       attachmentToastTimeoutId = null;
     }, 3500);
+  };
+
+  const showAttachmentUploadErrorToast = () => {
+    showComposerErrorToast(
+      t('chat.attachment.uploadFailed', 'Attachment upload failed.'),
+    );
+  };
+
+  const showTranscriptionError = (message) => {
+    const normalizedMessage =
+      typeof message === 'string' && message.length > 0
+        ? message
+        : t('chat.voice.transcriptionFailed', 'Speech transcription failed.');
+    showComposerErrorToast(normalizedMessage);
+    onTranscriptionError?.(normalizedMessage);
   };
 
   const removePendingAttachmentByPreviewUrl = (previewUrl) => {
@@ -189,6 +210,79 @@
     fileInputElement?.click();
   };
 
+  const handleMicrophoneClick = async () => {
+    if (disabled || voiceBusy) {
+      return;
+    }
+
+    if (isRecording) {
+      await stopRecordingAndTranscribe();
+      return;
+    }
+
+    recordingState = 'requesting';
+    try {
+      activeRecorder = await createAudioRecorder();
+      activeRecorder.start();
+      recordingState = 'recording';
+    } catch (error) {
+      activeRecorder = null;
+      recordingState = 'idle';
+      showTranscriptionError(
+        `${t('chat.voice.startFailed', 'Microphone recording could not start.')} ${error.message ?? ''}`.trim(),
+      );
+    }
+  };
+
+  const stopRecordingAndTranscribe = async () => {
+    const recorder = activeRecorder;
+    if (!recorder) {
+      recordingState = 'idle';
+      return;
+    }
+
+    activeRecorder = null;
+    recordingState = 'transcribing';
+    try {
+      const audioBlob = await recorder.stop();
+      const result = await transcribeSpeech(audioBlob, {
+        filename:
+          typeof recorder.filename === 'function'
+            ? recorder.filename()
+            : 'recording.webm',
+      });
+      await insertTranscript(result.text);
+    } catch (error) {
+      showTranscriptionError(
+        `${t('chat.voice.transcriptionFailed', 'Speech transcription failed.')} ${error.message ?? ''}`.trim(),
+      );
+    } finally {
+      recordingState = 'idle';
+    }
+  };
+
+  const cancelActiveRecording = () => {
+    if (!activeRecorder) {
+      return;
+    }
+    activeRecorder.cancel?.();
+    activeRecorder = null;
+    recordingState = 'idle';
+  };
+
+  const insertTranscript = async (transcript) => {
+    const text = typeof transcript === 'string' ? transcript.trim() : '';
+    if (!text) {
+      return;
+    }
+    content = content.trim() ? `${content.trimEnd()}\n${text}` : text;
+    triggerContext = null;
+    activeSkillIndex = 0;
+    await tick();
+    inputElement?.focus();
+    resizeInput();
+  };
+
   const handleFilePickerChange = async (event) => {
     const input = event.currentTarget;
     const files = input?.files;
@@ -257,10 +351,13 @@
     if (
       disabled ||
       hasUploadingAttachments ||
+      voiceBusy ||
       (!trimmedContent && !hasPendingAttachments)
     ) {
       return;
     }
+
+    cancelActiveRecording();
 
     if (!hasPendingAttachments) {
       onSendMessage?.(content);
@@ -598,6 +695,24 @@
       <button
         type="button"
         class="icon-btn"
+        class:icon-btn--active={isRecording}
+        disabled={disabled || voiceBusy}
+        aria-label={isRecording
+          ? t('chat.voice.stopRecording', 'Stop recording')
+          : t('chat.voice.startRecording', 'Start voice input')}
+        title={isRecording
+          ? t('chat.voice.stopRecording', 'Stop recording')
+          : t('chat.voice.startRecording', 'Start voice input')}
+        onclick={handleMicrophoneClick}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 2a2 2 0 0 1 2 2v4a2 2 0 1 1-4 0V4a2 2 0 0 1 2-2z" />
+          <path d="M4 7v1a4 4 0 0 0 8 0V7M8 12v2M6 14h4" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="icon-btn"
         {disabled}
         aria-label={t('chat.attachment.addFile', 'Add file')}
         title={t('chat.attachment.addFile', 'Add file')}
@@ -614,6 +729,7 @@
         class="send-btn"
         disabled={disabled ||
           hasUploadingAttachments ||
+          voiceBusy ||
           (!content.trim() && pendingAttachments.length === 0)}
         aria-label={isRunning
           ? t('chat.queueMessage', 'Queue message')
@@ -929,6 +1045,12 @@
   .icon-btn svg {
     width: 14px;
     height: 14px;
+  }
+
+  .icon-btn--active {
+    border-color: rgba(232, 135, 10, 0.45);
+    color: var(--accent);
+    background: rgba(232, 135, 10, 0.1);
   }
 
   .send-btn svg {

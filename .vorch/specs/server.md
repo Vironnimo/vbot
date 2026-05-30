@@ -26,7 +26,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`,
   `channel.status`, `prompt.list`, `prompt.update`, `prompt.reset`,
   `prompt.preview`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
-  `cron.delete`, `cron.enable`, `cron.disable`, `log.list`, and `log.read`.
+  `cron.delete`, `cron.enable`, `cron.disable`, `task_model.settings`,
+  `task_model.update`, `task_model.list_targets`, `task_model.options`,
+  `log.list`, and `log.read`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - `provider.set_key` accepts `{ provider_id, value, connection_id? }`, resolves the target API-key connection, writes the connection's configured `credential_key` to the data-dir `.env`, reloads runtime provider credentials, and returns `{ provider_id, connection_id, credential_key, configured }`. If `connection_id` is omitted, the provider must have exactly one API-key connection. OAuth connections are rejected; the secret value is never returned.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
@@ -57,7 +59,7 @@ Clients call the vBot server contract; provider wire details stay behind
   configured `models_endpoint` and a usable connection credential, skips
   ineligible providers, reloads the runtime model registry reference once, and
   returns `{ providers, refreshed_count, model_count }`.
-- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, `defaults.agent` for project-wide Agent fallback values, plus `subagents` settings for depth, per-turn count, and timeout limits, `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`, and `recall` settings `{ backend, available_backends }`.
+- `settings.get` provider items expose `connections` as `{ id, type, label, configured }`; `configured` mirrors `connection.list` usability for admin settings. Provider-level `credentials_configured` remains true when any connection is configured. Provider items also expose `models_endpoint` so the WebUI can show manual model-refresh controls only for supported providers. `settings.get` also returns `skills.default_directory` and `skills.directories` for the Settings Skills panel, `defaults.agent` for project-wide Agent fallback values, plus `subagents` settings for depth, per-turn count, and timeout limits, `compaction` settings `{ auto, threshold, tail_tokens, summary_model }`, `recall` settings `{ backend, available_backends }`, and normalized `model_tasks`.
 - `settings.get_raw` returns `{ settings }`, where `settings` is the raw top-level `settings.json` dict currently persisted for the target data directory.
 - `settings.set_key` accepts `{ key, value }`, where `value` may be any JSON type including `null`, updates one raw top-level `settings.json` key, persists it, and returns `{ settings }` with the updated raw dict.
 - `log.list` returns available daily log filenames from `<data_dir>/logs/` as
@@ -77,6 +79,15 @@ Clients call the vBot server contract; provider wire details stay behind
   to HTTP 413; blocked MIME types map to HTTP 415.
 - `GET /api/attachments/{attachment_id}` returns the raw stored blob with the
   stored `media_type` as Content-Type, or 404 when the attachment does not exist.
+- `POST /api/speech/transcribe` accepts one multipart `file` upload and returns
+  `{ text, language, segments, usage }` using the configured
+  `model_tasks.speech_to_text` binding.
+- `POST /api/speech/synthesize` accepts JSON `{ text }` and returns raw audio
+  bytes using the configured `model_tasks.text_to_speech` binding. The response
+  content type is the generated audio media type.
+- `GET /api/speech/artifacts/{artifact_id}` returns a persisted TTS artifact
+  from `<data_dir>/speech/`, or an expected HTTP error when the id/artifact is
+  invalid.
 - `tool.list` returns all registered tools for UI catalogs as
   `{ name, description }` entries sorted by tool name. Internal/system-managed tools such as `skill` are omitted.
 - `cron.create` accepts scheduled job fields and returns `{ id }`.
@@ -93,7 +104,15 @@ Clients call the vBot server contract; provider wire details stay behind
 - `agent.delete` serializes the list/check/delete sequence with a process-local
   `asyncio.Lock` so concurrent deletes in one server process cannot leave zero
   Agents. Cross-process/shared-data-dir locking is out of scope.
-- `settings.update` accepts supported `appearance`, `skills`, `defaults`, `subagents`, `compaction`, and `recall` sections. Public request-shape parsing and validation lives in `core/settings/`; server delegates map `SettingsValidationError` to RPC `invalid_request`, then apply accepted updates through storage/runtime services. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. The `defaults` section currently supports only `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual persisted default key, while `thinking_effort: ""` remains a valid explicit provider-default setting. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage. The `recall` section is `{ backend }` for first-party backends and reloads the runtime `session_search` backend without a restart.
+- `task_model.settings` returns normalized `{ model_tasks }`.
+- `task_model.update` accepts `{ model_tasks }`, reuses the same public settings
+  parser as `settings.update`, persists sparse task-model updates, and returns
+  normalized `{ model_tasks }`.
+- `task_model.list_targets` accepts `{ task_type }` and returns `{ targets }`,
+  filtered to usable provider/local targets for that task.
+- `task_model.options` accepts `{ task_type, target }` and returns
+  `{ schema }`, a backend-owned option schema for the selected target.
+- `settings.update` accepts supported `appearance`, `skills`, `defaults`, `subagents`, `compaction`, `recall`, and `model_tasks` sections. Public request-shape parsing and validation lives in `core/settings/`; server delegates map `SettingsValidationError` to RPC `invalid_request`, then apply accepted updates through storage/runtime services. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. The `defaults` section currently supports only `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual persisted default key, while `thinking_effort: ""` remains a valid explicit provider-default setting. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage. The `recall` section is `{ backend }` for first-party backends and reloads the runtime `session_search` backend without a restart. The `model_tasks` section is sparse and stores task-type bindings for specialized models.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
@@ -259,6 +278,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - Public history payloads also include `role: "compaction_checkpoint"` messages so accessors can render timeline separators after reload; they should not render them as normal chat bubbles.
 - Attachment uploads stay outside the RPC envelope. WebUI and other accessors use
   the dedicated HTTP endpoints instead of `POST /api/rpc` for blob transfer.
+- Speech audio uploads/downloads also stay outside the RPC envelope. WebUI and
+  other accessors use `/api/speech/*` for binary audio and `task_model.*` RPCs
+  only for settings/discovery metadata.
 - Streaming delta Run events (`assistant_output_delta`, `reasoning_delta`,
   `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr`) are SSE-only.
   They must not be bridged to WebSocket lifecycle summaries.

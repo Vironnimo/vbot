@@ -8,7 +8,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Data Model
 
-Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `recall`, `skills`, `logs`.
+Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `recall`, `skills`, `logs`, `speech`.
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
@@ -26,6 +26,8 @@ as a read-only fallback credential source.
 - `recall.backend` — raw Session recall backend selection, default
   `jsonl_scan`; `sqlite_fts` stores a disposable derived index under
   `<data_dir>/recall/`.
+- `model_tasks` — specialized task-model bindings keyed by supported task type,
+  with one `target` string and one JSON-object `options` mapping per task.
 
 ## Interfaces
 
@@ -46,6 +48,9 @@ as a read-only fallback credential source.
 - `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
 - `load_defaults() -> dict[str, Any]` / `update_defaults(section, values) -> dict[str, Any]` — read/write validated `settings.json` defaults blocks. Currently only `section="agent"` is supported.
 - `load_recall_settings() -> dict[str, str]` / `update_recall_settings(recall)` — read/write normalized recall backend settings, defaulting to `{"backend": "jsonl_scan"}`.
+- `load_model_task_settings() -> dict[str, dict[str, Any]]` /
+  `update_model_task_settings(model_tasks)` — read/write normalized sparse
+  task-model bindings. Empty target strings remove that task binding.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
 
@@ -63,8 +68,13 @@ as a read-only fallback credential source.
 - Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 - `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.
 - `update_defaults("agent", ...)` validates only the supported four Agent-default fields, removes individual keys when a value is `null`, bounds `temperature` to `[0, 2]`, and allows `thinking_effort` to be either `null`, `""`, or one of the normal effort tokens.
+- `update_model_task_settings(...)` validates task keys through
+  `core/model_tasks/`, persists only non-empty targets, preserves JSON-object
+  options, and removes the top-level `model_tasks` key when no bindings remain.
 
 ## Constraints & Gotchas
 
 - Atomic writes use temp files in `<data_dir>/.tmp/`; callers must ensure directories exist through `ensure_directories()` or methods that call it.
 - `ensure_directories()` is the owner of the `<data_dir>/attachments/` root used by `AttachmentStore`; attachment code should not invent a parallel storage root.
+- `ensure_directories()` also creates `<data_dir>/speech/`, but speech artifact
+  metadata and binary writes are owned by `core/speech/`.

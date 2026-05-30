@@ -10,10 +10,11 @@ vi.mock('svelte', async () => {
 });
 
 vi.mock('$lib/api.js', () => ({
+  transcribeSpeech: vi.fn(),
   uploadAttachment: vi.fn(),
 }));
 
-const { uploadAttachment } = await import('$lib/api.js');
+const { transcribeSpeech, uploadAttachment } = await import('$lib/api.js');
 
 const { default: ChatComposer } = await import('../ChatComposer.svelte');
 
@@ -24,6 +25,7 @@ describe('ChatComposer', () => {
     document.body.innerHTML = '';
     init('en');
     mountedComponent = null;
+    transcribeSpeech.mockReset();
     uploadAttachment.mockReset();
   });
 

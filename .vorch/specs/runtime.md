@@ -33,7 +33,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   happens inside a running asyncio loop, registers built-in tools including `memory`, creates the
   `RecallBackendRegistry`, selects the configured recall backend from
   `settings.recall.backend` with fallback to `jsonl_scan`, registers
-  `session_search` against that backend, creates the
+  `session_search` against that backend, creates the `TaskModelService` for
+  specialized task bindings, creates `SpeechService` for STT/TTS execution and
+  artifacts, registers the `text_to_speech` tool, creates the
   shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in
   slash commands, creates resolver-wired non-streaming and streaming
   `ChatLoop` instances, wires `TriggerService` with the streaming loop for
@@ -62,11 +64,15 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
 - `agents` — `AgentStore` for agent CRUD/workspaces. Runtime wires it to
   `settings.json` `defaults.agent` so resolved Agent reads always use the latest
   persisted defaults without rewriting agent files.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `cron`, `edit`, `glob`, `grep`, `process`, `read`, `session_search`, `status`, `subagent`, `subagent_result`, `web_fetch`, `web_search`, `write`) plus the internal `skill` tool. `channel_send` is registered dynamically while at least one channel is active.
+- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `cron`, `edit`, `glob`, `grep`, `process`, `read`, `session_search`, `status`, `subagent`, `subagent_result`, `text_to_speech`, `web_fetch`, `web_search`, `write`) plus the internal `skill` tool. `channel_send` is registered dynamically while at least one channel is active.
 - `process_manager` — shared in-memory `ProcessManager` service used by `bash`
   and `process` tools. It owns process sessions, output buffers, TTL sweeping,
   and Run-scoped cancellation.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
+- `model_tasks` — `TaskModelService` for specialized task-model settings,
+  credential-gated target discovery, and backend-owned option schemas.
+- `speech` — `SpeechService` for configured speech-to-text, text-to-speech, and
+  speech artifact lookup.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `recall_backend` — selected `RecallBackend` used by `session_search`.
 - `chat_run_manager` — shared `ChatRunManager` used by server chat flows and

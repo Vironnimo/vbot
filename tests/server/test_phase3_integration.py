@@ -177,6 +177,9 @@ class IntegrationStorage:
     def load_defaults(self) -> JsonObject:
         return {}
 
+    def load_model_task_settings(self) -> JsonObject:
+        return {}
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -412,6 +415,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "available_backends": ["jsonl_scan", "sqlite_fts"],
             },
             "defaults": {},
+            "model_tasks": {},
         },
     }
     assert "env_key" not in json.dumps(settings_response.json())

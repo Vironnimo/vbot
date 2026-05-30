@@ -47,6 +47,12 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 }
             },
             "recall": {"backend": "sqlite_fts"},
+            "model_tasks": {
+                "speech_to_text": {
+                    "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                    "options": {"language": "auto"},
+                }
+            },
         }
     )
 
@@ -73,6 +79,12 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             }
         },
         "recall": {"backend": "sqlite_fts"},
+        "model_tasks": {
+            "speech_to_text": {
+                "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                "options": {"language": "auto"},
+            }
+        },
     }
 
 
@@ -111,6 +123,15 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         (
             {"recall": {"backend": "unknown_backend"}},
             "params.recall.backend must be one of",
+        ),
+        ({"model_tasks": []}, "params.model_tasks must be an object"),
+        (
+            {"model_tasks": {"speech_to_text": {"target": 1}}},
+            "params.model_tasks.speech_to_text.target must be a string",
+        ),
+        (
+            {"model_tasks": {"speech_to_text": {"options": []}}},
+            "params.model_tasks.speech_to_text.options must be an object",
         ),
     ],
 )
@@ -156,6 +177,12 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                         "fallback_model": "",
                         "temperature": 0.7,
                         "thinking_effort": "medium",
+                    }
+                },
+                "model_tasks": {
+                    "speech_to_text": {
+                        "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                        "options": {"language": "auto"},
                     }
                 },
             }
@@ -206,6 +233,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
                 "attachment_max_size_bytes": 0,
                 "compaction": {"threshold": 2, "tail_tokens": False},
                 "defaults": {"agent": {"temperature": "warm", "unknown": True}},
+                "model_tasks": {"speech_to_text": {"target": "", "options": []}},
                 "typo": True,
             }
         ),
@@ -228,6 +256,8 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
             "unsupported defaults.agent setting: unknown",
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
+        ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
+        ("error", "$.model_tasks.speech_to_text.options", "must be an object"),
     ]
 
 

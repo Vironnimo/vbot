@@ -79,6 +79,10 @@ export const englishCatalog = Object.freeze({
   'chat.attachment.remove': 'Remove attachment',
   'chat.attachment.preview': 'Preview attachment',
   'chat.attachment.fileLabel': 'Attached file',
+  'chat.voice.startRecording': 'Start voice input',
+  'chat.voice.stopRecording': 'Stop recording',
+  'chat.voice.startFailed': 'Microphone recording could not start.',
+  'chat.voice.transcriptionFailed': 'Speech transcription failed.',
   'chat.messageQueued': 'Message queued for the next run.',
   'chat.cancelRun': 'Cancel run',
   'chat.cancelRunDescription': 'Stop the active run as soon as possible.',
@@ -416,6 +420,26 @@ export const englishCatalog = Object.freeze({
   'settings.recall.backends.sqlite_fts': 'SQLite FTS',
   'settings.recall.save': 'Save',
   'settings.recall.saveSuccess': 'Recall backend updated.',
+  'settings.specializedModels.title': 'Specialized Models',
+  'settings.specializedModels.subtitle':
+    'Task-specific model bindings for speech and future media tools.',
+  'settings.specializedModels.loading': 'Loading specialized model targets…',
+  'settings.specializedModels.loadError':
+    'Specialized model targets could not be loaded.',
+  'settings.specializedModels.optionsLoadError':
+    'Model options could not be loaded.',
+  'settings.specializedModels.saveSuccess':
+    'Specialized model bindings updated.',
+  'settings.specializedModels.speechToText': 'Speech to text',
+  'settings.specializedModels.speechToTextDescription':
+    'Used by the chat microphone transcription flow.',
+  'settings.specializedModels.textToSpeech': 'Text to speech',
+  'settings.specializedModels.textToSpeechDescription':
+    'Used by the agent text_to_speech tool.',
+  'settings.specializedModels.noTarget': 'Not configured',
+  'settings.specializedModels.customTarget': 'Custom target: {target}',
+  'settings.specializedModels.noOptions':
+    'This target has no configurable options.',
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',
