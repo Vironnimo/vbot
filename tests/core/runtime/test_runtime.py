@@ -40,6 +40,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "status",
     "subagent",
     "subagent_result",
+    "text_to_speech",
     "web_fetch",
     "web_search",
     "write",

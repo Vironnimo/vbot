@@ -46,6 +46,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `tools/subagent.md` - `subagent` and `subagent_result` registration wrapper
 - `tools/cron.md` - `cron`
 - `tools/channel_send.md` - `channel_send`
+- `tools/speech.md` - `text_to_speech`
 
 ## Conventions
 

@@ -9,7 +9,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from core.attachments.attachments import (
     AttachmentNotFoundError,
@@ -21,6 +21,12 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.compaction import CompactionService, SummarizationStrategy
 from core.runs import ChatRunManager, RunNotFoundError
 from core.settings import SettingsValidationError, load_validated_settings_json
+from core.speech import (
+    SpeechConfigurationError,
+    SpeechError,
+    SpeechExecutionError,
+    SpeechUnsupportedTargetError,
+)
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import bridge_run_to_event_bus, dispatch_rpc
@@ -47,7 +53,11 @@ try:
         UploadFile,
         WebSocket,
     )
-    from fastapi.responses import FileResponse, StreamingResponse  # type: ignore[import-not-found]
+    from fastapi.responses import (  # type: ignore[import-not-found]
+        FileResponse,
+        Response,
+        StreamingResponse,
+    )
     from fastapi.staticfiles import StaticFiles  # type: ignore[import-not-found]
     from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server extra is absent.
@@ -56,6 +66,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - exercised when server e
     FileResponse = Any  # type: ignore[misc,assignment]
     HTTPException = Any  # type: ignore[misc,assignment]
     Request = Any  # type: ignore[misc,assignment]
+    Response = Any  # type: ignore[misc,assignment]
     StaticFiles = Any  # type: ignore[misc,assignment]
     StreamingResponse = Any  # type: ignore[misc,assignment]
     UploadFile = Any  # type: ignore[misc,assignment]
@@ -156,6 +167,49 @@ def create_app(
         except AttachmentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return FileResponse(record.file_path, media_type=record.media_type)
+
+    @app.post("/api/speech/transcribe")
+    async def transcribe_speech(request: Request, file: UploadFile) -> JsonObject:
+        speech_service = _runtime_speech_service(request.app.state.runtime)
+        filename = file.filename or "recording.webm"
+        media_type = file.content_type or "application/octet-stream"
+        try:
+            result = await speech_service.transcribe(
+                await file.read(),
+                filename=filename,
+                media_type=media_type,
+            )
+        except SpeechError as exc:
+            raise _speech_http_exception(exc) from exc
+        finally:
+            await file.close()
+        return cast(JsonObject, result.to_dict())
+
+    @app.post("/api/speech/synthesize")
+    async def synthesize_speech(request: Request) -> Response:
+        speech_service = _runtime_speech_service(request.app.state.runtime)
+        payload = await request.json()
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise HTTPException(status_code=400, detail="text must be a non-empty string")
+        try:
+            result = await speech_service.synthesize(text)
+        except SpeechError as exc:
+            raise _speech_http_exception(exc) from exc
+        return Response(content=result.audio, media_type=result.media_type)
+
+    @app.get("/api/speech/artifacts/{artifact_id}")
+    async def get_speech_artifact(request: Request, artifact_id: str) -> FileResponse:
+        speech_service = _runtime_speech_service(request.app.state.runtime)
+        try:
+            artifact = speech_service.get_artifact(artifact_id)
+        except SpeechError as exc:
+            raise _speech_http_exception(exc) from exc
+        return FileResponse(
+            artifact.file_path,
+            media_type=artifact.media_type,
+            filename=artifact.filename,
+        )
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(request: Request, run_id: str) -> StreamingResponse:
@@ -309,6 +363,23 @@ def _runtime_attachment_store(runtime: Any) -> AttachmentStore:
         raise HTTPException(status_code=503, detail="Attachment store is unavailable")
 
     return attachment_store
+
+
+def _runtime_speech_service(runtime: Any) -> Any:
+    try:
+        return runtime.speech
+    except (AttributeError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Speech service is unavailable") from exc
+
+
+def _speech_http_exception(error: SpeechError) -> HTTPException:
+    if isinstance(error, SpeechConfigurationError):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, SpeechUnsupportedTargetError):
+        return HTTPException(status_code=422, detail=str(error))
+    if isinstance(error, SpeechExecutionError):
+        return HTTPException(status_code=502, detail=str(error))
+    return HTTPException(status_code=400, detail=str(error))
 
 
 def _app_chat_runs(state: Any) -> ChatRunManager:

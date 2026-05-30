@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ALLOWED_THINKING_EFFORTS,
@@ -32,6 +33,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "extension_directories",
         "max_subagent_depth",
         "max_subagents_per_turn",
+        "model_tasks",
         "port",
         "recall",
         "server_port",
@@ -51,6 +53,7 @@ COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_mode
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
 RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 AGENT_FIELDS = frozenset(
@@ -280,6 +283,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_compaction(diagnostics, data.get("compaction"))
     _validate_defaults(diagnostics, data.get("defaults"))
     _validate_recall(diagnostics, data.get("recall"))
+    _validate_model_tasks(diagnostics, data.get("model_tasks"))
     return diagnostics
 
 
@@ -638,6 +642,38 @@ def _validate_recall(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         return
     if RECALL_BACKEND_PATTERN.fullmatch(backend.strip()) is None:
         _error(diagnostics, "$.recall.backend", "must use lowercase snake_case")
+
+
+def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.model_tasks", "must be an object")
+        return
+
+    for task_type, binding in value.items():
+        task_path = _child_path("$.model_tasks", str(task_type))
+        if not isinstance(task_type, str) or task_type not in SUPPORTED_TASK_TYPES:
+            allowed = ", ".join(sorted(SUPPORTED_TASK_TYPES))
+            _error(diagnostics, task_path, f"unsupported task type; supported: {allowed}")
+            continue
+        if not isinstance(binding, Mapping):
+            _error(diagnostics, task_path, "must be an object")
+            continue
+
+        _warn_unknown_keys(
+            diagnostics,
+            task_path,
+            binding,
+            MODEL_TASK_BINDING_FIELDS,
+            "model task field",
+        )
+        target = binding.get("target")
+        if "target" in binding and (not isinstance(target, str) or not target.strip()):
+            _error(diagnostics, _child_path(task_path, "target"), "must be a non-empty string")
+        options = binding.get("options")
+        if "options" in binding and not isinstance(options, Mapping):
+            _error(diagnostics, _child_path(task_path, "options"), "must be an object")
 
 
 def _validate_agent_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:

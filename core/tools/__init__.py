@@ -80,6 +80,13 @@ from core.tools.skill import (
     make_skill_handler,
     register_skill_tool,
 )
+from core.tools.speech import (
+    TEXT_TO_SPEECH_TOOL_DESCRIPTION,
+    TEXT_TO_SPEECH_TOOL_NAME,
+    TEXT_TO_SPEECH_TOOL_PARAMETERS,
+    make_text_to_speech_handler,
+    register_text_to_speech_tool,
+)
 from core.tools.tools import (
     DEFAULT_TOOL_CONCURRENCY_LIMIT,
     TOOL_ALLOWLIST_WILDCARD,
@@ -184,6 +191,9 @@ __all__ = [
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
+    "TEXT_TO_SPEECH_TOOL_DESCRIPTION",
+    "TEXT_TO_SPEECH_TOOL_NAME",
+    "TEXT_TO_SPEECH_TOOL_PARAMETERS",
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",
@@ -217,6 +227,7 @@ __all__ = [
     "make_memory_handler",
     "make_process_handler",
     "make_skill_handler",
+    "make_text_to_speech_handler",
     "read_handler",
     "make_session_search_handler",
     "register_edit_tool",
@@ -231,6 +242,7 @@ __all__ = [
     "register_session_search_tool",
     "register_skill_tool",
     "register_subagent_tools",
+    "register_text_to_speech_tool",
     "register_web_fetch_tool",
     "register_web_search_tool",
     "register_write_tool",

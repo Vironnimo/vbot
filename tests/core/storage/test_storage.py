@@ -369,6 +369,46 @@ def test_update_recall_settings_rejects_unsupported_fields(tmp_path: Path) -> No
         storage.update_recall_settings({"backend": "sqlite_fts", "unknown": True})
 
 
+def test_model_task_settings_round_trip_and_preserve_other_settings(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500})
+
+    updated = storage.update_model_task_settings(
+        {
+            "speech_to_text": {
+                "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                "options": {"language": "auto"},
+            }
+        }
+    )
+
+    assert updated == {
+        "speech_to_text": {
+            "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+            "options": {"language": "auto"},
+        }
+    }
+    assert storage.load_settings()["server_port"] == 8500
+    assert storage.load_model_task_settings() == updated
+
+
+def test_model_task_empty_target_removes_binding(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.update_model_task_settings(
+        {
+            "speech_to_text": {
+                "target": "openrouter/openai/gpt-4o-transcribe::api-key",
+                "options": {},
+            }
+        }
+    )
+
+    updated = storage.update_model_task_settings({"speech_to_text": {"target": ""}})
+
+    assert updated == {}
+    assert "model_tasks" not in storage.load_settings()
+
+
 def test_load_recall_settings_rejects_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()

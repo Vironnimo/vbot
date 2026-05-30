@@ -23,9 +23,11 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
 speech, skills, automation, storage, utils. Each is a folder with a main file as
-public API, soft limit 600 lines per file. Providers has a subfolder structure:
+public API, soft limit 600 lines per file. `model_tasks/` owns specialized
+task-model bindings and target discovery; task-specific execution stays in
+domains such as `speech/`. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
 adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
 GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities, and
@@ -61,6 +63,9 @@ unset values inherit these defaults at load time without rewriting their
 fallback resolution. `settings.json` may also include `recall.backend` for raw
 configuration of the Session recall backend; `jsonl_scan` is default and
 `sqlite_fts` uses a disposable SQLite FTS5 index under `<data_dir>/recall/`.
+`settings.json` may also include `model_tasks`, a mapping from specialized task
+types such as `speech_to_text` and `text_to_speech` to one provider/local target
+and options. Speech TTS artifacts are stored under `<data_dir>/speech/`.
 The Settings UI exposes the first-party recall backends and applies changes by
 reloading the runtime `session_search` backend without restart.
 User-editable JSON configuration is validated through the central
@@ -83,6 +88,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
 | `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview and index to provider-specific specs |
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
+| `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |
 | `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
 | `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
@@ -100,6 +106,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 | `.vorch/specs/skills.md` | `core/skills/` | Local skill metadata loading and prompt allowlist filtering |
 | `.vorch/specs/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, Telegram-first routing, metadata, outbound send |
+| `.vorch/specs/speech.md` | `core/speech/` | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
@@ -190,7 +197,8 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 **Data directory:** `~/.vbot` — created on first run. Contains `.env` (API
 keys), `settings.json`, `attachments/` blobs plus per-blob sidecar JSON,
 `logs/`, OAuth tokens under `oauth/`, scheduled cron jobs under `cron/jobs.json`,
-the disposable Session recall index under `recall/`, and all runtime data.
+speech artifacts under `speech/`, the disposable Session recall index under
+`recall/`, and all runtime data.
 
 ## Testing
 

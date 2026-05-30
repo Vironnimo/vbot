@@ -86,33 +86,39 @@ def derive_model_task_types(
 
     inputs = set(_normalize_string_tuple(tuple(input_modalities)))
     outputs = set(_normalize_string_tuple(tuple(output_modalities)))
+    text_outputs = set(outputs)
+    audio_outputs = set(outputs)
+    if "transcription" in outputs:
+        text_outputs.add("text")
+    if "speech" in outputs:
+        audio_outputs.add("audio")
     tasks: set[str] = set()
 
-    if "text" in outputs:
+    if "text" in text_outputs:
         tasks.add("text_output")
-    if "text" in inputs and "text" in outputs:
+    if "text" in inputs and "text" in text_outputs:
         tasks.add("chat")
     if "image" in inputs:
         tasks.add("image_input")
-        if "text" in outputs:
+        if "text" in text_outputs:
             tasks.add("image_understanding")
     if "file" in inputs:
         tasks.add("file_input")
-        if "text" in outputs:
+        if "text" in text_outputs:
             tasks.add("file_understanding")
     if "audio" in inputs:
         tasks.add("audio_input")
-        if "text" in outputs:
+        if "text" in text_outputs:
             tasks.add("speech_to_text")
     if "video" in inputs:
         tasks.add("video_input")
-        if "text" in outputs:
+        if "text" in text_outputs:
             tasks.add("video_understanding")
     if "image" in outputs:
         tasks.add("image_generation")
         if "image" in inputs:
             tasks.add("image_edit")
-    if "audio" in outputs:
+    if "audio" in audio_outputs:
         tasks.add("audio_generation")
         if "text" in inputs:
             tasks.add("text_to_speech")

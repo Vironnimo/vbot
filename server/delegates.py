@@ -37,6 +37,7 @@ from core.chat.content_blocks import (
     TextBlock,
     content_block_from_dict,
 )
+from core.model_tasks import TaskModelError
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.prompts import PromptError, PromptFragmentManager
@@ -258,6 +259,14 @@ async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonO
             return _get_settings(state, params)
         case "settings.update":
             return _update_settings(state, params)
+        case "task_model.settings":
+            return _task_model_settings(state, params)
+        case "task_model.update":
+            return _task_model_update(state, params)
+        case "task_model.list_targets":
+            return _task_model_list_targets(state, params)
+        case "task_model.options":
+            return _task_model_options(state, params)
         case "log.list":
             return _list_logs(state, params)
         case "log.read":
@@ -1766,6 +1775,8 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         if "recall" in settings_update:
             storage.update_recall_settings(settings_update["recall"])
             should_reload_recall_backend = True
+        if "model_tasks" in settings_update:
+            storage.update_model_task_settings(settings_update["model_tasks"])
         if should_reload_skills:
             reload_skills = getattr(state.runtime, "reload_skills", None)
             if callable(reload_skills):
@@ -1780,6 +1791,65 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             with suppress(Exception):
                 storage.save_settings(original_settings)
         raise _map_expected_error(exc) from exc
+
+
+def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "task_model.settings does not accept params")
+    try:
+        return {"model_tasks": state.runtime.model_tasks.settings()}
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"model_tasks"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported task_model.update fields: {', '.join(unsupported_fields)}",
+        )
+    try:
+        settings_update = parse_settings_update({"model_tasks": params.get("model_tasks")})
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    try:
+        model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"])
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"model_tasks": model_tasks}
+
+
+def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"task_type"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported task_model.list_targets fields: {', '.join(unsupported_fields)}",
+        )
+    task_type = _required_string(params, "task_type")
+    try:
+        targets = state.runtime.model_tasks.list_targets(task_type)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"targets": [target.to_dict() for target in targets]}
+
+
+def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"task_type", "target"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported task_model.options fields: {', '.join(unsupported_fields)}",
+        )
+    task_type = _required_string(params, "task_type")
+    target = _required_string(params, "target")
+    try:
+        schema = state.runtime.model_tasks.options(task_type, target)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"schema": schema.to_dict()}
 
 
 def _list_logs(state: Any, params: JsonObject) -> JsonObject:
@@ -1988,6 +2058,7 @@ def _settings_response(state: Any) -> JsonObject:
     subagents = runtime.storage.load_subagent_settings()
     compaction = runtime.storage.load_compaction_settings()
     recall = runtime.storage.load_recall_settings()
+    model_tasks = runtime.storage.load_model_task_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
 
@@ -2017,6 +2088,7 @@ def _settings_response(state: Any) -> JsonObject:
             "backend": recall["backend"],
             "available_backends": sorted(FIRST_PARTY_RECALL_BACKENDS),
         },
+        "model_tasks": model_tasks,
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
     if callable(skill_directory_loader):
@@ -2384,7 +2456,17 @@ def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RunCancelledError):
         return RpcError(RPC_ERROR_CANCELLED, str(error))
     if isinstance(
-        error, (AgentError, ChatError, ChatSessionError, ConfigError, RunError, VBotError, KeyError)
+        error,
+        (
+            AgentError,
+            ChatError,
+            ChatSessionError,
+            ConfigError,
+            RunError,
+            TaskModelError,
+            VBotError,
+            KeyError,
+        ),
     ):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     raise error

@@ -15,17 +15,21 @@ import {
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   createRpcEnvelope,
+  getTaskModelOptions,
+  listTaskModelTargets,
   listQueue,
   listLogs,
   normalizeRpcError,
   readLogFile,
   removeFromQueue,
   rpc,
+  transcribeSpeech,
   uploadAttachment,
   subscribeLogEvents,
   subscribeRunEvents,
   subscribeServerEvents,
   updateQueueItem,
+  updateTaskModelSettings,
 } from '../api.js';
 
 afterEach(() => {
@@ -278,6 +282,50 @@ describe('rpc()', () => {
         content: 'Updated content',
       },
     });
+  });
+});
+
+describe('task model API helpers', () => {
+  it('wrap task-model RPCs with validated params', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { targets: [] } }));
+
+    await listTaskModelTargets('speech_to_text', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'task_model.list_targets',
+      params: { task_type: 'speech_to_text' },
+    });
+
+    expect(() => updateTaskModelSettings([])).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+    expect(() => getTaskModelOptions('', 'target')).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+  });
+});
+
+describe('transcribeSpeech()', () => {
+  it('uploads audio and returns the transcription payload', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ text: 'hello world' }, { status: 200 }),
+      );
+
+    const result = await transcribeSpeech(
+      new Blob(['abc'], { type: 'audio/webm' }),
+      {
+        fetch: fetchFunction,
+      },
+    );
+
+    expect(result).toEqual({ text: 'hello world' });
+    expect(fetchFunction.mock.calls[0][0]).toBe('/api/speech/transcribe');
+    expect(fetchFunction.mock.calls[0][1].method).toBe('POST');
+    expect(fetchFunction.mock.calls[0][1].body).toBeInstanceOf(FormData);
   });
 });
 

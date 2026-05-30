@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
@@ -59,6 +60,7 @@ PHASE_TWO_DIRECTORIES = (
     "oauth",
     "prompts",
     "recall",
+    "speech",
     "skills",
     "logs",
 )
@@ -255,6 +257,12 @@ class StorageManager:
         settings = self.load_settings()
         return self._normalize_recall_settings(settings.get("recall"))
 
+    def load_model_task_settings(self) -> dict[str, dict[str, Any]]:
+        """Return normalized persisted task-model bindings."""
+
+        settings = self.load_settings()
+        return self._normalize_model_task_settings(settings.get("model_tasks"))
+
     def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported recall settings subset and return it."""
 
@@ -271,6 +279,64 @@ class StorageManager:
         merged_settings["recall"] = normalized_recall
         self.save_settings(merged_settings)
         return dict(normalized_recall)
+
+    def update_model_task_settings(
+        self,
+        model_tasks: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Persist sparse task-model binding updates and return the full section."""
+
+        if not isinstance(model_tasks, Mapping):
+            raise StorageError("Model task settings must be a mapping")
+
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        merged_model_tasks = self._normalize_model_task_settings(settings.get("model_tasks"))
+
+        for task_type, raw_binding in model_tasks.items():
+            if task_type not in SUPPORTED_TASK_TYPES:
+                raise StorageError(f"Unsupported model task type: {task_type}")
+            if not isinstance(raw_binding, Mapping):
+                raise StorageError(f"Model task binding {task_type} must be a mapping")
+
+            unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+            if unsupported_fields:
+                raise StorageError(
+                    f"Unsupported model task settings for {task_type}: "
+                    f"{', '.join(unsupported_fields)}"
+                )
+
+            current_binding = dict(merged_model_tasks.get(task_type, {}))
+            target = current_binding.get("target", "")
+            if "target" in raw_binding:
+                raw_target = raw_binding["target"]
+                if not isinstance(raw_target, str):
+                    raise StorageError(f"Model task target for {task_type} must be a string")
+                target = raw_target.strip()
+
+            if not target:
+                merged_model_tasks.pop(task_type, None)
+                continue
+
+            options = current_binding.get("options", {})
+            if "options" in raw_binding:
+                options = self._normalize_json_object(
+                    raw_binding["options"],
+                    f"settings.model_tasks.{task_type}.options",
+                )
+
+            merged_model_tasks[task_type] = {
+                "target": target,
+                "options": options,
+            }
+
+        if merged_model_tasks:
+            merged_settings["model_tasks"] = merged_model_tasks
+        else:
+            merged_settings.pop("model_tasks", None)
+
+        self.save_settings(merged_settings)
+        return self._normalize_model_task_settings(merged_settings.get("model_tasks"))
 
     def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         """Persist normalized defaults for a single section and return persisted values."""
@@ -584,6 +650,69 @@ class StorageManager:
         if not isinstance(backend, str) or not backend.strip():
             raise StorageError("Recall backend must be a non-empty string")
         return {"backend": backend.strip()}
+
+    @classmethod
+    def _normalize_model_task_settings(cls, model_tasks: Any) -> dict[str, dict[str, Any]]:
+        section = cls._coerce_model_tasks_section(model_tasks)
+        normalized: dict[str, dict[str, Any]] = {}
+
+        for task_type, raw_binding in section.items():
+            if task_type not in SUPPORTED_TASK_TYPES:
+                raise StorageError(f"Unsupported model task type: {task_type}")
+            if not isinstance(raw_binding, Mapping):
+                raise StorageError(f"Expected settings.model_tasks.{task_type} to be an object")
+
+            unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
+            if unsupported_fields:
+                raise StorageError(
+                    f"Unsupported model task settings for {task_type}: "
+                    f"{', '.join(unsupported_fields)}"
+                )
+
+            target = raw_binding.get("target")
+            if not isinstance(target, str) or not target.strip():
+                raise StorageError(f"Model task target for {task_type} must be a non-empty string")
+
+            normalized[task_type] = {
+                "target": target.strip(),
+                "options": cls._normalize_json_object(
+                    raw_binding.get("options", {}),
+                    f"settings.model_tasks.{task_type}.options",
+                ),
+            }
+        return normalized
+
+    @staticmethod
+    def _coerce_model_tasks_section(model_tasks: Any) -> dict[str, Any]:
+        if model_tasks is None:
+            return {}
+        if not isinstance(model_tasks, Mapping):
+            raise StorageError("Expected settings.model_tasks to be an object")
+        return dict(model_tasks)
+
+    @classmethod
+    def _normalize_json_object(cls, value: Any, path: str) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise StorageError(f"Expected {path} to be an object")
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                raise StorageError(f"Expected {path} keys to be non-empty strings")
+            normalized[key] = cls._normalize_json_value(item, f"{path}.{key}")
+        return normalized
+
+    @classmethod
+    def _normalize_json_value(cls, value: Any, path: str) -> Any:
+        if value is None or isinstance(value, str | int | float | bool):
+            return value
+        if isinstance(value, list):
+            return [
+                cls._normalize_json_value(item, f"{path}[{index}]")
+                for index, item in enumerate(value)
+            ]
+        if isinstance(value, Mapping):
+            return cls._normalize_json_object(value, path)
+        raise StorageError(f"Unsupported JSON value at {path}")
 
     @staticmethod
     def _coerce_recall_section(recall: Any) -> dict[str, Any]:

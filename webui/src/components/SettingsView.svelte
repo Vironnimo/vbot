@@ -3,7 +3,12 @@
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    getTaskModelOptions,
+    listTaskModelTargets,
+    rpc,
+    updateTaskModelSettings,
+  } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
@@ -12,6 +17,15 @@
     selectModelValue,
   } from '$lib/modelSelection.js';
   import * as settingsViewHelpers from '$lib/settingsView.js';
+  import {
+    SPEECH_TASK_ROWS,
+    applyOptionDefaults,
+    createTaskModelUpdatePayload,
+    normalizeOptionSchema,
+    normalizeTargets,
+    normalizeTaskModelSettings,
+    taskModelBindingsMatch,
+  } from '$lib/taskModelSettings.js';
   import {
     CHANNEL_DM_SCOPES,
     CHANNEL_FORM_MODE_CREATE,
@@ -210,6 +224,17 @@
       subtitle: () => t('settings.recall.subtitle', 'Session search backend.'),
     },
     {
+      id: 'specialized_models',
+      labelKey: 'settings.specializedModels.title',
+      labelFallback: 'Specialized Models',
+      label: () => t('settings.specializedModels.title', 'Specialized Models'),
+      subtitle: () =>
+        t(
+          'settings.specializedModels.subtitle',
+          'Task-specific model bindings for speech and future media tools.',
+        ),
+    },
+    {
       id: 'providers',
       labelKey: 'settings.providers.title',
       labelFallback: 'Providers',
@@ -252,6 +277,13 @@
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let recallSettings = $state(getRecallSettings(null));
+  let taskModelBindings = $state(normalizeTaskModelSettings(null));
+  let taskModelTargetsByType = $state({});
+  let taskModelSchemasByType = $state({});
+  let taskModelPanelLoaded = $state(false);
+  let taskModelLoading = $state(false);
+  let taskModelSaving = $state(false);
+  let taskModelError = $state('');
   let newSkillDirectory = $state('');
   let availableModels = $state([]);
   let availableConnections = $state([]);
@@ -404,6 +436,16 @@
       saving ||
       recallSettingsMatch(recallSettings, getRecallSettings(settings)),
   );
+  let taskModelSaveDisabled = $derived(
+    loading ||
+      saving ||
+      taskModelSaving ||
+      taskModelLoading ||
+      taskModelBindingsMatch(
+        taskModelBindings,
+        normalizeTaskModelSettings(settings),
+      ),
+  );
 
   onMount(() => {
     loadSettings();
@@ -527,6 +569,10 @@
       void ensureChannelsLoaded();
     }
 
+    if (panelId === 'specialized_models') {
+      void ensureTaskModelPanelLoaded();
+    }
+
     if (panelUsesModelPicker(panelId)) {
       void ensureModelCatalogsLoaded();
     }
@@ -573,6 +619,7 @@
     subAgentSettings = normalizeSubAgentSettings(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
     recallSettings = getRecallSettings(nextSettings);
+    taskModelBindings = normalizeTaskModelSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
   }
@@ -747,6 +794,91 @@
     }
   }
 
+  async function ensureTaskModelPanelLoaded() {
+    if (taskModelPanelLoaded || taskModelLoading) {
+      return;
+    }
+
+    taskModelLoading = true;
+    taskModelError = '';
+
+    try {
+      const targetEntries = await Promise.all(
+        SPEECH_TASK_ROWS.map(async (row) => {
+          const result = await listTaskModelTargets(row.taskType);
+          return [row.taskType, normalizeTargets(result)];
+        }),
+      );
+      taskModelTargetsByType = Object.fromEntries(targetEntries);
+      taskModelPanelLoaded = true;
+
+      for (const row of SPEECH_TASK_ROWS) {
+        const target = taskModelBindings[row.taskType]?.target ?? '';
+        if (target) {
+          await loadTaskModelSchema(row.taskType, target);
+        }
+      }
+    } catch (error) {
+      taskModelError = `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} ${error.message}`;
+    } finally {
+      taskModelLoading = false;
+    }
+  }
+
+  async function loadTaskModelSchema(taskType, target) {
+    if (!target) {
+      taskModelSchemasByType = {
+        ...taskModelSchemasByType,
+        [taskType]: [],
+      };
+      return;
+    }
+
+    const result = await getTaskModelOptions(taskType, target);
+    const fields = normalizeOptionSchema(result);
+    taskModelSchemasByType = {
+      ...taskModelSchemasByType,
+      [taskType]: fields,
+    };
+    taskModelBindings = {
+      ...taskModelBindings,
+      [taskType]: applyOptionDefaults(taskModelBindings[taskType], fields),
+    };
+  }
+
+  async function saveTaskModelBindings() {
+    if (taskModelSaveDisabled) {
+      return;
+    }
+
+    taskModelSaving = true;
+    taskModelError = '';
+    saveError = '';
+
+    try {
+      const result = await updateTaskModelSettings(
+        createTaskModelUpdatePayload(taskModelBindings),
+      );
+      const nextSettings = {
+        ...settings,
+        model_tasks: result.model_tasks ?? {},
+      };
+      commitSettings(nextSettings);
+      taskModelBindings = normalizeTaskModelSettings(nextSettings);
+      showSettingsToast(
+        t(
+          'settings.specializedModels.saveSuccess',
+          'Specialized model bindings updated.',
+        ),
+        'success',
+      );
+    } catch (error) {
+      taskModelError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      taskModelSaving = false;
+    }
+  }
+
   function clearLanguageAutoSaveTimer() {
     if (languageAutoSaveTimer !== null) {
       clearTimeout(languageAutoSaveTimer);
@@ -869,6 +1001,19 @@
     void saveRecallSettings();
   }
 
+  function handleManualTaskModelSave() {
+    if (saving || taskModelSaving) {
+      return;
+    }
+
+    if (taskModelSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    void saveTaskModelBindings();
+  }
+
   function addSkillDirectory() {
     const directory = newSkillDirectory.trim();
     if (!directory) {
@@ -932,6 +1077,75 @@
       backend,
     };
     saveError = '';
+  }
+
+  async function handleTaskModelTargetChange(taskType, event) {
+    const target = event.currentTarget.value;
+    taskModelError = '';
+    taskModelBindings = {
+      ...taskModelBindings,
+      [taskType]: {
+        target,
+        options: {},
+      },
+    };
+
+    try {
+      await loadTaskModelSchema(taskType, target);
+    } catch (error) {
+      taskModelError = `${t('settings.specializedModels.optionsLoadError', 'Model options could not be loaded.')} ${error.message}`;
+    }
+  }
+
+  function handleTaskModelOptionChange(taskType, field, event) {
+    const currentBinding = taskModelBindings[taskType] ?? {
+      target: '',
+      options: {},
+    };
+    const value = valueFromTaskModelOptionField(field, event);
+    taskModelBindings = {
+      ...taskModelBindings,
+      [taskType]: {
+        ...currentBinding,
+        options: {
+          ...(currentBinding.options ?? {}),
+          [field.name]: value,
+        },
+      },
+    };
+    taskModelError = '';
+  }
+
+  function valueFromTaskModelOptionField(field, event) {
+    if (field.type === 'boolean') {
+      return event.currentTarget.checked === true;
+    }
+    if (field.type === 'number') {
+      const value = event.currentTarget.value;
+      if (value === '') {
+        return '';
+      }
+      const numberValue = Number(value);
+      return Number.isFinite(numberValue) ? numberValue : value;
+    }
+    return event.currentTarget.value;
+  }
+
+  function taskModelTargets(taskType) {
+    return taskModelTargetsByType[taskType] ?? [];
+  }
+
+  function taskModelFields(taskType) {
+    return taskModelSchemasByType[taskType] ?? [];
+  }
+
+  function taskModelOptionValue(taskType, field) {
+    const options = taskModelBindings[taskType]?.options ?? {};
+    const value = options[field.name];
+    if (value === undefined || value === null) {
+      return field.default ?? '';
+    }
+    return value;
   }
 
   function updateAgentDefaultsModelSelection(key, selectedValue) {
@@ -2191,6 +2405,180 @@
                 : t('settings.recall.save', 'Save')}
             </button>
           </div>
+        {:else if activePanelId === 'specialized_models'}
+          {#if taskModelLoading}
+            <div class="s-feedback s-feedback--neutral">
+              {t(
+                'settings.specializedModels.loading',
+                'Loading specialized model targets…',
+              )}
+            </div>
+          {/if}
+
+          {#if taskModelError}
+            <div class="s-feedback s-feedback--error">{taskModelError}</div>
+          {/if}
+
+          <div class="s-task-model-list">
+            {#each SPEECH_TASK_ROWS as row (row.taskType)}
+              {@const binding = taskModelBindings[row.taskType] ?? {
+                target: '',
+                options: {},
+              }}
+              {@const targets = taskModelTargets(row.taskType)}
+              {@const fields = taskModelFields(row.taskType)}
+              <div class="s-row s-row--stacked s-task-model-row">
+                <div class="s-task-model-head">
+                  <div class="s-row-info">
+                    <div class="s-row-label">
+                      {t(row.titleKey, row.titleFallback)}
+                    </div>
+                    <div class="s-row-desc">
+                      {t(row.descriptionKey, row.descriptionFallback)}
+                    </div>
+                  </div>
+                  <div class="s-row-control s-row-control--task-model">
+                    <select
+                      class="s-select"
+                      value={binding.target}
+                      aria-label={t(row.titleKey, row.titleFallback)}
+                      disabled={taskModelLoading || taskModelSaving}
+                      onchange={(event) =>
+                        handleTaskModelTargetChange(row.taskType, event)}
+                    >
+                      <option value="">
+                        {t(
+                          'settings.specializedModels.noTarget',
+                          'Not configured',
+                        )}
+                      </option>
+                      {#each targets as target (target.id)}
+                        <option value={target.id}>{target.label}</option>
+                      {/each}
+                      {#if binding.target && !targets.some((target) => target.id === binding.target)}
+                        <option value={binding.target}>
+                          {t(
+                            'settings.specializedModels.customTarget',
+                            'Custom target: {target}',
+                            { target: binding.target },
+                          )}
+                        </option>
+                      {/if}
+                    </select>
+                  </div>
+                </div>
+
+                {#if binding.target && fields.length > 0}
+                  <div class="s-task-model-options">
+                    {#each fields as field (field.name)}
+                      <label class="s-field">
+                        <span class="s-field-label">{field.label}</span>
+                        {#if field.type === 'select'}
+                          <select
+                            class="s-select"
+                            value={taskModelOptionValue(row.taskType, field)}
+                            disabled={taskModelSaving}
+                            onchange={(event) =>
+                              handleTaskModelOptionChange(
+                                row.taskType,
+                                field,
+                                event,
+                              )}
+                          >
+                            {#each field.options as option (option.value)}
+                              <option value={option.value}>
+                                {option.label}
+                              </option>
+                            {/each}
+                          </select>
+                        {:else if field.type === 'textarea'}
+                          <textarea
+                            class="s-input s-textarea"
+                            rows="3"
+                            value={taskModelOptionValue(row.taskType, field)}
+                            disabled={taskModelSaving}
+                            oninput={(event) =>
+                              handleTaskModelOptionChange(
+                                row.taskType,
+                                field,
+                                event,
+                              )}
+                          ></textarea>
+                        {:else if field.type === 'number'}
+                          <input
+                            class="s-input"
+                            type="number"
+                            min={field.min ?? undefined}
+                            max={field.max ?? undefined}
+                            step={field.step ?? 'any'}
+                            value={taskModelOptionValue(row.taskType, field)}
+                            disabled={taskModelSaving}
+                            oninput={(event) =>
+                              handleTaskModelOptionChange(
+                                row.taskType,
+                                field,
+                                event,
+                              )}
+                          />
+                        {:else if field.type === 'boolean'}
+                          <input
+                            class="s-checkbox"
+                            type="checkbox"
+                            checked={taskModelOptionValue(
+                              row.taskType,
+                              field,
+                            ) === true}
+                            disabled={taskModelSaving}
+                            onchange={(event) =>
+                              handleTaskModelOptionChange(
+                                row.taskType,
+                                field,
+                                event,
+                              )}
+                          />
+                        {:else}
+                          <input
+                            class="s-input"
+                            type="text"
+                            value={taskModelOptionValue(row.taskType, field)}
+                            disabled={taskModelSaving}
+                            oninput={(event) =>
+                              handleTaskModelOptionChange(
+                                row.taskType,
+                                field,
+                                event,
+                              )}
+                          />
+                        {/if}
+                        {#if field.description}
+                          <span class="s-field-help">{field.description}</span>
+                        {/if}
+                      </label>
+                    {/each}
+                  </div>
+                {:else if binding.target}
+                  <div class="s-row-desc">
+                    {t(
+                      'settings.specializedModels.noOptions',
+                      'This target has no configurable options.',
+                    )}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualTaskModelSave}
+            >
+              {taskModelSaving
+                ? t('common.saving', 'Saving…')
+                : t('common.save', 'Save')}
+            </button>
+          </div>
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
             <div class="s-feedback s-feedback--neutral">
@@ -3104,6 +3492,11 @@
     min-width: 220px;
   }
 
+  .s-row-control--task-model {
+    width: min(520px, 100%);
+    min-width: 280px;
+  }
+
   .s-row-control--checkbox {
     width: auto;
     min-width: 0;
@@ -3385,6 +3778,44 @@
     line-height: 1.2;
   }
 
+  .s-field-help {
+    color: var(--text-lo);
+    font-size: 11.5px;
+    line-height: 1.35;
+  }
+
+  .s-textarea {
+    min-height: 76px;
+    resize: vertical;
+  }
+
+  .s-task-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .s-task-model-row {
+    gap: 12px;
+  }
+
+  .s-task-model-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .s-task-model-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: rgba(255, 255, 255, 0.015);
+  }
+
   .s-channel-form-actions {
     display: flex;
     justify-content: flex-end;
@@ -3466,7 +3897,8 @@
     .s-row-control--model,
     .s-row-control--input-actions,
     .s-row-control--number,
-    .s-row-control--recall {
+    .s-row-control--recall,
+    .s-row-control--task-model {
       width: 100%;
       min-width: 0;
       max-width: none;
@@ -3521,10 +3953,15 @@
 
     .s-channel-head,
     .s-channel-controls,
+    .s-task-model-head,
     .s-row-actions--channel {
       align-items: stretch;
       flex-direction: column;
       width: 100%;
+    }
+
+    .s-task-model-options {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .s-channel-chips {

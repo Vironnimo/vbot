@@ -546,6 +546,10 @@
     await sendStream(agent, sessionState, content);
   };
 
+  const handleTranscriptionError = (message) => {
+    actionError = message;
+  };
+
   const sendStream = async (agent, sessionState, content) => {
     actionError = '';
     actionInfo = '';
@@ -1183,6 +1187,7 @@
             isRunning={isRunActive(activeSessionState)}
             {availableSkills}
             onSendMessage={handleSendMessage}
+            onTranscriptionError={handleTranscriptionError}
           />
         </div>
       </div>

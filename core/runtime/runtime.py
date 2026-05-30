@@ -18,6 +18,7 @@ from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.extensions import ExtensionRegistry
 from core.memory import MemoryService
+from core.model_tasks import TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -45,6 +46,7 @@ from core.runtime.interfaces import (
 )
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
+from core.speech import SpeechService
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -58,6 +60,7 @@ from core.tools import (
     register_read_tool,
     register_session_search_tool,
     register_skill_tool,
+    register_text_to_speech_tool,
     register_web_fetch_tool,
     register_web_search_tool,
     register_write_tool,
@@ -134,6 +137,8 @@ class Runtime:
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
         self._token_store: TokenStore | None = None
         self._models: ModelRegistry | None = None
+        self._model_tasks: TaskModelService | None = None
+        self._speech: SpeechService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._agents: AgentStore | None = None
@@ -198,6 +203,13 @@ class Runtime:
             token_store=self._token_store,
         )
         self._models = ModelRegistry.load(resources_path)
+        self._model_tasks = TaskModelService(
+            self._providers,
+            self._models,
+            self._provider_credentials,
+            self._storage,
+        )
+        self._speech = SpeechService(self._model_tasks, self, self._storage.data_dir)
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
@@ -217,6 +229,7 @@ class Runtime:
         register_web_search_tool(self._tools, self.resolve_environment_credential)
         register_homeassistant_tools(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
+        register_text_to_speech_tool(self._tools, self._speech)
         skill_directories = [resources_path / "skills", *self._extra_skill_directories(settings)]
         self._skills = SkillRegistry.load(
             self._storage.data_dir / "skills",
@@ -343,6 +356,8 @@ class Runtime:
         self._token_store = None
         self._fallback_environment = {}
         self._models = None
+        self._model_tasks = None
+        self._speech = None
         self._storage = None
         self._attachment_store = None
         self._agents = None
@@ -654,6 +669,22 @@ class Runtime:
         if self._provider_credentials is None:
             raise RuntimeError("Provider credential service not available")
         return self._provider_credentials
+
+    @property
+    def model_tasks(self) -> TaskModelService:
+        """Access to specialized task-model settings and discovery."""
+        self._ensure_started()
+        if self._model_tasks is None:
+            raise RuntimeError("Task-model service not available")
+        return self._model_tasks
+
+    @property
+    def speech(self) -> SpeechService:
+        """Access to speech-to-text and text-to-speech execution."""
+        self._ensure_started()
+        if self._speech is None:
+            raise RuntimeError("Speech service not available")
+        return self._speech
 
     @property
     def token_store(self) -> TokenStore:

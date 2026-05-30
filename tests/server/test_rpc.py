@@ -479,6 +479,10 @@ class StubStorage:
             return {"backend": "jsonl_scan"}
         return {"backend": backend.strip()}
 
+    def load_model_task_settings(self) -> JsonObject:
+        stored = self._settings.get("model_tasks")
+        return dict(stored) if isinstance(stored, dict) else {}
+
     def update_recall_settings(self, recall: object) -> JsonObject:
         if not isinstance(recall, dict):
             raise StorageError("Recall settings must be an object")
@@ -989,6 +993,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "appearance": {"language": "en", "available_languages": ["en"]},
         "defaults": {},
+        "model_tasks": {},
         "subagents": {
             "max_subagent_depth": 4,
             "max_subagents_per_turn": 8,

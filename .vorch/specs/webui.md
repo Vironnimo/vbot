@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Specialized Models, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -28,6 +28,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
     and returns `{ attachment_id, filename, media_type, size_bytes }`.
   - `getAttachmentUrl(attachmentId)` returns `/api/attachments/<id>` for use in
     `<img>` or download links.
+  - `getTaskModelSettings`, `updateTaskModelSettings`,
+    `listTaskModelTargets`, and `getTaskModelOptions` wrap the `task_model.*`
+    RPC methods.
+  - `transcribeSpeech(blob, options?)` posts multipart audio to
+    `/api/speech/transcribe` and returns normalized transcription JSON.
+  - `synthesizeSpeech(text, options?)` posts JSON to `/api/speech/synthesize`
+    and returns a `Blob` containing generated audio.
   - `listSessions(agentId, options?)` calls `session.list` and returns
     `{ sessions }` for one Agent.
   - `listQueue(agentId, sessionId, options?)`, `removeFromQueue(agentId,
@@ -114,6 +121,16 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Once-job edit payloads preserve the original stored `run_at` instant when
     the user does not change the scheduled value, so opening and saving a job
     does not shift its fire time.
+- `webui/src/lib/taskModelSettings.js`
+  - Normalizes task-model bindings, target lists, and option schemas for the
+    Settings Specialized Models panel.
+  - Builds sparse update payloads and compares normalized bindings for dirty
+    checks.
+- `webui/src/lib/audioRecorder.js`
+  - Wraps `navigator.mediaDevices.getUserMedia` and `MediaRecorder` for
+    push-to-talk recording, chooses a supported MIME type when the browser
+    exposes `MediaRecorder.isTypeSupported`, and stops all tracks on stop,
+    cancel, or error.
 - `webui/src/components/ToastStack.svelte`
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
@@ -149,6 +166,14 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Built-in command autocomplete consumes bare command names from `chat.commands` and inserts the `/` prefix exactly once at compose time.
   - Slash-trigger autocomplete shows the combined command/skill catalog from `chat.commands`; dollar-trigger autocomplete filters that catalog to skills only because `$skill-name` is a skill-only convention.
   - Supports attachment uploads via file picker, image paste, and drag-and-drop.
+  - Includes a microphone button for push-to-talk recording. Starting requests
+    microphone access, stopping uploads the recorded blob to
+    `/api/speech/transcribe`, and successful transcription inserts text into the
+    composer without sending automatically. Existing draft text is preserved and
+    the transcript is appended on a new line.
+  - Cancels active recording and stops media tracks on submit and component
+    destroy. Unsupported browser APIs, permission failures, and missing STT
+    configuration surface through existing Chat action/toast feedback.
   - Maintains local pending attachments with `preview_url` object URLs and builds
     canonical message `content` as `string` or `list[ContentBlock]` on send.
   - The visible composer box focuses the textarea from its padded wrapper area,
@@ -230,6 +255,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`. `summary_model` uses the same backend-backed searchable model picker as Agents, with the empty value meaning the active Agent model.
   - Includes a Recall panel. It lets users choose the `session_search` recall backend with a simple dropdown backed by `settings.recall.available_backends`.
+  - Includes a Specialized Models panel. It renders Speech to Text and Text to
+    Speech rows backed by `task_model.list_targets`, shows backend-owned option
+    schemas from `task_model.options`, and saves sparse bindings through
+    `task_model.update`. Target lists are credential-gated by the backend.
   - The Appearance, Skills, Sub-Agents, Compaction, and Recall panels auto-save about
     800 ms after the last dirty edit. Their manual save buttons remain visible
     in sticky footers inside the panel scroll area, stay enabled for trust, save
@@ -370,6 +399,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - Attachments are uploaded over the dedicated HTTP endpoints, not through RPC.
   The outgoing chat payload still uses the canonical `content` field, switching
   from plain string to `list[ContentBlock]` only when attachments are present.
+- Speech transcription in the Chat composer is an input aid only. It must not
+  auto-send messages, persist recordings, or bypass the server speech endpoint.
 - Streaming output is accessor-local/in-memory. `streamingItems` preserves the
   provider-visible order of reasoning, assistant text, and tool-call deltas;
   the final `assistant_output` event clears the buffer and becomes the
@@ -411,7 +442,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   last-selected Agent is restored through `localStorage` when available.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Recall (session_search backend), Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
+- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Recall (session_search backend), Specialized Models (STT/TTS bindings), Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search

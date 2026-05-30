@@ -16,6 +16,9 @@ consistent diagnostics.
 Raw `settings.json` also accepts `recall.backend` for backend selection, and
 the public `settings.update` RPC accepts the first-party recall backend names
 used by the Settings UI.
+Raw `settings.json` and the public `settings.update` RPC also accept
+`model_tasks`, a sparse mapping from supported specialized task types to
+configured targets and JSON-object options.
 
 Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes.
 
@@ -47,6 +50,10 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
 - `subagents` — requires `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` as positive integers.
 - `compaction` — requires `{ auto, threshold, tail_tokens, summary_model }`; `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | null`.
 - `recall` — `{ backend: "jsonl_scan" | "sqlite_fts" }`; updates the backend used by the `session_search` tool.
+- `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task
+  types are owned by `core/model_tasks/`. `target` must be a string when
+  present, `options` must be an object, and an empty target clears that task's
+  persisted binding.
 
 ## Constraints & Gotchas
 
@@ -58,8 +65,13 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
 - `settings.recall` must be an object when present. `settings.recall.backend`
   must be a non-empty lowercase snake_case string; runtime resolves it against
   the `RecallBackendRegistry` and falls back to `jsonl_scan` for unknown names.
+- `settings.model_tasks` must be an object when present. Each task key must be
+  supported by `core/model_tasks/`; each persisted binding must be an object
+  with a non-empty `target` string and optional object `options`.
 - `settings.py` stays focused on public `settings.update` parsing. Raw file
   validation belongs in `validation.py`.
-- `settings.update` accepts sparse Defaults updates but full Sub-Agent and Compaction sections. Recall updates are small exact-section writes with only `backend`.
+- `settings.update` accepts sparse Defaults and Model Task updates but full
+  Sub-Agent and Compaction sections. Recall updates are small exact-section
+  writes with only `backend`.
 - Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update. Recall backend changes are applied by server delegates through `runtime.reload_recall_backend()`.
 - Keep storage-level validation errors distinct from public schema errors so RPC error mapping remains stable.
