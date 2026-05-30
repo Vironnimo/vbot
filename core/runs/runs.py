@@ -260,6 +260,17 @@ class ChatRunManager:
         self._active_by_session: dict[tuple[str, str], Run] = {}
         self._queues: dict[tuple[str, str], deque[QueuedRunItem]] = {}
         self._runs: dict[str, Run] = {}
+        self._run_started_callbacks: list[Callable[[Run], None]] = []
+
+    def add_run_started_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]:
+        """Register a callback invoked whenever this manager starts a Run."""
+        self._run_started_callbacks.append(callback)
+
+        def remove_callback() -> None:
+            if callback in self._run_started_callbacks:
+                self._run_started_callbacks.remove(callback)
+
+        return remove_callback
 
     async def start(self, *, agent_id: str, session_id: str, executor: RunExecutor) -> Run:
         """Start one run if the session has no active run."""
@@ -458,7 +469,15 @@ class ChatRunManager:
         self._runs[run.id] = run
         task = asyncio.create_task(self._execute(run, session_key, executor))
         run.set_task(task)
+        self._notify_run_started(run)
         return run
+
+    def _notify_run_started(self, run: Run) -> None:
+        for callback in list(self._run_started_callbacks):
+            try:
+                callback(run)
+            except Exception:
+                _LOGGER.warning("Run start callback failed", exc_info=True)
 
 
 def _schedule_callback(callback: CancelCallback) -> None:

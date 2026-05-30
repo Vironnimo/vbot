@@ -71,6 +71,14 @@
   const SSE_RECONNECT_DELAY_MS = 500;
   const MAX_SSE_RECONNECT_ATTEMPTS = 3;
   const RUN_EVENT_FLUSH_DELAY_MS = 33;
+  const RUN_EVENT_ASSISTANT_OUTPUT_DELTA = 'assistant_output_delta';
+  const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
+  const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
+  const DELAYED_RUN_EVENT_TYPES = new Set([
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+    RUN_EVENT_REASONING_DELTA,
+    RUN_EVENT_TOOL_CALL_DELTA,
+  ]);
   const RUN_SERVER_EVENT_TYPES = new Set([
     'run_started',
     'run_output',
@@ -635,6 +643,10 @@
     const sessionKey = sessionState.key;
     pendingRunEventQueues[sessionKey] ??= [];
     pendingRunEventQueues[sessionKey].push(eventData);
+    if (!DELAYED_RUN_EVENT_TYPES.has(eventData?.type)) {
+      flushPendingRunEvents(sessionKey);
+      return;
+    }
     scheduleRunEventFlush(sessionKey);
   };
 

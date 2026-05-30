@@ -6,13 +6,14 @@ import asyncio
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatLoop
 from core.runs import ChatRunManager
 from core.runtime import Runtime
 from core.utils.config import Config
-from server.app import ServerEventBus, create_app
+from server.app import ServerEventBus, _register_run_event_bridge, create_app
 
 
 def test_create_app_does_not_mount_webui_when_build_is_absent(monkeypatch, tmp_path: Path) -> None:
@@ -202,6 +203,50 @@ def test_webui_serves_index_static_assets_and_spa_fallback(monkeypatch, tmp_path
     assert asset_response.text == "console.log('webui');"
     assert fallback_response.status_code == 200
     assert '<script type="module" src="/assets/app.js"></script>' in fallback_response.text
+
+
+@pytest.mark.asyncio
+async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
+    chat_runs = ChatRunManager()
+    state = type(
+        "State",
+        (),
+        {
+            "chat_runs": chat_runs,
+            "event_bus": ServerEventBus(),
+            "run_event_bridge_run_ids": set(),
+        },
+    )()
+    unsubscribe = _register_run_event_bridge(state)
+
+    async def execute(_run: Any) -> str:
+        return "done"
+
+    try:
+        run = await chat_runs.start(
+            agent_id="coder",
+            session_id="session-one",
+            executor=execute,
+        )
+        await run.wait()
+        await _wait_for_events(state.event_bus, 2)
+    finally:
+        if callable(unsubscribe):
+            unsubscribe()
+
+    assert [event["type"] for event in state.event_bus.events] == [
+        "run_started",
+        "run_completed",
+    ]
+    assert all(event["payload"]["run_id"] == run.id for event in state.event_bus.events)
+
+
+async def _wait_for_events(event_bus: ServerEventBus, count: int) -> None:
+    for _ in range(20):
+        if len(event_bus.events) >= count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"expected at least {count} events, got {len(event_bus.events)}")
 
 
 def _write_webui_build(tmp_path: Path) -> Path:
