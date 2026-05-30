@@ -18,9 +18,31 @@ from core.providers.reasoning import closest_supported_effort
 
 OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 
+# OpenRouter uses the ``output_modalities`` query parameter to filter models
+# by their output capability.  The default ``/models`` call returns only
+# text-output models.  Dedicated STT and TTS models require separate fetches
+# with ``?output_modalities=transcription`` and ``?output_modalities=speech``
+# respectively.
+SUPPLEMENTARY_OUTPUT_MODALITIES = ("transcription", "speech")
+
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
+
+    @classmethod
+    def supplementary_discovery_params(cls) -> list[dict[str, str]]:
+        """Return query-parameter dicts for supplementary model fetches.
+
+        The OpenRouter ``/models`` endpoint defaults to returning only
+        text-output models.  Dedicated STT and TTS models are excluded
+        unless the ``output_modalities`` query parameter is set to
+        ``transcription`` or ``speech`` respectively.
+
+        Each dict returned here is appended as query parameters to the
+        models endpoint URL during discovery, and the resulting models
+        are merged into the main catalog (deduplicated by ``model_id``).
+        """
+        return [{"output_modalities": m} for m in SUPPLEMENTARY_OUTPUT_MODALITIES]
 
     @classmethod
     def normalize_catalog_entry(

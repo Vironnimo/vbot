@@ -82,46 +82,67 @@ def derive_model_task_types(
     input_modalities: Iterable[str],
     output_modalities: Iterable[str],
 ) -> tuple[str, ...]:
-    """Derive coarse task filters from provider-reported model modalities."""
+    """Derive coarse task filters from provider-reported model modalities.
+
+    Modality conventions (provider-specific, normalized on ingestion):
+
+    * ``"transcription"`` in output — dedicated speech-to-text models (e.g.
+      ``openai/whisper-1`` via OpenRouter ``?output_modalities=transcription``).
+    * ``"speech"`` in output — dedicated text-to-speech models (e.g.
+      ``openai/gpt-4o-mini-tts`` via OpenRouter ``?output_modalities=speech``).
+    * ``"audio"`` in output — generic audio generation (music, sound effects,
+      or conversational audio).  Models with only ``"audio"`` are NOT tagged
+      ``text_to_speech`` unless they also have ``"speech"`` in their output
+      modalities.
+    """
 
     inputs = set(_normalize_string_tuple(tuple(input_modalities)))
     outputs = set(_normalize_string_tuple(tuple(output_modalities)))
-    text_outputs = set(outputs)
-    audio_outputs = set(outputs)
-    if "transcription" in outputs:
-        text_outputs.add("text")
-    if "speech" in outputs:
-        audio_outputs.add("audio")
+
+    # "transcription" output means the model produces text from audio → STT
+    has_transcription = "transcription" in outputs
+    # "speech" output means the model produces speech audio → TTS
+    has_speech = "speech" in outputs
+    # "audio" output is generic audio generation (music, effects, conv audio)
+    has_audio = "audio" in outputs
+
+    has_text_output = "text" in outputs or has_transcription
+
     tasks: set[str] = set()
 
-    if "text" in text_outputs:
+    if has_text_output:
         tasks.add("text_output")
-    if "text" in inputs and "text" in text_outputs:
+    if "text" in inputs and has_text_output:
         tasks.add("chat")
     if "image" in inputs:
         tasks.add("image_input")
-        if "text" in text_outputs:
+        if has_text_output:
             tasks.add("image_understanding")
     if "file" in inputs:
         tasks.add("file_input")
-        if "text" in text_outputs:
+        if has_text_output:
             tasks.add("file_understanding")
     if "audio" in inputs:
         tasks.add("audio_input")
-        if "text" in text_outputs:
+        if has_text_output:
             tasks.add("speech_to_text")
+    if has_transcription:
+        # Dedicated STT models that output transcription text
+        tasks.add("speech_to_text")
     if "video" in inputs:
         tasks.add("video_input")
-        if "text" in text_outputs:
+        if has_text_output:
             tasks.add("video_understanding")
     if "image" in outputs:
         tasks.add("image_generation")
         if "image" in inputs:
             tasks.add("image_edit")
-    if "audio" in audio_outputs:
+    if has_audio:
         tasks.add("audio_generation")
-        if "text" in inputs:
-            tasks.add("text_to_speech")
+    if has_speech:
+        # Dedicated TTS models that output speech audio
+        tasks.add("audio_generation")
+        tasks.add("text_to_speech")
     if "video" in outputs:
         tasks.add("video_generation")
 

@@ -77,7 +77,6 @@ class TestCapabilities:
             "image_input",
             "image_understanding",
             "audio_generation",
-            "text_to_speech",
         )
 
     def test_legacy_vision_derives_text_image_input(self):
@@ -101,9 +100,27 @@ class TestCapabilities:
             "image_generation",
             "image_edit",
         )
-        assert derive_model_task_types(("text",), ("audio",)) == (
+        # Generic "audio" output does NOT imply text_to_speech —
+        # only "speech" output does.
+        assert derive_model_task_types(("text",), ("audio",)) == ("audio_generation",)
+        # Dedicated TTS models have "speech" in output_modalities.
+        assert derive_model_task_types(("text",), ("speech",)) == (
             "audio_generation",
             "text_to_speech",
+        )
+        # Dedicated STT models have "transcription" in output_modalities.
+        # They also get audio_input since they accept audio.
+        assert derive_model_task_types(("audio",), ("transcription",)) == (
+            "text_output",
+            "audio_input",
+            "speech_to_text",
+        )
+        # Multimodal models with audio input and text output get speech_to_text.
+        assert derive_model_task_types(("text", "audio"), ("text",)) == (
+            "chat",
+            "text_output",
+            "audio_input",
+            "speech_to_text",
         )
 
     def test_frozen(self):
