@@ -90,6 +90,38 @@ async def refresh_models(
             credential_connection,
         )
 
+        # Some providers (e.g. OpenRouter) require supplementary API calls
+        # with different query parameters to discover dedicated task models
+        # (STT, TTS) that are excluded from the default model listing.
+        supplementary_params = _get_supplementary_params(adapter_class)
+        if supplementary_params:
+            seen_ids = {m.get("id") for m in raw_models if isinstance(m.get("id"), str)}
+            for params in supplementary_params:
+                supplementary_url = _append_query_params(url, params)
+                try:
+                    _, supplementary_models = await _fetch_raw_models(
+                        supplementary_url,
+                        provider_config,
+                        credential_value,
+                        credential_connection,
+                    )
+                except (httpx.HTTPError, ValueError) as exc:
+                    _LOGGER.warning(
+                        "Supplementary model fetch failed for provider '%s' with params %s: %s",
+                        provider_config.id,
+                        params,
+                        exc,
+                    )
+                    continue
+                for model in supplementary_models:
+                    model_id = model.get("id")
+                    if isinstance(model_id, str) and model_id not in seen_ids:
+                        raw_models.append(model)
+                        seen_ids.add(model_id)
+                        # Also merge into the raw payload so the dump is complete.
+                        if isinstance(raw_payload, dict) and "data" in raw_payload:
+                            raw_payload["data"].append(model)
+
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -285,6 +317,31 @@ def _adapter_class_for_discovery(adapter: str):
     if adapter_class is None:
         raise ValueError(f"No model normalizer registered for adapter '{adapter}'")
     return adapter_class
+
+
+def _get_supplementary_params(adapter_class: Any) -> list[dict[str, str]]:
+    """Return supplementary query-parameter dicts from the adapter, if any.
+
+    Adapters that require additional API calls to discover task-specific
+    models (e.g. OpenRouter's STT/TTS models) can define a class method
+    ``supplementary_discovery_params()`` returning a list of query-param
+    dicts.  Each dict is appended to the models endpoint URL for a
+    supplementary fetch.
+    """
+    method = getattr(adapter_class, "supplementary_discovery_params", None)
+    if callable(method):
+        result: list[dict[str, str]] = method()
+        return result
+    return []
+
+
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    """Append query parameters to a URL, preserving any existing query string."""
+    if not params:
+        return url
+    separator = "&" if "?" in url else "?"
+    encoded = "&".join(f"{k}={v}" for k, v in params.items())
+    return f"{url}{separator}{encoded}"
 
 
 def _read_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:

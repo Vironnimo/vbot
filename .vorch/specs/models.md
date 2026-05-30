@@ -42,7 +42,10 @@ Missing modality data defaults to text-in/text-out so sparse OpenAI-compatible
 catalogs remain usable as chat model catalogs. Output modality aliases from
 speech catalogs are normalized for task filtering: `transcription` is treated
 as text output for `speech_to_text`, and `speech` is treated as audio output for
-`text_to_speech`/`audio_generation`.
+`text_to_speech`/`audio_generation`. Generic `audio` output enables only
+`audio_generation` — it does NOT imply `text_to_speech`, because conversational
+audio models (e.g. `openai/gpt-audio`) produce audio turn-by-turn rather than
+synthesizing speech from text.
 
 ### Model
 
@@ -307,6 +310,17 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   normalization lives in `OpenRouterAdapter`; GitHub Copilot catalog
   normalization lives in `GitHubCopilotAdapter`. Discovery should not branch on
   provider IDs or contain provider-specific normalizer functions.
+- **Supplementary discovery fetches task-specific models.** Some providers
+  (notably OpenRouter) default to returning only text-output models from their
+  `/models` endpoint. Dedicated STT/TTS models require separate API calls with
+  query parameters such as `?output_modalities=transcription` or
+  `?output_modalities=speech`. Adapters declare these supplementary fetches via
+  an optional `supplementary_discovery_params()` classmethod that returns a
+  list of query-parameter dicts. `refresh_models()` makes the main fetch first,
+  then appends each supplementary param dict to the models endpoint URL for
+  additional fetches. New models from supplementary fetches are merged by model
+  ID (deduplication). Supplementary fetch failures are caught and logged as
+  warnings; they do not prevent the main catalog from being saved.
 - **Modalities and task filters come from adapter normalization.** If a provider
   exposes input/output modalities or supported request parameters, normalize
   those facts into `Capabilities` instead of leaving them only in raw catalogs.

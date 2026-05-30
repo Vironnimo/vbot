@@ -697,3 +697,167 @@ class TestRefreshModels:
 
         assert (resources_dir / "models" / "stub-provider.raw.json").exists()
         assert not (resources_dir / "models" / "stub-provider.json").exists()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_fetches_supplementary_openrouter_models(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """OpenRouter discovery fetches STT/TTS models via supplementary API calls."""
+        resources_dir = tmp_path / "resources"
+
+        # Main catalog returns a chat model and a multimodal audio model.
+        main_models = {
+            "data": [
+                raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o"),
+                raw_openrouter_model(
+                    model_id="openai/gpt-audio",
+                    name="GPT Audio",
+                    output_modalities=["text", "audio"],
+                ),
+            ]
+        }
+        # Supplementary STT fetch returns a whisper model.
+        stt_models = {
+            "data": [
+                raw_openrouter_model(
+                    model_id="openai/whisper-1",
+                    name="Whisper 1",
+                    input_modalities=["audio"],
+                    output_modalities=["transcription"],
+                ),
+            ]
+        }
+        # Supplementary TTS fetch returns a TTS model.
+        tts_models = {
+            "data": [
+                raw_openrouter_model(
+                    model_id="openai/gpt-4o-mini-tts",
+                    name="GPT-4o Mini TTS",
+                    input_modalities=["text"],
+                    output_modalities=["speech"],
+                ),
+            ]
+        }
+
+        # respx does not distinguish URLs by query params, so use side_effect.
+        def openrouter_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "output_modalities=transcription" in url:
+                return httpx.Response(200, json=stt_models)
+            if "output_modalities=speech" in url:
+                return httpx.Response(200, json=tts_models)
+            return httpx.Response(200, json=main_models)
+
+        respx.get(OPENROUTER_MODELS_URL).mock(side_effect=openrouter_handler)
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+        registry = ModelRegistry.load(resources_dir)
+
+        assert result["model_count"] == 4
+        assert registry.get("openrouter", "openai/gpt-4o") is not None
+        assert registry.get("openrouter", "openai/gpt-audio") is not None
+        assert registry.get("openrouter", "openai/whisper-1") is not None
+        assert registry.get("openrouter", "openai/gpt-4o-mini-tts") is not None
+
+        # Verify task types are derived correctly
+        whisper = registry.get("openrouter", "openai/whisper-1")
+        assert "speech_to_text" in whisper.capabilities.task_types
+
+        tts = registry.get("openrouter", "openai/gpt-4o-mini-tts")
+        assert "text_to_speech" in tts.capabilities.task_types
+
+        # GPT Audio should have audio_generation but NOT text_to_speech
+        gpt_audio = registry.get("openrouter", "openai/gpt-audio")
+        assert "audio_generation" in gpt_audio.capabilities.task_types
+        assert "text_to_speech" not in gpt_audio.capabilities.task_types
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_deduplicates_supplementary_models(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """Supplementary fetches that return already-known models are deduplicated."""
+        resources_dir = tmp_path / "resources"
+
+        # Main catalog includes gpt-audio; supplementary also returns it.
+        main_models = {
+            "data": [
+                raw_openrouter_model(
+                    model_id="openai/gpt-audio",
+                    name="GPT Audio",
+                    output_modalities=["text", "audio"],
+                ),
+            ]
+        }
+        duplicate_stt = {
+            "data": [
+                # Duplicate of gpt-audio from main catalog.
+                raw_openrouter_model(
+                    model_id="openai/gpt-audio",
+                    name="GPT Audio",
+                    output_modalities=["text", "audio"],
+                ),
+                raw_openrouter_model(
+                    model_id="openai/whisper-1",
+                    name="Whisper 1",
+                    input_modalities=["audio"],
+                    output_modalities=["transcription"],
+                ),
+            ]
+        }
+        empty_speech: dict[str, object] = {"data": []}
+
+        # respx does not distinguish URLs by query params, so use side_effect.
+        def openrouter_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "output_modalities=transcription" in url:
+                return httpx.Response(200, json=duplicate_stt)
+            if "output_modalities=speech" in url:
+                return httpx.Response(200, json=empty_speech)
+            return httpx.Response(200, json=main_models)
+
+        respx.get(OPENROUTER_MODELS_URL).mock(side_effect=openrouter_handler)
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        # gpt-audio should appear only once.
+        assert result["model_count"] == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_supplementary_fetch_failure_does_not_block(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """If a supplementary fetch fails, discovery still completes with main models."""
+        resources_dir = tmp_path / "resources"
+
+        main_models = {
+            "data": [
+                raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o"),
+            ]
+        }
+
+        # respx does not distinguish URLs by query params, so use side_effect.
+        def openrouter_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "output_modalities=transcription" in url:
+                return httpx.Response(500, text="Internal Server Error")
+            if "output_modalities=speech" in url:
+                return httpx.Response(500, text="Internal Server Error")
+            return httpx.Response(200, json=main_models)
+
+        respx.get(OPENROUTER_MODELS_URL).mock(side_effect=openrouter_handler)
+
+        result = await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        # Main models are still available.
+        assert result["model_count"] == 1
+        registry = ModelRegistry.load(resources_dir)
+        assert registry.get("openrouter", "openai/gpt-4o") is not None
