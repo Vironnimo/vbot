@@ -263,7 +263,7 @@ class WakewordWorker:
             return None
 
         url = f"{self._server_url}/api/speech/transcribe"
-        files = {"audio": ("recording.wav", audio_data, "audio/wav")}
+        files = {"file": ("recording.wav", audio_data, "audio/wav")}
 
         for attempt in range(_MAX_RETRIES):
             try:
