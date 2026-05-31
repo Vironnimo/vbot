@@ -27,6 +27,7 @@ CronJobStatus = Literal["active", "paused", "completed"]
 _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed"))
 _RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
+_ONCE_RETRY_DELAY_SECONDS = 60.0
 _MUTABLE_FIELDS = frozenset(
     (
         "agent_id",
@@ -360,38 +361,76 @@ class CronService:
             if latest is None or latest.status != "active" or latest.schedule_type != "cron":
                 return
 
-            await self._trigger_service.trigger_run(
-                latest.agent_id,
-                latest.prompt,
-                latest.session_id,
-            )
+            if not await self._trigger_job_run(latest):
+                continue
+
+            latest = self._jobs.get(job.id)
+            if latest is None:
+                return
+
             latest.last_fired_at = _utc_now_iso()
             self._jobs[latest.id] = latest
-            self._save_jobs()
+            self._save_jobs_after_fire(latest.id)
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed."""
-        current = self._jobs.get(job.id)
-        if current is None or current.status != "active" or current.schedule_type != "once":
+        while True:
+            current = self._jobs.get(job.id)
+            if current is None or current.status != "active" or current.schedule_type != "once":
+                return
+
+            run_at_utc = self._parse_run_at_utc(current)
+            delay_seconds = max((run_at_utc - _utc_now()).total_seconds(), 0.0)
+            await asyncio.sleep(delay_seconds)
+
+            latest = self._jobs.get(job.id)
+            if latest is None or latest.status != "active" or latest.schedule_type != "once":
+                return
+
+            if not await self._trigger_job_run(latest):
+                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                continue
+
+            latest = self._jobs.get(job.id)
+            if latest is None:
+                return
+
+            latest.status = "completed"
+            latest.last_fired_at = _utc_now_iso()
+            self._jobs[latest.id] = latest
+            self._save_jobs_after_fire(latest.id)
             return
 
-        run_at_utc = self._parse_run_at_utc(current)
-        delay_seconds = max((run_at_utc - _utc_now()).total_seconds(), 0.0)
-        await asyncio.sleep(delay_seconds)
+    async def _trigger_job_run(self, job: CronJob) -> bool:
+        try:
+            await self._trigger_service.trigger_run(
+                job.agent_id,
+                job.prompt,
+                job.session_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            _LOGGER.error(
+                "Cron job trigger failed for job=%s: %s",
+                job.id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            return False
 
-        latest = self._jobs.get(job.id)
-        if latest is None or latest.status != "active" or latest.schedule_type != "once":
-            return
+        return True
 
-        await self._trigger_service.trigger_run(
-            latest.agent_id,
-            latest.prompt,
-            latest.session_id,
-        )
-        latest.status = "completed"
-        latest.last_fired_at = _utc_now_iso()
-        self._jobs[latest.id] = latest
-        self._save_jobs()
+    def _save_jobs_after_fire(self, job_id: str) -> None:
+        try:
+            self._save_jobs()
+        except Exception as error:
+            _LOGGER.error(
+                "Cron job state save failed after firing job=%s: %s",
+                job_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     def _ensure_jobs_loaded(self) -> None:
         if self._jobs_loaded:

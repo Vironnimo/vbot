@@ -239,6 +239,39 @@ async def test_run_once_job_fires_and_marks_completed(
 
 
 @pytest.mark.asyncio
+async def test_run_once_job_retries_trigger_failure_without_completing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
+    )
+    sleep_delays: list[float] = []
+
+    async def record_sleep(delay_seconds: float) -> None:
+        sleep_delays.append(delay_seconds)
+
+    monkeypatch.setattr(cron_module.asyncio, "sleep", record_sleep)
+    trigger_service.trigger_run.side_effect = [RuntimeError("boom"), None]
+
+    # Act
+    await service._run_once_job(job)
+
+    # Assert
+    assert trigger_service.trigger_run.await_count == 2
+    assert sleep_delays[1] == cron_module._ONCE_RETRY_DELAY_SECONDS
+    updated = service.get_job(job.id)
+    assert updated.status == "completed"
+    assert updated.last_fired_at is not None
+    assert updated.last_fired_at.endswith("+00:00")
+
+
+@pytest.mark.asyncio
 async def test_run_cron_job_fires_and_updates_last_fired_at(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -279,6 +312,54 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with("agent-one", "Cron prompt", None)
     updated = service.get_job(job.id)
+    assert updated.last_fired_at is not None
+    assert updated.last_fired_at.endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_run_cron_job_continues_after_trigger_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Cron prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+        timezone="UTC",
+    )
+
+    class ImmediateCronIter:
+        @staticmethod
+        def is_valid(_expression: str) -> bool:
+            return True
+
+        def __init__(self, _expression: str, base_time: datetime) -> None:
+            self._next_fire = base_time
+
+        def get_next(self, _return_type: Any) -> datetime:
+            return self._next_fire
+
+    async def trigger_then_fail_then_pause(
+        _agent_id: str, _prompt: str, _session_id: str | None = None
+    ) -> None:
+        if trigger_service.trigger_run.await_count == 1:
+            raise RuntimeError("boom")
+        service._jobs[job.id].status = "paused"
+
+    monkeypatch.setattr(cron_module, "croniter", ImmediateCronIter)
+    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    trigger_service.trigger_run.side_effect = trigger_then_fail_then_pause
+
+    # Act
+    await service._run_cron_job(job)
+
+    # Assert
+    assert trigger_service.trigger_run.await_count == 2
+    updated = service.get_job(job.id)
+    assert updated.status == "paused"
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
 

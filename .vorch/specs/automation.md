@@ -27,6 +27,10 @@ Automation owns kernel-level primitives for starting Runs without going through 
 	errors raise `CronStorageError` with file/path diagnostics.
 - `schedule_type` is either `cron` or `once`; job `status` is `active`, `paused`, or `completed`.
 - Active cron jobs compute their next fire time with `croniter`; paused and completed jobs do not own running tasks.
+- Trigger failures are logged by `CronService` but do not terminate active
+	scheduler tasks. Repeating `cron` jobs continue with their next scheduled
+	fire time. Active `once` jobs retry after a short scheduler-owned delay and
+	are marked `completed` only after `trigger_run(...)` succeeds.
 - Timezone resolution uses stdlib `zoneinfo`; the project ships `tzdata` so IANA job timezones work on platforms without a system timezone database.
 
 ## Constraints & Gotchas
