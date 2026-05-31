@@ -14,7 +14,7 @@ vbot = "cli.main:main"
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart"]
 cli     = ["rich", "psutil"]
-desktop = ["pywebview"]
+desktop = ["pywebview", "openwakeword"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot", "python-multipart", "psutil"]
 
 [tool.hatch.build.targets.wheel]
