@@ -10,7 +10,7 @@ Desktop stays intentionally thin: it loads the same server-served WebUI
 that a browser would load from `/`, but inside a pywebview window.
 
 The Desktop now includes a local wakeword voice pipeline (`desktop/wakeword/`)
-that runs entirely on-device: openWakeWord detection → PyAudio recording with
+that runs entirely on-device: openWakeWord detection → sounddevice recording with
 webrtcvad silence detection → upload to the vBot speech endpoint → send
 transcript as a chat message through server RPC.
 
@@ -59,7 +59,7 @@ Nested under the `wakeword` key in `desktop/settings.json`:
 
 - `enabled` — whether the wakeword pipeline starts on Desktop launch
 - `engine` — display name of the detection engine (MVP: "openwakeword")
-- `microphone` — PyAudio device index or `null` for system default
+- `microphone` — sounddevice device index or `null` for system default
 - `sensitivity` — float 0–1, mapped to score threshold `1.0 - sensitivity`
 - `target_agent_id` — agent ID to send transcripts to, or `null` for none
 - `session_behavior` — `"active"` uses the latest session; `"new"` creates one
@@ -112,7 +112,7 @@ Worker states (exposed in `getWakewordStatus().state`):
 - **pywebview** — native window wrapper used to host the existing WebUI.
 - **openwakeword** (optional) — ONNX-based wakeword detection. Falls back to
   mock engine when not installed.
-- **pyaudio** (optional) — cross-platform microphone access via PortAudio.
+- **sounddevice** (optional) — cross-platform microphone access via PortAudio.
 - **webrtcvad** (optional) — Google WebRTC VAD for silence detection during
   post-wakeword recording. Falls back to fixed-duration capture when not
   installed.
@@ -127,7 +127,7 @@ Worker states (exposed in `getWakewordStatus().state`):
   `desktop/main.py` rather than in a later packaging-specific app directory.
 - pywebview is imported lazily so backend tests and non-desktop development
   workflows do not require the optional GUI package.
-- openWakeWord, PyAudio, and webrtcvad are optional imports — the Desktop
+- openWakeWord, sounddevice, and webrtcvad are optional imports — the Desktop
   launches with the mock engine when any of them is missing.
 - The wakeword worker runs in a daemon thread. If it crashes silently, the
   bridge state transitions to `error` and the WebUI shows a red indicator.
