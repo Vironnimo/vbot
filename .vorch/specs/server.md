@@ -219,8 +219,10 @@ Clients call the vBot server contract; provider wire details stay behind
 - `server.events.ServerEventBus` — in-memory replayable bus for general server
   lifecycle events sent over `/ws`. Supports `after_sequence` query param for
   reconnect replay: clients pass the last sequence number they saw, and the bus
-  replays all events with a higher sequence before streaming new ones. Published
-  event types must be in the server event contract allowlist.
+  replays retained events with a higher sequence before streaming new ones.
+  Sequence numbers are monotonic and are not reused when old events fall out of
+  the retained window. Published event types must be in the server event
+  contract allowlist.
 - `server.main.main(argv=None)` — starts uvicorn. Port priority is `--port` >
   `VBOT_SERVER_PORT` > `settings.json` > `8420`; ambient `PORT` /
   `SERVER_PORT` process environment variables are ignored unless they are keys
@@ -252,8 +254,8 @@ Clients call the vBot server contract; provider wire details stay behind
   the shared `ChatRunManager` and bridges every started Run into the WebSocket
   event bus. This includes RPC-started Runs, queued Runs that start later, and
   internal automation/sub-agent follow-up Runs. The bridge is idempotent per
-  Run so explicit RPC bridge calls and the manager observer cannot duplicate
-  lifecycle summaries.
+  recently observed Run so explicit RPC bridge calls and the manager observer
+  cannot duplicate lifecycle summaries within the bounded bridge-dedupe window.
 - The dedicated `/ws/logs` socket is not part of the shared server event bus.
   It is a file-specific transport for log viewing only.
 - `log.read` plus `/ws/logs` form one handoff contract: callers should pass the
@@ -261,6 +263,9 @@ Clients call the vBot server contract; provider wire details stay behind
   the gap between initial load and live stream connect.
 - SSE is the primary per-Run output stream and should remain event-level and
   provider-agnostic.
+- SSE and `/ws` replay are process-local bounded buffers, not durable event
+  stores. Reconnects can replay only the retained Run or server event window;
+  old chat content must be loaded from Session history.
 - Routine uvicorn access logging is suppressed by default.
 - Routine `websockets.server` lifecycle noise for the shared `/ws` socket and
   the dedicated `/ws/logs` socket is suppressed from normal INFO logs.

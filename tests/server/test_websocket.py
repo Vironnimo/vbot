@@ -535,6 +535,24 @@ async def test_event_bus_subscribe_after_sequence_zero_receives_all_events() -> 
 
 
 @pytest.mark.asyncio
+async def test_event_bus_replay_window_is_bounded_without_reusing_sequences() -> None:
+    bus = ServerEventBus(event_retention_limit=2)
+    bus.publish("agent.created", {"id": "a"})
+    bus.publish("agent.updated", {"id": "a"})
+    bus.publish("agent.deleted", {"agent_id": "a"})
+
+    events: list[dict[str, Any]] = []
+    async for event in bus.subscribe(after_sequence=0):
+        events.append(event)
+        if len(events) == 2:
+            break
+
+    assert [event["sequence"] for event in bus.events] == [2, 3]
+    assert [event["sequence"] for event in events] == [2, 3]
+    assert [event["type"] for event in events] == ["agent.updated", "agent.deleted"]
+
+
+@pytest.mark.asyncio
 async def test_event_bus_subscribe_after_sequence_higher_skips_all_replays() -> None:
     """When after_sequence exceeds all existing sequences, no events are replayed.
     The subscriber goes straight to the live subscription loop."""
