@@ -15,6 +15,9 @@ server URL and status information. It manages local vBot server reachability
 around the existing `server/main.py` foreground entrypoint, and every CLI
 command outside the `server` lifecycle area calls the running server's RPC
 contract rather than reading or mutating files directly.
+Shared RPC transport, envelope parsing, timeout handling, and RPC error message
+formatting live in `cli/rpc_client.py`; management modules own only command
+parameter translation and deterministic output formatting.
 
 ## Interfaces
 

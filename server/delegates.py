@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import sys
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import UTC, datetime, tzinfo
@@ -87,6 +88,25 @@ from server.events import (
     RUN_OUTPUT_SERVER_EVENT,
     RUN_STARTED_SERVER_EVENT,
 )
+from server.rpc import dispatcher as rpc_dispatcher
+from server.rpc import errors as rpc_errors
+from server.rpc.errors import (
+    RPC_ERROR_ACTIVE_RUN,
+    RPC_ERROR_AGENT_BUSY,
+    RPC_ERROR_AGENT_IN_USE,
+    RPC_ERROR_CANCELLED,
+    RPC_ERROR_CHANNEL_ALREADY_EXISTS,
+    RPC_ERROR_CHANNEL_CONFIG,
+    RPC_ERROR_CHANNEL_NOT_FOUND,
+    RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_LAST_AGENT,
+    RPC_ERROR_OAUTH_NOT_SUPPORTED,
+    RPC_ERROR_QUEUE_ITEM_NOT_FOUND,
+    RPC_ERROR_RUN_NOT_FOUND,
+    RpcError,
+)
+from server.rpc.methods import build_method_handlers
 
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.delegates")
@@ -95,6 +115,7 @@ DEFAULT_BRIDGED_RUN_RETENTION_LIMIT = 1024
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
+RPC_ERROR_METHOD_NOT_FOUND = rpc_errors.RPC_ERROR_METHOD_NOT_FOUND
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -123,34 +144,6 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
 BOOLEAN_MODEL_CAPABILITIES = frozenset(("vision", "tools", "json_mode", "reasoning"))
 MAX_CHAT_HISTORY_LIMIT = 500
 
-RPC_ERROR_INVALID_REQUEST = "invalid_request"
-RPC_ERROR_METHOD_NOT_FOUND = "method_not_found"
-RPC_ERROR_DOMAIN = "domain_error"
-RPC_ERROR_ACTIVE_RUN = "active_run"
-RPC_ERROR_RUN_NOT_FOUND = "run_not_found"
-RPC_ERROR_CANCELLED = "run_cancelled"
-RPC_ERROR_LAST_AGENT = "last_agent"
-RPC_ERROR_AGENT_BUSY = "agent_busy"
-RPC_ERROR_AGENT_IN_USE = "agent_in_use"
-RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
-RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
-RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
-RPC_ERROR_CHANNEL_CONFIG = "channel_config_error"
-RPC_ERROR_QUEUE_ITEM_NOT_FOUND = "queue_item_not_found"
-
-
-class RpcError(Exception):
-    """Expected RPC request or domain error."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-    def to_dict(self) -> JsonObject:
-        """Return the provider-agnostic error envelope payload."""
-        return {"code": self.code, "message": self.message}
-
 
 class _NoopAsyncContext:
     async def __aenter__(self) -> None:
@@ -165,124 +158,13 @@ _NOOP_ASYNC_CONTEXT = _NoopAsyncContext()
 
 async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
     """Dispatch one JSON-RPC-like vBot server request."""
-    try:
-        method, params = _parse_rpc_request(request)
-        result = await _dispatch_method(state, method, params)
-    except RpcError as exc:
-        return {"ok": False, "error": exc.to_dict()}
-    return {"ok": True, "result": result}
+    handlers = build_method_handlers(sys.modules[__name__])
+    return await rpc_dispatcher.dispatch_rpc(state, request, handlers)
 
 
 async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonObject:
-    match method:
-        case "connection.list":
-            return _list_connections(state, params)
-        case "model.list":
-            return _list_models(state, params)
-        case "model.refresh_db":
-            return await _refresh_model_db(state, params)
-        case "provider.set_key":
-            return _set_provider_key(state, params)
-        case "provider.connect":
-            return await _connect_provider(state, params)
-        case "provider.disconnect":
-            return _disconnect_provider(state, params)
-        case "provider.connection_status":
-            return _provider_connection_status(state, params)
-        case "tool.list":
-            return _list_tools(state, params)
-        case "skill.list":
-            return _list_skills(state, params)
-        case "chat.commands":
-            return _list_commands(state, params)
-        case "agent.list":
-            return _list_agents(state)
-        case "agent.get":
-            return _get_agent(state, params)
-        case "agent.create":
-            return _create_agent(state, params)
-        case "agent.update":
-            return _update_agent(state, params)
-        case "agent.delete":
-            return await _delete_agent(state, params)
-        case "session.create":
-            return _create_session(state, params)
-        case "session.list":
-            return _list_sessions(state, params)
-        case "session.link_channel":
-            return _link_session_to_channel(state, params)
-        case "chat.history":
-            return _chat_history(state, params)
-        case "chat.send":
-            return await _send_chat(state, params)
-        case "chat.stream":
-            return await _stream_chat(state, params)
-        case "chat.retry_last_turn":
-            return await _retry_chat(state, params)
-        case "chat.cancel":
-            return await _cancel_chat(state, params)
-        case "chat.queue_list":
-            return _chat_queue_list(state, params)
-        case "chat.queue_remove":
-            return _chat_queue_remove(state, params)
-        case "chat.queue_update":
-            return _chat_queue_update(state, params)
-        case "channel.list":
-            return _list_channels(state, params)
-        case "channel.create":
-            return await _create_channel(state, params)
-        case "channel.update":
-            return await _update_channel(state, params)
-        case "channel.delete":
-            return _delete_channel(state, params)
-        case "channel.enable":
-            return _enable_channel(state, params)
-        case "channel.disable":
-            return _disable_channel(state, params)
-        case "channel.status":
-            return _channel_status(state, params)
-        case "cron.create":
-            return await _cron_create(state, params)
-        case "cron.list":
-            return _cron_list(state, params)
-        case "cron.update":
-            return await _cron_update(state, params)
-        case "cron.delete":
-            return _cron_delete(state, params)
-        case "cron.enable":
-            return _cron_enable(state, params)
-        case "cron.disable":
-            return _cron_disable(state, params)
-        case "settings.get_raw":
-            return _get_settings_raw(state, params)
-        case "settings.set_key":
-            return _set_settings_key(state, params)
-        case "settings.get":
-            return _get_settings(state, params)
-        case "settings.update":
-            return _update_settings(state, params)
-        case "task_model.settings":
-            return _task_model_settings(state, params)
-        case "task_model.update":
-            return _task_model_update(state, params)
-        case "task_model.list_targets":
-            return _task_model_list_targets(state, params)
-        case "task_model.options":
-            return _task_model_options(state, params)
-        case "log.list":
-            return _list_logs(state, params)
-        case "log.read":
-            return _read_log(state, params)
-        case "prompt.list":
-            return _list_prompts(state)
-        case "prompt.update":
-            return _update_prompt(state, params)
-        case "prompt.reset":
-            return _reset_prompt(state, params)
-        case "prompt.preview":
-            return await _preview_prompt(state, params)
-        case _:
-            raise RpcError(RPC_ERROR_METHOD_NOT_FOUND, f"unknown RPC method: {method}")
+    handlers = build_method_handlers(sys.modules[__name__])
+    return await rpc_dispatcher.dispatch_method(state, method, params, handlers)
 
 
 def _list_agents(state: Any) -> JsonObject:
@@ -1926,15 +1808,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _parse_rpc_request(request: Any) -> tuple[str, JsonObject]:
-    if not isinstance(request, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "RPC request must be a JSON object")
-    method = request.get("method")
-    if not isinstance(method, str) or not method:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "RPC method must be a non-empty string")
-    params = request.get("params", {})
-    if not isinstance(params, dict):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "RPC params must be an object")
-    return method, params
+    return rpc_dispatcher.parse_rpc_request(request)
 
 
 def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:

@@ -6,7 +6,10 @@ FastAPI transport layer around the core kernel.
 
 `server/` owns HTTP, Server-Sent Events (SSE), WebSocket, process startup, and
 request/response mapping. It imports `core/` services but does not own chat,
-agent, provider, model, tool, skill, or storage business logic.
+agent, provider, model, tool, skill, or storage business logic. RPC envelope
+parsing and invocation live under `server/rpc/`; `server.delegates` remains the
+compatibility facade for transport delegate helpers and currently hosts the
+handler bodies registered by the domain-indexed method tables.
 
 Clients call the vBot server contract; provider wire details stay behind
 `core/providers/` adapters.
@@ -208,7 +211,8 @@ Clients call the vBot server contract; provider wire details stay behind
   and the server event bus
   into `app.state`.
 - `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC
-  methods to transport-only delegates.
+  methods through `server/rpc/dispatcher.py` and the domain-indexed method
+  registries in `server/rpc/*_methods.py`.
 - `GET /api/runs/{run_id}/events` — streams one Run timeline as SSE using
   `text/event-stream`, replaying existing events and then following new events
   until a terminal Run event. Each SSE event includes `id: <RunEvent.sequence>`
@@ -304,8 +308,8 @@ Clients call the vBot server contract; provider wire details stay behind
 - The server optional dependency group provides FastAPI, uvicorn, websockets,
   and `python-multipart` for upload endpoint parsing.
   Server code should fail clearly if these extras are not installed.
-- Exact long-term payload schemas remain intentionally lightweight;
-  keep schema decisions isolated in `server/delegates.py` and transport files.
+- Exact long-term payload schemas remain intentionally lightweight; keep schema
+  decisions isolated in RPC delegate/registry modules and transport files.
 - WebUI static serving is optional at runtime. If `webui/dist/index.html` is
   absent, `/` remains unmounted/404 rather than failing server startup.
 - Static single-page-app fallback must not shadow reserved server paths:

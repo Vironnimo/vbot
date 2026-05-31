@@ -17,9 +17,9 @@ only where native libraries force them.
 **Layers:**
 ```
 core/          ← Kernel (async). No HTTP, no UI.
-server/        ← FastAPI + WS + SSE. Imports core/. RPC delegates per domain.
+server/        ← FastAPI + WS + SSE. Imports core/. RPC dispatch lives in server/rpc/.
 webui/         ← Svelte frontend. Own package.json. Talks HTTP/WS/SSE only.
-cli/           ← CLI accessor. Server lifecycle locally; all other domains via RPC.
+cli/           ← CLI accessor. Server lifecycle locally; all other domains via shared RPC client.
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
