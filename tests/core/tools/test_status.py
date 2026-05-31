@@ -145,6 +145,8 @@ def test_status_tool_registered_with_correct_name() -> None:
 
     tool = registry.get(STATUS_TOOL_NAME)
     assert tool.name == STATUS_TOOL_NAME
+    assert "Use session_id to check another session for this agent" in tool.description
+    assert list(tool.parameters["properties"]) == ["session_id", "agent_id"]
 
 
 def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:

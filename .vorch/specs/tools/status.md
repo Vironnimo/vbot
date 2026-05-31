@@ -6,7 +6,8 @@ Reports current or targeted agent/session/runtime status through the same status
 
 - Tool name: `status`
 - Registration: `register_status_tool(registry, agents, sessions, models, chat_runs, started_at)`
-- Schema: optional `session_id` and optional `agent_id`; `additionalProperties: false`.
+- Description tells agents that no arguments check the current Session, `session_id` checks another Session for the current Agent, and `session_id` plus `agent_id` checks another Agent's Session.
+- Schema properties are ordered `session_id`, then `agent_id`; both are optional strings and `additionalProperties: false`.
 - Targeting rules:
   - no arguments checks the calling Agent's current tool context Session.
   - `session_id` checks that Session for the calling Agent.
