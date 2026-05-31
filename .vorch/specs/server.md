@@ -15,7 +15,9 @@ Clients call the vBot server contract; provider wire details stay behind
 
 - RPC envelope: `POST /api/rpc` accepts a JSON object with `method` and optional
   `params`, and returns `{ "ok": true, "result": ... }` or `{ "ok": false,
-  "error": { "code": ..., "message": ... } }`.
+  "error": { "code": ..., "message": ... } }`. Malformed JSON bodies still
+  return that RPC envelope with `invalid_request` instead of surfacing a
+  transport 500.
 - WebUI-facing RPC methods include `connection.list`, `model.list`, `model.refresh_db`, `provider.set_key`, `provider.connect`, `provider.disconnect`,
   `provider.connection_status`, `tool.list`, `skill.list`, `agent.list`,
   `agent.get`, `agent.create`, `agent.update`, `agent.delete`, `session.create`,
@@ -87,8 +89,9 @@ Clients call the vBot server contract; provider wire details stay behind
   bounded chunks and rejects payloads over `speech_upload_max_size_bytes` with
   HTTP 413 before calling the speech domain.
 - `POST /api/speech/synthesize` accepts JSON `{ text }` and returns raw audio
-  bytes using the configured `model_tasks.text_to_speech` binding. The response
-  content type is the generated audio media type.
+  bytes using the configured `model_tasks.text_to_speech` binding. Malformed
+  JSON returns HTTP 400 before speech-domain execution. The response content
+  type is the generated audio media type.
 - `GET /api/speech/artifacts/{artifact_id}` returns a persisted TTS artifact
   from `<data_dir>/speech/`, or an expected HTTP error when the id/artifact is
   invalid.

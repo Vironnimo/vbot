@@ -32,6 +32,22 @@ def test_synthesize_endpoint_returns_audio_bytes(tmp_path: Path) -> None:
     assert response.content == b"audio"
 
 
+def test_synthesize_endpoint_rejects_malformed_json_before_speech_call(tmp_path: Path) -> None:
+    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/speech/synthesize",
+            content="{",
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Request body must be valid JSON"
+    assert runtime.speech.synthesize_calls == 0
+
+
 def test_speech_expected_errors_map_to_http_status(tmp_path: Path) -> None:
     with _create_client(tmp_path, fail=True) as client:
         response = client.post(
@@ -86,6 +102,7 @@ class _SpeechRuntime:
 class _Speech:
     def __init__(self) -> None:
         self.transcribe_calls = 0
+        self.synthesize_calls = 0
 
     async def transcribe(
         self,
@@ -98,6 +115,7 @@ class _Speech:
         return SpeechTranscriptionResult(text="hello")
 
     async def synthesize(self, _text: str) -> SpeechSynthesisResult:
+        self.synthesize_calls += 1
         return SpeechSynthesisResult(audio=b"audio", media_type="audio/mpeg", format="mp3")
 
 

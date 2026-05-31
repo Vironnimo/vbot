@@ -321,6 +321,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                 self._config.id,
                 conversation.chat_id,
                 error,
+                exc_info=(type(error), error, error.__traceback__),
             )
             return
 
@@ -635,7 +636,16 @@ class TelegramChannelAdapter(ChannelAdapter):
                 queued.message.content,
                 queued.route.session_id,
             )
-        except Exception:
+        except Exception as error:
+            _LOGGER.error(
+                "Telegram trigger run failed (channel=%s agent=%s session=%s target=%s): %s",
+                queued.reply_plan.channel_id,
+                queued.route.agent_id,
+                queued.route.session_id,
+                queued.reply_plan.platform_target,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
             await self.send(_format_failed_reply(), queued.reply_plan.platform_target)
             return
 
@@ -672,7 +682,8 @@ class TelegramChannelAdapter(ChannelAdapter):
                         route.agent_id,
                         route.session_id,
                     )
-                except Exception:
+                except Exception as error:
+                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
                     reply = _format_failed_reply()
                 await self.send(reply, reply_plan.platform_target)
             case "new_session":
@@ -686,10 +697,30 @@ class TelegramChannelAdapter(ChannelAdapter):
                         route.agent_id,
                         route.session_id,
                     )
-                except Exception:
+                except Exception as error:
+                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
                     await self.send(_format_failed_reply(), reply_plan.platform_target)
                     return
                 await self._relay_run_events(run, reply_plan.platform_target)
+
+    def _log_command_action_failure(
+        self,
+        action_name: str,
+        route: RouteFacts,
+        reply_plan: ReplyPlanFacts,
+        error: Exception,
+    ) -> None:
+        _LOGGER.error(
+            "Telegram command action failed (action=%s channel=%s agent=%s session=%s "
+            "target=%s): %s",
+            action_name,
+            reply_plan.channel_id,
+            route.agent_id,
+            route.session_id,
+            reply_plan.platform_target,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
     async def _relay_run_events(self, run: Run, platform_target: str) -> None:
         assistant_text: str | None = None
@@ -742,6 +773,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                 label,
                 self._config.id,
                 error,
+                exc_info=(type(error), error, error.__traceback__),
             )
 
     def _require_bot(self) -> Any:
