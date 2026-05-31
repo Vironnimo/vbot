@@ -1,16 +1,23 @@
 # Status Tool
 
-Reports current agent, session, and runtime status through the same status builder used by chat commands.
+Reports current or targeted agent/session/runtime status through the same status builder used by chat commands.
 
 ## Interfaces
 
 - Tool name: `status`
-- Registration: `register_status_tool(registry, agents, sessions, models, started_at)`
-- Schema: empty object; `additionalProperties: false`.
-- Success data contains status text built from Agent, Session, model, and runtime state.
+- Registration: `register_status_tool(registry, agents, sessions, models, chat_runs, started_at)`
+- Schema: optional `session_id` and optional `agent_id`; `additionalProperties: false`.
+- Targeting rules:
+  - no arguments checks the calling Agent's current tool context Session.
+  - `session_id` checks that Session for the calling Agent.
+  - `agent_id` plus `session_id` checks that exact Agent/Session pair.
+  - `agent_id` without `session_id` returns `invalid_arguments`.
+- Success data contains status text built from Agent, Session, model, runtime, and run activity state, plus machine-readable `agent_id`, `session_id`, `activity`, `run_id`, `created_at`, and `updated_at`.
+- `activity` is only `running` or `idle`; unknown/missing Agent or Session targets return failure envelopes.
 - Display: no summary. A status call must render as `status`, not `status ({})`.
 
 ## Constraints & Gotchas
 
-- The handler ignores arguments because the schema has no properties.
-- Expected lookup problems are represented in the status text/result rather than requiring UI-specific handling.
+- The `/status` command and status tool share the same status text builder. `/status` always reports the current Session; the tool may target another Session.
+- `created_at` and `updated_at` are active Run timestamps when `activity` is `running`; they are `null` in structured data and rendered as placeholders in text when the Session is idle.
+- Expected target lookup problems are represented as tool failure envelopes (`agent_not_found`, `session_not_found`, or `invalid_arguments`) instead of an `unknown` status.

@@ -7,13 +7,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 import core.tools.status as status_tool_module
 from core.agents.agents import Agent, AgentNotFoundError, AgentStore
-from core.chat import CommandDispatcher, CommandHandled
+from core.chat import ChatSessionError, CommandDispatcher, CommandHandled
 from core.chat.chat import ChatMessage
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
@@ -105,6 +107,11 @@ class _StubSessions:
         return self._session
 
 
+class _NotFoundSessions:
+    def get(self, _agent_id: str, session_id: str) -> _StubSession:
+        raise ChatSessionError(f"session does not exist: {session_id}")
+
+
 class _StubModels:
     def __init__(self, model: Model) -> None:
         self._model = model
@@ -132,6 +139,7 @@ def test_status_tool_registered_with_correct_name() -> None:
         cast(AgentStore, _StubAgents(_make_agent())),
         cast(ChatSessionManager, _StubSessions([])),
         cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
         None,
     )
 
@@ -157,6 +165,7 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
         cast(AgentStore, _StubAgents(_make_agent())),
         cast(ChatSessionManager, _StubSessions(messages)),
         cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
         datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
     )
 
@@ -168,24 +177,119 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
     assert text
     assert "Agent: Coder (openai/gpt-5.2)" in text
     assert "Model display name: GPT-5.2" in text
+    assert "Activity: idle" in text
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
+    assert data["activity"] == "idle"
+    assert data["agent_id"] == "coder"
+    assert data["session_id"] == "session-one"
+    assert data["run_id"] is None
+    assert data["created_at"] is None
+    assert data["updated_at"] is None
 
 
-def test_status_tool_degrades_gracefully_when_agent_not_found(tmp_path: Path) -> None:
+def test_status_tool_returns_failure_when_agent_not_found(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_status_tool(
         registry,
         cast(AgentStore, _NotFoundAgents()),
         cast(ChatSessionManager, _StubSessions([])),
         cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
         None,
     )
 
     result = asyncio.run(_dispatch(registry, tmp_path))
 
+    assert result["ok"] is False
+    error = cast(dict[str, str], result["error"])
+    assert error["code"] == "agent_not_found"
+
+
+def test_status_tool_returns_failure_when_session_not_found(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentStore, _StubAgents(_make_agent())),
+        cast(ChatSessionManager, _NotFoundSessions()),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, {"session_id": "missing"}))
+
+    assert result["ok"] is False
+    error = cast(dict[str, str], result["error"])
+    assert error["code"] == "session_not_found"
+
+
+def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentStore, _StubAgents(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, {"agent_id": "coder"}))
+
+    assert result["ok"] is False
+    error = cast(dict[str, str], result["error"])
+    assert error["code"] == "invalid_arguments"
+
+
+@pytest.mark.asyncio
+async def test_status_tool_reports_running_target_session(tmp_path: Path) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    chat_runs = ChatRunManager()
+
+    async def execute(_run: Run) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    run = await chat_runs.start(
+        agent_id="reviewer",
+        session_id="session-two",
+        executor=execute,
+    )
+    await started.wait()
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentStore, _StubAgents(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        chat_runs,
+        None,
+    )
+
+    result = await registry.dispatch(
+        _context(tmp_path),
+        {"agent_id": "reviewer", "session_id": "session-two"},
+        [STATUS_TOOL_NAME],
+    )
+    expected_updated_at = run.updated_at
+    release.set()
+    await run.wait()
+
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
     text = cast(str, data["text"])
-    assert f"Agent: {STATUS_PLACEHOLDER}" in text
+    assert "Activity: running" in text
+    assert f"Run created at: {run.created_at}" in text
+    assert f"Run updated at: {expected_updated_at}" in text
+    assert data["activity"] == "running"
+    assert data["agent_id"] == "reviewer"
+    assert data["session_id"] == "session-two"
+    assert data["run_id"] == run.id
+    assert data["created_at"] == run.created_at
+    assert data["updated_at"] == expected_updated_at
 
 
 def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path) -> None:
@@ -216,7 +320,8 @@ def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path)
     assert command_result.reply is not None
 
     registry = ToolRegistry()
-    register_status_tool(registry, agents, sessions, models, started_at)
+    chat_runs = ChatRunManager()
+    register_status_tool(registry, agents, sessions, models, chat_runs, started_at)
     tool_result = asyncio.run(_dispatch(registry, tmp_path))
 
     assert tool_result["ok"] is True
@@ -242,6 +347,7 @@ def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path)
         cast(AgentStore, _StubAgents(_make_agent(model="openai/gpt-5.2::primary"))),
         cast(ChatSessionManager, _StubSessions([])),
         cast(ModelRegistry, recording_models),
+        ChatRunManager(),
         None,
     )
 
@@ -255,4 +361,4 @@ def test_status_tool_strips_pinned_suffix_before_registry_lookup(tmp_path: Path)
 
 
 def test_build_status_text_is_single_source_of_truth() -> None:
-    assert status_tool_module.build_status_text is build_status_text
+    assert status_tool_module.build_status_reply.__module__ == build_status_text.__module__

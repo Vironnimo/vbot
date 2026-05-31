@@ -312,6 +312,7 @@ class Runtime:
             self._agents,
             self._chat_sessions,
             self._models,
+            self._chat_run_manager,
             self._started_at,
         )
         self._ensure_bootstrap_agent()

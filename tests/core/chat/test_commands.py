@@ -236,6 +236,9 @@ def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
     assert result.reply is not None
     assert result.reply != ""
     assert f"Agent: {STATUS_PLACEHOLDER}" in result.reply
+    assert "Activity: idle" in result.reply
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
     assert "Current time:" in result.reply
 
 
@@ -264,8 +267,43 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
     assert result.reply is not None
     assert "Agent: Coder (openai/gpt-5.2)" in result.reply
     assert "Model display name: GPT-5.2" in result.reply
+    assert "Activity: idle" in result.reply
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
     assert "Context usage: 1234 / 200000" in result.reply
     assert "Current time:" in result.reply
+
+
+@pytest.mark.asyncio
+async def test_dispatch_status_reports_active_run_timestamps() -> None:
+    manager = ChatRunManager()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await started.wait()
+    dispatcher = CommandDispatcher(
+        manager,
+        agents=cast(AgentStore, _StubAgents(_make_agent())),
+        sessions=cast(ChatSessionManager, _StubSessions([])),
+        models=cast(ModelRegistry, _StubModels(_make_model())),
+    )
+
+    result = dispatcher.dispatch("coder", "session-one", "/status")
+    expected_updated_at = run.updated_at
+    release.set()
+    await run.wait()
+
+    assert isinstance(result, CommandHandled)
+    assert result.reply is not None
+    assert "Activity: running" in result.reply
+    assert f"Run created at: {run.created_at}" in result.reply
+    assert f"Run updated at: {expected_updated_at}" in result.reply
 
 
 def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
@@ -299,6 +337,9 @@ def test_build_status_text_degraded_with_no_data() -> None:
     assert f"Thinking effort: {STATUS_PLACEHOLDER}" in text
     assert f"Temperature: {STATUS_PLACEHOLDER}" in text
     assert f"Context usage: {STATUS_PLACEHOLDER}" in text
+    assert f"Activity: {STATUS_PLACEHOLDER}" in text
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
     assert f"Session started: {STATUS_PLACEHOLDER}" in text
     assert f"Turn count: {STATUS_PLACEHOLDER}" in text
     assert f"App uptime: {STATUS_PLACEHOLDER}" in text
@@ -329,6 +370,9 @@ def test_build_status_text_with_full_data() -> None:
     assert "Fallback model: openai/gpt-5.1" in text
     assert "Thinking effort: none" in text
     assert "Temperature: 0.3" in text
+    assert f"Activity: {STATUS_PLACEHOLDER}" in text
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in text
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in text
     assert "Context usage: ~987 / 200000" in text
     assert "Session started:" in text
     assert "Turn count: 1" in text
