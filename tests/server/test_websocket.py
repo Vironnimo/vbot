@@ -553,6 +553,27 @@ async def test_event_bus_replay_window_is_bounded_without_reusing_sequences() ->
 
 
 @pytest.mark.asyncio
+async def test_event_bus_evicts_lagging_live_subscriber() -> None:
+    bus = ServerEventBus(subscriber_queue_limit=2)
+
+    async with aclosing(bus.subscribe()) as gen:
+        first_event_task = asyncio.create_task(gen.__anext__())
+        await asyncio.sleep(0)
+
+        bus.publish("agent.created", {"id": "a"})
+        first_event = await first_event_task
+
+        bus.publish("agent.updated", {"id": "a"})
+        bus.publish("agent.updated", {"id": "a"})
+        bus.publish("agent.deleted", {"agent_id": "a"})
+
+        assert first_event["type"] == "agent.created"
+        assert bus.subscriber_count == 0
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+
+@pytest.mark.asyncio
 async def test_event_bus_subscribe_after_sequence_higher_skips_all_replays() -> None:
     """When after_sequence exceeds all existing sequences, no events are replayed.
     The subscriber goes straight to the live subscription loop."""

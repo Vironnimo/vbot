@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 JsonObject = dict[str, Any]
 DEFAULT_SERVER_EVENT_RETENTION_LIMIT = 4096
+DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT = 1024
+_LOGGER = logging.getLogger("vbot.server.events")
 
 APP_ERROR_EVENT = "app_error"
 AGENT_CREATED_EVENT = "agent.created"
@@ -38,6 +42,19 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
 )
 
 
+class _LaggedSubscriberSentinel:
+    """Internal marker that closes a lagging live subscriber."""
+
+
+_LAGGED_SUBSCRIBER = _LaggedSubscriberSentinel()
+
+
+@dataclass
+class _ServerEventSubscriber:
+    queue: asyncio.Queue[JsonObject | _LaggedSubscriberSentinel]
+    closed: bool = False
+
+
 class ServerEventBus:
     """Replayable in-memory event bus for server lifecycle events."""
 
@@ -45,11 +62,15 @@ class ServerEventBus:
         self,
         *,
         event_retention_limit: int = DEFAULT_SERVER_EVENT_RETENTION_LIMIT,
+        subscriber_queue_limit: int = DEFAULT_SERVER_EVENT_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
         if event_retention_limit < 1:
             raise ValueError("event_retention_limit must be positive")
+        if subscriber_queue_limit < 1:
+            raise ValueError("subscriber_queue_limit must be positive")
         self._events: deque[JsonObject] = deque(maxlen=event_retention_limit)
-        self._subscribers: list[asyncio.Queue[JsonObject]] = []
+        self._subscribers: list[_ServerEventSubscriber] = []
+        self._subscriber_queue_limit = subscriber_queue_limit
         self._next_sequence = 1
 
     @property
@@ -70,30 +91,73 @@ class ServerEventBus:
         self._next_sequence += 1
         self._events.append(event)
         for subscriber in list(self._subscribers):
-            subscriber.put_nowait(event)
+            self._publish_to_subscriber(subscriber, event)
         return event
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject, None]:
         """Replay existing events and stream new events until the client disconnects."""
-        for event in list(self._events):
-            if _event_sequence(event) > after_sequence:
-                yield event
-
-        queue: asyncio.Queue[JsonObject] = asyncio.Queue()
-        self._subscribers.append(queue)
+        subscriber = _ServerEventSubscriber(
+            queue=asyncio.Queue(maxsize=self._subscriber_queue_limit)
+        )
+        self._subscribers.append(subscriber)
         try:
-            while True:
-                event = await queue.get()
-                if _event_sequence(event) > after_sequence:
+            for event in list(self._events):
+                if subscriber.closed:
+                    return
+                sequence = _event_sequence(event)
+                if sequence > after_sequence:
                     yield event
+                    after_sequence = sequence
+
+            while True:
+                item = await subscriber.queue.get()
+                if item is _LAGGED_SUBSCRIBER:
+                    return
+                event = cast(JsonObject, item)
+                sequence = _event_sequence(event)
+                if sequence > after_sequence:
+                    yield event
+                    after_sequence = sequence
         finally:
-            if queue in self._subscribers:
-                self._subscribers.remove(queue)
+            self._remove_subscriber(subscriber)
 
     @property
     def subscriber_count(self) -> int:
         """Return active subscriber count for leak-focused tests."""
         return len(self._subscribers)
+
+    def _publish_to_subscriber(
+        self,
+        subscriber: _ServerEventSubscriber,
+        event: JsonObject,
+    ) -> None:
+        if subscriber.closed:
+            return
+        try:
+            subscriber.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self._evict_lagging_subscriber(subscriber)
+
+    def _evict_lagging_subscriber(self, subscriber: _ServerEventSubscriber) -> None:
+        if subscriber.closed:
+            return
+        self._remove_subscriber(subscriber)
+        _drain_queue(subscriber.queue)
+        subscriber.queue.put_nowait(_LAGGED_SUBSCRIBER)
+        _LOGGER.warning("Evicted lagging server event subscriber")
+
+    def _remove_subscriber(self, subscriber: _ServerEventSubscriber) -> None:
+        subscriber.closed = True
+        if subscriber in self._subscribers:
+            self._subscribers.remove(subscriber)
+
+
+def _drain_queue(queue: asyncio.Queue[Any]) -> None:
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
 
 
 def _event_sequence(event: JsonObject) -> int:
