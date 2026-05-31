@@ -146,6 +146,7 @@ def test_status_tool_registered_with_correct_name() -> None:
     tool = registry.get(STATUS_TOOL_NAME)
     assert tool.name == STATUS_TOOL_NAME
     assert "Use session_id to check another session for this agent" in tool.description
+    assert "Returns activity running/idle" not in tool.description
     assert list(tool.parameters["properties"]) == ["session_id", "agent_id"]
 
 

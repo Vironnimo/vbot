@@ -30,8 +30,7 @@ STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = (
     "Show status for a chat session. With no arguments, checks this session. "
     "Use session_id to check another session for this agent; use both session_id "
-    "and agent_id to check another agent's session. Returns activity running/idle "
-    "and active run timestamps."
+    "and agent_id to check another agent's session."
 )
 STATUS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
