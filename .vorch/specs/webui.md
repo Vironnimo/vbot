@@ -133,9 +133,14 @@ does not talk to providers directly. The product presents an Agent-first chat su
     cancel, or error.
 - `webui/src/lib/desktopBridge.js`
   - `isDesktop()` — true when `window.location.search` includes
-    `accessor=desktop` AND `window.pywebview.api` is present.
+     `accessor=desktop` AND `window.pywebview.api` is present.
+  - `isDesktopAccessor()` — true when the Desktop accessor URL parameter is
+    present, even before pywebview has injected the bridge.
+  - `waitForDesktopBridge()` — waits for pywebview's `pywebviewready` DOM event
+    and resolves false after a short timeout, so Desktop-only UI is not
+    permanently hidden when the bridge is injected after Svelte mount.
   - `getDesktopCapabilities()` — calls the bridge and returns
-    `{ wakeword: true }` inside the Desktop shell; caches the result.
+     `{ wakeword: true }` inside the Desktop shell; caches the result.
   - `hasWakeword()` — convenience wrapper that resolves to the `wakeword`
     capability flag.
   - `getWakewordStatus()` — polls the bridge for the full wakeword status
@@ -423,6 +428,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     and passes an `onToast` callback to tabs that need transient user feedback.
   - Forwards `provider_auth_completed` WebSocket events to `SettingsView` when
     the Settings view is active.
+  - In Desktop accessor mode, waits for pywebview's bridge readiness event
+    before loading Desktop capabilities. Clicking the Chat wakeword indicator
+    sends a one-shot Settings target request for the Voice panel.
 
 ## Conventions
 

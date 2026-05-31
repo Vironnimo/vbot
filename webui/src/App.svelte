@@ -53,9 +53,10 @@
   import { t } from '$lib/i18n.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
-    isDesktop,
+    isDesktopAccessor,
     getDesktopCapabilities,
     onWakewordStatusChange,
+    waitForDesktopBridge,
   } from '$lib/desktopBridge.js';
   import './styles/app.css';
 
@@ -94,6 +95,7 @@
   let desktopCapabilities = $state(null);
   let wakewordStatus = $state({ enabled: false, state: 'off' });
   let settingsPanelTarget = $state('');
+  let settingsPanelTargetRequestId = $state(0);
   let subAgentNavigationRequestId = 0;
   let cleanupWakewordPoll = null;
   const toastDismissTimers = new SvelteMap();
@@ -238,16 +240,32 @@
 
   const navigateToVoiceSettings = () => {
     settingsPanelTarget = 'voice';
+    settingsPanelTargetRequestId += 1;
     selectView('settings');
   };
 
   onMount(() => {
+    let cancelled = false;
+
     connect(connectionState, { onEvent: handleServerEvent });
 
     // Detect desktop capabilities and start wakeword status polling
-    if (isDesktop()) {
-      getDesktopCapabilities()
+    if (isDesktopAccessor()) {
+      waitForDesktopBridge()
+        .then((ready) => {
+          if (cancelled) {
+            return null;
+          }
+          if (!ready) {
+            desktopCapabilities = { wakeword: false };
+            return null;
+          }
+          return getDesktopCapabilities();
+        })
         .then((caps) => {
+          if (cancelled || !caps) {
+            return;
+          }
           desktopCapabilities = caps;
           if (caps?.wakeword) {
             cleanupWakewordPoll = onWakewordStatusChange((status) => {
@@ -256,13 +274,16 @@
           }
         })
         .catch(() => {
-          desktopCapabilities = { wakeword: false };
+          if (!cancelled) {
+            desktopCapabilities = { wakeword: false };
+          }
         });
     } else {
       desktopCapabilities = { wakeword: false };
     }
 
     return () => {
+      cancelled = true;
       disconnect(connectionState);
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {
@@ -311,6 +332,7 @@
       {agents}
       {desktopCapabilities}
       targetPanelId={settingsPanelTarget}
+      targetPanelRequestId={settingsPanelTargetRequestId}
     />
   {:else if activeViewId === 'logs'}
     <LogsView />

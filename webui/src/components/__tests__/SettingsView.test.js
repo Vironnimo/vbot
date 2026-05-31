@@ -21,6 +21,8 @@ describe('SettingsView', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    window.history.pushState({}, '', '/');
+    delete window.pywebview;
     init('en');
     rpcMock.mockReset();
     mountedComponent = null;
@@ -600,6 +602,54 @@ describe('SettingsView', () => {
     );
     expect(document.body.textContent).not.toContain('Already saved');
     expect(getSettingsUpdateCalls()).toHaveLength(0);
+  });
+
+  it('hides the Voice panel outside Desktop wakeword capabilities', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => buttonByText('Appearance'));
+
+    expect(buttonByText('Voice')).toBeUndefined();
+  });
+
+  it('opens the Desktop Voice panel once for a target panel request', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    window.history.pushState({}, '', '/?accessor=desktop');
+    window.pywebview = {
+      api: {
+        getWakewordStatus: vi.fn().mockResolvedValue({
+          enabled: false,
+          state: 'off',
+        }),
+      },
+    };
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: {
+        agents: agentsPayload(),
+        desktopCapabilities: { wakeword: true },
+        targetPanelId: 'voice',
+        targetPanelRequestId: 1,
+      },
+    });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('Wakeword listening'),
+    );
+
+    expect(buttonByText('Voice')).toBeTruthy();
+
+    buttonByText('General').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('Server host'),
+    );
+    expect(document.body.textContent).not.toContain('Wakeword listening');
   });
 
   it('keeps in-progress values while an auto-save request is in flight', async () => {

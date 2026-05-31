@@ -5,23 +5,66 @@
  */
 
 const POLL_INTERVAL_MS = 500;
+const BRIDGE_READY_EVENT = 'pywebviewready';
+const BRIDGE_READY_TIMEOUT_MS = 5000;
 
 let cachedCapabilities = null;
+let cachedBridgeApi = null;
 
-/** True when the WebUI is loaded inside the vBot Desktop pywebview shell. */
-export function isDesktop() {
+/** True when the WebUI was loaded through the Desktop accessor URL. */
+export function isDesktopAccessor() {
   if (typeof window === 'undefined') {
     return false;
   }
   const params = new URLSearchParams(window.location.search);
-  const hasAccessorParam = params.get('accessor') === 'desktop';
-  const hasBridgeApi = Boolean(window.pywebview?.api);
-  return hasAccessorParam && hasBridgeApi;
+  return params.get('accessor') === 'desktop';
+}
+
+/** True when the WebUI is loaded inside the vBot Desktop pywebview shell. */
+export function isDesktop() {
+  return isDesktopAccessor() && bridgeAvailable();
 }
 
 /** Return whether the pywebview bridge is reachable. */
 function bridgeAvailable() {
-  return Boolean(window.pywebview?.api);
+  return typeof window !== 'undefined' && Boolean(window.pywebview?.api);
+}
+
+/**
+ * Resolve once the pywebview bridge is ready, or false after a short timeout.
+ *
+ * pywebview creates `window.pywebview.api` asynchronously and announces it via
+ * `pywebviewready`; Desktop boot must wait for that instead of treating the
+ * first missing global as a permanent browser mode.
+ */
+export function waitForDesktopBridge(timeoutMs = BRIDGE_READY_TIMEOUT_MS) {
+  if (!isDesktopAccessor()) {
+    return Promise.resolve(false);
+  }
+
+  if (bridgeAvailable()) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let timeoutId = null;
+
+    const finish = () => {
+      if (resolved) {
+        return;
+      }
+      resolved = true;
+      window.removeEventListener(BRIDGE_READY_EVENT, finish);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      resolve(bridgeAvailable());
+    };
+
+    window.addEventListener(BRIDGE_READY_EVENT, finish, { once: true });
+    timeoutId = setTimeout(finish, timeoutMs);
+  });
 }
 
 /** Call a bridge method by name, returning a Promise of the result. */
@@ -41,12 +84,13 @@ export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
     return { wakeword: false };
   }
-  if (cachedCapabilities) {
+  if (cachedCapabilities && cachedBridgeApi === window.pywebview.api) {
     return cachedCapabilities;
   }
   try {
     const caps = await callBridge('getDesktopCapabilities');
     cachedCapabilities = caps;
+    cachedBridgeApi = window.pywebview.api;
     return caps;
   } catch {
     return { wakeword: false };
