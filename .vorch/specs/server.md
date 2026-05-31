@@ -228,8 +228,10 @@ Clients call the vBot server contract; provider wire details stay behind
   reconnect replay: clients pass the last sequence number they saw, and the bus
   replays retained events with a higher sequence before streaming new ones.
   Sequence numbers are monotonic and are not reused when old events fall out of
-  the retained window. Published event types must be in the server event
-  contract allowlist.
+  the retained window. Live subscriber queues are bounded; subscribers that lag
+  past that bound are evicted and should reconnect with `after_sequence` to
+  replay from the retained window. Published event types must be in the server
+  event contract allowlist.
 - `server.main.main(argv=None)` — starts uvicorn. Port priority is `--port` >
   `VBOT_SERVER_PORT` > `settings.json` > `8420`; ambient `PORT` /
   `SERVER_PORT` process environment variables are ignored unless they are keys

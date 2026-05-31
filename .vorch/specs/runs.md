@@ -41,7 +41,8 @@ to render without re-inferring tool semantics from raw arguments.
 
 - `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes a visible event unless the Run is already terminal or cancellation is suppressing non-terminal output.
 - `Run.subscribe(after_sequence=0)` replays matching retained events and streams
-  future events until terminal state.
+  future events until terminal state. Live subscriber queues are bounded; a
+  subscriber that falls behind the bound is evicted and its stream ends.
 - `Run.wait()` waits for terminal state, returns the result, re-raises failures, and raises `RunCancelledError` for cancelled Runs.
 - `Run.request_cancel()` marks cancellation requested, runs registered cancellation callbacks, and cancels the background executor task.
 - `Run.add_cancel_callback(callback)` registers cleanup work for active host/provider/tool work.
@@ -73,7 +74,8 @@ to render without re-inferring tool semantics from raw arguments.
 - All timestamps are UTC ISO 8601 strings with explicit offsets.
 - Run timelines are process-local replay buffers, not durable history. The
   manager retains only a bounded number of completed Runs, and each Run retains
-  only a bounded number of recent events. Live subscribers still receive events
-  as they are emitted; late subscribers and reconnects can replay only the
-  retained window. Persisted Session history remains the durable source for old
-  conversation content.
+  only a bounded number of recent events. Live subscribers receive events as
+  they are emitted while they keep up; lagging subscribers are disconnected
+  instead of being allowed to accumulate unbounded memory. Late subscribers and
+  reconnects can replay only the retained window. Persisted Session history
+  remains the durable source for old conversation content.

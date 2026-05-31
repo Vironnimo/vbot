@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import aclosing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -148,6 +149,31 @@ async def test_run_event_replay_window_is_bounded_without_reusing_sequences() ->
     assert [event.sequence for event in replayed_events] == [4, 5, 6]
     assert [event.payload for event in replayed_events[:2]] == [{"index": 3}, {"index": 4}]
     assert replayed_events[-1].type == "run_completed"
+
+
+async def test_run_subscribe_evicts_lagging_live_subscriber() -> None:
+    run = Run(
+        run_id="run-one",
+        agent_id="coder",
+        session_id="session-one",
+        subscriber_queue_limit=2,
+    )
+
+    async with aclosing(run.subscribe()) as stream:
+        first_event_task = asyncio.create_task(stream.__anext__())
+        await asyncio.sleep(0)
+
+        first_event = run.emit("run_started")
+        streamed_event = await first_event_task
+
+        run.emit("visible", {"index": 1})
+        run.emit("visible", {"index": 2})
+        run.emit("visible", {"index": 3})
+
+        assert first_event is not None
+        assert streamed_event.sequence == first_event.sequence
+        with pytest.raises(StopAsyncIteration):
+            await stream.__anext__()
 
 
 async def test_delta_events_obey_cancel_guard() -> None:

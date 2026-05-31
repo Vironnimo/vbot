@@ -7,7 +7,7 @@ import inspect
 import logging
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -20,6 +20,7 @@ RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
 _LOGGER = logging.getLogger("vbot.runs")
 DEFAULT_RUN_EVENT_RETENTION_LIMIT = 4096
+DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT = 4096
 DEFAULT_COMPLETED_RUN_RETENTION_LIMIT = 512
 
 RUN_STARTED_EVENT = "run_started"
@@ -113,6 +114,19 @@ class RunEvent:
         }
 
 
+class _LaggedRunSubscriberSentinel:
+    """Internal marker that closes a lagging live Run subscriber."""
+
+
+_LAGGED_RUN_SUBSCRIBER = _LaggedRunSubscriberSentinel()
+
+
+@dataclass
+class _RunSubscriber:
+    queue: asyncio.Queue[RunEvent | _LaggedRunSubscriberSentinel]
+    closed: bool = False
+
+
 class Run:
     """One active execution inside a persisted chat session."""
 
@@ -123,9 +137,12 @@ class Run:
         agent_id: str,
         session_id: str,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
+        subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
         if event_retention_limit < 1:
             raise ValueError("event_retention_limit must be positive")
+        if subscriber_queue_limit < 1:
+            raise ValueError("subscriber_queue_limit must be positive")
         self.id = run_id
         self.agent_id = agent_id
         self.session_id = session_id
@@ -137,7 +154,8 @@ class Run:
         self.cancel_requested = False
         self._events: deque[RunEvent] = deque(maxlen=event_retention_limit)
         self._next_sequence = 1
-        self._subscribers: list[asyncio.Queue[RunEvent]] = []
+        self._subscribers: list[_RunSubscriber] = []
+        self._subscriber_queue_limit = subscriber_queue_limit
         self._done = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._cancel_callbacks: list[CancelCallback] = []
@@ -195,33 +213,65 @@ class Run:
         self._events.append(event)
         self.updated_at = event.timestamp
         for subscriber in list(self._subscribers):
-            subscriber.put_nowait(event)
+            self._publish_to_subscriber(subscriber, event)
         return event
 
-    async def subscribe(self, *, after_sequence: int = 0) -> AsyncIterator[RunEvent]:
+    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent, None]:
         """Replay old events and stream future events until a terminal event."""
-        for event in list(self._events):
-            if event.sequence > after_sequence:
-                yield event
-                if event.type in TERMINAL_EVENT_TYPES:
-                    return
-
         if self.status != RunStatus.RUNNING:
+            for event in list(self._events):
+                if event.sequence > after_sequence:
+                    yield event
+                    if event.type in TERMINAL_EVENT_TYPES:
+                        return
             return
 
-        queue: asyncio.Queue[RunEvent] = asyncio.Queue()
-        self._subscribers.append(queue)
+        subscriber = _RunSubscriber(queue=asyncio.Queue(maxsize=self._subscriber_queue_limit))
+        self._subscribers.append(subscriber)
         try:
+            for event in list(self._events):
+                if subscriber.closed:
+                    return
+                if event.sequence > after_sequence:
+                    yield event
+                    after_sequence = event.sequence
+                    if event.type in TERMINAL_EVENT_TYPES:
+                        return
+
             while True:
-                event = await queue.get()
+                item = await subscriber.queue.get()
+                if item is _LAGGED_RUN_SUBSCRIBER:
+                    return
+                event = cast(RunEvent, item)
                 if event.sequence <= after_sequence:
                     continue
                 yield event
+                after_sequence = event.sequence
                 if event.type in TERMINAL_EVENT_TYPES:
                     return
         finally:
-            if queue in self._subscribers:
-                self._subscribers.remove(queue)
+            self._remove_subscriber(subscriber)
+
+    def _publish_to_subscriber(self, subscriber: _RunSubscriber, event: RunEvent) -> None:
+        if subscriber.closed:
+            return
+        try:
+            subscriber.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self._evict_lagging_subscriber(subscriber)
+
+    def _evict_lagging_subscriber(self, subscriber: _RunSubscriber) -> None:
+        if subscriber.closed:
+            return
+        self._remove_subscriber(subscriber)
+        _drain_queue(subscriber.queue)
+        subscriber.queue.put_nowait(_LAGGED_RUN_SUBSCRIBER)
+        _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id)
+
+    def _remove_subscriber(self, subscriber: _RunSubscriber) -> None:
+        subscriber.closed = True
+        if subscriber in self._subscribers:
+            self._subscribers.remove(subscriber)
 
     async def wait(self) -> Any:
         """Wait for terminal state and return the run result."""
@@ -516,6 +566,14 @@ class ChatRunManager:
         overflow = len(terminal_run_ids) - self._completed_run_retention_limit
         for run_id in terminal_run_ids[: max(0, overflow)]:
             self._runs.pop(run_id, None)
+
+
+def _drain_queue(queue: asyncio.Queue[Any]) -> None:
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
 
 
 def _schedule_callback(callback: CancelCallback) -> None:
