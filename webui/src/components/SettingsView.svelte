@@ -158,6 +158,7 @@
     agents = [],
     desktopCapabilities = null,
     targetPanelId = '',
+    targetPanelRequestId = 0,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -329,6 +330,7 @@
   let subAgentSettingsAutoSaveTimer = null;
   let compactionSettingsAutoSaveTimer = null;
   let recallSettingsAutoSaveTimer = null;
+  let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
@@ -483,7 +485,12 @@
       activePanelId = panels[0]?.id ?? 'general';
       return;
     }
-    if (targetPanelId && panels.some((panel) => panel.id === targetPanelId)) {
+    if (
+      targetPanelId &&
+      targetPanelRequestId !== handledTargetPanelRequestId &&
+      panels.some((panel) => panel.id === targetPanelId)
+    ) {
+      handledTargetPanelRequestId = targetPanelRequestId;
       activePanelId = targetPanelId;
     }
   });

@@ -73,6 +73,9 @@ The Desktop exposes a `DesktopBridge` instance as pywebview's `js_api`. The
 WebUI detects Desktop mode via the `?accessor=desktop` query parameter and
 calls bridge methods through `window.pywebview.api.<method>()`. All methods
 return plain Python objects that pywebview serializes to JSON.
+Because pywebview injects `window.pywebview.api` asynchronously, the WebUI waits
+for the `pywebviewready` DOM event before deciding Desktop capabilities are
+unavailable.
 
 Bridge methods:
 
