@@ -1,4 +1,4 @@
-"""Built-in status tool that reports current agent/session/runtime status."""
+"""Built-in status tool that reports current or targeted agent/session/runtime status."""
 
 from __future__ import annotations
 
@@ -27,19 +27,24 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
-STATUS_TOOL_DESCRIPTION = "Show current session and runtime status."
+STATUS_TOOL_DESCRIPTION = (
+    "Show status for a chat session. With no arguments, checks this session. "
+    "Use session_id to check another session for this agent; use both session_id "
+    "and agent_id to check another agent's session. Returns activity running/idle "
+    "and active run timestamps."
+)
 STATUS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "agent_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional agent id. Requires session_id.",
-        },
         "session_id": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional session id to inspect.",
+            "description": "Optional session id to inspect. Alone, it targets this agent.",
+        },
+        "agent_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional agent id for the target session. Requires session_id.",
         },
     },
     "additionalProperties": False,
