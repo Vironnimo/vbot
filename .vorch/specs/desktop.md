@@ -92,6 +92,9 @@ method, and config changes are reflected in the next full status payload.
 
 Worker states (exposed in `getWakewordStatus().state`):
 `off` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `listening` (or → `error` at any point).
+The real worker closes the microphone stream while transcribing and sending, then
+reopens it before returning to `listening`; this avoids treating expected input
+buffer overflows after network waits as fatal loop errors.
 
 ## Conventions
 
@@ -119,6 +122,9 @@ Worker states (exposed in `getWakewordStatus().state`):
 - Transcripts are submitted with `chat.stream` so the Desktop worker returns to
   listening after the server accepts the Run instead of blocking until the Run
   completes.
+- After a successful voice turn, the worker resets the microphone stream before
+  listening again. Isolated microphone read errors are recovered by reopening
+  the stream; repeated read failures still transition to `error`.
 
 ## External Dependencies
 
@@ -144,9 +150,9 @@ Worker states (exposed in `getWakewordStatus().state`):
   the mock worker when either is missing. webrtcvad is optional only for
   post-wake silence detection; when it is missing, the worker uses fixed-duration
   recording after the wakeword.
-- The real wakeword worker runs in a daemon thread. If startup, microphone,
-  transcription, session resolution, or send fails, the bridge state transitions
-  to `error` and remains there until the user changes config or toggles the
-  worker.
+- The real wakeword worker runs in a daemon thread. If startup, repeated
+  microphone failures, transcription, session resolution, or send fails, the
+  bridge state transitions to `error` and remains there until the user changes
+  config or toggles the worker.
 - Bridge methods must return quickly and not block — they hold a threading.Lock
   for config access only during reads/writes to the local settings file.

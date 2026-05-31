@@ -33,6 +33,7 @@ _SILENCE_FRAME_COUNT = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS /
 
 _MAX_RECORDING_SECONDS = 15.0
 _MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+_MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
 
 _HTTP_TIMEOUT = 30.0
 _RPC_TIMEOUT = 10.0
@@ -110,6 +111,7 @@ class WakewordWorker:
             return
 
         self._bridge.publish_state("listening")
+        consecutive_read_errors = 0
 
         try:
             while self._running.is_set():
@@ -117,14 +119,35 @@ class WakewordWorker:
                     chunk = self._stream.read(_FRAME_SIZE_SAMPLES)[0].tobytes()
                 except Exception:
                     logger.warning("Microphone read error", exc_info=True)
+                    consecutive_read_errors += 1
+                    if consecutive_read_errors >= _MAX_CONSECUTIVE_MIC_READ_ERRORS:
+                        self._running.clear()
+                        self._bridge.publish_state("error")
+                        break
+                    if self._restart_stream():
+                        self._bridge.publish_state("listening")
+                        continue
+                    self._running.clear()
                     self._bridge.publish_state("error")
                     break
 
-                score = self._engine.detect(chunk)
+                consecutive_read_errors = 0
+
+                try:
+                    score = self._engine.detect(chunk)
+                except Exception:
+                    logger.warning("Wakeword detection failed", exc_info=True)
+                    self._running.clear()
+                    self._bridge.publish_state("error")
+                    break
                 if score >= getattr(self._engine, "threshold", 0.5):
                     self._bridge.publish_state("wakeword_detected")
                     self._handle_detection()
                     if not self._running.is_set():
+                        break
+                    if not self._restart_stream():
+                        self._running.clear()
+                        self._bridge.publish_state("error")
                         break
                     self._bridge.publish_state("listening")
         finally:
@@ -159,6 +182,16 @@ class WakewordWorker:
                 logger.warning("Error closing microphone stream", exc_info=True)
             self._stream = None
 
+    def _restart_stream(self) -> bool:
+        """Reset the microphone stream after overflow-prone pauses."""
+        self._close_stream()
+        try:
+            self._open_stream()
+        except Exception:
+            logger.warning("Failed to reopen microphone stream", exc_info=True)
+            return False
+        return True
+
     # -- Post-detection pipeline ---------------------------------------------
 
     def _handle_detection(self) -> None:
@@ -179,6 +212,7 @@ class WakewordWorker:
             return
 
         self._bridge.publish_state("transcribing")
+        self._close_stream()
         transcript = self._transcribe(audio_data)
         if not transcript:
             self._bridge.publish_state("error")
@@ -197,9 +231,6 @@ class WakewordWorker:
             self._bridge.publish_state("error")
             self._running.clear()
             return
-
-        if self._running.is_set():
-            self._bridge.publish_state("listening")
 
     def _read_config(self) -> dict[str, Any]:
         """Read the current wakeword configuration from Desktop settings."""
