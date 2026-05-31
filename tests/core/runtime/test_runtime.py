@@ -33,6 +33,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "edit",
     "glob",
     "grep",
+    "image_generation",
     "memory",
     "process",
     "read",
