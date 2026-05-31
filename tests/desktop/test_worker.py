@@ -281,6 +281,65 @@ def test_handle_detection_closes_microphone_before_network_calls(
     assert worker._running.is_set()
 
 
+def test_handle_detection_empty_transcript_returns_to_listening(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._stream = stream
+    worker._running.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._transcribe = lambda _audio_data: "   "  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock()  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock()  # type: ignore[method-assign]
+
+    worker._handle_detection()
+
+    worker._resolve_session.assert_not_called()
+    worker._send_transcript.assert_not_called()
+    assert fake_bridge.states == ["recording", "transcribing", "listening"]
+    assert worker._running.is_set()
+
+
+def test_handle_detection_transcription_failure_returns_to_listening(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([_make_speech_chunk()])
+    worker._running.set()
+    worker._read_config = lambda: {  # type: ignore[method-assign]
+        "target_agent_id": "main",
+        "session_behavior": "active",
+    }
+    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._transcribe = lambda _audio_data: None  # type: ignore[assignment,method-assign]
+    worker._resolve_session = MagicMock()  # type: ignore[method-assign]
+    worker._send_transcript = MagicMock()  # type: ignore[method-assign]
+
+    worker._handle_detection()
+
+    worker._resolve_session.assert_not_called()
+    worker._send_transcript.assert_not_called()
+    assert fake_bridge.states == ["recording", "transcribing", "listening"]
+    assert worker._running.is_set()
+
+
 def test_detection_loop_reopens_microphone_after_successful_turn(
     fake_bridge: FakeBridge,
 ) -> None:

@@ -214,9 +214,16 @@ class WakewordWorker:
         self._bridge.publish_state("transcribing")
         self._close_stream()
         transcript = self._transcribe(audio_data)
+        if transcript is None:
+            logger.warning("Wakeword transcription failed; returning to listening")
+            if self._running.is_set():
+                self._bridge.publish_state("listening")
+            return
+        transcript = transcript.strip()
         if not transcript:
-            self._bridge.publish_state("error")
-            self._running.clear()
+            logger.info("Wakeword recording produced no transcript; returning to listening")
+            if self._running.is_set():
+                self._bridge.publish_state("listening")
             return
 
         self._bridge.publish_state("sending")
@@ -332,7 +339,11 @@ class WakewordWorker:
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     _backoff_sleep(attempt)
                     continue
-                logger.warning("Speech transcription failed: HTTP %s", response.status_code)
+                logger.warning(
+                    "Speech transcription failed: HTTP %s %s",
+                    response.status_code,
+                    _response_text_preview(response),
+                )
                 return None
             except httpx.RequestError:
                 if attempt < _MAX_RETRIES - 1:
@@ -445,6 +456,17 @@ def _backoff_sleep(attempt: int) -> None:
     """Sleep with exponential backoff and jitter."""
     delay = (2**attempt) + random.random()
     time.sleep(min(delay, 10.0))
+
+
+def _response_text_preview(response: httpx.Response) -> str:
+    """Return a bounded response-body preview for diagnostics."""
+    try:
+        text = response.text.strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    return text[:500]
 
 
 def list_microphones() -> list[dict[str, Any]]:

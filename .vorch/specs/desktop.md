@@ -125,6 +125,11 @@ buffer overflows after network waits as fatal loop errors.
 - After a successful voice turn, the worker resets the microphone stream before
   listening again. Isolated microphone read errors are recovered by reopening
   the stream; repeated read failures still transition to `error`.
+- If transcription succeeds but returns empty text, the worker treats the
+  recording as a no-op and returns to `listening` without sending a chat message.
+- If one transcription request fails, the worker logs the HTTP/status details
+  and returns to `listening`; one bad utterance must not stop future wakeword
+  detection.
 
 ## External Dependencies
 
@@ -151,8 +156,8 @@ buffer overflows after network waits as fatal loop errors.
   post-wake silence detection; when it is missing, the worker uses fixed-duration
   recording after the wakeword.
 - The real wakeword worker runs in a daemon thread. If startup, repeated
-  microphone failures, transcription, session resolution, or send fails, the
-  bridge state transitions to `error` and remains there until the user changes
-  config or toggles the worker.
+  microphone failures, missing target Agent, session resolution, or send fails,
+  the bridge state transitions to `error` and remains there until the user
+  changes config or toggles the worker.
 - Bridge methods must return quickly and not block — they hold a threading.Lock
   for config access only during reads/writes to the local settings file.
