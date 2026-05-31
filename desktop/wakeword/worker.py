@@ -34,6 +34,8 @@ _SILENCE_FRAME_COUNT = int(_SILENCE_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS /
 _MAX_RECORDING_SECONDS = 15.0
 _MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
 _MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
+_POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
+_INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
 
 _HTTP_TIMEOUT = 30.0
 _RPC_TIMEOUT = 10.0
@@ -112,6 +114,7 @@ class WakewordWorker:
 
         self._bridge.publish_state("listening")
         consecutive_read_errors = 0
+        wakeword_armed = True
 
         try:
             while self._running.is_set():
@@ -140,16 +143,24 @@ class WakewordWorker:
                     self._running.clear()
                     self._bridge.publish_state("error")
                     break
-                if score >= getattr(self._engine, "threshold", 0.5):
+                threshold = getattr(self._engine, "threshold", 0.5)
+                if not wakeword_armed:
+                    if score < threshold:
+                        wakeword_armed = True
+                    continue
+                if score >= threshold:
+                    wakeword_armed = False
                     self._bridge.publish_state("wakeword_detected")
                     self._handle_detection()
+                    if not self._running.is_set():
+                        break
+                    self._prepare_next_listen()
                     if not self._running.is_set():
                         break
                     if not self._restart_stream():
                         self._running.clear()
                         self._bridge.publish_state("error")
                         break
-                    self._bridge.publish_state("listening")
         finally:
             self._close_stream()
 
@@ -192,6 +203,12 @@ class WakewordWorker:
             return False
         return True
 
+    def _prepare_next_listen(self) -> None:
+        """Return to a visible listening state before re-arming wakeword detection."""
+        self._close_stream()
+        self._bridge.publish_state("listening")
+        _sleep_while_running(self._running, _POST_DETECTION_LISTENING_HOLD_SECONDS)
+
     # -- Post-detection pipeline ---------------------------------------------
 
     def _handle_detection(self) -> None:
@@ -207,8 +224,6 @@ class WakewordWorker:
         self._bridge.publish_state("recording")
         audio_data = self._record_until_silence()
         if audio_data is None:
-            if self._running.is_set():
-                self._bridge.publish_state("listening")
             return
 
         self._bridge.publish_state("transcribing")
@@ -216,14 +231,10 @@ class WakewordWorker:
         transcript = self._transcribe(audio_data)
         if transcript is None:
             logger.warning("Wakeword transcription failed; returning to listening")
-            if self._running.is_set():
-                self._bridge.publish_state("listening")
             return
         transcript = transcript.strip()
         if not transcript:
             logger.info("Wakeword recording produced no transcript; returning to listening")
-            if self._running.is_set():
-                self._bridge.publish_state("listening")
             return
 
         self._bridge.publish_state("sending")
@@ -456,6 +467,16 @@ def _backoff_sleep(attempt: int) -> None:
     """Sleep with exponential backoff and jitter."""
     delay = (2**attempt) + random.random()
     time.sleep(min(delay, 10.0))
+
+
+def _sleep_while_running(running: threading.Event, duration_seconds: float) -> None:
+    """Sleep in small slices so stop() can interrupt the post-detection hold."""
+    deadline = time.monotonic() + max(0.0, duration_seconds)
+    while running.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(_INTERRUPTIBLE_SLEEP_SLICE_SECONDS, remaining))
 
 
 def _response_text_preview(response: httpx.Response) -> str:
