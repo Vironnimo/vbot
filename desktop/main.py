@@ -7,6 +7,7 @@ import html
 import importlib
 import json
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,17 @@ PROBE_SERVER_UNREACHABLE = "server_unreachable"
 PROBE_NOT_VBOT_SERVER = "not_vbot_server"
 PROBE_INVALID_TARGET = "invalid_target"
 INVALID_HOST_CHARACTERS = frozenset("/\\:?#@[]")
+ACCESSOR_QUERY_PARAM = "accessor=desktop"
+
+DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
+    "enabled": False,
+    "engine": "openwakeword",
+    "microphone": None,
+    "sensitivity": 0.5,
+    "target_agent_id": None,
+    "session_behavior": "active",
+    "wake_phrase": "hey_jarvis",
+}
 
 
 class HttpResponse(Protocol):
@@ -87,6 +99,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open the vBot desktop shell")
     parser.add_argument("--host")
     parser.add_argument("--port", type=_parse_port)
+    parser.add_argument(
+        "--mock-wakeword",
+        action="store_true",
+        help="Use a mock wakeword engine for UI validation without a real microphone.",
+    )
     return parser.parse_args(argv)
 
 
@@ -115,10 +132,18 @@ def read_settings(path: Path | None = None) -> dict[str, Any]:
     if not resolved_path.exists():
         return {}
 
-    try:
-        data = json.loads(resolved_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    for attempt in range(3):
+        try:
+            data = json.loads(resolved_path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            return {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+        else:
+            break
     if not isinstance(data, dict):
         return {}
     return data
@@ -131,18 +156,65 @@ def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(settings, indent=2, sort_keys=True) + "\n"
 
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=resolved_path.parent,
-        delete=False,
-        prefix=f".{resolved_path.name}.",
-        suffix=".tmp",
-    ) as temporary_file:
-        temporary_file.write(payload)
-        temporary_path = Path(temporary_file.name)
+    temporary_path: Path | None = None
+    for attempt in range(3):
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=resolved_path.parent,
+                delete=False,
+                prefix=f".{resolved_path.name}.",
+                suffix=".tmp",
+            ) as temporary_file:
+                temporary_file.write(payload)
+                temporary_path = Path(temporary_file.name)
+            temporary_path.replace(resolved_path)
+            return
+        except PermissionError:
+            if temporary_path is not None and temporary_path.exists():
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+        except OSError:
+            if temporary_path is not None and temporary_path.exists():
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+                continue
+            return
+        else:
+            return
 
-    temporary_path.replace(resolved_path)
+
+def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
+    """Read wakeword config from Desktop settings, merged with defaults.
+
+    Malformed wakeword key (missing or non-dict) falls back to defaults.
+    """
+
+    full = read_settings(path)
+    wakeword_data = full.get("wakeword")
+    if not isinstance(wakeword_data, dict):
+        wakeword_data = {}
+    merged = dict(DEFAULT_WAKEWORD_SETTINGS)
+    merged.update(wakeword_data)
+    return merged
+
+
+def write_wakeword_settings(wakeword_config: dict[str, Any], path: Path | None = None) -> None:
+    """Merge wakeword config into full Desktop settings and persist atomically."""
+
+    full = read_settings(path)
+    full["wakeword"] = wakeword_config
+    write_settings(full, path)
 
 
 def resolve_target(
@@ -245,12 +317,16 @@ def launch_window(
     *,
     webview_module: WebviewModule | None = None,
     app_icon_path: Path | None = None,
+    js_api: Any = None,
 ) -> None:
     """Create the pywebview window and run the GUI loop."""
 
     webview = webview_module if webview_module is not None else load_webview()
     if content.url is not None:
-        webview.create_window(WINDOW_TITLE, url=content.url)
+        kwargs: dict[str, Any] = {"url": content.url}
+        if js_api is not None:
+            kwargs["js_api"] = js_api
+        webview.create_window(WINDOW_TITLE, **kwargs)
     elif content.html is not None:
         webview.create_window(WINDOW_TITLE, html=content.html)
     else:
@@ -274,9 +350,31 @@ def launch_desktop(
 ) -> DesktopTarget:
     """Resolve, probe, and launch the thin pywebview Desktop shell."""
 
+    args = parse_args(argv)
     target = resolve_target(argv, settings_file=settings_file)
     content = choose_window_content(target, probe=probe)
-    launch_window(content, webview_module=webview_module, app_icon_path=app_icon_path)
+
+    # Set up wakeword bridge and worker
+    bridge = _create_wakeword_bridge(args, settings_file, target.url)
+
+    # Append desktop accessor query param so the WebUI can detect Desktop mode
+    if content.url is not None:
+        content = DesktopWindowContent(
+            status=content.status,
+            url=_append_accessor_param(content.url),
+        )
+
+    try:
+        launch_window(
+            content,
+            webview_module=webview_module,
+            app_icon_path=app_icon_path,
+            js_api=bridge,
+        )
+    finally:
+        if bridge is not None:
+            bridge._stop_worker()
+
     return target
 
 
@@ -434,6 +532,68 @@ def _fallback_copy(status: str) -> tuple[str, str, str]:
             "Choose a localhost or LAN host name without a scheme, path, or whitespace.",
         )
     raise ValueError(f"Unsupported Desktop probe status: {status}")
+
+
+def _create_wakeword_bridge(
+    args: argparse.Namespace,
+    settings_file: Path | None = None,
+    server_url: str = "",
+) -> Any:
+    """Create the DesktopBridge with engine and worker for the wakeword pipeline.
+
+    Uses MockWakewordEngine when --mock-wakeword is set or when openWakeWord
+    cannot be imported. Returns the bridge instance (never None — the bridge
+    always exists so the WebUI can query capabilities).
+    """
+
+    from desktop.wakeword.bridge import DesktopBridge
+    from desktop.wakeword.engine import MockWakewordEngine
+
+    use_mock = bool(args.mock_wakeword)
+    engine = None
+    worker = None
+
+    if not use_mock:
+        try:
+            from desktop.wakeword.engine import OpenWakeWordEngine
+            from desktop.wakeword.worker import WakewordWorker
+
+            wakeword_config = read_wakeword_settings(settings_file)
+            engine = OpenWakeWordEngine(
+                wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
+                sensitivity=wakeword_config.get("sensitivity", 0.5),
+            )
+            worker = WakewordWorker(
+                engine=engine,
+                bridge=None,  # Set after bridge creation
+                settings_path=settings_file,
+                server_url=server_url,
+            )
+        except ImportError:
+            engine = MockWakewordEngine()
+    else:
+        engine = MockWakewordEngine()
+        engine.set_score_sequence([0.0])
+
+    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+
+    # Back-reference: worker needs bridge to publish state
+    if worker is not None:
+        worker._bridge = bridge
+
+    wakeword_config = read_wakeword_settings(settings_file)
+    if wakeword_config.get("enabled", False) and worker is not None:
+        bridge.publish_state("listening")
+        worker.start()
+
+    return bridge
+
+
+def _append_accessor_param(url: str) -> str:
+    """Append ?accessor=desktop to a URL, preserving existing query params."""
+
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{ACCESSOR_QUERY_PARAM}"
 
 
 def main(argv: list[str] | None = None) -> DesktopTarget:
