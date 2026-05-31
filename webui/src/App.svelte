@@ -52,6 +52,11 @@
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
+  import {
+    isDesktop,
+    getDesktopCapabilities,
+    onWakewordStatusChange,
+  } from '$lib/desktopBridge.js';
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
@@ -86,7 +91,10 @@
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvents = $state([]);
+  let desktopCapabilities = $state(null);
+  let wakewordStatus = $state({ enabled: false, state: 'off' });
   let subAgentNavigationRequestId = 0;
+  let cleanupWakewordPoll = null;
   const toastDismissTimers = new SvelteMap();
 
   $effect(() => {
@@ -227,11 +235,38 @@
     }
   };
 
+  const navigateToVoiceSettings = () => {
+    selectView('settings');
+  };
+
   onMount(() => {
     connect(connectionState, { onEvent: handleServerEvent });
+
+    // Detect desktop capabilities and start wakeword status polling
+    if (isDesktop()) {
+      getDesktopCapabilities()
+        .then((caps) => {
+          desktopCapabilities = caps;
+          if (caps?.wakeword) {
+            cleanupWakewordPoll = onWakewordStatusChange((status) => {
+              wakewordStatus = status;
+            });
+          }
+        })
+        .catch(() => {
+          desktopCapabilities = { wakeword: false };
+        });
+    } else {
+      desktopCapabilities = { wakeword: false };
+    }
+
     return () => {
       disconnect(connectionState);
       clearToastDismissTimers();
+      if (cleanupWakewordPoll) {
+        cleanupWakewordPoll();
+        cleanupWakewordPoll = null;
+      }
     };
   });
 </script>
@@ -252,6 +287,9 @@
       {navigateToSubAgent}
       {pendingSubAgentNavigation}
       {runServerEvents}
+      {wakewordStatus}
+      {desktopCapabilities}
+      onNavigateToVoiceSettings={navigateToVoiceSettings}
     />
   {:else if activeViewId === 'agents'}
     <AgentsView
@@ -265,7 +303,7 @@
   {:else if activeViewId === 'system-prompt'}
     <SystemPromptView onToast={showToast} />
   {:else if activeViewId === 'settings'}
-    <SettingsView {providerAuthEvent} onToast={showToast} />
+    <SettingsView {providerAuthEvent} onToast={showToast} {agents} />
   {:else if activeViewId === 'logs'}
     <LogsView />
   {/if}

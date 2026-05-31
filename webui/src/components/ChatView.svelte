@@ -47,6 +47,9 @@
     pendingSubAgentNavigation = null,
     runServerEvent = null,
     runServerEvents = [],
+    wakewordStatus = { enabled: false, state: 'off' },
+    desktopCapabilities = null,
+    onNavigateToVoiceSettings = () => {},
   } = $props();
 
   const chatState = $state(createChatState());
@@ -150,6 +153,45 @@
     }
     return '';
   });
+
+  let micDotClass = $derived(computeMicDotClass(wakewordStatus));
+  let micTooltip = $derived(computeMicTooltip(wakewordStatus));
+  let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
+
+  function computeMicDotClass(status) {
+    if (!status?.enabled) return 'mic-dot--off';
+    switch (status.state) {
+      case 'listening':
+        return 'mic-dot--listening';
+      case 'recording':
+        return 'mic-dot--recording';
+      case 'transcribing':
+      case 'sending':
+        return 'mic-dot--processing';
+      case 'error':
+        return 'mic-dot--error';
+      default:
+        return 'mic-dot--off';
+    }
+  }
+
+  function computeMicTooltip(status) {
+    if (!status?.enabled)
+      return t('voice.mic.tooltip.off', 'Wakeword disabled');
+    switch (status.state) {
+      case 'listening':
+        return t('voice.mic.tooltip.listening', 'Listening for wakeword');
+      case 'recording':
+        return t('voice.mic.tooltip.recording', 'Recording voice command');
+      case 'transcribing':
+      case 'sending':
+        return t('voice.mic.tooltip.processing', 'Processing voice command');
+      case 'error':
+        return t('voice.mic.tooltip.error', 'Voice error');
+      default:
+        return t('voice.mic.tooltip.off', 'Wakeword disabled');
+    }
+  }
 
   function getActiveAgent() {
     if (viewingSessionAgentId) {
@@ -1026,6 +1068,17 @@
       {/if}
     </div>
     <div class="header-right">
+      {#if micVisible}
+        <button
+          type="button"
+          class="mic-indicator"
+          title={micTooltip}
+          aria-label={micTooltip}
+          onclick={() => onNavigateToVoiceSettings()}
+        >
+          <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
+        </button>
+      {/if}
       {#if tokenBadgeText}
         <span class="token-badge">{tokenBadgeText}</span>
       {/if}
@@ -1290,6 +1343,75 @@
     background: var(--surface-2);
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+
+  .mic-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .mic-indicator:hover {
+    background: var(--surface-2);
+  }
+  .mic-dot {
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .mic-dot--off {
+    background: var(--text-lo, #5e4c38);
+  }
+  .mic-dot--listening {
+    background: var(--green, #4ade80);
+    animation: mic-pulse 1.6s ease-in-out infinite;
+  }
+  .mic-dot--recording {
+    background: var(--amber, #f59e0b);
+  }
+  .mic-dot--processing {
+    background: var(--accent, #e8870a);
+    animation: mic-spin 1s linear infinite;
+  }
+  .mic-dot--error {
+    background: var(--red, #fc8181);
+  }
+
+  @keyframes mic-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @keyframes mic-spin {
+    0% {
+      opacity: 1;
+    }
+    25% {
+      opacity: 0.5;
+    }
+    50% {
+      opacity: 0.2;
+    }
+    75% {
+      opacity: 0.5;
+    }
+    100% {
+      opacity: 1;
+    }
   }
 
   .chat-view__surface {
