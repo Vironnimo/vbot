@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
+  import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -154,13 +155,14 @@
     connectProvider = null,
     disconnectProvider = null,
     onToast = noop,
+    agents = [],
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
     handleProviderAuthEvent(event);
   }
 
-  const panels = [
+  let panels = $derived([
     {
       id: 'general',
       labelKey: 'settings.general.title',
@@ -257,13 +259,24 @@
         ),
     },
     {
+      id: 'voice',
+      labelKey: 'settings.voice.title',
+      labelFallback: 'Voice',
+      label: () => t('settings.voice.title', 'Voice'),
+      subtitle: () =>
+        t(
+          'settings.voice.subtitle',
+          'Wakeword detection and voice command settings.',
+        ),
+    },
+    {
       id: 'appearance',
       labelKey: 'settings.appearance.title',
       labelFallback: 'Appearance',
       label: () => t('settings.appearance.title', 'Appearance'),
       subtitle: () => t('settings.appearance.subtitle', 'Language preference.'),
     },
-  ];
+  ]);
 
   let activePanelId = $state('general');
   let settings = $state(null);
@@ -3162,7 +3175,9 @@
               {/each}
             </div>
           {/if}
-        {:else}
+        {:else if activePanelId === 'voice'}
+          <WakewordVoiceSettings {agents} {onToast} />
+        {:else if activePanelId === 'appearance'}
           <div class="s-row">
             <div class="s-row-info">
               <div class="s-row-label">
