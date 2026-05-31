@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Specialized Models, Providers, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Specialized Models, Providers, Voice (Desktop-only), Channels, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
 
 ## Layout
 
@@ -131,6 +131,30 @@ does not talk to providers directly. The product presents an Agent-first chat su
     push-to-talk recording, chooses a supported MIME type when the browser
     exposes `MediaRecorder.isTypeSupported`, and stops all tracks on stop,
     cancel, or error.
+- `webui/src/lib/desktopBridge.js`
+  - `isDesktop()` — true when `window.location.search` includes
+    `accessor=desktop` AND `window.pywebview.api` is present.
+  - `getDesktopCapabilities()` — calls the bridge and returns
+    `{ wakeword: true }` inside the Desktop shell; caches the result.
+  - `hasWakeword()` — convenience wrapper that resolves to the `wakeword`
+    capability flag.
+  - `getWakewordStatus()` — polls the bridge for the full wakeword status
+    dict; returns `{ enabled: false, state: 'off' }` when the bridge is
+    absent.
+  - `setWakewordEnabled(enabled)` / `setWakewordConfig(config)` — call the
+    bridge with proper error handling.
+  - `onWakewordStatusChange(callback, intervalMs)` — starts a 500ms polling
+    interval that calls `callback(status)` on every state change. Returns a
+    cleanup function. Only active when `isDesktop()` is true.
+- `webui/src/lib/wakewordSettings.js`
+  - Pure helpers for the Settings → Voice panel:
+    `createVoiceSettingsState()`, `applyWakewordStatus(state, status)`,
+    `buildVoiceSettingsPayload(state, lastSaved)`, `voiceSettingsDirty(state, lastSaved)`,
+    `snapshotVoiceSettings(state)`.
+  - Defaults match the Desktop wakeword config schema: `enabled: false`,
+    `engine: 'openwakeword'`, `sensitivity: 0.5`, etc.
+  - `liveState` tracks the worker state string from the bridge and is
+    excluded from save payloads (it is read-only).
 - `webui/src/components/ToastStack.svelte`
   - Renders dismissable toast notifications from toast state using the shared
     toast CSS classes.
@@ -155,6 +179,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
     Repeated clicks on the same sub-agent session link are treated as distinct
     navigation requests, so returning to the parent and opening that same child
     Session again reloads it.
+  - Shows a mic status indicator in the header-right toolbar when
+    `desktopCapabilities?.wakeword` is true. The indicator is an 8px colored
+    dot with tooltip showing the current wakeword worker state:
+    gray = disabled, green pulsing = listening, orange = recording,
+    accent spinner = transcribing/sending, red = error. Clicking navigates
+    to Settings where the Voice panel is visible.
 - `webui/src/components/QueuedMessages.svelte`
   - Renders queued server-backed messages with remove and inline edit controls. Edit mode is local UI state; save persists through `chat.queue_update` and cancel only exits the local editor.
 - `webui/src/components/SessionListDrawer.svelte`
@@ -183,6 +213,21 @@ does not talk to providers directly. The product presents an Agent-first chat su
     of the field while composer action buttons stay bottom-aligned.
 - `webui/src/components/SkillAutocomplete.svelte`
   - Renders the flat name/description list selected by the composer for the active trigger context: combined commands plus skills for `/`, skills only for `$`. Skills with validation warnings are still loadable and may appear; invalid/non-loadable diagnostics are excluded by ChatView data flow.
+- `webui/src/components/WakewordVoiceSettings.svelte`
+  - Gated on `desktopCapabilities?.wakeword` — renders nothing when absent.
+  - Self-contained Settings sub-panel that manages wakeword state and saves
+    through the Desktop bridge (not server RPC).
+  - Controls: enable/disable toggle (calls `setWakewordEnabled`), sensitivity
+    slider (0–1, step 0.05), target Agent dropdown, session behavior dropdown
+    (`active` / `new`), plus read-only displays for engine, microphone,
+    wake phrase, and live worker state with a colored dot.
+  - Live state dot colors: green pulsing = listening, orange = recording,
+    accent spinner = transcribing/sending, red = error, gray = off.
+  - Auto-saves sensitivity, agent, and session behavior changes through
+    `setWakewordConfig()` with 800ms debounce; emits toast feedback through
+    the app-level `ToastStack`.
+  - Privacy note paragraph rendered from i18n key
+    `settings.voice.privacyNote`.
 - `webui/src/lib/agentForm.js`
   - Normalizes Agent create/update form values into RPC payloads. Workspace is
   omitted from public create payloads but included in edit payloads when changed.
@@ -270,6 +315,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Channels panel. It lists configured channels, hydrates per-row
     running state via `channel.status`, and supports create, edit, delete,
     enable, and disable actions through the `channel.*` RPC methods.
+  - Includes a Voice panel (Desktop-only). Gated on `desktopCapabilities?.wakeword`.
+    Renders `WakewordVoiceSettings` which saves through the Desktop bridge
+    (`setWakewordConfig`, `setWakewordEnabled`) rather than server RPC.
+    The panel auto-saves sensitivity, agent, and session behavior with 800ms
+    debounce; the enable toggle saves immediately. Manual save button shows
+    "Already saved" when clean. Read-only fields (engine, microphone, wake
+    phrase) display the current Desktop configuration.
   - The Providers panel renders OAuth connections with Connect/Disconnect
     controls. `provider.connect` opens an inline Device Flow dialog with the user
     code, copy control, and verification link; `provider_auth_completed` closes
