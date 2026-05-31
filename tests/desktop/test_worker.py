@@ -165,6 +165,122 @@ def test_encode_wav_produces_valid_container() -> None:
         assert wf.readframes(wf.getnframes()) == raw
 
 
+def test_worker_does_not_record_without_target_agent(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._running.set()
+    worker._read_config = lambda: {"target_agent_id": None}  # type: ignore[method-assign]
+
+    worker._handle_detection()
+
+    assert fake_bridge.states == ["error"]
+    assert not worker._running.is_set()
+
+
+def test_resolve_session_uses_agent_current_session(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    def rpc_call(method: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((method, params))
+        if method == "agent.get":
+            return {"current_session_id": "current-one"}
+        raise AssertionError(f"unexpected method: {method}")
+
+    worker._rpc_call = rpc_call  # type: ignore[method-assign]
+
+    assert worker._resolve_session("main", "active") == "current-one"
+    assert calls == [("agent.get", {"id": "main"})]
+
+
+def test_resolve_session_falls_back_to_latest_activity(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    def rpc_call(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "agent.get":
+            return {"current_session_id": ""}
+        if method == "session.list":
+            return {
+                "sessions": [
+                    {"id": "older", "last_active_at": "2026-05-30T10:00:00+00:00"},
+                    {"id": "newer", "last_active_at": "2026-05-31T10:00:00+00:00"},
+                ]
+            }
+        raise AssertionError(f"unexpected method: {method}")
+
+    worker._rpc_call = rpc_call  # type: ignore[method-assign]
+
+    assert worker._resolve_session("main", "active") == "newer"
+
+
+def test_send_transcript_uses_streaming_rpc(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    def rpc_call(method: str, params: dict[str, object]) -> dict[str, object]:
+        calls.append((method, params))
+        return {"run_id": "run-one", "sse_url": "/api/runs/run-one/events"}
+
+    worker._rpc_call = rpc_call  # type: ignore[method-assign]
+
+    sent = worker._send_transcript("hello", "main", "session-one")
+
+    assert sent is True
+    assert calls == [
+        (
+            "chat.stream",
+            {"agent_id": "main", "session_id": "session-one", "content": "hello"},
+        )
+    ]
+
+
+def test_rpc_call_returns_empty_for_rpc_error(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"ok": False, "error": {"message": "bad request"}}
+
+    monkeypatch.setattr(worker_module.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+
+    assert worker._rpc_call("agent.get", {"id": "main"}) == {}
+
+
 def test_list_microphones_graceful_when_no_sounddevice(monkeypatch) -> None:
     """list_microphones should return empty list when sounddevice unavailable."""
     monkeypatch.setitem(__import__("sys").modules, "sounddevice", None)

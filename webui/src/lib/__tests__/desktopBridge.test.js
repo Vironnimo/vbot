@@ -220,6 +220,38 @@ describe('onWakewordStatusChange', () => {
     cleanup();
   });
 
+  it('calls callback when config changes while state is unchanged', async () => {
+    const callbacks = [];
+    let pollCount = 0;
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          getWakewordStatus: () => {
+            pollCount += 1;
+            return {
+              state: 'listening',
+              enabled: true,
+              target_agent_id: pollCount === 1 ? 'main' : 'writer',
+            };
+          },
+        },
+      },
+    };
+
+    const cleanup = onWakewordStatusChange((status) => {
+      callbacks.push(status);
+    }, 100);
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(callbacks).toHaveLength(2);
+    expect(callbacks[1].target_agent_id).toBe('writer');
+
+    cleanup();
+  });
+
   it('returns noop cleanup when not on desktop', () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 

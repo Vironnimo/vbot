@@ -601,6 +601,8 @@ export const englishCatalog = Object.freeze({
   'settings.voice.saveSuccess': 'Voice settings updated.',
   'settings.voice.systemDefaultMic': 'System default',
   'settings.voice.noAgent': '— (none)',
+  'settings.voice.lessSensitive': 'Less sensitive',
+  'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.desktopOnly':
     'Voice settings are only available in the vBot Desktop app. Open the Desktop app to configure wakeword detection and voice commands.',
 
@@ -614,6 +616,7 @@ export const englishCatalog = Object.freeze({
 
   'voice.mic.tooltip.off': 'Wakeword disabled',
   'voice.mic.tooltip.listening': 'Listening for wakeword',
+  'voice.mic.tooltip.detected': 'Wakeword detected',
   'voice.mic.tooltip.recording': 'Recording voice command',
   'voice.mic.tooltip.processing': 'Processing voice command',
   'voice.mic.tooltip.error': 'Voice error',

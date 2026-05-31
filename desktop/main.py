@@ -9,6 +9,7 @@ import json
 import tempfile
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -173,19 +174,15 @@ def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
             return
         except PermissionError:
             if temporary_path is not None and temporary_path.exists():
-                try:
+                with suppress(OSError):
                     temporary_path.unlink()
-                except OSError:
-                    pass
             if attempt < 2:
                 time.sleep(0.05 * (attempt + 1))
                 continue
         except OSError:
             if temporary_path is not None and temporary_path.exists():
-                try:
+                with suppress(OSError):
                     temporary_path.unlink()
-                except OSError:
-                    pass
             if attempt < 2:
                 time.sleep(0.05 * (attempt + 1))
                 continue
@@ -238,11 +235,17 @@ def resolve_target(
             host=str(host_value or ""), port=port, url="", configuration_error=str(exc)
         )
         if args.host is None:
-            write_settings({"host": DEFAULT_HOST, "port": port}, settings_file)
+            normalized_settings = dict(saved_settings)
+            normalized_settings["host"] = DEFAULT_HOST
+            normalized_settings["port"] = port
+            write_settings(normalized_settings, settings_file)
         return target
 
     target = DesktopTarget(host=host, port=port, url=build_target_url(host, port))
-    write_settings({"host": target.host, "port": target.port}, settings_file)
+    normalized_settings = dict(saved_settings)
+    normalized_settings["host"] = target.host
+    normalized_settings["port"] = target.port
+    write_settings(normalized_settings, settings_file)
     return target
 
 
@@ -547,44 +550,37 @@ def _create_wakeword_bridge(
     """
 
     from desktop.wakeword.bridge import DesktopBridge
-    from desktop.wakeword.engine import MockWakewordEngine
+    from desktop.wakeword.worker import MockWakewordWorker, WakewordWorker
 
     use_mock = bool(args.mock_wakeword)
-    engine = None
-    worker = None
 
-    if not use_mock:
+    def worker_factory(bridge: DesktopBridge) -> Any:
+        if use_mock:
+            return MockWakewordWorker(bridge=bridge)
         try:
+            import sounddevice  # type: ignore[import-untyped]  # noqa: F401
+
             from desktop.wakeword.engine import OpenWakeWordEngine
-            from desktop.wakeword.worker import WakewordWorker
-
-            wakeword_config = read_wakeword_settings(settings_file)
-            engine = OpenWakeWordEngine(
-                wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
-                sensitivity=wakeword_config.get("sensitivity", 0.5),
-            )
-            worker = WakewordWorker(
-                engine=engine,
-                bridge=None,  # Set after bridge creation
-                settings_path=settings_file,
-                server_url=server_url,
-            )
         except ImportError:
-            engine = MockWakewordEngine()
-    else:
-        engine = MockWakewordEngine()
-        engine.set_score_sequence([0.0])
+            return MockWakewordWorker(bridge=bridge)
 
-    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+        wakeword_config = read_wakeword_settings(settings_file)
+        engine = OpenWakeWordEngine(
+            wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
+            sensitivity=wakeword_config.get("sensitivity", 0.5),
+        )
+        return WakewordWorker(
+            engine=engine,
+            bridge=bridge,
+            settings_path=settings_file,
+            server_url=server_url,
+        )
 
-    # Back-reference: worker needs bridge to publish state
-    if worker is not None:
-        worker._bridge = bridge
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
 
     wakeword_config = read_wakeword_settings(settings_file)
-    if wakeword_config.get("enabled", False) and worker is not None:
-        bridge.publish_state("listening")
-        worker.start()
+    if wakeword_config.get("enabled", False):
+        bridge._start_worker()
 
     return bridge
 
