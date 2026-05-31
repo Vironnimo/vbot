@@ -24,9 +24,10 @@ transcript as a chat message through server RPC.
     the vBot identity contract
   - probes `/` after health succeeds and opens a pywebview window pointed at
     `http://<host>:<port>/?accessor=desktop` only when the WebUI root returns 2xx/3xx
-  - `--mock-wakeword` forces a `MockWakewordEngine` for UI validation without
-    a real microphone; when omitted, the real `OpenWakeWordEngine` is used,
-    falling back to the mock engine if openWakeWord cannot be imported
+  - `--mock-wakeword` forces a no-microphone `MockWakewordWorker` for UI
+    validation; when omitted, the real `OpenWakeWordEngine` is used if
+    openWakeWord and sounddevice can be imported, otherwise Desktop falls back
+    to the mock worker instead of opening an audio device
   - if the configured host is invalid, the server is unreachable, the target is
     not a vBot server, or a reachable vBot server has no WebUI, shows an escaped
     in-window message instead of crashing
@@ -38,6 +39,7 @@ transcript as a chat message through server RPC.
   - malformed or non-object JSON is treated as empty settings and overwritten
     with the next resolved target
   - malformed `wakeword` key (missing or non-dict) falls back to defaults
+  - target host/port writes must preserve the existing `wakeword` object
 
 ### Wakeword settings schema
 
@@ -79,11 +81,11 @@ Bridge methods:
 | `getDesktopCapabilities()` | `{ wakeword: true }` | Feature flags for WebUI gating |
 | `getWakewordStatus()` | status dict | Current config + live worker state |
 | `setWakewordEnabled(enabled)` | — | Enable/disable the worker |
-| `setWakewordConfig(config)` | — | Partial config update, persists, restarts worker |
+| `setWakewordConfig(config)` | — | Partial config update, persists, recreates/restarts worker when enabled |
 
-The WebUI polls `getWakewordStatus()` every 500ms while Desktop is detected
-and wakeword is enabled. Worker state transitions are published through the
-bridge's `publish_state()` method, which the poll picks up.
+The WebUI polls `getWakewordStatus()` every 500ms while Desktop is detected.
+Worker state transitions are published through the bridge's `publish_state()`
+method, and config changes are reflected in the next full status payload.
 
 Worker states (exposed in `getWakewordStatus().state`):
 `off` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `listening` (or → `error` at any point).
@@ -106,6 +108,14 @@ Worker states (exposed in `getWakewordStatus().state`):
   and URL punctuation are rejected into an in-window invalid-target message.
 - Wakeword detection runs locally. Audio is only recorded after the wake phrase
   is detected. No audio leaves the device before a wakeword match.
+- If `target_agent_id` is not configured, the worker enters `error` without
+  recording or transcribing audio.
+- `"active"` session behavior resolves the Agent's persisted
+  `current_session_id` via `agent.get`; if unavailable, it falls back to the
+  most recently active session from `session.list`, then creates a session.
+- Transcripts are submitted with `chat.stream` so the Desktop worker returns to
+  listening after the server accepts the Run instead of blocking until the Run
+  completes.
 
 ## External Dependencies
 
@@ -127,9 +137,13 @@ Worker states (exposed in `getWakewordStatus().state`):
   `desktop/main.py` rather than in a later packaging-specific app directory.
 - pywebview is imported lazily so backend tests and non-desktop development
   workflows do not require the optional GUI package.
-- openWakeWord, sounddevice, and webrtcvad are optional imports — the Desktop
-  launches with the mock engine when any of them is missing.
-- The wakeword worker runs in a daemon thread. If it crashes silently, the
-  bridge state transitions to `error` and the WebUI shows a red indicator.
+- openWakeWord and sounddevice are optional imports — the Desktop launches with
+  the mock worker when either is missing. webrtcvad is optional only for
+  post-wake silence detection; when it is missing, the worker uses fixed-duration
+  recording after the wakeword.
+- The real wakeword worker runs in a daemon thread. If startup, microphone,
+  transcription, session resolution, or send fails, the bridge state transitions
+  to `error` and remains there until the user changes config or toggles the
+  worker.
 - Bridge methods must return quickly and not block — they hold a threading.Lock
   for config access only during reads/writes to the local settings file.

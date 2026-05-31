@@ -156,6 +156,8 @@
     disconnectProvider = null,
     onToast = noop,
     agents = [],
+    desktopCapabilities = null,
+    targetPanelId = '',
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -258,17 +260,21 @@
           'Manage channel routing and runtime status.',
         ),
     },
-    {
-      id: 'voice',
-      labelKey: 'settings.voice.title',
-      labelFallback: 'Voice',
-      label: () => t('settings.voice.title', 'Voice'),
-      subtitle: () =>
-        t(
-          'settings.voice.subtitle',
-          'Wakeword detection and voice command settings.',
-        ),
-    },
+    ...(desktopCapabilities?.wakeword
+      ? [
+          {
+            id: 'voice',
+            labelKey: 'settings.voice.title',
+            labelFallback: 'Voice',
+            label: () => t('settings.voice.title', 'Voice'),
+            subtitle: () =>
+              t(
+                'settings.voice.subtitle',
+                'Wakeword detection and voice command settings.',
+              ),
+          },
+        ]
+      : []),
     {
       id: 'appearance',
       labelKey: 'settings.appearance.title',
@@ -470,6 +476,16 @@
       clearCompactionSettingsAutoSaveTimer();
       clearRecallSettingsAutoSaveTimer();
     };
+  });
+
+  $effect(() => {
+    if (!panels.some((panel) => panel.id === activePanelId)) {
+      activePanelId = panels[0]?.id ?? 'general';
+      return;
+    }
+    if (targetPanelId && panels.some((panel) => panel.id === targetPanelId)) {
+      activePanelId = targetPanelId;
+    }
   });
 
   $effect(() => {

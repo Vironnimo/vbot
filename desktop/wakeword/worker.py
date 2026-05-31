@@ -75,6 +75,7 @@ class WakewordWorker:
             self._engine.start()
         except Exception:
             logger.warning("Failed to start wakeword engine", exc_info=True)
+            self._running.clear()
             self._bridge.publish_state("error")
             return
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -104,6 +105,7 @@ class WakewordWorker:
             self._open_stream()
         except Exception:
             logger.warning("Failed to open microphone stream", exc_info=True)
+            self._running.clear()
             self._bridge.publish_state("error")
             return
 
@@ -132,11 +134,18 @@ class WakewordWorker:
         """Open the microphone stream at 16kHz mono 16-bit via sounddevice."""
         import sounddevice as sd  # type: ignore[import-untyped]
 
+        config = self._read_config()
+        device = config.get("microphone")
+        stream_options: dict[str, Any] = {
+            "samplerate": _SAMPLE_RATE,
+            "channels": _CHANNELS,
+            "dtype": "int16",
+            "blocksize": _FRAME_SIZE_SAMPLES,
+        }
+        if isinstance(device, int):
+            stream_options["device"] = device
         self._stream = sd.InputStream(
-            samplerate=_SAMPLE_RATE,
-            channels=_CHANNELS,
-            dtype="int16",
-            blocksize=_FRAME_SIZE_SAMPLES,
+            **stream_options,
         )
         self._stream.start()
 
@@ -147,7 +156,7 @@ class WakewordWorker:
                 self._stream.stop()
                 self._stream.close()
             except Exception:
-                pass
+                logger.warning("Error closing microphone stream", exc_info=True)
             self._stream = None
 
     # -- Post-detection pipeline ---------------------------------------------
@@ -155,6 +164,12 @@ class WakewordWorker:
     def _handle_detection(self) -> None:
         """Record audio, transcribe, and send after wakeword detection."""
         config = self._read_config()
+        agent_id = config.get("target_agent_id")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            logger.warning("Wakeword command ignored because no target agent is configured")
+            self._bridge.publish_state("error")
+            self._running.clear()
+            return
 
         self._bridge.publish_state("recording")
         audio_data = self._record_until_silence()
@@ -167,16 +182,21 @@ class WakewordWorker:
         transcript = self._transcribe(audio_data)
         if not transcript:
             self._bridge.publish_state("error")
+            self._running.clear()
             return
 
         self._bridge.publish_state("sending")
-        agent_id = config.get("target_agent_id")
         session_behavior = config.get("session_behavior", "active")
 
-        if agent_id:
-            session_id = self._resolve_session(agent_id, session_behavior)
-            if session_id:
-                self._send_transcript(transcript, agent_id, session_id)
+        session_id = self._resolve_session(agent_id, session_behavior)
+        if not session_id:
+            self._bridge.publish_state("error")
+            self._running.clear()
+            return
+        if not self._send_transcript(transcript, agent_id, session_id):
+            self._bridge.publish_state("error")
+            self._running.clear()
+            return
 
         if self._running.is_set():
             self._bridge.publish_state("listening")
@@ -188,6 +208,7 @@ class WakewordWorker:
 
             return read_wakeword_settings(self._settings_path)
         except Exception:
+            logger.warning("Failed to read wakeword settings", exc_info=True)
             return {}
 
     # -- Audio recording -----------------------------------------------------
@@ -199,7 +220,7 @@ class WakewordWorker:
         audio bytes, or None when no frames were recorded.
         """
         try:
-            import webrtcvad
+            import webrtcvad  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("webrtcvad not available; recording raw audio")
             return self._record_raw()
@@ -250,6 +271,7 @@ class WakewordWorker:
                 frame = self._stream.read(_VAD_FRAME_SIZE)[0].tobytes()
                 frames.append(frame)
             except Exception:
+                logger.warning("Microphone read error during raw recording", exc_info=True)
                 break
         if not frames:
             return None
@@ -270,7 +292,12 @@ class WakewordWorker:
                 response = httpx.post(url, files=files, timeout=_HTTP_TIMEOUT)
                 if response.status_code == 200:
                     result = response.json()
-                    return result.get("text") or result.get("transcript", "")
+                    if not isinstance(result, dict):
+                        return None
+                    transcript = result.get("text") or result.get("transcript", "")
+                    if isinstance(transcript, str):
+                        return transcript
+                    return None
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     _backoff_sleep(attempt)
                     continue
@@ -288,31 +315,45 @@ class WakewordWorker:
         """Resolve or create a session for the given agent."""
         if behavior == "new":
             return self._create_session(agent_id)
-        # "active" behavior: pick the latest session, or create one
+        current_session_id = self._current_session_id(agent_id)
+        if current_session_id:
+            return current_session_id
+        # Fallback for agents without current_session_id: pick most recently active, or create one.
         sessions = self._list_sessions(agent_id)
         if sessions:
-            return sessions[0].get("id", "")
+            latest = max(sessions, key=lambda session: str(session.get("last_active_at", "")))
+            session_id = latest.get("id", "")
+            return session_id if isinstance(session_id, str) else ""
         return self._create_session(agent_id)
+
+    def _current_session_id(self, agent_id: str) -> str:
+        """Return the agent's persisted current session id, if available."""
+        result = self._rpc_call("agent.get", {"id": agent_id})
+        session_id = result.get("current_session_id", "")
+        return session_id if isinstance(session_id, str) else ""
 
     def _list_sessions(self, agent_id: str) -> list[dict[str, Any]]:
         """List sessions for an agent via the session.list RPC."""
-        return self._rpc_call("session.list", {"agent_id": agent_id}).get("sessions", [])
+        sessions = self._rpc_call("session.list", {"agent_id": agent_id}).get("sessions", [])
+        return sessions if isinstance(sessions, list) else []
 
     def _create_session(self, agent_id: str) -> str:
         """Create a new session for an agent and return its ID."""
         result = self._rpc_call("session.create", {"agent_id": agent_id, "make_current": True})
-        return result.get("session_id") or result.get("id", "")
+        session_id = result.get("session_id") or result.get("id", "")
+        return session_id if isinstance(session_id, str) else ""
 
-    def _send_transcript(self, transcript: str, agent_id: str, session_id: str) -> None:
+    def _send_transcript(self, transcript: str, agent_id: str, session_id: str) -> bool:
         """Send the transcribed text as a chat message via RPC."""
-        self._rpc_call(
-            "chat.send",
+        result = self._rpc_call(
+            "chat.stream",
             {
                 "agent_id": agent_id,
                 "session_id": session_id,
                 "content": transcript,
             },
         )
+        return bool(result)
 
     def _rpc_call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Make a JSON-RPC call to the vBot server. Returns result dict or {}."""
@@ -326,7 +367,21 @@ class WakewordWorker:
             try:
                 response = httpx.post(url, json=payload, timeout=_RPC_TIMEOUT)
                 if response.status_code == 200:
-                    return response.json().get("result", {})
+                    rpc_response = response.json()
+                    if not isinstance(rpc_response, dict):
+                        logger.warning("RPC %s returned a non-object response", method)
+                        return {}
+                    if rpc_response.get("ok") is False:
+                        error = rpc_response.get("error", {})
+                        message = (
+                            error.get("message", "unknown RPC error")
+                            if isinstance(error, dict)
+                            else "unknown RPC error"
+                        )
+                        logger.warning("RPC %s failed: %s", method, message)
+                        return {}
+                    result = rpc_response.get("result", {})
+                    return result if isinstance(result, dict) else {}
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     _backoff_sleep(attempt)
                     continue
@@ -380,5 +435,38 @@ def list_microphones() -> list[dict[str, Any]]:
                     }
                 )
     except Exception:
-        pass
+        logger.warning("Failed to enumerate microphones", exc_info=True)
     return devices
+
+
+class MockWakewordWorker:
+    """No-microphone worker used when real wakeword dependencies are unavailable."""
+
+    def __init__(self, bridge: Any) -> None:
+        self._bridge = bridge
+        self._thread: threading.Thread | None = None
+        self._running = threading.Event()
+
+    def start(self) -> None:
+        """Start a lightweight status loop without opening audio devices."""
+        if self.is_running():
+            return
+        self._running.set()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the mock status loop."""
+        self._running.clear()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
+    def is_running(self) -> bool:
+        """True while the mock status thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def _run(self) -> None:
+        self._bridge.publish_state("listening")
+        while self._running.is_set():
+            time.sleep(0.1)

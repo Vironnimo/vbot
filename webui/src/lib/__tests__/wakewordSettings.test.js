@@ -53,6 +53,20 @@ describe('applyWakewordStatus', () => {
     expect(hydrated.enabled).toBe(true);
   });
 
+  it('applies explicit null values from bridge status', () => {
+    const state = {
+      ...createVoiceSettingsState(),
+      microphone: 3,
+      target_agent_id: 'agent-1',
+    };
+    const status = { microphone: null, target_agent_id: null };
+
+    const hydrated = applyWakewordStatus(state, status);
+
+    expect(hydrated.microphone).toBeNull();
+    expect(hydrated.target_agent_id).toBeNull();
+  });
+
   it('returns same state when status is null', () => {
     const state = createVoiceSettingsState();
     const hydrated = applyWakewordStatus(state, null);

@@ -144,8 +144,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - `setWakewordEnabled(enabled)` / `setWakewordConfig(config)` — call the
     bridge with proper error handling.
   - `onWakewordStatusChange(callback, intervalMs)` — starts a 500ms polling
-    interval that calls `callback(status)` on every state change. Returns a
-    cleanup function. Only active when `isDesktop()` is true.
+    interval that calls `callback(status)` whenever the full status payload
+    changes, including config-only changes where `state` is unchanged. Returns
+    a cleanup function. Only active when `isDesktop()` is true.
 - `webui/src/lib/wakewordSettings.js`
   - Pure helpers for the Settings → Voice panel:
     `createVoiceSettingsState()`, `applyWakewordStatus(state, status)`,
@@ -183,8 +184,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `desktopCapabilities?.wakeword` is true. The indicator is an 8px colored
     dot with tooltip showing the current wakeword worker state:
     gray = disabled, green pulsing = listening, orange = recording,
-    accent spinner = transcribing/sending, red = error. Clicking navigates
-    to Settings where the Voice panel is visible.
+    accent spinner = transcribing/sending, red = error. `wakeword_detected`
+    shares the listening treatment with a distinct tooltip. Clicking navigates
+    directly to Settings → Voice.
 - `webui/src/components/QueuedMessages.svelte`
   - Renders queued server-backed messages with remove and inline edit controls. Edit mode is local UI state; save persists through `chat.queue_update` and cancel only exits the local editor.
 - `webui/src/components/SessionListDrawer.svelte`
@@ -315,7 +317,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Channels panel. It lists configured channels, hydrates per-row
     running state via `channel.status`, and supports create, edit, delete,
     enable, and disable actions through the `channel.*` RPC methods.
-  - Includes a Voice panel (Desktop-only). Gated on `desktopCapabilities?.wakeword`.
+  - Includes a Voice panel (Desktop-only). Gated on `desktopCapabilities?.wakeword`;
+    normal browser WebUI instances must not show the Voice panel in Settings.
     Renders `WakewordVoiceSettings` which saves through the Desktop bridge
     (`setWakewordConfig`, `setWakewordEnabled`) rather than server RPC.
     The panel auto-saves sensitivity, agent, and session behavior with 800ms

@@ -93,6 +93,7 @@
   let runServerEvents = $state([]);
   let desktopCapabilities = $state(null);
   let wakewordStatus = $state({ enabled: false, state: 'off' });
+  let settingsPanelTarget = $state('');
   let subAgentNavigationRequestId = 0;
   let cleanupWakewordPoll = null;
   const toastDismissTimers = new SvelteMap();
@@ -236,6 +237,7 @@
   };
 
   const navigateToVoiceSettings = () => {
+    settingsPanelTarget = 'voice';
     selectView('settings');
   };
 
@@ -303,7 +305,13 @@
   {:else if activeViewId === 'system-prompt'}
     <SystemPromptView onToast={showToast} />
   {:else if activeViewId === 'settings'}
-    <SettingsView {providerAuthEvent} onToast={showToast} {agents} />
+    <SettingsView
+      {providerAuthEvent}
+      onToast={showToast}
+      {agents}
+      {desktopCapabilities}
+      targetPanelId={settingsPanelTarget}
+    />
   {:else if activeViewId === 'logs'}
     <LogsView />
   {/if}

@@ -52,6 +52,9 @@
   let sensitivityPercent = $derived(Math.round(voiceState.sensitivity * 100));
 
   function liveStateText(state) {
+    if (state === 'wakeword_detected') {
+      return t('voice.state.wakewordDetected', 'Wakeword detected');
+    }
     const key = `voice.state.${state}`;
     return t(key, state);
   }
@@ -262,8 +265,8 @@
             disabled={!loaded}
           />
           <div class="voice-slider-labels">
-            <span>Less sensitive</span>
-            <span>More sensitive</span>
+            <span>{t('settings.voice.lessSensitive', 'Less sensitive')}</span>
+            <span>{t('settings.voice.moreSensitive', 'More sensitive')}</span>
           </div>
         </div>
       </div>

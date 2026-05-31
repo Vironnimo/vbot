@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 
@@ -33,7 +34,7 @@ class MockWakewordEngine:
         self._score_sequence = score_sequence or [0.0]
         self._index = 0
         self._running = False
-        self._on_detected: callable | None = None
+        self._on_detected: Callable[[], None] | None = None
 
     def start(self) -> None:
         self._running = True
@@ -77,9 +78,9 @@ class OpenWakeWordEngine:
 
     def start(self) -> None:
         """Load the openWakeWord model for inference."""
-        import openwakeword
+        from openwakeword.model import Model  # type: ignore[import-untyped]
 
-        self._model = openwakeword.Model(
+        self._model = Model(
             wakeword_models=[self._wake_phrase],
             inference_framework="onnx",
         )

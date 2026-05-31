@@ -18,6 +18,22 @@ def _write_settings(path: Path, wakeword_config: dict | None = None) -> None:
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
+class FakeWorker:
+    def __init__(self) -> None:
+        self.started = False
+        self.stopped = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def stop(self) -> None:
+        self.stopped = True
+        self.started = False
+
+    def is_running(self) -> bool:
+        return self.started
+
+
 def test_get_desktop_capabilities(tmp_path: Path) -> None:
     _write_settings(tmp_path / "settings.json")
 
@@ -57,6 +73,46 @@ def test_set_wakeword_enabled_toggles_and_persists(tmp_path: Path) -> None:
     bridge.setWakewordEnabled(False)
     status = bridge.getWakewordStatus()
     assert status["enabled"] is False
+
+
+def test_set_wakeword_enabled_uses_worker_factory(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    workers: list[FakeWorker] = []
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+
+    bridge.setWakewordEnabled(True)
+
+    assert len(workers) == 1
+    assert workers[0].started is True
+    assert bridge.getWakewordStatus()["enabled"] is True
+
+
+def test_set_wakeword_config_recreates_running_worker(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    workers: list[FakeWorker] = []
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        worker = FakeWorker()
+        workers.append(worker)
+        return worker
+
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+    bridge.setWakewordEnabled(True)
+
+    bridge.setWakewordConfig({"sensitivity": 0.9})
+
+    assert len(workers) == 2
+    assert workers[0].stopped is True
+    assert workers[1].started is True
+    assert bridge.getWakewordStatus()["sensitivity"] == 0.9
 
 
 def test_set_wakeword_config_partial_update(tmp_path: Path) -> None:

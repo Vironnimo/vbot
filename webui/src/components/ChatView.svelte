@@ -162,6 +162,7 @@
     if (!status?.enabled) return 'mic-dot--off';
     switch (status.state) {
       case 'listening':
+      case 'wakeword_detected':
         return 'mic-dot--listening';
       case 'recording':
         return 'mic-dot--recording';
@@ -181,6 +182,8 @@
     switch (status.state) {
       case 'listening':
         return t('voice.mic.tooltip.listening', 'Listening for wakeword');
+      case 'wakeword_detected':
+        return t('voice.mic.tooltip.detected', 'Wakeword detected');
       case 'recording':
         return t('voice.mic.tooltip.recording', 'Recording voice command');
       case 'transcribing':

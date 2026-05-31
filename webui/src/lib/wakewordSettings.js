@@ -11,6 +11,8 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   liveState: 'off',
 });
 
+const hasKey = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
 /** Create the initial voice settings state with defaults. */
 export function createVoiceSettingsState() {
   return { ...VOICE_SETTINGS_DEFAULTS };
@@ -24,14 +26,24 @@ export function applyWakewordStatus(state, status) {
   if (!status) return state;
   return {
     ...state,
-    enabled: status.enabled ?? state.enabled,
-    engine: status.engine ?? state.engine,
-    microphone: status.microphone ?? state.microphone,
-    sensitivity: status.sensitivity ?? state.sensitivity,
-    target_agent_id: status.target_agent_id ?? state.target_agent_id,
-    session_behavior: status.session_behavior ?? state.session_behavior,
-    wake_phrase: status.wake_phrase ?? state.wake_phrase,
-    liveState: status.state ?? state.liveState,
+    enabled: hasKey(status, 'enabled') ? status.enabled : state.enabled,
+    engine: hasKey(status, 'engine') ? status.engine : state.engine,
+    microphone: hasKey(status, 'microphone')
+      ? status.microphone
+      : state.microphone,
+    sensitivity: hasKey(status, 'sensitivity')
+      ? status.sensitivity
+      : state.sensitivity,
+    target_agent_id: hasKey(status, 'target_agent_id')
+      ? status.target_agent_id
+      : state.target_agent_id,
+    session_behavior: hasKey(status, 'session_behavior')
+      ? status.session_behavior
+      : state.session_behavior,
+    wake_phrase: hasKey(status, 'wake_phrase')
+      ? status.wake_phrase
+      : state.wake_phrase,
+    liveState: hasKey(status, 'state') ? status.state : state.liveState,
   };
 }
 

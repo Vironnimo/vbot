@@ -105,6 +105,31 @@ def test_cli_args_override_saved_settings_per_field(tmp_path: Path) -> None:
     assert port_override.url == "http://localhost:9001/"
 
 
+def test_resolve_target_preserves_wakeword_settings(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    wakeword = {
+        "enabled": True,
+        "engine": "openwakeword",
+        "microphone": None,
+        "sensitivity": 0.8,
+        "target_agent_id": "main",
+        "session_behavior": "active",
+        "wake_phrase": "hey_jarvis",
+    }
+    settings_file.write_text(
+        json.dumps({"host": "10.0.0.8", "port": 8765, "wakeword": wakeword}),
+        encoding="utf-8",
+    )
+
+    target = desktop_main.resolve_target(["--port", "9001"], settings_file=settings_file)
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert target.url == "http://10.0.0.8:9001/"
+    assert stored["host"] == "10.0.0.8"
+    assert stored["port"] == 9001
+    assert stored["wakeword"] == wakeword
+
+
 def test_settings_can_partially_override_defaults(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps({"host": "vbot.lan"}), encoding="utf-8")

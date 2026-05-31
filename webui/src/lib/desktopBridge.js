@@ -4,7 +4,6 @@
  * loads inside pywebview with `?accessor=desktop` in the URL.
  */
 
-const DESKTOP_ACCESSOR_PARAM = 'accessor=desktop';
 const POLL_INTERVAL_MS = 500;
 
 let cachedCapabilities = null;
@@ -14,9 +13,8 @@ export function isDesktop() {
   if (typeof window === 'undefined') {
     return false;
   }
-  const hasAccessorParam = window.location.search.includes(
-    DESKTOP_ACCESSOR_PARAM,
-  );
+  const params = new URLSearchParams(window.location.search);
+  const hasAccessorParam = params.get('accessor') === 'desktop';
   const hasBridgeApi = Boolean(window.pywebview?.api);
   return hasAccessorParam && hasBridgeApi;
 }
@@ -98,15 +96,16 @@ export function onWakewordStatusChange(
     return () => {};
   }
 
-  let lastState = '';
+  let lastStatusKey = '';
   let running = true;
 
   const poll = async () => {
     if (!running) return;
     try {
       const status = await getWakewordStatus();
-      if (running && status.state !== lastState) {
-        lastState = status.state;
+      const statusKey = JSON.stringify(status);
+      if (running && statusKey !== lastStatusKey) {
+        lastStatusKey = statusKey;
         callback(status);
       }
     } catch {
