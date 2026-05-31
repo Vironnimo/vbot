@@ -19,6 +19,8 @@ JsonObject = dict[str, Any]
 RunExecutor = Callable[["Run"], Awaitable[Any]]
 CancelCallback = Callable[[], Any]
 _LOGGER = logging.getLogger("vbot.runs")
+DEFAULT_RUN_EVENT_RETENTION_LIMIT = 4096
+DEFAULT_COMPLETED_RUN_RETENTION_LIMIT = 512
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
@@ -114,7 +116,16 @@ class RunEvent:
 class Run:
     """One active execution inside a persisted chat session."""
 
-    def __init__(self, *, run_id: str, agent_id: str, session_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        agent_id: str,
+        session_id: str,
+        event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
+    ) -> None:
+        if event_retention_limit < 1:
+            raise ValueError("event_retention_limit must be positive")
         self.id = run_id
         self.agent_id = agent_id
         self.session_id = session_id
@@ -124,7 +135,8 @@ class Run:
         self.result: Any | None = None
         self.error: BaseException | None = None
         self.cancel_requested = False
-        self._events: list[RunEvent] = []
+        self._events: deque[RunEvent] = deque(maxlen=event_retention_limit)
+        self._next_sequence = 1
         self._subscribers: list[asyncio.Queue[RunEvent]] = []
         self._done = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -172,13 +184,14 @@ class Run:
         if self.cancel_requested and event_type not in TERMINAL_EVENT_TYPES:
             return None
         event = RunEvent(
-            sequence=len(self._events) + 1,
+            sequence=self._next_sequence,
             run_id=self.id,
             agent_id=self.agent_id,
             session_id=self.session_id,
             type=event_type,
             payload=dict(payload or {}),
         )
+        self._next_sequence += 1
         self._events.append(event)
         self.updated_at = event.timestamp
         for subscriber in list(self._subscribers):
@@ -187,7 +200,7 @@ class Run:
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncIterator[RunEvent]:
         """Replay old events and stream future events until a terminal event."""
-        for event in self._events:
+        for event in list(self._events):
             if event.sequence > after_sequence:
                 yield event
                 if event.type in TERMINAL_EVENT_TYPES:
@@ -255,12 +268,23 @@ class Run:
 class ChatRunManager:
     """Coordinates active chat runs across sessions."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        completed_run_retention_limit: int = DEFAULT_COMPLETED_RUN_RETENTION_LIMIT,
+        run_event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
+    ) -> None:
+        if completed_run_retention_limit < 1:
+            raise ValueError("completed_run_retention_limit must be positive")
+        if run_event_retention_limit < 1:
+            raise ValueError("run_event_retention_limit must be positive")
         self._lock = asyncio.Lock()
         self._active_by_session: dict[tuple[str, str], Run] = {}
         self._queues: dict[tuple[str, str], deque[QueuedRunItem]] = {}
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
+        self._completed_run_retention_limit = completed_run_retention_limit
+        self._run_event_retention_limit = run_event_retention_limit
 
     def add_run_started_callback(self, callback: Callable[[Run], None]) -> Callable[[], None]:
         """Register a callback invoked whenever this manager starts a Run."""
@@ -429,6 +453,7 @@ class ChatRunManager:
             async with self._lock:
                 if self._active_by_session.get(session_key) is run:
                     self._active_by_session.pop(session_key, None)
+                self._prune_terminal_runs_locked()
             await self._drain_next(session_key)
 
     async def _drain_next(self, session_key: tuple[str, str]) -> None:
@@ -464,7 +489,12 @@ class ChatRunManager:
         session_id: str,
         executor: RunExecutor,
     ) -> Run:
-        run = Run(run_id=str(uuid.uuid4()), agent_id=agent_id, session_id=session_id)
+        run = Run(
+            run_id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            session_id=session_id,
+            event_retention_limit=self._run_event_retention_limit,
+        )
         self._active_by_session[session_key] = run
         self._runs[run.id] = run
         task = asyncio.create_task(self._execute(run, session_key, executor))
@@ -478,6 +508,14 @@ class ChatRunManager:
                 callback(run)
             except Exception:
                 _LOGGER.warning("Run start callback failed", exc_info=True)
+
+    def _prune_terminal_runs_locked(self) -> None:
+        terminal_run_ids = [
+            run_id for run_id, run in self._runs.items() if run.status != RunStatus.RUNNING
+        ]
+        overflow = len(terminal_run_ids) - self._completed_run_retention_limit
+        for run_id in terminal_run_ids[: max(0, overflow)]:
+            self._runs.pop(run_id, None)
 
 
 def _schedule_callback(callback: CancelCallback) -> None:

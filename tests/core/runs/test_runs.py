@@ -129,6 +129,27 @@ async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
     }
 
 
+async def test_run_event_replay_window_is_bounded_without_reusing_sequences() -> None:
+    run = Run(
+        run_id="run-one",
+        agent_id="coder",
+        session_id="session-one",
+        event_retention_limit=3,
+    )
+
+    for index in range(5):
+        run.emit("visible", {"index": index})
+    run.mark_completed("done")
+
+    retained_events = run.events
+    replayed_events = [event async for event in run.subscribe()]
+
+    assert [event.sequence for event in retained_events] == [4, 5, 6]
+    assert [event.sequence for event in replayed_events] == [4, 5, 6]
+    assert [event.payload for event in replayed_events[:2]] == [{"index": 3}, {"index": 4}]
+    assert replayed_events[-1].type == "run_completed"
+
+
 async def test_delta_events_obey_cancel_guard() -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
 
@@ -749,6 +770,25 @@ async def test_run_started_callbacks_are_notified_and_removable() -> None:
     await second_run.wait()
 
     assert observed_runs == [first_run]
+
+
+async def test_completed_run_lookup_retention_is_bounded() -> None:
+    manager = ChatRunManager(completed_run_retention_limit=2)
+
+    async def execute(run: Run) -> str:
+        return run.id
+
+    first_run = await manager.start(agent_id="coder", session_id="one", executor=execute)
+    await first_run.wait()
+    second_run = await manager.start(agent_id="coder", session_id="two", executor=execute)
+    await second_run.wait()
+    third_run = await manager.start(agent_id="coder", session_id="three", executor=execute)
+    await third_run.wait()
+
+    with pytest.raises(RunNotFoundError):
+        manager.get(first_run.id)
+    assert manager.get(second_run.id) is second_run
+    assert manager.get(third_run.id) is third_run
 
 
 async def test_run_completed_omits_usage_when_usage_is_none() -> None:

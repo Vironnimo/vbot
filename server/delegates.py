@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from collections import OrderedDict
 from contextlib import suppress
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
@@ -89,6 +90,7 @@ from server.events import (
 
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger("vbot.server.delegates")
+DEFAULT_BRIDGED_RUN_RETENTION_LIMIT = 1024
 
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 MIN_TEMPERATURE = 0.0
@@ -2623,10 +2625,8 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
     if event_bus is None:
         return
     bridged_run_ids = getattr(state, "run_event_bridge_run_ids", None)
-    if isinstance(bridged_run_ids, set):
-        if run.id in bridged_run_ids:
-            return
-        bridged_run_ids.add(run.id)
+    if _run_was_already_bridged(state, bridged_run_ids, run.id):
+        return
     task = asyncio.create_task(_publish_run_events(event_bus, run))
     task.add_done_callback(_on_run_event_bridge_done)
 
@@ -2643,6 +2643,35 @@ def _on_run_event_bridge_done(task: asyncio.Task[None]) -> None:
         task.result()
     except Exception:
         _LOGGER.warning("Run event bridge failed", exc_info=True)
+
+
+def _run_was_already_bridged(state: Any, bridged_run_ids: Any, run_id: str) -> bool:
+    retention_limit = getattr(
+        state,
+        "run_event_bridge_retention_limit",
+        DEFAULT_BRIDGED_RUN_RETENTION_LIMIT,
+    )
+    if not isinstance(retention_limit, int) or retention_limit < 1:
+        retention_limit = DEFAULT_BRIDGED_RUN_RETENTION_LIMIT
+
+    if isinstance(bridged_run_ids, OrderedDict):
+        if run_id in bridged_run_ids:
+            bridged_run_ids.move_to_end(run_id)
+            return True
+        bridged_run_ids[run_id] = None
+        while len(bridged_run_ids) > retention_limit:
+            bridged_run_ids.popitem(last=False)
+        return False
+
+    if isinstance(bridged_run_ids, set):
+        if run_id in bridged_run_ids:
+            return True
+        bridged_run_ids.add(run_id)
+        while len(bridged_run_ids) > retention_limit:
+            bridged_run_ids.remove(next(iter(bridged_run_ids)))
+        return False
+
+    return False
 
 
 def _bridge_queued_item_to_event_bus(state: Any, item: QueuedRunItem) -> None:

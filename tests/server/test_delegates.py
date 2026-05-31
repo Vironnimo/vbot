@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -520,6 +521,23 @@ async def test_run_event_bridge_observes_publish_failures(
     await asyncio.sleep(0)
 
     assert warnings == [("Run event bridge failed", True)]
+
+
+def test_run_event_bridge_dedupe_cache_is_bounded() -> None:
+    state = SimpleNamespace(
+        run_event_bridge_run_ids=OrderedDict(),
+        run_event_bridge_retention_limit=2,
+    )
+    cache = state.run_event_bridge_run_ids
+
+    assert delegates._run_was_already_bridged(state, cache, "run-one") is False
+    assert delegates._run_was_already_bridged(state, cache, "run-one") is True
+    assert delegates._run_was_already_bridged(state, cache, "run-two") is False
+    assert delegates._run_was_already_bridged(state, cache, "run-three") is False
+
+    assert list(cache) == ["run-two", "run-three"]
+    assert delegates._run_was_already_bridged(state, cache, "run-one") is False
+    assert list(cache) == ["run-three", "run-one"]
 
 
 @pytest.mark.asyncio

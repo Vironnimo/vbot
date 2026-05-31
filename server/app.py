@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -284,7 +285,7 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = _runtime_chat_runs(runtime)
     app.state.event_bus = ServerEventBus()
-    app.state.run_event_bridge_run_ids = set()
+    app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.compaction_service = CompactionService(SummarizationStrategy())
     chat_loop = _runtime_chat_loop(runtime)

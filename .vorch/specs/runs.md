@@ -12,7 +12,8 @@ The chat loop creates and executes Runs. Server, channels, automation, tools, an
 
 - `RunStatus` — `running`, `completed`, `failed`, or `cancelled`.
 - `RunEvent` — replayable event with `sequence`, `run_id`, `agent_id`, `session_id`, `type`, `payload`, and UTC `timestamp`.
-- `Run` — active execution state with events, subscribers, cancellation callbacks, terminal status, final result, and final error.
+- `Run` — active execution state with a bounded replay event window, subscribers,
+  cancellation callbacks, terminal status, final result, and final error.
 - `QueuedRunItem` — one queued request with display content, executor, `internal` visibility flag, start future, and created timestamp.
 - `ChatRunManager` — in-memory coordinator for active Runs, Run lookup/cancel, and per-session FIFO queues.
 - `RunError`, `ActiveRunError`, `RunNotFoundError`, `RunCancelledError` — expected domain errors for caller mapping.
@@ -25,7 +26,11 @@ Stable Run event constants live in `core.runs`:
 - persisted/visible output: `user_message_persisted`, `reasoning`, `tool_call_started`, `tool_call_result`, `subagent_session_started`, `assistant_output`, `error_message_persisted`, `model_fallback_activated`, `compaction_completed`
 - transient SSE-only deltas: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, `tool_call_stderr`
 
-Every emitted event increments the Run-local `sequence`, including transient delta events. Subscribers can replay events after a sequence number and then follow live events until a terminal event.
+Every emitted event increments the Run-local `sequence`, including transient
+delta events. Sequences are monotonic for the lifetime of the Run and are not
+reused when old events fall out of the retained replay window. Subscribers can
+replay retained events after a sequence number and then follow live events until
+a terminal event.
 
 `tool_call_started` payloads include both the raw call and display metadata:
 `{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`.
@@ -35,7 +40,8 @@ to render without re-inferring tool semantics from raw arguments.
 ## Interfaces
 
 - `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes a visible event unless the Run is already terminal or cancellation is suppressing non-terminal output.
-- `Run.subscribe(after_sequence=0)` replays matching events and streams future events until terminal state.
+- `Run.subscribe(after_sequence=0)` replays matching retained events and streams
+  future events until terminal state.
 - `Run.wait()` waits for terminal state, returns the result, re-raises failures, and raises `RunCancelledError` for cancelled Runs.
 - `Run.request_cancel()` marks cancellation requested, runs registered cancellation callbacks, and cancels the background executor task.
 - `Run.add_cancel_callback(callback)` registers cleanup work for active host/provider/tool work.
@@ -65,3 +71,9 @@ to render without re-inferring tool semantics from raw arguments.
 - `Run.emit()` returns `None` when suppression drops an event; callers must tolerate that.
 - Terminal events are the only events allowed after cancellation suppression starts.
 - All timestamps are UTC ISO 8601 strings with explicit offsets.
+- Run timelines are process-local replay buffers, not durable history. The
+  manager retains only a bounded number of completed Runs, and each Run retains
+  only a bounded number of recent events. Live subscribers still receive events
+  as they are emitted; late subscribers and reconnects can replay only the
+  retained window. Persisted Session history remains the durable source for old
+  conversation content.
