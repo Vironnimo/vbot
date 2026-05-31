@@ -78,6 +78,12 @@ class AttachmentStore:
         self._attachments_dir = Path(data_dir).expanduser() / "attachments"
         self._max_size_bytes = max_size_bytes
 
+    @property
+    def max_size_bytes(self) -> int:
+        """Configured maximum accepted attachment size in bytes."""
+
+        return self._max_size_bytes
+
     def store(self, filename: str, data: bytes) -> AttachmentRecord:
         """Persist one blob and sidecar metadata, then return the record."""
 

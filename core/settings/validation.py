@@ -38,6 +38,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "recall",
         "server_port",
         "skill_directories",
+        "speech_upload_max_size_bytes",
         "subagent_timeout_minutes",
     }
 )
@@ -276,6 +277,12 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         diagnostics,
         "$.attachment_max_size_bytes",
         data.get("attachment_max_size_bytes"),
+        required=False,
+    )
+    _validate_positive_integer(
+        diagnostics,
+        "$.speech_upload_max_size_bytes",
+        data.get("speech_upload_max_size_bytes"),
         required=False,
     )
     for field in SUBAGENT_SETTING_FIELDS:

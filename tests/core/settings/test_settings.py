@@ -161,6 +161,7 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                 "skill_directories": ["~/skills"],
                 "extension_directories": ["C:/vbot/extensions"],
                 "attachment_max_size_bytes": 1024,
+                "speech_upload_max_size_bytes": 2048,
                 "max_subagent_depth": 4,
                 "max_subagents_per_turn": 8,
                 "subagent_timeout_minutes": 60,
@@ -231,6 +232,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
                 "server_port": 70000,
                 "skill_directories": ["relative/path"],
                 "attachment_max_size_bytes": 0,
+                "speech_upload_max_size_bytes": 0,
                 "compaction": {"threshold": 2, "tail_tokens": False},
                 "defaults": {"agent": {"temperature": "warm", "unknown": True}},
                 "model_tasks": {"speech_to_text": {"target": "", "options": []}},
@@ -248,6 +250,7 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         ("error", "$.server_port", "must be between 1 and 65535"),
         ("error", "$.skill_directories[0]", "must be an absolute or home-relative path"),
         ("error", "$.attachment_max_size_bytes", "must be a positive integer"),
+        ("error", "$.speech_upload_max_size_bytes", "must be a positive integer"),
         ("error", "$.compaction.threshold", "must be in (0, 1]"),
         ("error", "$.compaction.tail_tokens", "must be a positive integer"),
         (

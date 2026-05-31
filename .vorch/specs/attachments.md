@@ -23,6 +23,9 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 ## Interfaces
 
 - `AttachmentStore(data_dir: Path, *, max_size_bytes: int = 20_971_520)`
+- `AttachmentStore.max_size_bytes` exposes the configured upload limit so
+  transport layers can reject oversized payloads before materializing the full
+  request body.
 - `store(filename: str, data: bytes) -> AttachmentRecord` — sniffs MIME, validates allowlist and size, writes blob and sidecar, extracts `text_content` for `text/*`
 - `get(attachment_id: str) -> AttachmentRecord` — loads one attachment record from its sidecar
 - `delete(attachment_id: str) -> None` — deletes blob and sidecar if present

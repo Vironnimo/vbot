@@ -19,6 +19,9 @@ used by the Settings UI.
 Raw `settings.json` and the public `settings.update` RPC also accept
 `model_tasks`, a sparse mapping from supported specialized task types to
 configured targets and JSON-object options.
+Raw `settings.json` accepts positive integer binary upload limits:
+`attachment_max_size_bytes` for stored attachments and
+`speech_upload_max_size_bytes` for speech transcription audio.
 
 Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes.
 
