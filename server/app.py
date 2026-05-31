@@ -93,6 +93,8 @@ WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
+DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
+UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
 
 
 def create_app(
@@ -150,7 +152,12 @@ def create_app(
         attachment_store = _runtime_attachment_store(request.app.state.runtime)
         filename = file.filename or "upload.bin"
         try:
-            record = attachment_store.store(filename, await file.read())
+            data = await _read_upload_file_with_limit(
+                file,
+                max_size_bytes=attachment_store.max_size_bytes,
+                upload_kind="Attachment",
+            )
+            record = attachment_store.store(filename, data)
         except AttachmentTooLargeError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
         except AttachmentTypeNotAllowedError as exc:
@@ -177,12 +184,18 @@ def create_app(
 
     @app.post("/api/speech/transcribe")
     async def transcribe_speech(request: Request, file: UploadFile) -> JsonObject:
+        runtime = request.app.state.runtime
         speech_service = _runtime_speech_service(request.app.state.runtime)
         filename = file.filename or "recording.webm"
         media_type = file.content_type or "application/octet-stream"
         try:
+            audio = await _read_upload_file_with_limit(
+                file,
+                max_size_bytes=_runtime_speech_upload_max_size_bytes(runtime),
+                upload_kind="Speech audio",
+            )
             result = await speech_service.transcribe(
-                await file.read(),
+                audio,
                 filename=filename,
                 media_type=media_type,
             )
@@ -390,6 +403,38 @@ def _runtime_speech_service(runtime: Any) -> Any:
         return runtime.speech
     except (AttributeError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail="Speech service is unavailable") from exc
+
+
+def _runtime_speech_upload_max_size_bytes(runtime: Any) -> int:
+    try:
+        value = runtime.speech_upload_max_size_bytes
+    except (AttributeError, RuntimeError):
+        value = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
+
+
+async def _read_upload_file_with_limit(
+    file: UploadFile,
+    *,
+    max_size_bytes: int,
+    upload_kind: str,
+) -> bytes:
+    chunks: list[bytes] = []
+    size_bytes = 0
+    while True:
+        read_size = min(UPLOAD_READ_CHUNK_SIZE_BYTES, max_size_bytes - size_bytes + 1)
+        chunk = await file.read(read_size)
+        if not chunk:
+            return b"".join(chunks)
+        size_bytes += len(chunk)
+        if size_bytes > max_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{upload_kind} size {size_bytes} exceeds limit {max_size_bytes}",
+            )
+        chunks.append(chunk)
 
 
 def _speech_http_exception(error: SpeechError) -> HTTPException:

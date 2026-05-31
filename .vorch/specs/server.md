@@ -75,13 +75,17 @@ Clients call the vBot server contract; provider wire details stay behind
   renders through the runtime-owned `SystemPromptManager` and returns text plus
   token estimate metadata.
 - `POST /api/upload` accepts one multipart file upload and returns
-  `{ attachment_id, filename, media_type, size_bytes }`. Oversize uploads map
-  to HTTP 413; blocked MIME types map to HTTP 415.
+  `{ attachment_id, filename, media_type, size_bytes, text_content }`. The
+  server reads the upload in bounded chunks and rejects payloads over the
+  runtime attachment limit with HTTP 413 before calling attachment storage;
+  blocked MIME types map to HTTP 415.
 - `GET /api/attachments/{attachment_id}` returns the raw stored blob with the
   stored `media_type` as Content-Type, or 404 when the attachment does not exist.
 - `POST /api/speech/transcribe` accepts one multipart `file` upload and returns
   `{ text, language, segments, usage }` using the configured
-  `model_tasks.speech_to_text` binding.
+  `model_tasks.speech_to_text` binding. The server reads uploaded audio in
+  bounded chunks and rejects payloads over `speech_upload_max_size_bytes` with
+  HTTP 413 before calling the speech domain.
 - `POST /api/speech/synthesize` accepts JSON `{ text }` and returns raw audio
   bytes using the configured `model_tasks.text_to_speech` binding. The response
   content type is the generated audio media type.

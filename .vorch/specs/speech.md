@@ -9,6 +9,8 @@ central task-model bindings.
 `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges
 stored options with backend schema defaults, parses the target, and then routes
 to either a provider-backed HTTP client or a local speech executor hook.
+The server enforces `settings.json` `speech_upload_max_size_bytes` before
+calling `SpeechService.transcribe`; the default limit is 20 MiB.
 
 The first implementation supports OpenAI-compatible audio endpoints and
 OpenRouter's audio endpoints. Mistral option schemas may be exposed through the

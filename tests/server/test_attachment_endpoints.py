@@ -30,6 +30,11 @@ class _AttachmentRuntime:
         return None
 
 
+class _RejectingAttachmentStore(AttachmentStore):
+    def store(self, filename: str, data: bytes) -> Any:
+        raise AssertionError("attachment store should not receive oversize uploads")
+
+
 def test_upload_valid_jpeg_returns_attachment_metadata(tmp_path: Path) -> None:
     payload = _jpeg_payload()
 
@@ -75,6 +80,20 @@ def test_upload_rejects_payload_over_20_mib_limit(tmp_path: Path) -> None:
         response = client.post(
             "/api/upload",
             files={"file": ("too-large.bin", payload, "application/octet-stream")},
+        )
+
+    assert response.status_code == 413
+
+
+def test_upload_rejects_payload_before_attachment_store_call(tmp_path: Path) -> None:
+    runtime = _AttachmentRuntime(tmp_path / "data")
+    runtime.attachment_store = _RejectingAttachmentStore(tmp_path / "data", max_size_bytes=3)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/upload",
+            files={"file": ("too-large.txt", b"abcd", "text/plain")},
         )
 
     assert response.status_code == 413

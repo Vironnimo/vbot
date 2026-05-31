@@ -84,6 +84,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
 _DEFAULT_APP_VERSION = "0.1.0"
 _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
+_DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
 
 # ---------------------------------------------------------------------------
 # Adapter factory mapping
@@ -144,6 +145,7 @@ class Runtime:
         self._image: ImageService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
+        self._speech_upload_max_size_bytes = _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
         self._memory_service: MemoryService | None = None
@@ -189,7 +191,16 @@ class Runtime:
             raise RuntimeError("Storage service not available")
         self._storage.ensure_directories()
         settings = self._storage.load_settings()
-        attachment_max_size_bytes = self._attachment_max_size_bytes(settings)
+        attachment_max_size_bytes = self._positive_size_setting(
+            settings,
+            key="attachment_max_size_bytes",
+            default=_DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+        )
+        self._speech_upload_max_size_bytes = self._positive_size_setting(
+            settings,
+            key="speech_upload_max_size_bytes",
+            default=_DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
+        )
         self._attachment_store = AttachmentStore(
             self._storage.data_dir,
             max_size_bytes=attachment_max_size_bytes,
@@ -445,16 +456,17 @@ class Runtime:
             total_connection_count,
         )
 
-    def _attachment_max_size_bytes(self, settings: dict[str, object]) -> int:
-        raw_limit = settings.get("attachment_max_size_bytes", _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES)
+    def _positive_size_setting(self, settings: dict[str, object], *, key: str, default: int) -> int:
+        raw_limit = settings.get(key, default)
         if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) and raw_limit > 0:
             return raw_limit
         if self.logger is not None:
             self.logger.warning(
-                "settings.attachment_max_size_bytes must be a positive integer; using default %s",
-                _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+                "settings.%s must be a positive integer; using default %s",
+                key,
+                default,
             )
-        return _DEFAULT_ATTACHMENT_MAX_SIZE_BYTES
+        return default
 
     def _extra_skill_directories(self, settings: dict[str, object]) -> list[Path]:
         raw_directories = settings.get("skill_directories", [])
@@ -723,6 +735,13 @@ class Runtime:
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
         return self._attachment_store
+
+    @property
+    def speech_upload_max_size_bytes(self) -> int:
+        """Maximum accepted uploaded audio size for speech transcription."""
+
+        self._ensure_started()
+        return self._speech_upload_max_size_bytes
 
     @property
     def agents(self) -> AgentStore:
