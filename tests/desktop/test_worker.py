@@ -112,6 +112,29 @@ class DetectOnceEngine:
         return 1.0 if self.calls == 1 else 0.0
 
 
+class SequenceEngine:
+    threshold = 0.5
+
+    def __init__(self, scores: list[float], on_detect: Callable[[int], None] | None = None) -> None:
+        self._scores = list(scores)
+        self._on_detect = on_detect
+        self.calls = 0
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def detect(self, _chunk: bytes) -> float:
+        self.calls += 1
+        if callable(self._on_detect):
+            self._on_detect(self.calls)
+        if not self._scores:
+            return 0.0
+        return self._scores.pop(0)
+
+
 @pytest.fixture
 def fake_bridge() -> FakeBridge:
     return FakeBridge()
@@ -307,7 +330,7 @@ def test_handle_detection_empty_transcript_returns_to_listening(
 
     worker._resolve_session.assert_not_called()
     worker._send_transcript.assert_not_called()
-    assert fake_bridge.states == ["recording", "transcribing", "listening"]
+    assert fake_bridge.states == ["recording", "transcribing"]
     assert worker._running.is_set()
 
 
@@ -336,14 +359,18 @@ def test_handle_detection_transcription_failure_returns_to_listening(
 
     worker._resolve_session.assert_not_called()
     worker._send_transcript.assert_not_called()
-    assert fake_bridge.states == ["recording", "transcribing", "listening"]
+    assert fake_bridge.states == ["recording", "transcribing"]
     assert worker._running.is_set()
 
 
 def test_detection_loop_reopens_microphone_after_successful_turn(
     fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from desktop.wakeword import worker as worker_module
     from desktop.wakeword.worker import WakewordWorker
+
+    monkeypatch.setattr(worker_module, "_POST_DETECTION_LISTENING_HOLD_SECONDS", 0.0)
 
     worker = WakewordWorker(
         engine=DetectOnceEngine(),
@@ -369,6 +396,50 @@ def test_detection_loop_reopens_microphone_after_successful_turn(
     assert opened_streams[0].closed is True
     assert opened_streams[1].stopped is True
     assert opened_streams[1].closed is True
+    assert fake_bridge.states == ["listening", "wakeword_detected", "listening"]
+    assert not worker._running.is_set()
+
+
+def test_detection_loop_requires_score_drop_before_retrigger(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    monkeypatch.setattr(worker_module, "_POST_DETECTION_LISTENING_HOLD_SECONDS", 0.0)
+
+    worker: WakewordWorker
+
+    def stop_after_third_detection(call_count: int) -> None:
+        if call_count >= 3:
+            worker._running.clear()
+
+    worker = WakewordWorker(
+        engine=SequenceEngine([1.0, 1.0, 0.0], on_detect=stop_after_third_detection),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    detection_count = 0
+    opened_streams: list[FakeSounddeviceStream] = []
+
+    def open_stream() -> None:
+        stream = FakeSounddeviceStream([_make_silence_chunk(), _make_silence_chunk()])
+        opened_streams.append(stream)
+        worker._stream = stream
+
+    def handle_detection() -> None:
+        nonlocal detection_count
+        detection_count += 1
+
+    worker._open_stream = open_stream  # type: ignore[method-assign]
+    worker._handle_detection = handle_detection  # type: ignore[method-assign]
+    worker._running.set()
+
+    worker._run()
+
+    assert detection_count == 1
+    assert len(opened_streams) == 2
     assert fake_bridge.states == ["listening", "wakeword_detected", "listening"]
     assert not worker._running.is_set()
 

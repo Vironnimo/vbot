@@ -95,6 +95,10 @@ Worker states (exposed in `getWakewordStatus().state`):
 The real worker closes the microphone stream while transcribing and sending, then
 reopens it before returning to `listening`; this avoids treating expected input
 buffer overflows after network waits as fatal loop errors.
+After any wakeword activation, detection is disarmed until the score falls below
+the configured threshold again. The worker also holds the visible `listening`
+state briefly before reopening the microphone stream, so one spoken wake phrase
+cannot immediately retrigger a second recording cycle.
 
 ## Conventions
 
@@ -125,6 +129,9 @@ buffer overflows after network waits as fatal loop errors.
 - After a successful voice turn, the worker resets the microphone stream before
   listening again. Isolated microphone read errors are recovered by reopening
   the stream; repeated read failures still transition to `error`.
+- The worker is one-shot per wake phrase: after a detection it publishes
+  `listening`, waits briefly, and requires a below-threshold wakeword score
+  before another detection can start recording.
 - If transcription succeeds but returns empty text, the worker treats the
   recording as a no-op and returns to `listening` without sending a chat message.
 - If one transcription request fails, the worker logs the HTTP/status details
