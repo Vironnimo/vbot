@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -992,6 +993,7 @@ async def test_failed_run_sends_error_reply(
 async def test_trigger_run_exception_does_not_leak_internal_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     trigger_mock = AsyncMock(side_effect=RuntimeError("internal stack trace"))
     adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
@@ -1000,6 +1002,7 @@ async def test_trigger_run_exception_does_not_leak_internal_error_text(
         allowed_chat_ids=[12345],
         trigger_run=trigger_mock,
     )
+    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
 
     await adapter._handle_inbound_message(
         make_update(chat_id=12345, user_id=50, text="hello"),
@@ -1010,4 +1013,89 @@ async def test_trigger_run_exception_does_not_leak_internal_error_text(
     bot.send_message.assert_awaited_once()
     sent_text = bot.send_message.await_args.kwargs["text"]
     assert "internal stack trace" not in sent_text
+    log_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Telegram trigger run failed")
+    ]
+    assert len(log_records) == 1
+    assert log_records[0].exc_info is not None
+    assert "tg-assistant" in log_records[0].message
+    assert "ch-tg-assistant-12345" in log_records[0].message
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_compact_command_exception_is_logged_with_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    compact_mock = AsyncMock(side_effect=RuntimeError("compact failed"))
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        compact_session=compact_mock,
+        command_dispatcher=command_dispatcher,
+    )
+    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/compact"),
+        SimpleNamespace(),
+    )
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+    sent_text = bot.send_message.await_args.kwargs["text"]
+    assert "compact failed" not in sent_text
+    log_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Telegram command action failed")
+    ]
+    assert len(log_records) == 1
+    assert log_records[0].exc_info is not None
+    assert "action=compact" in log_records[0].message
+    assert "ch-tg-assistant-12345" in log_records[0].message
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_retry_command_exception_is_logged_with_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    retry_mock = AsyncMock(side_effect=RuntimeError("retry failed"))
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="retry_last_turn"))
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        retry_run=retry_mock,
+        command_dispatcher=command_dispatcher,
+    )
+    caplog.set_level(logging.ERROR, logger="vbot.channels.telegram")
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="/retry"),
+        SimpleNamespace(),
+    )
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+    sent_text = bot.send_message.await_args.kwargs["text"]
+    assert "retry failed" not in sent_text
+    log_records = [
+        record
+        for record in caplog.records
+        if record.message.startswith("Telegram command action failed")
+    ]
+    assert len(log_records) == 1
+    assert log_records[0].exc_info is not None
+    assert "action=retry_last_turn" in log_records[0].message
+    assert "ch-tg-assistant-12345" in log_records[0].message
     await adapter.stop()

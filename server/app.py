@@ -36,7 +36,7 @@ from core.speech import (
 )
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
-from server.delegates import bridge_run_to_event_bus, dispatch_rpc
+from server.delegates import RPC_ERROR_INVALID_REQUEST, bridge_run_to_event_bus, dispatch_rpc
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
@@ -144,7 +144,16 @@ def create_app(
 
     @app.post("/api/rpc")
     async def rpc(request: Request) -> JsonObject:
-        payload = await request.json()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError:
+            return {
+                "ok": False,
+                "error": {
+                    "code": RPC_ERROR_INVALID_REQUEST,
+                    "message": "RPC request body must be valid JSON",
+                },
+            }
         return await dispatch_rpc(request.app.state, payload)
 
     @app.post("/api/upload")
@@ -208,7 +217,13 @@ def create_app(
     @app.post("/api/speech/synthesize")
     async def synthesize_speech(request: Request) -> Response:
         speech_service = _runtime_speech_service(request.app.state.runtime)
-        payload = await request.json()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Request body must be valid JSON",
+            ) from exc
         text = payload.get("text") if isinstance(payload, dict) else None
         if not isinstance(text, str) or not text.strip():
             raise HTTPException(status_code=400, detail="text must be a non-empty string")

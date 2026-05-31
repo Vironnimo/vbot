@@ -185,6 +185,26 @@ def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) 
     assert rpc_response.json()["ok"] is False
 
 
+def test_rpc_endpoint_returns_error_envelope_for_malformed_json(tmp_path: Path) -> None:
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/rpc",
+            content="{",
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "error": {
+            "code": "invalid_request",
+            "message": "RPC request body must be valid JSON",
+        },
+    }
+
+
 def test_webui_serves_index_static_assets_and_spa_fallback(monkeypatch, tmp_path: Path) -> None:
     import server.app as server_app
 
