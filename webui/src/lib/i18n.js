@@ -583,6 +583,40 @@ export const englishCatalog = Object.freeze({
   'status.notReachable': 'Not reachable',
   'status.reconnecting': 'Reconnecting…',
   'status.inactive': 'Inactive',
+
+  'settings.voice.title': 'Voice',
+  'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
+  'settings.voice.enabled': 'Wakeword listening',
+  'settings.voice.engine': 'Engine',
+  'settings.voice.microphone': 'Microphone',
+  'settings.voice.sensitivity': 'Sensitivity',
+  'settings.voice.targetAgent': 'Target Agent',
+  'settings.voice.sessionBehavior': 'Session',
+  'settings.voice.sessionBehaviorActive': 'Use active session',
+  'settings.voice.sessionBehaviorNew': 'New session each time',
+  'settings.voice.wakePhrase': 'Wake phrase',
+  'settings.voice.state': 'Status',
+  'settings.voice.privacyNote':
+    'Wakeword detection runs locally on your device. Audio is only recorded after the wake phrase is detected. Transcription uses your configured vBot speech backend.',
+  'settings.voice.saveSuccess': 'Voice settings updated.',
+  'settings.voice.systemDefaultMic': 'System default',
+  'settings.voice.noAgent': '— (none)',
+  'settings.voice.desktopOnly':
+    'Voice settings are only available in the vBot Desktop app. Open the Desktop app to configure wakeword detection and voice commands.',
+
+  'voice.state.off': 'Disabled',
+  'voice.state.listening': 'Listening',
+  'voice.state.wakewordDetected': 'Wakeword detected',
+  'voice.state.recording': 'Recording',
+  'voice.state.transcribing': 'Transcribing',
+  'voice.state.sending': 'Sending',
+  'voice.state.error': 'Error',
+
+  'voice.mic.tooltip.off': 'Wakeword disabled',
+  'voice.mic.tooltip.listening': 'Listening for wakeword',
+  'voice.mic.tooltip.recording': 'Recording voice command',
+  'voice.mic.tooltip.processing': 'Processing voice command',
+  'voice.mic.tooltip.error': 'Voice error',
 });
 
 const catalogs = Object.freeze({
