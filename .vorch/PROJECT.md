@@ -23,6 +23,10 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
+Server RPC handler bodies are split by domain under `server/rpc/*_methods.py`;
+`server.delegates` is a thin compatibility facade for transport imports and
+legacy private-name tests/callers.
+
 **Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels,
 speech, image, skills, automation, storage, utils. Each is a folder with a main file as
 public API, soft limit 600 lines per file. `model_tasks/` owns specialized
@@ -39,7 +43,7 @@ and `CronService` for persisted time-based scheduling rooted at `<data_dir>/cron
 + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth
 (single-user-local).
 
-**Data flow:** Accessors → HTTP/WS/SSE → server delegates → core (orchestration
+**Data flow:** Accessors → HTTP/WS/SSE → server RPC handlers → core (orchestration
 via providers, models, tools, agents) → external APIs. Agentic-only — no
 separate non-agentic streaming path.
 

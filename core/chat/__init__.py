@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from core.chat.chat import ChatLoop as ChatLoop
     from core.chat.chat import ChatMessage as ChatMessage
     from core.chat.chat import ToolCall as ToolCall
+    from core.chat.chat import parse_bare_model as parse_bare_model
     from core.chat.commands import CommandAction as CommandAction
     from core.chat.commands import CommandDispatcher as CommandDispatcher
     from core.chat.commands import CommandHandled as CommandHandled
@@ -36,6 +37,7 @@ _EXPORT_MODULES = {
     "DispatchResult": "core.chat.commands",
     "MAX_TOOL_ITERATIONS": "core.chat.chat",
     "NotACommand": "core.chat.commands",
+    "parse_bare_model": "core.chat.chat",
     "ToolCall": "core.chat.chat",
     "ToolIterationLimitError": "core.chat.errors",
 }

@@ -79,7 +79,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   automation triggers. Runtime also exposes it as `runtime.chat_runs` for server
   compatibility.
 - `command_dispatcher` — shared `CommandDispatcher` for built-in slash
-  commands, used by server delegates and channel adapters before starting Runs.
+  commands, used by server RPC handlers and channel adapters before starting Runs.
+- `chat_loop` — resolver-wired non-streaming `ChatLoop` used by server non-SSE
+  flows and command helpers.
 - `streaming_chat_loop` — resolver-wired streaming `ChatLoop` used by server SSE flows.
 - `trigger_service` — `TriggerService` for programmatic Run starts and
   in-memory busy-Session queueing.

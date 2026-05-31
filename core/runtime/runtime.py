@@ -813,6 +813,14 @@ class Runtime:
         return self._command_dispatcher
 
     @property
+    def chat_loop(self) -> ChatLoop:
+        """Access to the resolver-wired non-streaming chat loop."""
+        self._ensure_started()
+        if self._chat_loop is None:
+            raise RuntimeError("Chat loop service not available")
+        return self._chat_loop
+
+    @property
     def trigger_service(self) -> TriggerService:
         """Access to programmatic run triggering."""
         self._ensure_started()

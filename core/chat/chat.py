@@ -55,6 +55,7 @@ from core.runs import (
     ChatRunManager,
     QueuedRunItem,
     Run,
+    RunExecutor,
 )
 from core.sessions import ChatSession, ChatSessionManager, is_skill_context_note
 from core.tools import (
@@ -601,6 +602,23 @@ class ChatLoop:
             executor=lambda run: self._execute_run(run, content, internal=internal),
             display_content=_display_content_preview(content),
             internal=internal,
+        )
+
+    def build_queue_update(
+        self,
+        agent_id: str,
+        session_id: str,
+        content: str | list[ContentBlock],
+    ) -> tuple[str, RunExecutor, str]:
+        """Build replacement data for a queued run without mutating queue state."""
+        agent = self._runtime.agents.get(agent_id)
+        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
+        _ensure_provider_exists(self._runtime.providers, provider_id)
+        session = self._get_session(agent_id, session_id, create_missing=False)
+        return (
+            session.id,
+            lambda run: self._execute_run(run, content),
+            _display_content_preview(content),
         )
 
     async def retry_run(self, agent_id: str, session_id: str) -> Run:

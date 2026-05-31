@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from server.rpc import (
     agent_methods,
     automation_methods,
@@ -17,7 +15,7 @@ from server.rpc import (
 from server.rpc.dispatcher import RpcMethodHandler
 
 
-def build_method_handlers(delegates: Any) -> dict[str, RpcMethodHandler]:
+def build_method_handlers() -> dict[str, RpcMethodHandler]:
     """Build the complete RPC method table from domain registries."""
 
     handlers: dict[str, RpcMethodHandler] = {}
@@ -31,5 +29,5 @@ def build_method_handlers(delegates: Any) -> dict[str, RpcMethodHandler]:
         settings_methods,
         operations_methods,
     ):
-        handlers.update(registry.method_handlers(delegates))
+        handlers.update(registry.method_handlers())
     return handlers

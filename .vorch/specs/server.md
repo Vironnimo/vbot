@@ -7,9 +7,12 @@ FastAPI transport layer around the core kernel.
 `server/` owns HTTP, Server-Sent Events (SSE), WebSocket, process startup, and
 request/response mapping. It imports `core/` services but does not own chat,
 agent, provider, model, tool, skill, or storage business logic. RPC envelope
-parsing and invocation live under `server/rpc/`; `server.delegates` remains the
-compatibility facade for transport delegate helpers and currently hosts the
-handler bodies registered by the domain-indexed method tables.
+parsing and invocation live under `server/rpc/`. Domain handler bodies live in
+the domain-indexed `server/rpc/*_methods.py` modules, with shared request
+validation, payload mapping, runtime access, provider access, and event bridging
+helpers split into focused `server/rpc/` support modules. `server.delegates`
+remains the compatibility facade for transport delegate helpers and transitional
+private-name imports.
 
 Clients call the vBot server contract; provider wire details stay behind
 `core/providers/` adapters.
@@ -122,7 +125,7 @@ Clients call the vBot server contract; provider wire details stay behind
   filtered to usable provider/local targets for that task.
 - `task_model.options` accepts `{ task_type, target }` and returns
   `{ schema }`, a backend-owned option schema for the selected target.
-- `settings.update` accepts supported `appearance`, `skills`, `defaults`, `subagents`, `compaction`, `recall`, and `model_tasks` sections. Public request-shape parsing and validation lives in `core/settings/`; server delegates map `SettingsValidationError` to RPC `invalid_request`, then apply accepted updates through storage/runtime services. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. The `defaults` section currently supports only `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual persisted default key, while `thinking_effort: ""` remains a valid explicit provider-default setting. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage. The `recall` section is `{ backend }` for first-party backends and reloads the runtime `session_search` backend without a restart. The `model_tasks` section is sparse and stores task-type bindings for specialized models.
+- `settings.update` accepts supported `appearance`, `skills`, `defaults`, `subagents`, `compaction`, `recall`, and `model_tasks` sections. Public request-shape parsing and validation lives in `core/settings/`; server RPC handlers map `SettingsValidationError` to RPC `invalid_request`, then apply accepted updates through storage/runtime services. The `skills` section shape is `{ directories: string[] }` and persists `settings.json` `skill_directories`; paths must be absolute or home-relative. The `defaults` section currently supports only `{ agent: { model?, fallback_model?, temperature?, thinking_effort? } }`; `null` removes an individual persisted default key, while `thinking_effort: ""` remains a valid explicit provider-default setting. Updating skill directories reloads the runtime skill registry so `skill.list` reflects the saved directories without a restart. The `subagents` section requires all three positive integer fields: `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes`. The `compaction` section requires all four fields `{ auto, threshold, tail_tokens, summary_model }` with the same validation rules as storage. The `recall` section is `{ backend }` for first-party backends and reloads the runtime `session_search` backend without a restart. The `model_tasks` section is sparse and stores task-type bindings for specialized models.
 - Public Agent create/update RPCs validate mutable fields and reject unsupported
   fields. `model` and `fallback_model` are optional string fields and may carry
   an optional `::<connection-local-id>` suffix instead of separate connection
@@ -212,7 +215,8 @@ Clients call the vBot server contract; provider wire details stay behind
   into `app.state`.
 - `server.delegates.dispatch_rpc(state, request)` — validates and dispatches RPC
   methods through `server/rpc/dispatcher.py` and the domain-indexed method
-  registries in `server/rpc/*_methods.py`.
+  registries in `server/rpc/*_methods.py`. New handler code should live in the
+  domain module directly; `server.delegates` should stay a thin facade.
 - `GET /api/runs/{run_id}/events` — streams one Run timeline as SSE using
   `text/event-stream`, replaying existing events and then following new events
   until a terminal Run event. Each SSE event includes `id: <RunEvent.sequence>`
@@ -247,7 +251,7 @@ Clients call the vBot server contract; provider wire details stay behind
 ## Conventions
 
 - Server code maps expected domain errors to provider-agnostic RPC errors.
-- Channel RPC delegates map channel-domain failures to stable RPC codes:
+- Channel RPC handlers map channel-domain failures to stable RPC codes:
   `channel_not_found`, `channel_already_exists`, and `channel_config_error`.
 - Opaque provider metadata such as `reasoning_meta` must not appear in public
   server payloads, including nested SSE/WebSocket event payloads.
@@ -309,7 +313,7 @@ Clients call the vBot server contract; provider wire details stay behind
   and `python-multipart` for upload endpoint parsing.
   Server code should fail clearly if these extras are not installed.
 - Exact long-term payload schemas remain intentionally lightweight; keep schema
-  decisions isolated in RPC delegate/registry modules and transport files.
+  decisions isolated in RPC handler/registry modules and transport files.
 - WebUI static serving is optional at runtime. If `webui/dist/index.html` is
   absent, `/` remains unmounted/404 rather than failing server startup.
 - Static single-page-app fallback must not shadow reserved server paths:
