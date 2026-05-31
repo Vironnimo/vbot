@@ -452,9 +452,11 @@ def test_launch_desktop_resolves_probes_and_creates_one_window(tmp_path: Path) -
 
     assert target.url == "http://10.0.0.10:8500/"
     assert checked_targets == [target]
-    assert fake_webview.created_windows == [
-        (desktop_main.WINDOW_TITLE, {"url": "http://10.0.0.10:8500/"})
-    ]
+    assert len(fake_webview.created_windows) == 1
+    title, window_kwargs = fake_webview.created_windows[0]
+    assert title == desktop_main.WINDOW_TITLE
+    assert window_kwargs["url"] == "http://10.0.0.10:8500/?accessor=desktop"
+    assert "js_api" in window_kwargs
     assert fake_webview.start_calls == [{}]
 
 
