@@ -5,11 +5,23 @@ from __future__ import annotations
 from datetime import datetime
 
 from core.agents.agents import AgentNotFoundError, AgentStore
-from core.chat.commands import build_status_reply, build_status_text, resolve_status_model_details
+from core.chat.commands import (
+    build_status_reply,
+    resolve_status_activity,
+    resolve_status_model_details,
+)
 from core.chat.errors import ChatSessionError
 from core.models.models import ModelRegistry
+from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
-from core.tools.tools import JsonObject, ToolContext, ToolDisplay, ToolRegistry, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolDisplay,
+    ToolRegistry,
+    tool_failure,
+    tool_success,
+)
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("tools.status")
@@ -18,7 +30,18 @@ STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = "Show current session and runtime status."
 STATUS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "properties": {},
+    "properties": {
+        "agent_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional agent id. Requires session_id.",
+        },
+        "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional session id to inspect.",
+        },
+    },
     "additionalProperties": False,
 }
 
@@ -27,50 +50,41 @@ def make_status_handler(
     agents: AgentStore,
     sessions: ChatSessionManager,
     models: ModelRegistry,
+    chat_runs: ChatRunManager,
     started_at: datetime | None,
 ):
     """Create a status tool handler bound to runtime services."""
 
-    def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
-        agent = None
-        messages = []
+    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        try:
+            requested_agent_id = _optional_target_string(arguments, "agent_id")
+            requested_session_id = _optional_target_string(arguments, "session_id")
+        except ValueError as error:
+            return tool_failure("invalid_arguments", str(error))
+        if requested_agent_id is not None and requested_session_id is None:
+            return tool_failure(
+                "invalid_arguments",
+                "agent_id requires session_id; provide no target, session_id, "
+                "or both agent_id and session_id",
+            )
+
+        agent_id = requested_agent_id or context.agent_id
+        session_id = requested_session_id or context.session_id
 
         try:
-            agent = agents.get(context.agent_id)
+            agent = agents.get(agent_id)
         except AgentNotFoundError:
-            _LOGGER.warning(
-                "Failed to load agent %r while running status tool",
-                context.agent_id,
-                exc_info=True,
-            )
-            agent = None
-        except Exception:
-            _LOGGER.error(
-                "Failed to load agent %r while running status tool",
-                context.agent_id,
-                exc_info=True,
-            )
-            agent = None
+            return tool_failure("agent_not_found", f"agent does not exist: {agent_id}")
 
         try:
-            messages = sessions.get(context.agent_id, context.session_id).load()
+            messages = sessions.get(agent_id, session_id).load()
         except ChatSessionError:
-            _LOGGER.warning(
-                "Failed to load session %r for agent %r while running status tool",
-                context.session_id,
-                context.agent_id,
-                exc_info=True,
+            return tool_failure(
+                "session_not_found",
+                f"session does not exist for agent {agent_id}: {session_id}",
             )
-            messages = []
-        except Exception:
-            _LOGGER.error(
-                "Failed to load session %r for agent %r while running status tool",
-                context.session_id,
-                context.agent_id,
-                exc_info=True,
-            )
-            messages = []
 
+        activity = resolve_status_activity(chat_runs, agent_id, session_id)
         context_window, model_display_name = resolve_status_model_details(agent, models)
 
         try:
@@ -80,11 +94,23 @@ def make_status_handler(
                 context_window,
                 started_at,
                 model_display_name,
+                activity,
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
-            text = build_status_text(None, [], None, None)
-        return tool_success({"text": text})
+            raise
+
+        return tool_success(
+            {
+                "text": text,
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "activity": activity.activity,
+                "run_id": activity.run_id,
+                "created_at": activity.created_at,
+                "updated_at": activity.updated_at,
+            }
+        )
 
     return handler
 
@@ -94,6 +120,7 @@ def register_status_tool(
     agents: AgentStore,
     sessions: ChatSessionManager,
     models: ModelRegistry,
+    chat_runs: ChatRunManager,
     started_at: datetime | None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
@@ -101,6 +128,15 @@ def register_status_tool(
         STATUS_TOOL_NAME,
         STATUS_TOOL_DESCRIPTION,
         STATUS_TOOL_PARAMETERS,
-        make_status_handler(agents, sessions, models, started_at),
+        make_status_handler(agents, sessions, models, chat_runs, started_at),
         display=ToolDisplay(),
     )
+
+
+def _optional_target_string(arguments: JsonObject, field_name: str) -> str | None:
+    value = arguments.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value

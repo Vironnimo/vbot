@@ -24,6 +24,7 @@ else:
     ModelRegistry = Any
 
 CommandActionName = Literal["compact", "new_session", "retry_last_turn"]
+StatusActivityName = Literal["idle", "running"]
 
 CommandHandler = Callable[[str, str], "CommandHandled | CommandAction"]
 
@@ -50,6 +51,16 @@ class CommandAction:
     """Result indicating a recognized command needs accessor-level execution."""
 
     name: CommandActionName
+
+
+@dataclass(frozen=True)
+class StatusActivity:
+    """Run activity summary for one Session."""
+
+    activity: StatusActivityName
+    run_id: str | None
+    created_at: str | None
+    updated_at: str | None
 
 
 @dataclass(frozen=True)
@@ -169,12 +180,14 @@ class CommandDispatcher:
             messages = []
 
         context_window, model_display_name = resolve_status_model_details(agent, self._models)
+        activity = resolve_status_activity(self._chat_runs, agent_id, session_id)
         text = build_status_reply(
             agent,
             messages,
             context_window,
             self._started_at,
             model_display_name,
+            activity,
         )
         return CommandHandled(reply=text)
 
@@ -218,11 +231,12 @@ def build_status_reply(
     context_window: int | None,
     started_at: datetime | None,
     model_display_name: str | None,
+    activity: StatusActivity | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
     try:
-        return build_status_text(agent, messages, context_window, started_at)
+        return build_status_text(agent, messages, context_window, started_at, activity)
     finally:
         _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
 
@@ -232,6 +246,7 @@ def build_status_text(
     messages: list[ChatMessage],
     context_window: int | None,
     started_at: datetime | None,
+    activity: StatusActivity | None = None,
 ) -> str:
     """Build human-readable status text for the current session and runtime state."""
     now_utc = datetime.now(UTC)
@@ -255,6 +270,9 @@ def build_status_text(
     session_started = _session_started_text(messages, now_utc)
     turn_count = _turn_count_text(messages)
     app_uptime = _app_uptime_text(started_at, now_utc)
+    activity_name = activity.activity if activity is not None else STATUS_PLACEHOLDER
+    run_created_at = activity.created_at if activity is not None else None
+    run_updated_at = activity.updated_at if activity is not None else None
 
     lines = [
         f"Agent: {agent_summary}",
@@ -262,6 +280,9 @@ def build_status_text(
         f"Fallback model: {fallback_model}",
         f"Thinking effort: {thinking_effort}",
         f"Temperature: {temperature}",
+        f"Activity: {activity_name}",
+        f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
+        f"Run updated at: {run_updated_at or STATUS_PLACEHOLDER}",
         f"Context usage: {context_usage}",
         f"Session started: {session_started}",
         f"Turn count: {turn_count}",
@@ -269,6 +290,28 @@ def build_status_text(
         f"Current time: {now_local.strftime(_STATUS_TIME_FORMAT)}",
     ]
     return "\n".join(lines)
+
+
+def resolve_status_activity(
+    chat_runs: ChatRunManager,
+    agent_id: str,
+    session_id: str,
+) -> StatusActivity:
+    """Return running/idle activity for one Session."""
+    run = chat_runs.active_run(agent_id=agent_id, session_id=session_id)
+    if run is None:
+        return StatusActivity(
+            activity="idle",
+            run_id=None,
+            created_at=None,
+            updated_at=None,
+        )
+    return StatusActivity(
+        activity="running",
+        run_id=run.id,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+    )
 
 
 def _model_display_name(model_string: str) -> str:
