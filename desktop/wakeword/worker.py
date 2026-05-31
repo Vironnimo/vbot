@@ -7,7 +7,6 @@ so the WebUI can show live status via poll-based `getWakewordStatus()`.
 from __future__ import annotations
 
 import io
-import json
 import logging
 import random
 import threading
@@ -45,7 +44,7 @@ _RETRYABLE_STATUS_CODES = frozenset([429, 502, 503])
 class WakewordWorker:
     """Orchestrates the wakeword detection → recording → transcription → send pipeline.
 
-    The worker owns the PyAudio microphone stream and runs the detection loop
+    The worker owns the microphone stream and runs the detection loop
     in a daemon thread. It publishes every state transition to the bridge so
     the WebUI can show live status.
     """
@@ -63,7 +62,6 @@ class WakewordWorker:
         self._server_url = server_url.rstrip("/")
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
-        self._pyaudio: Any = None
         self._stream: Any = None
 
     # -- Lifecycle -----------------------------------------------------------
@@ -114,9 +112,7 @@ class WakewordWorker:
         try:
             while self._running.is_set():
                 try:
-                    chunk = self._stream.read(
-                        _FRAME_SIZE_SAMPLES, exception_on_overflow=False
-                    )
+                    chunk = self._stream.read(_FRAME_SIZE_SAMPLES)[0].tobytes()
                 except Exception:
                     logger.warning("Microphone read error", exc_info=True)
                     self._bridge.publish_state("error")
@@ -133,33 +129,26 @@ class WakewordWorker:
             self._close_stream()
 
     def _open_stream(self) -> None:
-        """Open the PyAudio microphone stream at 16kHz mono 16-bit."""
-        import pyaudio
+        """Open the microphone stream at 16kHz mono 16-bit via sounddevice."""
+        import sounddevice as sd  # type: ignore[import-untyped]
 
-        self._pyaudio = pyaudio.PyAudio()
-        self._stream = self._pyaudio.open(
-            format=pyaudio.paInt16,
+        self._stream = sd.InputStream(
+            samplerate=_SAMPLE_RATE,
             channels=_CHANNELS,
-            rate=_SAMPLE_RATE,
-            input=True,
-            frames_per_buffer=_FRAME_SIZE_SAMPLES,
+            dtype="int16",
+            blocksize=_FRAME_SIZE_SAMPLES,
         )
+        self._stream.start()
 
     def _close_stream(self) -> None:
-        """Close PyAudio stream and terminate the library."""
+        """Close the microphone stream."""
         if self._stream is not None:
             try:
-                self._stream.stop_stream()
+                self._stream.stop()
                 self._stream.close()
             except Exception:
                 pass
             self._stream = None
-        if self._pyaudio is not None:
-            try:
-                self._pyaudio.terminate()
-            except Exception:
-                pass
-            self._pyaudio = None
 
     # -- Post-detection pipeline ---------------------------------------------
 
@@ -222,9 +211,7 @@ class WakewordWorker:
 
         while self._running.is_set():
             try:
-                frame = self._stream.read(
-                    _VAD_FRAME_SIZE, exception_on_overflow=False
-                )
+                frame = self._stream.read(_VAD_FRAME_SIZE)[0].tobytes()
             except Exception:
                 logger.warning("Microphone read error during recording", exc_info=True)
                 break
@@ -260,9 +247,7 @@ class WakewordWorker:
             if not self._running.is_set():
                 break
             try:
-                frame = self._stream.read(
-                    _VAD_FRAME_SIZE, exception_on_overflow=False
-                )
+                frame = self._stream.read(_VAD_FRAME_SIZE)[0].tobytes()
                 frames.append(frame)
             except Exception:
                 break
@@ -289,9 +274,7 @@ class WakewordWorker:
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     _backoff_sleep(attempt)
                     continue
-                logger.warning(
-                    "Speech transcription failed: HTTP %s", response.status_code
-                )
+                logger.warning("Speech transcription failed: HTTP %s", response.status_code)
                 return None
             except httpx.RequestError:
                 if attempt < _MAX_RETRIES - 1:
@@ -313,20 +296,14 @@ class WakewordWorker:
 
     def _list_sessions(self, agent_id: str) -> list[dict[str, Any]]:
         """List sessions for an agent via the session.list RPC."""
-        return self._rpc_call("session.list", {"agent_id": agent_id}).get(
-            "sessions", []
-        )
+        return self._rpc_call("session.list", {"agent_id": agent_id}).get("sessions", [])
 
     def _create_session(self, agent_id: str) -> str:
         """Create a new session for an agent and return its ID."""
-        result = self._rpc_call(
-            "session.create", {"agent_id": agent_id, "make_current": True}
-        )
+        result = self._rpc_call("session.create", {"agent_id": agent_id, "make_current": True})
         return result.get("session_id") or result.get("id", "")
 
-    def _send_transcript(
-        self, transcript: str, agent_id: str, session_id: str
-    ) -> None:
+    def _send_transcript(self, transcript: str, agent_id: str, session_id: str) -> None:
         """Send the transcribed text as a chat message via RPC."""
         self._rpc_call(
             "chat.send",
@@ -353,9 +330,7 @@ class WakewordWorker:
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     _backoff_sleep(attempt)
                     continue
-                logger.warning(
-                    "RPC %s failed: HTTP %s", method, response.status_code
-                )
+                logger.warning("RPC %s failed: HTTP %s", method, response.status_code)
                 return {}
             except httpx.RequestError:
                 if attempt < _MAX_RETRIES - 1:
@@ -367,6 +342,7 @@ class WakewordWorker:
 
 
 # -- Helpers ----------------------------------------------------------------
+
 
 def _encode_wav(raw_frames: bytes) -> bytes:
     """Wrap raw 16kHz mono 16-bit PCM frames in a WAV container."""
@@ -381,30 +357,28 @@ def _encode_wav(raw_frames: bytes) -> bytes:
 
 def _backoff_sleep(attempt: int) -> None:
     """Sleep with exponential backoff and jitter."""
-    delay = (2 ** attempt) + random.random()
+    delay = (2**attempt) + random.random()
     time.sleep(min(delay, 10.0))
 
 
 def list_microphones() -> list[dict[str, Any]]:
-    """Enumerate available PyAudio input devices."""
+    """Enumerate available input audio devices via sounddevice."""
     try:
-        import pyaudio
+        import sounddevice as sd  # type: ignore[import-untyped]
     except ImportError:
         return []
 
-    audio = pyaudio.PyAudio()
     devices: list[dict[str, Any]] = []
     try:
-        for i in range(audio.get_device_count()):
-            info = audio.get_device_info_by_index(i)
-            if int(info.get("maxInputChannels", 0)) > 0:
+        for i, info in enumerate(sd.query_devices()):
+            if int(info.get("max_input_channels", 0)) > 0:
                 devices.append(
                     {
                         "index": i,
                         "name": info.get("name", f"Device {i}"),
-                        "default_sample_rate": int(info.get("defaultSampleRate", _SAMPLE_RATE)),
+                        "default_sample_rate": int(info.get("default_samplerate", _SAMPLE_RATE)),
                     }
                 )
-    finally:
-        audio.terminate()
+    except Exception:
+        pass
     return devices

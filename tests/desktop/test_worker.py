@@ -165,9 +165,9 @@ def test_encode_wav_produces_valid_container() -> None:
         assert wf.readframes(wf.getnframes()) == raw
 
 
-def test_list_microphones_graceful_when_no_pyaudio(monkeypatch) -> None:
-    """list_microphones should return empty list when PyAudio unavailable."""
-    monkeypatch.setitem(__import__("sys").modules, "pyaudio", None)
+def test_list_microphones_graceful_when_no_sounddevice(monkeypatch) -> None:
+    """list_microphones should return empty list when sounddevice unavailable."""
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", None)
 
     from desktop.wakeword.worker import list_microphones
 
