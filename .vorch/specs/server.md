@@ -78,10 +78,16 @@ Clients call the vBot server contract; provider wire details stay behind
   and `continuation` for multiline tails. `cursor` is a short-lived handoff
   token for the follow-up log WebSocket subscription.
 - `prompt.list`, `prompt.update`, and `prompt.reset` use `core/prompts/` for
-  editable fragment order, variable metadata, and prompt-specific name validation.
-  Storage remains responsible for raw prompt file reads/writes. `prompt.preview`
-  renders through the runtime-owned `SystemPromptManager` and returns text plus
-  token estimate metadata.
+  editable fragment order, variable metadata, scope validation, and
+  prompt-specific name validation. Each accepts optional
+  `scope: { type: "default" }` or
+  `scope: { type: "agent", agent_id }`; missing scope means default.
+  `prompt.list` returns `{ fragments, scopes }`, where `scopes` contains only
+  `Default` plus Agents that have enabled custom system prompts. Storage remains
+  responsible for raw prompt file reads/writes. `prompt.preview` accepts the
+  same optional `scope`; Agent scopes imply that Agent as the preview target.
+  It renders through the runtime-owned `SystemPromptManager` and returns text
+  plus token estimate metadata.
 - `POST /api/upload` accepts one multipart file upload and returns
   `{ attachment_id, filename, media_type, size_bytes, text_content }`. The
   server reads the upload in bounded chunks and rejects payloads over the
@@ -132,7 +138,12 @@ Clients call the vBot server contract; provider wire details stay behind
   fields. `temperature` and `thinking_effort` accept `null` to clear an explicit
   override back to inherited defaults. `agent.create` keeps `workspace`
   server-assigned; `agent.update` accepts a non-empty `workspace` string and
-  returns the normalized absolute workspace path.
+  returns the normalized absolute workspace path. Agent payloads include
+  `custom_system_prompt_enabled`; create/update accept that optional boolean.
+  Missing persisted Agent values resolve to `false`. When the flag transitions
+  from false to true, the server seeds
+  `<data_dir>/agents/<agent-id>/prompts/` from the current effective default
+  prompt fragments without overwriting existing Agent prompt files.
 - `session.create` accepts optional `make_current: true`; when set, the created
   Session ID is persisted to the Agent's `current_session_id`.
 - `session.list` accepts `{ agent_id }` and returns `{ sessions }`, where each

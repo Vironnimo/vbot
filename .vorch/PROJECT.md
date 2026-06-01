@@ -220,7 +220,8 @@ cd webui && npm install && npm run build   # Svelte → static JS/CSS
 keys), `settings.json`, `attachments/` blobs plus per-blob sidecar JSON,
 `logs/`, OAuth tokens under `oauth/`, scheduled cron jobs under `cron/jobs.json`,
 speech artifacts under `speech/`, the disposable Session recall index under
-`recall/`, and all runtime data.
+`recall/`, default prompt overrides under `prompts/`, Agent-scoped prompt
+overrides under `agents/<agent-id>/prompts/`, and all runtime data.
 
 ## Testing
 

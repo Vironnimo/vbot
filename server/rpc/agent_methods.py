@@ -57,9 +57,10 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     name = _required_string(params, "name")
     try:
-        state.runtime.agents.create(
-            agent_id, name, **_agent_changes(params, blocked={"id", "name"}, for_create=True)
-        )
+        changes = _agent_changes(params, blocked={"id", "name"}, for_create=True)
+        state.runtime.agents.create(agent_id, name, **changes)
+        if changes.get("custom_system_prompt_enabled") is True:
+            state.runtime.storage.copy_agent_prompt_fragments(agent_id)
         agent = state.runtime.agents.get(agent_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -71,9 +72,14 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
 def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
-        agent = state.runtime.agents.update(
-            agent_id, **_agent_changes(params, blocked={"id"}, for_create=False)
-        )
+        changes = _agent_changes(params, blocked={"id"}, for_create=False)
+        previous_agent = state.runtime.agents.get(agent_id)
+        if (
+            changes.get("custom_system_prompt_enabled") is True
+            and not previous_agent.custom_system_prompt_enabled
+        ):
+            state.runtime.storage.copy_agent_prompt_fragments(agent_id)
+        agent = state.runtime.agents.update(agent_id, **changes)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
@@ -194,6 +200,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "thinking_effort",
         "allowed_tools",
         "allowed_skills",
+        "custom_system_prompt_enabled",
     }
     if not for_create:
         public_fields.add("current_session_id")
@@ -229,6 +236,13 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return _validate_thinking_effort(value, allow_none=True)
     if key in {"allowed_tools", "allowed_skills"}:
         return _validate_string_list(key, value)
+    if key == "custom_system_prompt_enabled":
+        if not isinstance(value, bool):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.custom_system_prompt_enabled must be a boolean",
+            )
+        return value
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
 
 

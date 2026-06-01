@@ -12,6 +12,11 @@ Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`,
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
+Agent-scoped editable prompt fragments live under
+`<data_dir>/agents/<agent-id>/prompts/`. Agent scopes may contain only the five
+normal editable system-prompt fragments: `system.md`, `runtime.md`, `tools.md`,
+`channels.md`, and `skills.md`. `compaction.md` is never Agent-scoped.
+
 `<data_dir>/.env` stores user-owned secrets such as provider API keys and acts
 as a read-only fallback credential source.
 
@@ -53,6 +58,21 @@ as a read-only fallback credential source.
   task-model bindings. Empty target strings remove that task binding.
 - `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
 - `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
+- `copy_agent_prompt_fragments(agent_id, overwrite=False) -> list[Path]` —
+  copies the current effective default-scope editable fragments into one
+  Agent's prompt directory, preserving existing Agent files unless `overwrite`
+  is true.
+- `agent_prompts_dir(agent_id) -> Path` — returns
+  `<data_dir>/agents/<agent-id>/prompts/` after validating the Agent id.
+- `agent_prompt_fragment_exists(agent_id, fragment_name) -> bool` — reports
+  whether one Agent-scoped fragment exists on disk.
+- `read_agent_prompt_fragment(agent_id, fragment_name) -> str` — reads an
+  Agent-scoped fragment, returning `""` when the file is missing.
+- `write_agent_prompt_fragment(agent_id, fragment_name, content) -> Path` —
+  writes one Agent-scoped fragment atomically.
+- `reset_agent_prompt_fragment(agent_id, fragment_name) -> Path` — copies the
+  current effective default-scope content for that fragment into the Agent
+  scope.
 
 ## Conventions
 
@@ -63,7 +83,10 @@ as a read-only fallback credential source.
 - `.env` values must not be copied back into `os.environ`; callers receive
   snapshots instead.
 - Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
-- `compaction.md` is allowlisted for backend prompt loading but is not part of the normal system-prompt editor/viewer surface.
+- Prompt Agent IDs are validated before building Agent prompt paths. Prompt
+  fragment names are allowlisted separately for default and Agent scopes; path
+  traversal and absolute paths are rejected.
+- `compaction.md` is allowlisted for backend prompt loading but is not part of the normal system-prompt editor/viewer surface, and it is never copied into Agent prompt scopes.
 - User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
 - Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
 - `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.

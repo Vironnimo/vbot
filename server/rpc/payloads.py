@@ -74,6 +74,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "thinking_effort": agent.thinking_effort,
         "allowed_tools": list(agent.allowed_tools),
         "allowed_skills": list(agent.allowed_skills),
+        "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "current_session_id": agent.current_session_id,
         "context_window": _resolve_context_window(state, agent.model),
         "created_at": agent.created_at,

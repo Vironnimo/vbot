@@ -10,8 +10,8 @@ Persisted agent configuration and workspace lifecycle management.
 
 `Agent` fields match the current schema: `id`, `name`, `model`,
 `fallback_model`, `workspace`, `current_session_id`, `temperature`,
-`thinking_effort`, `allowed_tools`, `allowed_skills`, `created_at`,
-`updated_at`.
+`thinking_effort`, `allowed_tools`, `allowed_skills`,
+`custom_system_prompt_enabled`, `created_at`, `updated_at`.
 
 - `id` is immutable and used as the filesystem directory name.
 - `model` is user-facing `<provider>/<model-id>` and may optionally carry a pinned local connection suffix as `<provider>/<model-id>::<connection-local-id>`. It may be empty until chat time.
@@ -25,6 +25,11 @@ Persisted agent configuration and workspace lifecycle management.
   an initial empty Session immediately; configs without this field are
   normalized to a valid Session when loaded.
 - `allowed_tools` and `allowed_skills` default to `['*']`.
+- `custom_system_prompt_enabled` is an optional persisted boolean. Missing or
+  `false` means the Agent uses the default prompt scope; `true` means chat and
+  preview may read `<data_dir>/agents/<agent-id>/prompts/` for editable
+  system-prompt fragments. Disabling the toggle ignores Agent prompt files
+  without deleting them.
 
 ## Interfaces
 
@@ -61,6 +66,11 @@ Persisted agent configuration and workspace lifecycle management.
   of `null`, `""`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
   `max`; `temperature` may also be `null`. `null` means "inherit
   defaults.agent" while `""` for `thinking_effort` means "provider default".
-  `allowed_tools` and `allowed_skills` must be lists of strings.
+  `allowed_tools` and `allowed_skills` must be lists of strings. When present,
+  `custom_system_prompt_enabled` must be a boolean; when omitted, it defaults
+  to `false`.
+- Enabling `custom_system_prompt_enabled` through public Agent RPC seeds the
+  Agent prompt directory from the current effective default prompt fragments.
+  Re-enabling preserves existing Agent prompt files.
 - Automatic fallback is run-local only. It does not mutate persisted `model` or `fallback_model`.
 - The optional `::<connection-local-id>` suffix stores only the provider-local connection slug. Runtime reconstructs the full connection ID as `<provider>:<connection-local-id>` from the model prefix.

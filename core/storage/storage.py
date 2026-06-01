@@ -29,6 +29,16 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "compaction.md",
     }
 )
+AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
+    {
+        "system.md",
+        "runtime.md",
+        "tools.md",
+        "channels.md",
+        "skills.md",
+    }
+)
+AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 DEFAULT_APPEARANCE_LANGUAGE = "en"
 SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
 SUBAGENT_SETTING_DEFAULTS = {
@@ -436,6 +446,90 @@ class StorageManager:
             written_paths.append(target_path)
         return written_paths
 
+    def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:
+        """Seed an Agent prompt scope from the currently effective default fragments.
+
+        Existing Agent copies are preserved unless ``overwrite`` is true. Only
+        normal editable system-prompt fragments are copied; backend-only prompt
+        fragments such as ``compaction.md`` are never Agent-scoped.
+        """
+
+        safe_agent_id = self._validate_agent_id(agent_id)
+        self.ensure_directories()
+        target_dir = self.agent_prompts_dir(safe_agent_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        written_paths: list[Path] = []
+        for fragment_name in sorted(AGENT_PROMPT_FRAGMENT_NAMES):
+            target_path = target_dir / fragment_name
+            if target_path.exists() and not overwrite:
+                continue
+
+            content = self.read_prompt_fragment(fragment_name)
+            temp_path = self._temporary_path(target_path)
+            try:
+                temp_path.write_text(content, encoding="utf-8")
+                os.replace(temp_path, target_path)
+            except OSError as exc:
+                self._remove_temporary_file(temp_path)
+                raise StorageError(
+                    f"Cannot copy Agent prompt fragment {fragment_name}: {exc}"
+                ) from exc
+            written_paths.append(target_path)
+        return written_paths
+
+    def agent_prompts_dir(self, agent_id: str) -> Path:
+        """Return the prompt-fragment directory for one Agent."""
+
+        safe_agent_id = self._validate_agent_id(agent_id)
+        return self.data_dir / "agents" / safe_agent_id / "prompts"
+
+    def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
+        """Return whether an Agent prompt fragment exists on disk."""
+
+        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
+        return (self.agent_prompts_dir(agent_id) / safe_name).exists()
+
+    def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
+        """Read an Agent prompt fragment, returning an empty string when absent."""
+
+        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
+        prompt_path = self.agent_prompts_dir(agent_id) / safe_name
+        if not prompt_path.exists():
+            return ""
+
+        try:
+            return prompt_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise StorageError(f"Cannot read Agent prompt fragment {safe_name}: {exc}") from exc
+
+    def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
+        """Write one Agent prompt fragment."""
+
+        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
+        target_dir = self.agent_prompts_dir(agent_id)
+        target_path = target_dir / safe_name
+
+        self.ensure_directories()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = self._temporary_path(target_path)
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            os.replace(temp_path, target_path)
+        except OSError as exc:
+            self._remove_temporary_file(temp_path)
+            raise StorageError(f"Cannot write Agent prompt fragment {safe_name}: {exc}") from exc
+
+        return target_path
+
+    def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
+        """Reset one Agent prompt fragment to the current default-scope content."""
+
+        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
+        return self.write_agent_prompt_fragment(
+            agent_id, safe_name, self.read_prompt_fragment(safe_name)
+        )
+
     def reset_prompt_fragment(self, fragment_name: str) -> Path:
         """Reset a user-copy prompt fragment to its bundled default.
 
@@ -799,6 +893,21 @@ class StorageManager:
             raise StorageError(f"Unsafe prompt fragment name: {fragment_name}")
         if fragment_name not in PROMPT_FRAGMENT_NAMES:
             raise StorageError(f"Unknown prompt fragment: {fragment_name}")
+        return fragment_name
+
+    @staticmethod
+    def _validate_agent_id(agent_id: str) -> str:
+        if not isinstance(agent_id, str) or AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+            raise StorageError(f"Unsafe agent id: {agent_id}")
+        return agent_id
+
+    @staticmethod
+    def _validate_agent_prompt_fragment_name(fragment_name: str) -> str:
+        path = Path(fragment_name)
+        if path.name != fragment_name or path.is_absolute():
+            raise StorageError(f"Unsafe Agent prompt fragment name: {fragment_name}")
+        if fragment_name not in AGENT_PROMPT_FRAGMENT_NAMES:
+            raise StorageError(f"Unknown Agent prompt fragment: {fragment_name}")
         return fragment_name
 
     def _temporary_path(self, target_path: Path) -> Path:

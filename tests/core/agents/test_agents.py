@@ -46,6 +46,7 @@ def test_agent_dataclass_is_frozen() -> None:
         thinking_effort="",
         allowed_tools=["*"],
         allowed_skills=["*"],
+        custom_system_prompt_enabled=False,
         current_session_id="session-one",
         created_at="2026-05-03T12:00:00Z",
         updated_at="2026-05-03T12:00:00Z",
@@ -70,6 +71,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["thinking_effort"] is None
     assert data["allowed_tools"] == ["*"]
     assert data["allowed_skills"] == ["*"]
+    assert data["custom_system_prompt_enabled"] is False
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
     assert data["created_at"].endswith("Z")
@@ -98,11 +100,13 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         thinking_effort="high",
         allowed_tools=[],
         allowed_skills=["memory"],
+        custom_system_prompt_enabled=True,
     )
 
     assert agent.workspace == str(custom_workspace.resolve())
     assert agent.allowed_tools == []
     assert agent.allowed_skills == ["memory"]
+    assert agent.custom_system_prompt_enabled is True
     assert (custom_workspace / "SOUL.md").exists()
 
 
@@ -121,6 +125,11 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", None], "allowed_skills must be a list of strings"),
+        (
+            "custom_system_prompt_enabled",
+            "yes",
+            "custom_system_prompt_enabled must be a boolean",
+        ),
     ],
 )
 def test_create_rejects_invalid_mutable_fields(
@@ -208,6 +217,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         name="Updated Coder",
         model="openai/gpt-5.2",
         allowed_tools=["read_file"],
+        custom_system_prompt_enabled=True,
     )
 
     assert updated.id == "coder"
@@ -216,6 +226,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
     assert updated.allowed_tools == ["read_file"]
+    assert updated.custom_system_prompt_enabled is True
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
 
@@ -253,6 +264,11 @@ def test_update_changes_workspace_and_seeds_templates(
         ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", {}], "allowed_skills must be a list of strings"),
+        (
+            "custom_system_prompt_enabled",
+            1,
+            "custom_system_prompt_enabled must be a boolean",
+        ),
     ],
 )
 def test_update_rejects_invalid_mutable_fields(
@@ -506,6 +522,20 @@ def test_agent_without_workspace_is_normalized_to_default_workspace(store: Agent
     assert (workspace_path / "SOUL.md").exists()
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert normalized_data["workspace"] == str(workspace_path.resolve())
+
+
+def test_agent_without_custom_prompt_toggle_uses_default_false(store: AgentStore) -> None:
+    store.create("missing_prompt_toggle", "Missing Prompt Toggle Agent")
+    agent_path = store.data_dir / "agents" / "missing_prompt_toggle" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    data.pop("custom_system_prompt_enabled")
+    agent_path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = store.get("missing_prompt_toggle")
+
+    assert loaded.custom_system_prompt_enabled is False
+    persisted_data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert "custom_system_prompt_enabled" not in persisted_data
 
 
 def test_agent_with_missing_workspace_directory_recreates_workspace(store: AgentStore) -> None:
