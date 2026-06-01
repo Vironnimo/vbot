@@ -107,6 +107,8 @@ cannot immediately retrigger a second recording cycle.
 - The loaded UI is the normal WebUI root path `/`; no separate desktop-only
   frontend build or route is part of the current contract.
 - The Desktop window title is `vBot`.
+- The Desktop window enables pywebview document text selection so normal WebUI
+  text can be selected inside the native shell.
 - A custom `desktop/icon.png` is optional; when absent, pywebview's platform
   default icon is used.
 - Closing the window ends only the Desktop process, never the target server.
