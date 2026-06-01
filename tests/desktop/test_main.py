@@ -411,7 +411,10 @@ def test_launch_window_creates_url_window_without_js_bridge(tmp_path: Path) -> N
     )
 
     assert fake_webview.created_windows == [
-        (desktop_main.WINDOW_TITLE, {"url": "http://127.0.0.1:8420/"})
+        (
+            desktop_main.WINDOW_TITLE,
+            {"url": "http://127.0.0.1:8420/", "text_select": True},
+        )
     ]
     assert "js_api" not in fake_webview.created_windows[0][1]
     assert fake_webview.start_calls == [{}]
@@ -430,7 +433,10 @@ def test_launch_window_creates_html_window_without_js_bridge(tmp_path: Path) -> 
     )
 
     assert fake_webview.created_windows == [
-        (desktop_main.WINDOW_TITLE, {"html": "<p>Server unreachable</p>"})
+        (
+            desktop_main.WINDOW_TITLE,
+            {"html": "<p>Server unreachable</p>", "text_select": True},
+        )
     ]
     assert "js_api" not in fake_webview.created_windows[0][1]
     assert fake_webview.start_calls == [{}]

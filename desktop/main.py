@@ -326,12 +326,12 @@ def launch_window(
 
     webview = webview_module if webview_module is not None else load_webview()
     if content.url is not None:
-        kwargs: dict[str, Any] = {"url": content.url}
+        kwargs: dict[str, Any] = {"url": content.url, "text_select": True}
         if js_api is not None:
             kwargs["js_api"] = js_api
         webview.create_window(WINDOW_TITLE, **kwargs)
     elif content.html is not None:
-        webview.create_window(WINDOW_TITLE, html=content.html)
+        webview.create_window(WINDOW_TITLE, html=content.html, text_select=True)
     else:
         raise ValueError("Desktop window content requires either url or html")
 
