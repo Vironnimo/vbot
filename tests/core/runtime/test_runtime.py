@@ -459,6 +459,50 @@ async def test_runtime_start_does_not_crash_when_channel_adapter_cannot_start(
     runtime.start()
 
     assert runtime.channel_service.has_active_channels() is False
+    assert runtime.channel_service.is_failed("tg-assistant") is True
+    assert (
+        runtime.channel_service.failure_reason("tg-assistant")
+        == "Missing Telegram token in environment variable: TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
+    )
+
+    runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_does_not_crash_when_channel_agent_is_missing(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
+    channel_dir = config.data_dir / "channels" / "tg-assistant"
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    channel_dir.joinpath("channel.json").write_text(
+        "\n".join(
+            (
+                "{",
+                '  "id": "tg-assistant",',
+                '  "platform": "telegram",',
+                '  "agent_id": "missing-agent",',
+                '  "dm_scope": "per_conversation",',
+                '  "allowed_chat_ids": [12345],',
+                '  "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",',
+                '  "enabled": true',
+                "}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    runtime = Runtime(config)
+
+    runtime.start()
+
+    assert runtime.agents.get("main").id == "main"
+    assert runtime.channel_service.has_active_channels() is False
+    assert runtime.channel_service.is_failed("tg-assistant") is True
+    assert (
+        runtime.channel_service.failure_reason("tg-assistant") == "Unknown agent_id: missing-agent"
+    )
 
     runtime.stop()
 

@@ -58,7 +58,8 @@ parameter translation and deterministic output formatting.
 - `python cli/main.py channel disable --id`
   - calls `channel.disable` over server RPC
 - `python cli/main.py channel status --id`
-  - calls `channel.status` over server RPC
+  - calls `channel.status` over server RPC and prints enabled, running, and
+    failed state plus the failure reason when one exists
 - `python cli/main.py provider list`
   - calls `connection.list` over server RPC and prints configured connections
 - `python cli/main.py provider status --provider <id> [--connection <provider:connection-id>]`

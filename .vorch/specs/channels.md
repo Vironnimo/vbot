@@ -48,6 +48,8 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
   - `enable_channel(channel_id: str) -> None`
   - `disable_channel(channel_id: str) -> None`
   - `has_active_channels() -> bool`
+  - `is_failed(channel_id: str) -> bool`
+  - `failure_reason(channel_id: str) -> str | None`
 - `ChannelAdapter`
   - `platform: str`
   - `async start() -> None`
@@ -81,6 +83,11 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Session history remains the single source of truth. Channels add metadata and System Reminder notes; they do not fork chat history.
 - Runtime registers `channel_send` only when at least one channel is active and re-evaluates registration when channels are enabled or disabled.
 - `channel_send` reports success only after the adapter send call completes; delivery is not fire-and-forget.
+- Runtime startup degrades per channel: an enabled channel with invalid runtime
+  dependencies, such as an unknown `agent_id` or missing Telegram token, is
+  marked failed with a diagnostic reason and does not prevent the server from
+  starting. Public create/update/enable paths still reject unknown Agent IDs
+  before persisting or enabling a channel.
 
 ## External Dependencies
 
@@ -92,6 +99,9 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Only the final assistant text from a completed Run is forwarded to the platform. Tool results, reasoning, and intermediate events stay in the JSONL/SSE flow.
 - Sidecar metadata is owned by `ChatSessionManager`; channel code consumes it but does not define a separate storage path or format.
 - Adapter restart on failure should use bounded retry with backoff; a broken adapter must not silently disappear.
+- Failed channel diagnostics are runtime-local health state. Persisted
+  `channel.json` remains the source of truth for configuration, and vBot does
+  not automatically retarget a channel to a fallback Agent.
 - Telegram caught failure paths that must preserve user-facing generic replies
   still log channel/session/action context with traceback detail so operators
   can diagnose trigger, compact, retry, media ingest, and lifecycle failures.

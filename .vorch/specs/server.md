@@ -165,7 +165,10 @@ Clients call the vBot server contract; provider wire details stay behind
 - `channel.create` accepts channel config fields and returns `{ id }`.
 - `channel.update`, `channel.delete`, `channel.enable`, and `channel.disable`
   return `{ ok: true }`.
-- `channel.status` accepts `{ id }` and returns `{ id, enabled, running }`.
+- `channel.status` accepts `{ id }` and returns
+  `{ id, enabled, running, failed, failure_reason }`. `failure_reason` is
+  `null` unless the channel service has recorded a runtime-local channel start
+  or adapter failure.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model. `content` may be a
   string or a JSON array of canonical content-block dicts. When the target
