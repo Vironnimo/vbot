@@ -5,7 +5,7 @@ from __future__ import annotations
 import platform
 import re
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
@@ -64,12 +64,25 @@ class PromptError(VBotError, ValueError):
     """Raised when a public prompt-domain request is invalid."""
 
 
+@dataclass(frozen=True)
+class PromptScope:
+    """Resolved prompt-fragment scope."""
+
+    type: str
+    agent_id: str | None = None
+
+
 class PromptAgent(Protocol):
     """Agent fields needed for prompt assembly."""
 
     @property
     def id(self) -> str:
         """Stable Agent identifier."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Display name for the Agent."""
         ...
 
     @property
@@ -97,12 +110,21 @@ class PromptAgent(Protocol):
         """Skill allowlist for prompt-visible skills."""
         ...
 
+    @property
+    def custom_system_prompt_enabled(self) -> bool:
+        """Whether this Agent uses its private system prompt fragment scope."""
+        ...
+
 
 class PromptFragmentReader(Protocol):
     """Minimal prompt storage interface used by the system prompt manager."""
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
         """Return a prompt fragment by resource name."""
+        ...
+
+    def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
+        """Return an Agent prompt fragment or an empty string when absent."""
         ...
 
 
@@ -117,6 +139,34 @@ class PromptFragmentStorage(PromptFragmentReader, Protocol):
 
     def reset_prompt_fragment(self, fragment_name: str) -> Path:
         """Reset a user-copy prompt fragment to the bundled default."""
+        ...
+
+    def agent_prompts_dir(self, agent_id: str) -> Path:
+        """Return the prompt-fragment directory for one Agent."""
+        ...
+
+    def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
+        """Return whether one Agent prompt fragment exists."""
+        ...
+
+    def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
+        """Write one Agent prompt fragment."""
+        ...
+
+    def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
+        """Reset one Agent prompt fragment to current default-scope content."""
+        ...
+
+
+class PromptAgentStore(Protocol):
+    """Agent catalog methods needed for prompt scope validation."""
+
+    def get(self, agent_id: str) -> PromptAgent:
+        """Return one Agent by id."""
+        ...
+
+    def list(self) -> list[PromptAgent]:
+        """Return all Agents."""
         ...
 
 
@@ -224,34 +274,100 @@ class PromptFragment:
 class PromptFragmentManager:
     """Manage editable prompt fragments through a storage backend."""
 
-    def __init__(self, storage: PromptFragmentStorage) -> None:
+    def __init__(
+        self,
+        storage: PromptFragmentStorage,
+        agent_store: PromptAgentStore | None = None,
+    ) -> None:
         self._storage = storage
+        self._agent_store = agent_store
 
-    def list_fragments(self) -> list[JsonObject]:
+    def list_scopes(self) -> list[JsonObject]:
+        """Return prompt scopes available to the System Prompt editor."""
+        scopes: list[JsonObject] = [{"type": "default", "label": "Default"}]
+        if self._agent_store is None:
+            return scopes
+
+        for agent in sorted(self._agent_store.list(), key=lambda item: item.id):
+            if not agent.custom_system_prompt_enabled:
+                continue
+            scopes.append(
+                {
+                    "type": "agent",
+                    "agent_id": agent.id,
+                    "label": agent.name or agent.id,
+                }
+            )
+        return scopes
+
+    def validate_scope(self, scope: Any = None) -> PromptScope:
+        """Resolve and validate a public prompt scope payload."""
+        return self._resolve_scope(scope)
+
+    def list_fragments(self, scope: Any = None) -> list[JsonObject]:
         """Return editable prompt fragments in stable UI order."""
+        prompt_scope = self._resolve_scope(scope)
         fragments: list[JsonObject] = []
         for name in EDITABLE_PROMPT_FRAGMENT_NAMES:
-            fragment = PromptFragment(
-                name=name,
-                content=self._storage.read_prompt_fragment(name),
-                is_modified=(self._storage.prompts_dir / name).exists(),
-                variables=PROMPT_FRAGMENT_VARIABLES.get(name, []),
-            )
+            if prompt_scope.type == "agent":
+                agent_id = _require_scope_agent_id(prompt_scope)
+                fragment = PromptFragment(
+                    name=name,
+                    content=self._storage.read_agent_prompt_fragment(agent_id, name),
+                    is_modified=self._storage.agent_prompt_fragment_exists(agent_id, name),
+                    variables=PROMPT_FRAGMENT_VARIABLES.get(name, []),
+                )
+            else:
+                fragment = PromptFragment(
+                    name=name,
+                    content=self._storage.read_prompt_fragment(name),
+                    is_modified=(self._storage.prompts_dir / name).exists(),
+                    variables=PROMPT_FRAGMENT_VARIABLES.get(name, []),
+                )
             fragments.append(fragment.to_dict())
         return fragments
 
-    def update_fragment(self, name: str, content: str) -> JsonObject:
+    def update_fragment(self, name: str, content: str, scope: Any = None) -> JsonObject:
         """Write an editable prompt fragment and return its public state."""
         fragment_name = _validate_editable_prompt_fragment_name(name)
+        prompt_scope = self._resolve_scope(scope)
+        if prompt_scope.type == "agent":
+            agent_id = _require_scope_agent_id(prompt_scope)
+            self._storage.write_agent_prompt_fragment(agent_id, fragment_name, content)
+            return {"name": fragment_name, "content": content, "is_modified": True}
+
         self._storage.write_prompt_fragment(fragment_name, content)
         return {"name": fragment_name, "content": content, "is_modified": True}
 
-    def reset_fragment(self, name: str) -> JsonObject:
-        """Reset an editable prompt fragment to its bundled default."""
+    def reset_fragment(self, name: str, scope: Any = None) -> JsonObject:
+        """Reset an editable prompt fragment to its default content."""
         fragment_name = _validate_editable_prompt_fragment_name(name)
+        prompt_scope = self._resolve_scope(scope)
+        if prompt_scope.type == "agent":
+            agent_id = _require_scope_agent_id(prompt_scope)
+            self._storage.reset_agent_prompt_fragment(agent_id, fragment_name)
+            content = self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
+            return {"name": fragment_name, "content": content, "is_modified": True}
+
         self._storage.reset_prompt_fragment(fragment_name)
         content = self._storage.read_prompt_fragment(fragment_name)
-        return {"name": fragment_name, "content": content}
+        return {"name": fragment_name, "content": content, "is_modified": False}
+
+    def _resolve_scope(self, scope: Any = None) -> PromptScope:
+        prompt_scope = _normalize_prompt_scope(scope)
+        if prompt_scope.type == "default":
+            return prompt_scope
+        if self._agent_store is None:
+            raise PromptError("Agent prompt scopes are not available")
+
+        agent_id = _require_scope_agent_id(prompt_scope)
+        try:
+            agent = self._agent_store.get(agent_id)
+        except Exception as exc:
+            raise PromptError(f"unknown prompt scope agent: {agent_id}") from exc
+        if not agent.custom_system_prompt_enabled:
+            raise PromptError(f"Agent prompt scope is not enabled: {agent_id}")
+        return prompt_scope
 
 
 class SystemPromptManager:
@@ -286,18 +402,21 @@ class SystemPromptManager:
         """Replace the skill registry used for prompt and provider tool decisions."""
         self._skill_registry = skill_registry
 
-    def build_system_prompt(self, agent: PromptAgent) -> str:
+    def build_system_prompt(self, agent: PromptAgent, scope: Any = None) -> str:
         """Build the complete system prompt for an agent."""
-        prompt = self._storage.read_prompt_fragment("system.md")
-        replacements = {
-            "{app_version}": self._app_version,
-            "{runtime}": self._build_runtime_block(agent),
-            "{tools}": self._build_tools_block(agent),
-            "{channels}": self._build_channels_block(agent),
-            "{skills}": self._build_skills_block(agent),
-        }
-        for placeholder, value in replacements.items():
-            prompt = prompt.replace(placeholder, value)
+        prompt_scope = self._resolve_build_scope(agent, scope)
+        prompt = self._read_prompt_fragment(prompt_scope, agent.id, "system.md")
+
+        if "{app_version}" in prompt:
+            prompt = prompt.replace("{app_version}", self._app_version)
+        if "{runtime}" in prompt:
+            prompt = prompt.replace("{runtime}", self._build_runtime_block(agent, prompt_scope))
+        if "{tools}" in prompt:
+            prompt = prompt.replace("{tools}", self._build_tools_block(agent, prompt_scope))
+        if "{channels}" in prompt:
+            prompt = prompt.replace("{channels}", self._build_channels_block(agent, prompt_scope))
+        if "{skills}" in prompt:
+            prompt = prompt.replace("{skills}", self._build_skills_block(agent, prompt_scope))
 
         return self._replace_workspace_includes(prompt, Path(agent.workspace))
 
@@ -312,8 +431,8 @@ class SystemPromptManager:
             *self._tool_registry.provider_definitions(["skill"], include_internal=True),
         ]
 
-    def _build_runtime_block(self, agent: PromptAgent) -> str:
-        runtime = self._storage.read_prompt_fragment("runtime.md")
+    def _build_runtime_block(self, agent: PromptAgent, scope: PromptScope) -> str:
+        runtime = self._read_prompt_fragment(scope, agent.id, "runtime.md")
         thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
         replacements = {
             "{host}": self._host or socket.gethostname(),
@@ -328,22 +447,49 @@ class SystemPromptManager:
         }
         return _replace_placeholders(runtime, replacements)
 
-    def _build_tools_block(self, agent: PromptAgent) -> str:
-        tools = self._storage.read_prompt_fragment("tools.md")
+    def _build_tools_block(self, agent: PromptAgent, scope: PromptScope) -> str:
+        tools = self._read_prompt_fragment(scope, agent.id, "tools.md")
         tool_list = _format_tool_list(
             self._tool_registry.prompt_definitions(agent.allowed_tools),
         )
         return tools.replace("{tool_list}", tool_list)
 
-    def _build_channels_block(self, agent: PromptAgent) -> str:
-        channels = self._storage.read_prompt_fragment("channels.md")
+    def _build_channels_block(self, agent: PromptAgent, scope: PromptScope) -> str:
+        channels = self._read_prompt_fragment(scope, agent.id, "channels.md")
         channel_list = _format_channel_list(self._agent_active_channels(agent))
         return channels.replace("{channel_list}", channel_list)
 
-    def _build_skills_block(self, agent: PromptAgent) -> str:
-        skills = self._storage.read_prompt_fragment("skills.md")
+    def _build_skills_block(self, agent: PromptAgent, scope: PromptScope) -> str:
+        skills = self._read_prompt_fragment(scope, agent.id, "skills.md")
         skill_list = _format_skill_list(self._skill_registry.filter_allowed(agent.allowed_skills))
         return skills.replace("{skill_list}", skill_list)
+
+    def _resolve_build_scope(self, agent: PromptAgent, scope: Any = None) -> PromptScope:
+        if scope is None:
+            if agent.custom_system_prompt_enabled:
+                return PromptScope("agent", agent.id)
+            return PromptScope("default")
+
+        prompt_scope = _normalize_prompt_scope(scope)
+        if prompt_scope.type == "default":
+            return prompt_scope
+
+        agent_id = _require_scope_agent_id(prompt_scope)
+        if agent_id != agent.id:
+            raise PromptError("Agent prompt scope must match the preview Agent")
+        if not agent.custom_system_prompt_enabled:
+            raise PromptError(f"Agent prompt scope is not enabled: {agent_id}")
+        return prompt_scope
+
+    def _read_prompt_fragment(
+        self,
+        scope: PromptScope,
+        agent_id: str,
+        fragment_name: str,
+    ) -> str:
+        if scope.type == "agent":
+            return self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
+        return self._storage.read_prompt_fragment(fragment_name)
 
     def _agent_has_loadable_skills(self, agent: PromptAgent) -> bool:
         return bool(self._skill_registry.filter_allowed(agent.allowed_skills))
@@ -385,6 +531,38 @@ def _validate_workspace_include(filename: str) -> None:
     path = Path(filename)
     if path.name != filename or path.is_absolute():
         raise PromptError(f"Unsafe workspace include: {filename}")
+
+
+def _normalize_prompt_scope(scope: Any = None) -> PromptScope:
+    if scope is None:
+        return PromptScope("default")
+    if isinstance(scope, PromptScope):
+        return scope
+    if not isinstance(scope, Mapping):
+        raise PromptError("prompt scope must be an object")
+
+    unsupported_fields = sorted(set(scope) - {"type", "agent_id"})
+    if unsupported_fields:
+        raise PromptError(f"unsupported prompt scope fields: {', '.join(unsupported_fields)}")
+
+    scope_type = scope.get("type", "default")
+    if scope_type == "default":
+        if scope.get("agent_id") not in (None, ""):
+            raise PromptError("default prompt scope must not include agent_id")
+        return PromptScope("default")
+    if scope_type == "agent":
+        agent_id = scope.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            raise PromptError("agent prompt scope requires agent_id")
+        return PromptScope("agent", agent_id)
+
+    raise PromptError(f"unknown prompt scope type: {scope_type}")
+
+
+def _require_scope_agent_id(scope: PromptScope) -> str:
+    if scope.agent_id is None:
+        raise PromptError("agent prompt scope requires agent_id")
+    return scope.agent_id
 
 
 def _validate_editable_prompt_fragment_name(name: str) -> str:

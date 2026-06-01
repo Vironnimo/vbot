@@ -702,3 +702,89 @@ def test_write_prompt_fragment_rejects_unknown_name(tmp_path: Path) -> None:
 
     with pytest.raises(StorageError, match="Unknown prompt fragment"):
         storage.write_prompt_fragment("unknown.md", "content")
+
+
+def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+    storage.ensure_directories()
+    storage.write_prompt_fragment("system.md", "custom default system")
+
+    written_paths = storage.copy_agent_prompt_fragments("coder")
+
+    assert sorted(path.name for path in written_paths) == [
+        "channels.md",
+        "runtime.md",
+        "skills.md",
+        "system.md",
+        "tools.md",
+    ]
+    assert storage.read_agent_prompt_fragment("coder", "system.md") == "custom default system"
+    assert not (data_dir / "agents" / "coder" / "prompts" / "compaction.md").exists()
+
+
+def test_copy_agent_prompt_fragments_preserves_existing_files(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+    storage.write_agent_prompt_fragment("coder", "system.md", "custom agent system")
+
+    storage.copy_agent_prompt_fragments("coder")
+
+    assert storage.read_agent_prompt_fragment("coder", "system.md") == "custom agent system"
+
+
+def test_read_missing_agent_prompt_fragment_returns_empty_string(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+
+    assert storage.read_agent_prompt_fragment("coder", "skills.md") == ""
+
+
+def test_write_agent_prompt_fragment_creates_file(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+
+    written_path = storage.write_agent_prompt_fragment("coder", "tools.md", "agent tools")
+
+    assert written_path == data_dir / "agents" / "coder" / "prompts" / "tools.md"
+    assert storage.read_agent_prompt_fragment("coder", "tools.md") == "agent tools"
+
+
+def test_reset_agent_prompt_fragment_uses_current_default_scope(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    data_dir = tmp_path / "data"
+    create_prompt_resources(resources_dir)
+    storage = StorageManager(data_dir, resources_dir=resources_dir)
+    storage.write_prompt_fragment("skills.md", "custom default skills")
+    storage.write_agent_prompt_fragment("coder", "skills.md", "agent skills")
+
+    storage.reset_agent_prompt_fragment("coder", "skills.md")
+
+    assert storage.read_agent_prompt_fragment("coder", "skills.md") == "custom default skills"
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "fragment_name", "message"),
+    [
+        ("../escape", "system.md", "Unsafe agent id"),
+        ("coder", "../system.md", "Unsafe Agent prompt fragment name"),
+        ("coder", "compaction.md", "Unknown Agent prompt fragment"),
+    ],
+)
+def test_agent_prompt_fragments_reject_unsafe_paths(
+    tmp_path: Path,
+    agent_id: str,
+    fragment_name: str,
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path / "data")
+
+    with pytest.raises(StorageError, match=message):
+        storage.read_agent_prompt_fragment(agent_id, fragment_name)

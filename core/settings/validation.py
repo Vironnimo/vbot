@@ -62,6 +62,7 @@ AGENT_FIELDS = frozenset(
         "allowed_skills",
         "allowed_tools",
         "created_at",
+        "custom_system_prompt_enabled",
         "current_session_id",
         "fallback_model",
         "id",
@@ -300,6 +301,7 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         return [_error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
 
     _warn_unknown_keys(diagnostics, "$", data, AGENT_FIELDS, "agent field")
+    _validate_required_fields(diagnostics, "$", data, REQUIRED_AGENT_FIELDS)
     _validate_agent_id(diagnostics, data.get("id"))
     _validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=True)
     _validate_string(diagnostics, "$.model", data.get("model"), required=True)
@@ -316,6 +318,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
     )
     _validate_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     _validate_string_list(diagnostics, "$.allowed_skills", data.get("allowed_skills"))
+    if "custom_system_prompt_enabled" in data and not isinstance(
+        data["custom_system_prompt_enabled"], bool
+    ):
+        _error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     if "current_session_id" in data:

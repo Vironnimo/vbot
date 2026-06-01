@@ -20,28 +20,50 @@ Editable prompt fragments are exactly these five names, in UI order:
 
 `compaction.md` is storage-readable for backend compaction, but it is not editable through the System Prompt UI.
 
+Prompt fragments can be edited in scopes:
+
+- The `default` scope reads and writes `<data_dir>/prompts/`, falling back to
+  `resources/prompts/` when a default user copy is absent.
+- An `agent` scope reads and writes
+  `<data_dir>/agents/<agent-id>/prompts/` and is available only when that
+  Agent has `custom_system_prompt_enabled: true`.
+- Missing Agent-scope fragments read as empty strings and are created on save.
+  `system.md` may intentionally be empty.
+
 ## Interfaces
 
 - `core/prompts/__init__.py` exports `SystemPromptManager`, `PromptFragmentManager`, `PromptError`, prompt Protocols, editable fragment names, and variable metadata.
 - `SystemPromptManager(storage, tool_registry, skill_registry, app_version, app_dir, data_root, ...)`
-  - `build_system_prompt(agent) -> str` expands `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and `{include:filename}`. The rendered runtime fragment expands `{app_version}` with the application version.
+  - `build_system_prompt(agent, scope=None) -> str` expands `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and `{include:filename}`. The rendered runtime fragment expands `{app_version}` with the application version. With `scope=None`, it uses the Agent scope only when the Agent explicitly enables custom system prompts; otherwise it uses the default scope. Passing an explicit scope is used by preview and must match the preview Agent for Agent scopes.
   - `provider_tool_definitions(agent) -> list[dict]` returns provider tool schemas filtered by the Agent allowlist and adds the internal `skill` tool only when the Agent has loadable skills.
   - `update_skill_registry(skill_registry)` refreshes prompt-visible skill filtering after runtime skill reload.
-- `PromptFragmentManager(storage)`
-  - `list_fragments() -> list[dict]` returns editable fragments in stable UI order with content, modification status, and variable metadata.
-  - `update_fragment(name, content) -> dict` validates that `name` is editable, writes the user copy through storage, and returns `{ name, content, is_modified: true }`.
-  - `reset_fragment(name) -> dict` validates that `name` is editable, resets through storage, and returns `{ name, content }`.
+- `PromptFragmentManager(storage, agent_store=None)`
+  - `list_scopes() -> list[dict]` returns the default scope plus enabled Agent scopes only.
+  - `validate_scope(scope=None) -> PromptScope` validates public scope payloads for RPC callers.
+  - `list_fragments(scope=None) -> list[dict]` returns editable fragments in stable UI order with content, modification status, and variable metadata for the chosen scope.
+  - `update_fragment(name, content, scope=None) -> dict` validates that `name` is editable, writes the scoped user copy through storage, and returns `{ name, content, is_modified: true }`.
+  - `reset_fragment(name, scope=None) -> dict` validates that `name` is editable and resets through storage. Default-scope reset restores the bundled default and returns `is_modified: false`; Agent-scope reset copies the current effective default-scope content and returns `is_modified: true`.
 
 ## Conventions
 
 - Prompt domain code depends on Protocols for Agent, Tool, Skill, Channel, and Storage shapes. Avoid importing concrete AgentStore, ChannelService, or StorageManager classes here unless a new boundary genuinely needs it.
 - Workspace includes accept only safe flat filenames. `{include:filename}` resolves under the Agent workspace and wraps content as `<file name="filename">\n...\n</file>`.
 - The bundled default system prompt includes `SOUL.md`, `USER.md`, and `MEMORY.md`; missing workspace includes render as an empty tagged file rather than failing prompt assembly.
+- Custom Agent `system.md` expands optional blocks lazily: `{runtime}`,
+  `{tools}`, `{channels}`, and `{skills}` are rendered only when the placeholder
+  appears in the Agent's `system.md`. This keeps an empty or minimal Agent root
+  from implicitly pulling in default fragments.
 - Skill prompt metadata is XML-escaped before insertion.
 - Prompt fragment variable metadata is descriptive UI data only; changing it is a user-visible contract change.
+- Provider tool permissions and schemas continue to come from `allowed_tools`.
+  The `{tools}` prompt placeholder controls only prompt-visible explanatory
+  text and does not grant tool access.
 
 ## Constraints & Gotchas
 
 - Prompt RPC error behavior must stay stable: prompt-specific public validation errors map to `invalid_request`; storage/runtime failures map through the server's normal domain-error path.
 - User-edited prompt fragments in `<data_dir>/prompts/` override bundled resources and must be preserved unless reset explicitly.
+- Agent prompt fragments are ignored unless that Agent's
+  `custom_system_prompt_enabled` flag is true. Disabling the flag does not
+  delete Agent prompt files.
 - Prompt preview uses the runtime's active `SystemPromptManager`, so it reflects live skill registry, tool registry, channel state, and Agent allowlists.

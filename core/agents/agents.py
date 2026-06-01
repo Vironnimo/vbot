@@ -20,6 +20,7 @@ DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
 DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_THINKING_EFFORT: str | None = None
+DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -63,6 +64,7 @@ class Agent:
     created_at: str
     updated_at: str
     current_session_id: str = ""
+    custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
 
 
 class AgentStore:
@@ -97,6 +99,7 @@ class AgentStore:
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
+        custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     ) -> Agent:
         """Create and persist a new agent, sessions directory, and workspace."""
         self._validate_agent_id(agent_id)
@@ -113,6 +116,9 @@ class AgentStore:
         validated_thinking_effort = _validate_thinking_effort(thinking_effort)
         validated_allowed_tools = _validate_allowed_items("allowed_tools", allowed_tools)
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
+        validated_custom_system_prompt_enabled = _validate_bool_field(
+            "custom_system_prompt_enabled", custom_system_prompt_enabled
+        )
         now = _utc_now()
         workspace_path = (
             _validate_workspace(workspace)
@@ -132,6 +138,7 @@ class AgentStore:
             thinking_effort=validated_thinking_effort,
             allowed_tools=validated_allowed_tools,
             allowed_skills=validated_allowed_skills,
+            custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
             current_session_id=session.id,
             created_at=now,
             updated_at=now,
@@ -213,6 +220,10 @@ class AgentStore:
         if "allowed_skills" in changes:
             changes["allowed_skills"] = _validate_allowed_items(
                 "allowed_skills", changes["allowed_skills"]
+            )
+        if "custom_system_prompt_enabled" in changes:
+            changes["custom_system_prompt_enabled"] = _validate_bool_field(
+                "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
             )
         if "current_session_id" in changes:
             self._validate_current_session(agent_id, changes["current_session_id"])
@@ -384,6 +395,12 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
     return list(items)
 
 
+def _validate_bool_field(field: str, value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise AgentError(f"{field} must be a boolean")
+    return value
+
+
 def _validate_workspace(workspace: str | Path) -> Path:
     if not isinstance(workspace, str | os.PathLike):
         raise AgentError("workspace must be a path string")
@@ -410,6 +427,13 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
         thinking_effort=_validate_thinking_effort(data.get("thinking_effort")),
         allowed_tools=_validate_allowed_items("allowed_tools", data["allowed_tools"]),
         allowed_skills=_validate_allowed_items("allowed_skills", data["allowed_skills"]),
+        custom_system_prompt_enabled=_validate_bool_field(
+            "custom_system_prompt_enabled",
+            data.get(
+                "custom_system_prompt_enabled",
+                DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+            ),
+        ),
         current_session_id=_validate_string_field(
             "current_session_id", data.get("current_session_id", ""), allow_empty=True
         ),

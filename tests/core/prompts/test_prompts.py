@@ -11,6 +11,7 @@ from core.agents.agents import Agent
 from core.channels.channels import ChannelConfig
 from core.prompts.prompts import (
     EDITABLE_PROMPT_FRAGMENT_NAMES,
+    PromptAgent,
     PromptError,
     PromptFragmentManager,
     SkillPromptMetadata,
@@ -28,9 +29,19 @@ class StubSkill:
 class StubStorage:
     def __init__(self, fragments: dict[str, str]) -> None:
         self._fragments = fragments
+        self._agent_fragments: dict[tuple[str, str], str] = {}
+        self.reads: list[tuple[str, str]] = []
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
+        self.reads.append(("default", fragment_name))
         return self._fragments[fragment_name]
+
+    def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
+        self.reads.append((agent_id, fragment_name))
+        return self._agent_fragments.get((agent_id, fragment_name), "")
+
+    def set_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> None:
+        self._agent_fragments[(agent_id, fragment_name)] = content
 
 
 class EditableStubStorage(StubStorage):
@@ -50,6 +61,27 @@ class EditableStubStorage(StubStorage):
         target_path.write_text(content, encoding="utf-8")
         return target_path
 
+    def agent_prompts_dir(self, agent_id: str) -> Path:
+        return self.prompts_dir.parent / "agents" / agent_id / "prompts"
+
+    def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
+        return (agent_id, fragment_name) in self._agent_fragments
+
+    def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
+        self._agent_fragments[(agent_id, fragment_name)] = content
+        target_dir = self.agent_prompts_dir(agent_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / fragment_name
+        target_path.write_text(content, encoding="utf-8")
+        return target_path
+
+    def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
+        return self.write_agent_prompt_fragment(
+            agent_id,
+            fragment_name,
+            self._fragments[fragment_name],
+        )
+
     def reset_prompt_fragment(self, fragment_name: str) -> Path:
         content = f"default {fragment_name}"
         self._fragments[fragment_name] = content
@@ -57,6 +89,17 @@ class EditableStubStorage(StubStorage):
         target_path = self.prompts_dir / fragment_name
         target_path.write_text(content, encoding="utf-8")
         return target_path
+
+
+class StubAgentStore:
+    def __init__(self, agents: list[PromptAgent]) -> None:
+        self._agents = {agent.id: agent for agent in agents}
+
+    def get(self, agent_id: str) -> PromptAgent:
+        return self._agents[agent_id]
+
+    def list(self) -> list[PromptAgent]:
+        return list(self._agents.values())
 
 
 class StubTools:
@@ -469,6 +512,75 @@ def test_missing_workspace_include_is_omitted(
     assert prompt == "Before\n\nAfter"
 
 
+def test_custom_agent_system_prompt_uses_agent_fragments_without_default_fallback(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    storage = StubStorage(fragments)
+    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root\n{skills}")
+    manager = SystemPromptManager(
+        storage,
+        StubTools(),
+        StubSkills([StubSkill("debugging", "Debug failures")]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(_agent(workspace, custom_system_prompt_enabled=True))
+
+    assert prompt == "Custom root\n"
+    assert ("default", "skills.md") not in storage.reads
+
+
+def test_custom_agent_system_prompt_omits_unreferenced_blocks_lazily(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    storage = StubStorage(fragments)
+    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root only")
+    manager = SystemPromptManager(
+        storage,
+        StubTools(),
+        StubSkills([StubSkill("debugging", "Debug failures")]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(_agent(workspace, custom_system_prompt_enabled=True))
+
+    assert prompt == "Custom root only"
+    assert storage.reads == [("coder", "system.md")]
+
+
+def test_default_prompt_scope_preview_ignores_agent_custom_toggle(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    fragments["system.md"] = "Default root"
+    storage = StubStorage(fragments)
+    storage.set_agent_prompt_fragment("coder", "system.md", "Custom root")
+    manager = SystemPromptManager(
+        storage,
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(
+        _agent(workspace, custom_system_prompt_enabled=True),
+        scope={"type": "default"},
+    )
+
+    assert prompt == "Default root"
+
+
 def test_prompt_fragment_manager_lists_editable_fragments_in_ui_order(tmp_path: Path) -> None:
     storage = EditableStubStorage(tmp_path)
     storage.write_prompt_fragment("runtime.md", "custom runtime")
@@ -490,7 +602,59 @@ def test_prompt_fragment_manager_updates_and_resets_editable_fragment(tmp_path: 
     reset = manager.reset_fragment("tools.md")
 
     assert updated == {"name": "tools.md", "content": "custom tools", "is_modified": True}
-    assert reset == {"name": "tools.md", "content": "default tools.md"}
+    assert reset == {"name": "tools.md", "content": "default tools.md", "is_modified": False}
+
+
+def test_prompt_fragment_manager_lists_available_agent_scopes(tmp_path: Path) -> None:
+    enabled_agent = _agent(tmp_path, custom_system_prompt_enabled=True)
+    disabled_agent = _agent(
+        tmp_path,
+        agent_id="disabled",
+        custom_system_prompt_enabled=False,
+    )
+    manager = PromptFragmentManager(
+        EditableStubStorage(tmp_path),
+        StubAgentStore([disabled_agent, enabled_agent]),
+    )
+
+    scopes = manager.list_scopes()
+
+    assert scopes == [
+        {"type": "default", "label": "Default"},
+        {"type": "agent", "agent_id": "coder", "label": "Coder Agent"},
+    ]
+
+
+def test_prompt_fragment_manager_reads_missing_agent_fragments_as_empty(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, custom_system_prompt_enabled=True)
+    manager = PromptFragmentManager(EditableStubStorage(tmp_path), StubAgentStore([agent]))
+
+    fragments = manager.list_fragments({"type": "agent", "agent_id": "coder"})
+
+    assert [fragment["name"] for fragment in fragments] == list(EDITABLE_PROMPT_FRAGMENT_NAMES)
+    assert all(fragment["content"] == "" for fragment in fragments)
+    assert all(fragment["is_modified"] is False for fragment in fragments)
+
+
+def test_prompt_fragment_manager_updates_and_resets_agent_fragment(tmp_path: Path) -> None:
+    storage = EditableStubStorage(tmp_path)
+    agent = _agent(tmp_path, custom_system_prompt_enabled=True)
+    manager = PromptFragmentManager(storage, StubAgentStore([agent]))
+    scope = {"type": "agent", "agent_id": "coder"}
+
+    updated = manager.update_fragment("skills.md", "custom agent skills", scope)
+    reset = manager.reset_fragment("skills.md", scope)
+
+    assert updated == {"name": "skills.md", "content": "custom agent skills", "is_modified": True}
+    assert reset == {"name": "skills.md", "content": "skills.md content", "is_modified": True}
+
+
+def test_prompt_fragment_manager_rejects_disabled_agent_scope(tmp_path: Path) -> None:
+    agent = _agent(tmp_path, custom_system_prompt_enabled=False)
+    manager = PromptFragmentManager(EditableStubStorage(tmp_path), StubAgentStore([agent]))
+
+    with pytest.raises(PromptError, match="not enabled"):
+        manager.list_fragments({"type": "agent", "agent_id": "coder"})
 
 
 def test_prompt_fragment_manager_rejects_internal_compaction_fragment(tmp_path: Path) -> None:
@@ -503,11 +667,13 @@ def test_prompt_fragment_manager_rejects_internal_compaction_fragment(tmp_path: 
 def _agent(
     workspace: Path,
     *,
+    agent_id: str = "coder",
     allowed_tools: list[str] | None = None,
     allowed_skills: list[str] | None = None,
+    custom_system_prompt_enabled: bool = False,
 ) -> Agent:
     return Agent(
-        id="coder",
+        id=agent_id,
         name="Coder Agent",
         model="openai/gpt-5.2",
         fallback_model="",
@@ -516,6 +682,7 @@ def _agent(
         thinking_effort="high",
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
+        custom_system_prompt_enabled=custom_system_prompt_enabled,
         created_at="2026-05-03T12:00:00Z",
         updated_at="2026-05-03T12:00:00Z",
     )

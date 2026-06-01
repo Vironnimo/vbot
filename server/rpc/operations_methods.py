@@ -38,21 +38,39 @@ def _read_log(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_DOMAIN, str(exc)) from exc
 
 
-def _list_prompts(state: Any) -> JsonObject:
+def _list_prompts(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"scope"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported prompt.list fields: {', '.join(unsupported_fields)}",
+        )
+
     try:
-        fragments = PromptFragmentManager(state.runtime.storage).list_fragments()
+        manager = _prompt_fragment_manager(state)
+        fragments = manager.list_fragments(params.get("scope"))
+        scopes = manager.list_scopes()
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"fragments": fragments}
+    return {"fragments": fragments, "scopes": scopes}
 
 
 def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"name", "content", "scope"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported prompt.update fields: {', '.join(unsupported_fields)}",
+        )
+
     name = _required_string(params, "name")
     content = params.get("content")
     if not isinstance(content, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
     try:
-        return PromptFragmentManager(state.runtime.storage).update_fragment(name, content)
+        return _prompt_fragment_manager(state).update_fragment(name, content, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
@@ -60,9 +78,16 @@ def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"name", "scope"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported prompt.reset fields: {', '.join(unsupported_fields)}",
+        )
+
     name = _required_string(params, "name")
     try:
-        return PromptFragmentManager(state.runtime.storage).reset_fragment(name)
+        return _prompt_fragment_manager(state).reset_fragment(name, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
@@ -70,7 +95,24 @@ def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
-    agent_id = _required_string(params, "agent_id")
+    unsupported_fields = sorted(set(params) - {"agent_id", "scope"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported prompt.preview fields: {', '.join(unsupported_fields)}",
+        )
+
+    scope = params.get("scope")
+    try:
+        prompt_scope = _prompt_fragment_manager(state).validate_scope(scope)
+    except PromptError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    if prompt_scope.type == "agent":
+        agent_id = cast(str, prompt_scope.agent_id)
+    else:
+        agent_id = _required_string(params, "agent_id")
+
     try:
         agent = state.runtime.agents.get(agent_id)
     except KeyError as exc:
@@ -79,7 +121,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
     try:
         prompt_manager = state.runtime.system_prompts
-        text = prompt_manager.build_system_prompt(agent)
+        text = prompt_manager.build_system_prompt(agent, scope=prompt_scope)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     token_count, estimated = estimate_tokens(text)
@@ -95,16 +137,17 @@ def _log_viewer(state: Any) -> LogViewer:
     return log_viewer
 
 
+def _prompt_fragment_manager(state: Any) -> PromptFragmentManager:
+    return PromptFragmentManager(state.runtime.storage, state.runtime.agents)
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return log and prompt RPC handlers."""
-
-    def list_prompts(state: Any, _params: dict[str, Any]) -> dict[str, Any]:
-        return cast(dict[str, Any], _list_prompts(state))
 
     return {
         "log.list": _list_logs,
         "log.read": _read_log,
-        "prompt.list": list_prompts,
+        "prompt.list": _list_prompts,
         "prompt.update": _update_prompt,
         "prompt.reset": _reset_prompt,
         "prompt.preview": _preview_prompt,

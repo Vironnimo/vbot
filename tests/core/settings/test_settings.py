@@ -11,6 +11,7 @@ from core.settings import (
     SettingsValidationError,
     SettingsValidationReport,
     parse_settings_update,
+    validate_agent_data,
     validate_settings_file,
 )
 
@@ -274,3 +275,43 @@ def test_validate_settings_file_reports_invalid_recall_backend(tmp_path: Path) -
     assert diagnostics_as_tuples(report) == [
         ("error", "$.recall.backend", "must use lowercase snake_case")
     ]
+
+
+def _valid_agent_data() -> dict[str, object]:
+    return {
+        "id": "coder",
+        "name": "Coder",
+        "model": "",
+        "fallback_model": "",
+        "temperature": None,
+        "thinking_effort": None,
+        "allowed_tools": ["*"],
+        "allowed_skills": ["*"],
+        "custom_system_prompt_enabled": False,
+        "created_at": "2026-05-03T12:00:00Z",
+        "updated_at": "2026-05-03T12:00:00Z",
+    }
+
+
+def test_validate_agent_data_accepts_missing_custom_prompt_toggle() -> None:
+    data = _valid_agent_data()
+    del data["custom_system_prompt_enabled"]
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics == []
+
+
+def test_validate_agent_data_rejects_non_bool_custom_prompt_toggle() -> None:
+    data = _valid_agent_data()
+    data["custom_system_prompt_enabled"] = "yes"
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("agent.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.custom_system_prompt_enabled", "must be a boolean")]

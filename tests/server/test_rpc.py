@@ -45,6 +45,7 @@ class StubAgent:
     thinking_effort: str | None = ""
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
+    custom_system_prompt_enabled: bool = False
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
     updated_at: str = "2026-05-04T00:00:00Z"
@@ -403,6 +404,7 @@ class StubStorage:
             "channels.md": "# Channels\nDefault channels list.",
             "skills.md": "# Skills\nDefault skills list.",
         }
+        self._agent_prompt_fragments: dict[tuple[str, str], str] = {}
 
     def load_appearance_settings(self) -> JsonObject:
         return dict(self._appearance)
@@ -636,9 +638,47 @@ class StubStorage:
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
         (self.prompts_dir / name).write_text(default, encoding="utf-8")
 
+    def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:
+        written_paths: list[Path] = []
+        for name, content in sorted(self._prompt_fragments.items()):
+            key = (agent_id, name)
+            if key in self._agent_prompt_fragments and not overwrite:
+                continue
+            self._agent_prompt_fragments[key] = content
+            path = self.agent_prompts_dir(agent_id) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            written_paths.append(path)
+        return written_paths
+
+    def agent_prompts_dir(self, agent_id: str) -> Path:
+        return self.data_dir / "agents" / agent_id / "prompts"
+
+    def agent_prompt_fragment_exists(self, agent_id: str, name: str) -> bool:
+        return (agent_id, name) in self._agent_prompt_fragments
+
+    def read_agent_prompt_fragment(self, agent_id: str, name: str) -> str:
+        return self._agent_prompt_fragments.get((agent_id, name), "")
+
+    def write_agent_prompt_fragment(self, agent_id: str, name: str, content: str) -> None:
+        if name not in self._prompt_fragments:
+            raise StorageError(f"Unknown prompt fragment: {name}")
+        self._agent_prompt_fragments[(agent_id, name)] = content
+        path = self.agent_prompts_dir(agent_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def reset_agent_prompt_fragment(self, agent_id: str, name: str) -> None:
+        if name not in self._prompt_fragments:
+            raise StorageError(f"Unknown prompt fragment: {name}")
+        self.write_agent_prompt_fragment(agent_id, name, self._prompt_fragments[name])
+
 
 class StubPrompts:
-    def build_system_prompt(self, agent: StubAgent) -> str:
+    def build_system_prompt(self, agent: StubAgent, scope: object = None) -> str:
+        if getattr(scope, "type", None) == "agent":
+            scope_agent_id = getattr(scope, "agent_id", None)
+            return f"Custom system for {scope_agent_id}"
         return f"System for {agent.id}"
 
     def provider_tool_definitions(self, _agent: StubAgent) -> list[JsonObject]:
@@ -2424,8 +2464,51 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 
     assert list_response["result"]["agents"][0]["current_session_id"] == "current-one"
     assert create_response["result"]["id"] == "writer"
+    assert create_response["result"]["custom_system_prompt_enabled"] is False
     assert update_response["result"]["name"] == "Updated Writer"
     assert delete_response["result"]["agent_id"] == "writer"
+
+
+@pytest.mark.asyncio
+async def test_agent_update_enabling_custom_prompt_seeds_agent_fragments(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.write_prompt_fragment("system.md", "custom default system")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "custom_system_prompt_enabled": True},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["custom_system_prompt_enabled"] is True
+    assert (
+        state.runtime.storage.read_agent_prompt_fragment("coder", "system.md")
+        == "custom default system"
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_update_reenabling_custom_prompt_preserves_agent_fragments(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+    state.runtime.storage.write_agent_prompt_fragment("coder", "system.md", "agent custom")
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=False)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.update",
+            "params": {"id": "coder", "custom_system_prompt_enabled": True},
+        },
+    )
+
+    assert response["ok"] is True
+    assert state.runtime.storage.read_agent_prompt_fragment("coder", "system.md") == "agent custom"
 
 
 @pytest.mark.asyncio
@@ -2637,6 +2720,7 @@ async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Pa
         ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
         ("agent.update", {"id": "coder", "name": ""}),
         ("agent.update", {"id": "coder", "model": 5}),
+        ("agent.update", {"id": "coder", "custom_system_prompt_enabled": "yes"}),
     ],
 )
 async def test_agent_rpc_rejects_malformed_mutable_payloads(
@@ -4050,6 +4134,25 @@ async def test_prompt_list_includes_content_is_modified_and_variables(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_prompt_list_includes_default_and_enabled_agent_scopes(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create(
+        "custom",
+        "Custom Agent",
+        custom_system_prompt_enabled=True,
+    )
+    state.runtime.agents.create("plain", "Plain Agent")
+
+    response = await dispatch_rpc(state, {"method": "prompt.list", "params": {}})
+
+    assert response["ok"] is True
+    assert response["result"]["scopes"] == [
+        {"type": "default", "label": "Default"},
+        {"type": "agent", "agent_id": "custom", "label": "Custom Agent"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prompt_list_reflects_user_modified_fragment(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.write_prompt_fragment("runtime.md", "My custom runtime.")
@@ -4079,6 +4182,67 @@ async def test_prompt_update_writes_content_and_returns_is_modified_true(tmp_pat
         "is_modified": True,
     }
     assert state.runtime.storage.read_prompt_fragment("tools.md") == "# Custom tools"
+
+
+@pytest.mark.asyncio
+async def test_prompt_update_writes_enabled_agent_scope(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.update",
+            "params": {
+                "name": "system.md",
+                "content": "Agent system",
+                "scope": {"type": "agent", "agent_id": "coder"},
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"] == {
+        "name": "system.md",
+        "content": "Agent system",
+        "is_modified": True,
+    }
+    assert state.runtime.storage.read_agent_prompt_fragment("coder", "system.md") == "Agent system"
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_reads_missing_agent_fragment_as_empty(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.list",
+            "params": {"scope": {"type": "agent", "agent_id": "coder"}},
+        },
+    )
+
+    assert response["ok"] is True
+    fragments = {fragment["name"]: fragment for fragment in response["result"]["fragments"]}
+    assert fragments["skills.md"]["content"] == ""
+    assert fragments["skills.md"]["is_modified"] is False
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_rejects_disabled_agent_scope(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.list",
+            "params": {"scope": {"type": "agent", "agent_id": "coder"}},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
 
 
 @pytest.mark.asyncio
@@ -4123,6 +4287,32 @@ async def test_prompt_reset_restores_default_and_returns_content(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_prompt_reset_agent_scope_uses_current_default_content(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+    state.runtime.storage.write_prompt_fragment("skills.md", "Default skills now")
+    state.runtime.storage.write_agent_prompt_fragment("coder", "skills.md", "Agent skills")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.reset",
+            "params": {
+                "name": "skills.md",
+                "scope": {"type": "agent", "agent_id": "coder"},
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"] == {
+        "name": "skills.md",
+        "content": "Default skills now",
+        "is_modified": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_prompt_reset_rejects_unknown_fragment_name(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 
@@ -4150,6 +4340,23 @@ async def test_prompt_preview_returns_rendered_text_and_token_estimate(tmp_path:
     assert isinstance(result["tokens"], int)
     assert result["tokens"] > 0
     assert result["estimated"] is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_uses_enabled_agent_scope(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.preview",
+            "params": {"scope": {"type": "agent", "agent_id": "coder"}},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["text"] == "Custom system for coder"
 
 
 @pytest.mark.asyncio
