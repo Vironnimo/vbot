@@ -417,9 +417,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Saves and resets use the selected prompt scope. Agent-scope reset asks for
     Agent-specific confirmation and restores the current Default fragment
     content into the Agent scope.
-  - The preview section shows a normal Agent picker for Default scope. For an
-    Agent scope it replaces the picker with the Agent scope chip and sends
-    `prompt.preview` with `{ agent_id, scope }` for that Agent.
+  - The preview section shows a normal Agent picker for Default scope and sends
+    `prompt.preview` without a scope so the preview matches that Agent's
+    effective runtime prompt. For an Agent scope it replaces the picker with the
+    Agent scope chip and sends `prompt.preview` with `{ agent_id, scope }` for
+    that Agent.
   - Dirty fragments auto-save about 800 ms after the last edit using per-fragment
     debounce timers.
   - Manual save is a single global button at the bottom of the System Prompt

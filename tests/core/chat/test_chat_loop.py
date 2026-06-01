@@ -428,6 +428,24 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
+    class EmptySystemPrompts(StubPrompts):
+        def build_system_prompt(self, agent: StubAgent) -> str:
+            return "\n"
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.system_prompts = EmptySystemPrompts()
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    request_messages = adapter.requests[0]["messages"]
+    assert [message["role"] for message in request_messages] == ["user"]
+    assert request_messages[0]["content"] == "Hi"
+
+
+@pytest.mark.asyncio
 async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
     tmp_path: Path,
 ) -> None:
