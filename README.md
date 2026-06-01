@@ -27,13 +27,47 @@ CLI commands require a running vBot server and go through its RPC surface.
 
 ## Quick Start
 
-### 1. Install Python dependencies
+### 1. Install vBot
+
+On Windows, the installer prepares the Python CLI, builds the WebUI, and creates
+missing files in `~/.vbot` without overwriting an existing valid
+`settings.json` or `.env`:
+
+```powershell
+.\scripts\install.ps1
+```
+
+Optional autostart via Windows Task Scheduler:
+
+```powershell
+.\scripts\install.ps1 -EnableAutostart
+```
+
+Start the server immediately after installation:
+
+```powershell
+.\scripts\install.ps1 -StartServer
+```
+
+Uninstall removes the Python package only. It leaves `~/.vbot` untouched:
+
+```powershell
+.\scripts\uninstall.ps1
+```
+
+Remove the optional autostart task too:
+
+```powershell
+.\scripts\uninstall.ps1 -RemoveAutostart
+```
+
+### Manual development install
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-### 2. Install WebUI dependencies
+### Install WebUI dependencies
 
 ```bash
 cd webui
@@ -41,7 +75,7 @@ npm install
 cd ..
 ```
 
-### 3. Add API keys
+### Add API keys
 
 vBot reads configuration from `~/.vbot/` by default.
 

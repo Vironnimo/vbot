@@ -13,6 +13,42 @@ the server, WebUI, CLI, desktop shell, and channel integrations.
 
 ## 2. Setup
 
+### Install with the script on Windows
+
+The installer always builds the WebUI, installs the Python package in editable
+mode, and prepares the data directory conservatively. If `~/.vbot/settings.json`
+already exists and is valid JSON, it is kept as-is. If it is missing, the script
+creates a minimal file with `server_port`. If it exists but is invalid, the
+script stops instead of overwriting it. Existing port settings are respected for
+installer start/autostart commands unless `-Port` is passed explicitly.
+
+```powershell
+.\scripts\install.ps1
+```
+
+Common options:
+
+```powershell
+.\scripts\install.ps1 -EnableAutostart
+.\scripts\install.ps1 -StartServer
+.\scripts\install.ps1 -DataDir "$env:USERPROFILE\.vbot" -Port 8420
+```
+
+The autostart option registers a Windows Task Scheduler task that runs
+`vbot server start` at user login.
+
+To uninstall the Python package while keeping the data directory untouched:
+
+```powershell
+.\scripts\uninstall.ps1
+```
+
+To also remove the optional autostart task:
+
+```powershell
+.\scripts\uninstall.ps1 -RemoveAutostart
+```
+
 ### Install Python dependencies
 
 ```bash
