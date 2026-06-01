@@ -171,6 +171,20 @@ through i18n — no hardcoded text.
 **Prerequisites:** Python >= 3.11, Node.js (for webui).
 
 **Setup:**
+Windows users can run the conservative installer, which installs the editable
+Python package, always installs/builds the WebUI, creates missing `~/.vbot`
+files without overwriting an existing valid `settings.json` or `.env`, and can
+optionally register a Windows Task Scheduler autostart task. Existing port
+settings are respected unless `-Port` is explicit:
+```powershell
+.\scripts\install.ps1 [-EnableAutostart] [-StartServer]
+```
+Uninstall is intentionally data-dir preserving:
+```powershell
+.\scripts\uninstall.ps1 [-RemoveAutostart]
+```
+
+Manual development setup:
 ```bash
 pip install -e ".[dev]"
 ```
