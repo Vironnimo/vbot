@@ -877,14 +877,18 @@ class ChatLoop:
 
     def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
-        system_message = ChatMessage.system(system_prompt, agent.model)
+        system_messages = (
+            [ChatMessage.system(system_prompt, agent.model).to_dict()]
+            if system_prompt.strip()
+            else []
+        )
         session_messages = session.load()
         checkpoint = _latest_compaction_checkpoint(session_messages)
 
         if checkpoint is None:
             history = _embed_notes_into_request(session_messages)
             request_messages = [
-                system_message.to_dict(),
+                *system_messages,
                 *session.skill_context_messages(),
                 *history,
             ]
@@ -909,7 +913,7 @@ class ChatLoop:
             }
             history = _embed_notes_into_request(tail_messages)
             request_messages = [
-                system_message.to_dict(),
+                *system_messages,
                 *session.skill_context_messages(),
                 summary_synthetic_message,
                 *history,

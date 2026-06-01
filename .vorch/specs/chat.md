@@ -157,4 +157,4 @@ container; a Run is one active execution inside that session.
 
 - Unknown future fields in session JSON may appear; avoid making chat depend on provider-specific metadata shape.
 - Model IDs in messages use user-facing `<provider>/<model-id>` form for traceability, while adapters receive the provider-specific `model_id` part.
-- The loop stores user, assistant, tool, and note messages in session files. The system prompt is assembled for each request rather than appended as normal chat history.
+- The loop stores user, assistant, tool, and note messages in session files. The system prompt is assembled for each request rather than appended as normal chat history. If the assembled system prompt is empty or whitespace-only, the provider request omits the system message entirely.

@@ -679,6 +679,8 @@ class StubPrompts:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
             return f"Custom system for {scope_agent_id}"
+        if scope is None and agent.custom_system_prompt_enabled:
+            return f"Effective custom system for {agent.id}"
         return f"System for {agent.id}"
 
     def provider_tool_definitions(self, _agent: StubAgent) -> list[JsonObject]:
@@ -4340,6 +4342,41 @@ async def test_prompt_preview_returns_rendered_text_and_token_estimate(tmp_path:
     assert isinstance(result["tokens"], int)
     assert result["tokens"] > 0
     assert result["estimated"] is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_without_scope_uses_effective_agent_prompt(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "prompt.preview", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["text"] == "Effective custom system for coder"
+
+
+@pytest.mark.asyncio
+async def test_prompt_preview_explicit_default_scope_uses_default_prompt(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update("coder", custom_system_prompt_enabled=True)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "prompt.preview",
+            "params": {"agent_id": "coder", "scope": {"type": "default"}},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["text"] == "System for coder"
 
 
 @pytest.mark.asyncio

@@ -104,11 +104,13 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
     scope = params.get("scope")
     try:
-        prompt_scope = _prompt_fragment_manager(state).validate_scope(scope)
+        prompt_scope = (
+            _prompt_fragment_manager(state).validate_scope(scope) if scope is not None else None
+        )
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
-    if prompt_scope.type == "agent":
+    if prompt_scope is not None and prompt_scope.type == "agent":
         agent_id = cast(str, prompt_scope.agent_id)
     else:
         agent_id = _required_string(params, "agent_id")

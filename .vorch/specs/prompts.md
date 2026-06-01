@@ -67,3 +67,4 @@ Prompt fragments can be edited in scopes:
   `custom_system_prompt_enabled` flag is true. Disabling the flag does not
   delete Agent prompt files.
 - Prompt preview uses the runtime's active `SystemPromptManager`, so it reflects live skill registry, tool registry, channel state, and Agent allowlists.
+- `prompt.preview` without a `scope` parameter shows the Agent's effective runtime prompt, including its Agent scope when custom prompts are enabled. Passing `scope: {type: "default"}` previews the default scope explicitly.
