@@ -225,7 +225,13 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
             200,
             json={
                 "ok": True,
-                "result": {"id": "tg-assistant", "enabled": True, "running": False},
+                "result": {
+                    "id": "tg-assistant",
+                    "enabled": True,
+                    "running": False,
+                    "failed": True,
+                    "failure_reason": "Unknown agent_id: missing-agent",
+                },
             },
         )
 
@@ -235,7 +241,10 @@ def test_channel_status_posts_status_rpc(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert result == CommandResult(
         ok=True,
-        message="tg-assistant: enabled=yes running=no",
+        message=(
+            "tg-assistant: enabled=yes running=no failed=yes "
+            "failure_reason=Unknown agent_id: missing-agent"
+        ),
         instance=instance,
     )
     assert calls == [
@@ -450,7 +459,7 @@ def test_channel_commands_surface_rpc_domain_errors(
             "status",
             ["channel", "status", "--id", "tg-assistant"],
             "status",
-            "result: tg-assistant: enabled=yes running=no",
+            "result: tg-assistant: enabled=yes running=no failed=no",
         ),
     ],
 )
@@ -529,7 +538,7 @@ def test_run_dispatches_channel_commands(
         calls.append(("status", {"instance": resolved_instance, "id": channel_id}))
         return CommandResult(
             ok=True,
-            message="tg-assistant: enabled=yes running=no",
+            message="tg-assistant: enabled=yes running=no failed=no",
             instance=resolved_instance,
         )
 

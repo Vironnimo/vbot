@@ -175,6 +175,8 @@ async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
     channel_service = Mock()
     channel_service.list_channels.return_value = [config]
     channel_service._is_running = Mock(return_value=True)
+    channel_service.is_failed = Mock(return_value=False)
+    channel_service.failure_reason = Mock(return_value=None)
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -193,6 +195,40 @@ async def test_channel_status_happy_path_returns_enabled_and_running() -> None:
             "id": "tg-assistant",
             "enabled": True,
             "running": True,
+            "failed": False,
+            "failure_reason": None,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_channel_status_returns_failure_reason() -> None:
+    config = _channel_config(enabled=True)
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    channel_service._is_running = Mock(return_value=False)
+    channel_service.is_failed = Mock(return_value=True)
+    channel_service.failure_reason = Mock(return_value="Unknown agent_id: missing-agent")
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.status",
+            "params": {
+                "id": "tg-assistant",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "id": "tg-assistant",
+            "enabled": True,
+            "running": False,
+            "failed": True,
+            "failure_reason": "Unknown agent_id: missing-agent",
         },
     }
 

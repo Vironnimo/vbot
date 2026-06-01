@@ -48,6 +48,8 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   storage.load_defaults().get("agent", {})`, and ensures a usable default Agent exists. Before the final
   `Runtime started` line it also writes one info-level inventory summary with loaded tool and skill counts plus
   usable-provider and usable-connection counts derived from the current provider registry and credential state.
+  The bootstrap Agent is ensured before `ChannelService` starts so a configured
+  channel targeting `main` can come up during first-start recovery.
   Second call is no-op (debug log) and preserves service instances.
 - `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the
   `ProcessManager` sweeper, stops `ChannelService`, stops `CronService`, resets
@@ -126,6 +128,8 @@ runtime helper methods.
 - `ChannelService.start()` follows the same event-loop guard pattern as
   `CronService.start()`: when runtime startup happens without an active asyncio
   loop, the service is wired but listeners are not started.
+- Channel startup failures are isolated to the channel service and recorded as
+  failed channel health state; they must not fail `Runtime.start()`.
 - Runtime owns the canonical resolver-wired chat loops. Server code should use
   `runtime.chat_loop` / `runtime.streaming_chat_loop` when available instead of
   constructing fresh `ChatLoop` instances and bypassing attachment resolution.

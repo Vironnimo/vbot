@@ -286,6 +286,19 @@ def test_channel_service_update_validates_agent_exists(tmp_path: Path) -> None:
         service.update_channel(config.id, agent_id="missing-agent")
 
 
+def test_channel_service_start_marks_missing_agent_channel_failed(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+    service = make_service(tmp_path, known_agent_ids={"main"})
+
+    service.start()
+
+    assert service.has_active_channels() is False
+    assert service.is_failed(config.id) is True
+    assert service.failure_reason(config.id) == "Unknown agent_id: assistant"
+
+
 @pytest.mark.asyncio
 async def test_channel_service_start_and_stop_manage_enabled_adapters(
     tmp_path: Path,

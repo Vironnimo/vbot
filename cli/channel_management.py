@@ -115,9 +115,19 @@ def channel_status(instance: ServerInstance, channel_id: str) -> CommandResult:
     resolved_id = _string_or_default(payload.data.get("id"), channel_id)
     enabled_text = _bool_text(payload.data.get("enabled"))
     running_text = _bool_text(payload.data.get("running"))
+    failed_text = _bool_text(payload.data.get("failed"))
+    failure_reason = payload.data.get("failure_reason")
+    failure_suffix = (
+        f" failure_reason={failure_reason}"
+        if isinstance(failure_reason, str) and failure_reason
+        else ""
+    )
     return CommandResult(
         ok=True,
-        message=f"{resolved_id}: enabled={enabled_text} running={running_text}",
+        message=(
+            f"{resolved_id}: enabled={enabled_text} running={running_text} "
+            f"failed={failed_text}{failure_suffix}"
+        ),
         instance=instance,
     )
 

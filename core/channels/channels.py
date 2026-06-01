@@ -251,6 +251,7 @@ class ChannelService:
         self._adapter_restart_tasks: dict[str, asyncio.Task[None]] = {}
         self._pending_start_requests: dict[str, tuple[bool, ChannelConfig | None]] = {}
         self._failed_channels: set[str] = set()
+        self._failure_reasons: dict[str, str] = {}
         self._started = False
         self._notify_tool_registration_changed_hook: Callable[[], None] = lambda: None
 
@@ -265,6 +266,7 @@ class ChannelService:
                 try:
                     self.start_channel(config.id)
                 except ChannelError as error:
+                    self._mark_channel_failed(config.id, str(error))
                     _LOGGER.error(
                         "Cannot start channel adapter during service startup (channel=%s): %s",
                         config.id,
@@ -289,6 +291,7 @@ class ChannelService:
             self.stop_channel(channel_id)
         self._adapter_restart_attempts.clear()
         self._failed_channels.clear()
+        self._failure_reasons.clear()
         self._started = False
 
     async def aclose(self) -> None:
@@ -326,6 +329,7 @@ class ChannelService:
         if reset_backoff:
             self._adapter_restart_attempts.pop(normalized_id, None)
             self._failed_channels.discard(normalized_id)
+            self._failure_reasons.pop(normalized_id, None)
 
         if self._is_stop_in_progress(normalized_id):
             self._schedule_pending_start(
@@ -376,6 +380,7 @@ class ChannelService:
         self._cancel_restart_task(normalized_id)
         self._adapter_restart_attempts.pop(normalized_id, None)
         self._failed_channels.discard(normalized_id)
+        self._failure_reasons.pop(normalized_id, None)
 
         task = self._adapter_tasks.pop(normalized_id, None)
         self._adapters.pop(normalized_id, None)
@@ -530,11 +535,25 @@ class ChannelService:
         """Return whether at least one channel adapter task is currently running."""
         return any(not task.done() for task in self._adapter_tasks.values())
 
+    def is_failed(self, channel_id: str) -> bool:
+        """Return whether one channel is currently marked failed."""
+        normalized_id = _normalize_channel_id(channel_id)
+        return normalized_id in self._failed_channels
+
+    def failure_reason(self, channel_id: str) -> str | None:
+        """Return the latest failure reason for one failed channel, if any."""
+        normalized_id = _normalize_channel_id(channel_id)
+        return self._failure_reasons.get(normalized_id)
+
     def _notify_tool_registration_changed(self) -> None:
         try:
             self._notify_tool_registration_changed_hook()
         except Exception:
             _LOGGER.exception("Channel tool-registration hook failed")
+
+    def _mark_channel_failed(self, channel_id: str, reason: str) -> None:
+        self._failed_channels.add(channel_id)
+        self._failure_reasons[channel_id] = reason
 
     def _notify_tool_registration_if_changed(self, had_active_channels: bool) -> None:
         if had_active_channels == self.has_active_channels():
@@ -731,8 +750,12 @@ class ChannelService:
         error = task.exception()
         if error is None:
             self._adapter_restart_attempts.pop(channel_id, None)
+            self._failed_channels.discard(channel_id)
+            self._failure_reasons.pop(channel_id, None)
             self._notify_tool_registration_changed()
             return
+
+        self._failure_reasons[channel_id] = str(error)
 
         _LOGGER.warning(
             "Channel adapter task failed for channel=%s; scheduling restart: %s",
@@ -776,7 +799,8 @@ class ChannelService:
     async def _restart_with_backoff(self, channel_id: str) -> None:
         attempt = self._adapter_restart_attempts.get(channel_id, 0)
         if attempt >= _ADAPTER_RESTART_MAX_RETRIES:
-            self._failed_channels.add(channel_id)
+            reason = self._failure_reasons.get(channel_id, "adapter restart attempts exhausted")
+            self._mark_channel_failed(channel_id, reason)
             _LOGGER.error(
                 "Channel adapter exceeded max restart attempts and is marked failed "
                 "(channel=%s, retries=%s)",

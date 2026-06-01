@@ -266,6 +266,7 @@ class Runtime:
             extra_dirs=extension_dirs,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        self._ensure_bootstrap_agent()
         recall_registry = RecallBackendRegistry.with_builtins()
         self._recall_backend = self._create_recall_backend(recall_registry)
         register_session_search_tool(self._tools, self._recall_backend)
@@ -315,7 +316,6 @@ class Runtime:
             self._chat_run_manager,
             self._started_at,
         )
-        self._ensure_bootstrap_agent()
         self._system_prompts = SystemPromptManager(
             self._storage,
             self._tools,
