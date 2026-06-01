@@ -64,17 +64,199 @@ describe('SystemPromptView', () => {
     );
 
     const textareas = document.body.querySelectorAll('textarea.sp-textarea');
-    expect(textareas).toHaveLength(4);
+    expect(textareas).toHaveLength(5);
 
     expect(textareas[0].value).toBe('# System prompt content');
     expect(textareas[1].value).toBe('# Runtime content');
     expect(textareas[2].value).toBe('# Tools content');
-    expect(textareas[3].value).toBe('# Skills content');
+    expect(textareas[3].value).toBe('# Channels content');
+    expect(textareas[4].value).toBe('# Skills content');
 
     expect(document.body.textContent).toContain('system.md');
     expect(document.body.textContent).toContain('runtime.md');
     expect(document.body.textContent).toContain('tools.md');
+    expect(document.body.textContent).toContain('channels.md');
     expect(document.body.textContent).toContain('skills.md');
+  });
+
+  it('renders only default and enabled agent prompt scopes', async () => {
+    rpcMock.mockImplementation(createRpcMock());
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      100,
+    );
+
+    const optionLabels = scopeOptionLabels();
+    expect(optionLabels).toEqual(['Default', 'Alpha']);
+    expect(optionLabels).not.toContain('Beta');
+  });
+
+  it('loads and saves selected agent prompt scope with scoped params', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        agentFragments: baseFragments().map((fragment) =>
+          fragment.name === 'system.md'
+            ? { ...fragment, content: '', is_modified: false }
+            : fragment,
+        ),
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      100,
+    );
+
+    selectPromptScope('agent:agent-1');
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          (call) => call[0] === 'prompt.list' && call[1]?.scope,
+        ),
+      100,
+    );
+
+    const scopedListCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'prompt.list' && call[1]?.scope,
+    );
+    expect(scopedListCall[1]).toEqual({
+      scope: { type: 'agent', agent_id: 'agent-1' },
+    });
+
+    const textarea = document.body.querySelectorAll('textarea.sp-textarea')[0];
+    expect(textarea.value).toBe('');
+    textarea.value = 'Agent custom system';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    const saveButton = Array.from(
+      document.body.querySelectorAll('button.btn-primary.sp-btn-sm'),
+    ).find((button) => button.textContent.trim() === 'Save');
+    saveButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.update'),
+      100,
+    );
+
+    const updateCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'prompt.update',
+    );
+    expect(updateCall[1]).toMatchObject({
+      name: 'system.md',
+      content: 'Agent custom system',
+      scope: { type: 'agent', agent_id: 'agent-1' },
+    });
+  });
+
+  it('resets selected agent prompt scope with agent confirmation text', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptReset: {
+          name: 'system.md',
+          content: '# Default copied into agent',
+          is_modified: true,
+        },
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      100,
+    );
+
+    selectPromptScope('agent:agent-1');
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#sp-scope-select')?.value ===
+        'agent:agent-1',
+      100,
+    );
+
+    const resetButton = Array.from(
+      document.body.querySelectorAll('button.btn-outline.sp-btn-sm'),
+    ).find((button) => button.textContent.trim() === 'Reset');
+    resetButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.reset'),
+      100,
+    );
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Reset this Agent fragment to the current Default content? This cannot be undone.',
+    );
+    const resetCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'prompt.reset',
+    );
+    expect(resetCall[1]).toEqual({
+      name: 'system.md',
+      scope: { type: 'agent', agent_id: 'agent-1' },
+    });
+  });
+
+  it('previews selected agent prompt scope without the default agent selector', async () => {
+    rpcMock.mockImplementation(
+      createRpcMock({
+        promptPreview: {
+          text: 'Agent scoped preview',
+          tokens: 77,
+          estimated: true,
+        },
+      }),
+    );
+
+    mountedComponent = mount(SystemPromptView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('#sp-scope-select')?.options.length === 2,
+      100,
+    );
+
+    selectPromptScope('agent:agent-1');
+    await waitForCondition(
+      () => document.body.textContent.includes('Alpha'),
+      100,
+    );
+
+    expect(document.body.querySelector('#sp-agent-select')).toBeNull();
+
+    const refreshButton = Array.from(
+      document.body.querySelectorAll('button'),
+    ).find((button) => button.textContent.trim() === 'Refresh');
+    refreshButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
+      100,
+    );
+
+    const previewCall = rpcMock.mock.calls.find(
+      (call) => call[0] === 'prompt.preview',
+    );
+    expect(previewCall[1]).toEqual({
+      agent_id: 'agent-1',
+      scope: { type: 'agent', agent_id: 'agent-1' },
+    });
+    expect(document.body.textContent).toContain('Agent scoped preview');
   });
 
   it('renders variable references with tooltip titles', async () => {
@@ -103,7 +285,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -122,7 +304,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -181,7 +363,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -243,7 +425,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -296,7 +478,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -336,7 +518,7 @@ describe('SystemPromptView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.body.querySelectorAll('textarea.sp-textarea').length === 4,
+      () => document.body.querySelectorAll('textarea.sp-textarea').length === 5,
       100,
     );
 
@@ -472,11 +654,14 @@ describe('SystemPromptView', () => {
       'common.saved',
       'common.alreadySaved',
       'systemPrompt.title',
+      'systemPrompt.scope.label',
+      'systemPrompt.scope.default',
       'systemPrompt.fragmentEditor.save',
       'systemPrompt.fragmentEditor.reset',
       'systemPrompt.fragmentEditor.dirtyIndicator',
       'systemPrompt.fragmentEditor.modifiedIndicator',
       'systemPrompt.fragmentEditor.resetConfirm',
+      'systemPrompt.fragmentEditor.resetAgentConfirm',
       'systemPrompt.preview.heading',
       'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
@@ -522,6 +707,14 @@ function baseFragments() {
       ],
     },
     {
+      name: 'channels.md',
+      content: '# Channels content',
+      is_modified: false,
+      variables: [
+        { placeholder: '{channel_list}', description: 'Available channels' },
+      ],
+    },
+    {
       name: 'skills.md',
       content: '# Skills content',
       is_modified: false,
@@ -534,14 +727,19 @@ function baseFragments() {
 
 function baseAgents() {
   return [
-    { id: 'agent-1', name: 'Alpha' },
-    { id: 'agent-2', name: 'Beta' },
+    { id: 'agent-1', name: 'Alpha', custom_system_prompt_enabled: true },
+    { id: 'agent-2', name: 'Beta', custom_system_prompt_enabled: false },
   ];
 }
 
 function createRpcMock(options = {}) {
   const fragments = options.fragments ?? baseFragments();
+  const agentFragments = options.agentFragments ?? fragments;
   const agents = options.agents ?? baseAgents();
+  const scopes = options.scopes ?? [
+    { type: 'default', label: 'Default' },
+    { type: 'agent', agent_id: 'agent-1', label: 'Alpha' },
+  ];
   const promptUpdate = options.promptUpdate ?? null;
   const promptReset = options.promptReset ?? null;
   const promptPreview = options.promptPreview ?? null;
@@ -552,7 +750,10 @@ function createRpcMock(options = {}) {
     }
 
     if (method === 'prompt.list') {
-      return { fragments };
+      return {
+        fragments: params?.scope?.type === 'agent' ? agentFragments : fragments,
+        scopes,
+      };
     }
 
     if (method === 'prompt.update') {
@@ -586,6 +787,20 @@ function createRpcMock(options = {}) {
 
     throw new Error(`Unexpected RPC method: ${method}`);
   };
+}
+
+function scopeOptionLabels() {
+  return Array.from(
+    document.body.querySelectorAll('#sp-scope-select option'),
+  ).map((option) => option.textContent.trim());
+}
+
+function selectPromptScope(value) {
+  const select = document.body.querySelector('#sp-scope-select');
+  expect(select).toBeTruthy();
+  select.value = value;
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+  flushSync();
 }
 
 async function waitForCondition(check, attempts = 20) {

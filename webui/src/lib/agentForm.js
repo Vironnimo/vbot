@@ -19,6 +19,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'workspace',
   'allowed_tools',
   'allowed_skills',
+  'custom_system_prompt_enabled',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -43,6 +44,7 @@ export function createAgentFormValues(agent = {}) {
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
+    custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
   };
 }
 
@@ -129,6 +131,7 @@ function normalizeValues(values = {}) {
     thinking_effort: asText(values.thinking_effort).trim(),
     allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: normalizeArrayList(values.allowed_skills),
+    custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
   };
 }
 
@@ -174,6 +177,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     thinking_effort: normalized.thinking_effort || null,
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
+    custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
   };
 
   if (options.includeWorkspace) {

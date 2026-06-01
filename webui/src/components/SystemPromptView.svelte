@@ -11,6 +11,8 @@
 
   let fragments = $state([]);
   let agents = $state([]);
+  let promptScopes = $state([]);
+  let selectedScopeKey = $state('default');
   let selectedAgentId = $state('');
   let previewText = $state('');
   let previewTokens = $state(null);
@@ -20,6 +22,10 @@
 
   let isPromptSaveBusy = $derived(
     fragments.some((fragment) => fragment.isSaving || fragment.isResetting),
+  );
+  let selectedScope = $derived(
+    promptScopes.find((scope) => scope.key === selectedScopeKey) ??
+      defaultPromptScope(),
   );
 
   onMount(() => {
@@ -63,22 +69,10 @@
       ]);
 
       agents = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
-      selectedAgentId = agents[0]?.id ?? '';
-
-      const rawFragments = Array.isArray(promptsResult?.fragments)
-        ? promptsResult.fragments
-        : [];
-
-      fragments = rawFragments.map((fragment) => ({
-        name: fragment.name,
-        content: fragment.content ?? '',
-        editedContent: fragment.content ?? '',
-        isDirty: false,
-        isModified: fragment.is_modified ?? false,
-        variables: Array.isArray(fragment.variables) ? fragment.variables : [],
-        isSaving: false,
-        isResetting: false,
-      }));
+      selectedAgentId = resolvePreviewAgentId(selectedAgentId);
+      promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
+      selectedScopeKey = resolveScopeKey(selectedScopeKey);
+      applyPromptFragments(promptsResult?.fragments);
     } catch {
       showToast(
         t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
@@ -87,6 +81,166 @@
     } finally {
       isLoadingData = false;
     }
+  }
+
+  async function selectScope(nextScopeKey) {
+    if (nextScopeKey === selectedScopeKey) {
+      return;
+    }
+
+    selectedScopeKey = nextScopeKey;
+    previewText = '';
+    previewTokens = null;
+    clearAutoSaveTimers();
+    await loadFragmentsForScope(nextScopeKey);
+  }
+
+  async function loadFragmentsForScope(scopeKey) {
+    isLoadingData = true;
+
+    try {
+      const promptsResult = await rpc(
+        'prompt.list',
+        promptListParams(scopeKey),
+      );
+      promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
+      selectedScopeKey = resolveScopeKey(scopeKey);
+      applyPromptFragments(promptsResult?.fragments);
+    } catch {
+      showToast(
+        t('systemPrompt.error.loadFailed', 'Failed to load prompt data'),
+        'error',
+      );
+    } finally {
+      isLoadingData = false;
+    }
+  }
+
+  function applyPromptFragments(rawFragments) {
+    const sourceFragments = Array.isArray(rawFragments) ? rawFragments : [];
+    fragments = sourceFragments.map((fragment) => ({
+      name: fragment.name,
+      content: fragment.content ?? '',
+      editedContent: fragment.content ?? '',
+      isDirty: false,
+      isModified: fragment.is_modified ?? false,
+      variables: Array.isArray(fragment.variables) ? fragment.variables : [],
+      isSaving: false,
+      isResetting: false,
+    }));
+  }
+
+  function normalizePromptScopes(rawScopes, currentAgents) {
+    const scopes = Array.isArray(rawScopes)
+      ? rawScopes.map(normalizePromptScope).filter(Boolean)
+      : [];
+
+    const hasDefaultScope = scopes.some((scope) => scope.key === 'default');
+    const availableScopes = hasDefaultScope
+      ? scopes
+      : [defaultPromptScope(), ...scopes];
+
+    if (availableScopes.length > 1 || scopes.length > 0) {
+      return availableScopes;
+    }
+
+    return [
+      defaultPromptScope(),
+      ...currentAgents
+        .filter((agent) => agent.custom_system_prompt_enabled)
+        .map((agent) =>
+          normalizePromptScope({
+            type: 'agent',
+            agent_id: agent.id,
+            label: agent.name || agent.id,
+          }),
+        ),
+    ];
+  }
+
+  function normalizePromptScope(scope) {
+    if (!scope || typeof scope !== 'object') {
+      return null;
+    }
+
+    if (scope.type === 'agent' && scope.agent_id) {
+      return {
+        key: `agent:${scope.agent_id}`,
+        type: 'agent',
+        agent_id: scope.agent_id,
+        label: scope.label || scope.agent_id,
+      };
+    }
+
+    if (!scope.type || scope.type === 'default') {
+      return defaultPromptScope();
+    }
+
+    return null;
+  }
+
+  function defaultPromptScope() {
+    return {
+      key: 'default',
+      type: 'default',
+      label: t('systemPrompt.scope.default', 'Default'),
+    };
+  }
+
+  function resolveScopeKey(scopeKey) {
+    if (promptScopes.some((scope) => scope.key === scopeKey)) {
+      return scopeKey;
+    }
+
+    return 'default';
+  }
+
+  function resolvePreviewAgentId(agentId) {
+    if (agents.some((agent) => agent.id === agentId)) {
+      return agentId;
+    }
+
+    return agents[0]?.id ?? '';
+  }
+
+  function promptListParams(scopeKey) {
+    const scope = scopePayloadForKey(scopeKey);
+    return scope ? { scope } : {};
+  }
+
+  function scopePayloadForKey(scopeKey) {
+    if (!scopeKey || scopeKey === 'default') {
+      return null;
+    }
+
+    const agentId = scopeKey.replace(/^agent:/u, '');
+    return { type: 'agent', agent_id: agentId };
+  }
+
+  function selectedScopePayload() {
+    return scopePayloadForKey(selectedScopeKey);
+  }
+
+  function scopedParams(baseParams = {}) {
+    const scope = selectedScopePayload();
+    return scope ? { ...baseParams, scope } : baseParams;
+  }
+
+  function previewParams() {
+    const scope = selectedScopePayload();
+    if (scope?.type === 'agent') {
+      return { agent_id: scope.agent_id, scope };
+    }
+
+    if (!selectedAgentId) {
+      return null;
+    }
+
+    return { agent_id: selectedAgentId };
+  }
+
+  function canRefreshPreview() {
+    return Boolean(previewParams());
   }
 
   function handleTextareaInput(index, event) {
@@ -124,6 +278,7 @@
       const result = await rpc('prompt.update', {
         name: fragment.name,
         content: draftContent,
+        ...scopedParams(),
       });
 
       const nextSavedContent = result.content ?? draftContent;
@@ -232,9 +387,13 @@
 
   async function resetFragment(index) {
     const fragment = fragments[index];
+    const confirmKey =
+      selectedScope.type === 'agent'
+        ? 'systemPrompt.fragmentEditor.resetAgentConfirm'
+        : 'systemPrompt.fragmentEditor.resetConfirm';
     const confirmed = window.confirm(
       t(
-        'systemPrompt.fragmentEditor.resetConfirm',
+        confirmKey,
         'Reset this fragment to its bundled default? This cannot be undone.',
       ),
     );
@@ -246,12 +405,15 @@
     fragments[index].isResetting = true;
 
     try {
-      const result = await rpc('prompt.reset', { name: fragment.name });
+      const result = await rpc(
+        'prompt.reset',
+        scopedParams({ name: fragment.name }),
+      );
       const restoredContent = result.content ?? '';
       fragments[index].content = restoredContent;
       fragments[index].editedContent = restoredContent;
       fragments[index].isDirty = false;
-      fragments[index].isModified = false;
+      fragments[index].isModified = result.is_modified ?? false;
     } catch {
       showToast(
         t('systemPrompt.error.resetFailed', 'Failed to reset'),
@@ -263,16 +425,15 @@
   }
 
   async function refreshPreview() {
-    if (!selectedAgentId) {
+    const params = previewParams();
+    if (!params) {
       return;
     }
 
     isRefreshingPreview = true;
 
     try {
-      const result = await rpc('prompt.preview', {
-        agent_id: selectedAgentId,
-      });
+      const result = await rpc('prompt.preview', params);
       previewText = result.text ?? '';
       previewTokens = result.tokens ?? null;
     } catch {
@@ -309,6 +470,21 @@
         <h2 id="sp-title" class="sp-title">
           {t('systemPrompt.title', 'System Prompt')}
         </h2>
+        <div class="sp-scope-control">
+          <label class="sp-scope-label" for="sp-scope-select">
+            {t('systemPrompt.scope.label', 'Prompt scope')}
+          </label>
+          <select
+            id="sp-scope-select"
+            class="sp-scope-select"
+            value={selectedScopeKey}
+            onchange={(event) => selectScope(event.currentTarget.value)}
+          >
+            {#each promptScopes as scope (scope.key)}
+              <option value={scope.key}>{scope.label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
 
       {#if isLoadingData}
@@ -317,7 +493,7 @@
         </div>
       {:else}
         <div class="sp-fragments">
-          {#each fragments as fragment, index (fragment.name)}
+          {#each fragments as fragment, index (`${selectedScopeKey}:${fragment.name}`)}
             <div class="sp-fragment">
               <div class="sp-fragment-header">
                 <div class="sp-fragment-meta">
@@ -391,7 +567,9 @@
               <span class="sp-preview-heading">
                 {t('systemPrompt.preview.heading', 'Preview for')}
               </span>
-              {#if agents.length > 0}
+              {#if selectedScope.type === 'agent'}
+                <span class="sp-scope-chip">{selectedScope.label}</span>
+              {:else if agents.length > 0}
                 <label class="sp-agent-label" for="sp-agent-select">
                   {t('systemPrompt.preview.agentLabel', 'Agent')}
                 </label>
@@ -425,7 +603,7 @@
               <button
                 class="btn-primary sp-btn-sm"
                 type="button"
-                disabled={isRefreshingPreview || !selectedAgentId}
+                disabled={isRefreshingPreview || !canRefreshPreview()}
                 onclick={refreshPreview}
               >
                 {isRefreshingPreview
@@ -498,7 +676,12 @@
   }
 
   .sp-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   .sp-title {
@@ -508,6 +691,39 @@
     letter-spacing: -0.03em;
     line-height: 1.2;
     margin: 0;
+  }
+
+  .sp-scope-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .sp-scope-label {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .sp-scope-select,
+  .sp-agent-select {
+    padding: 4px 9px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-sm);
+    color: var(--text-hi);
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    appearance: none;
+    cursor: pointer;
+  }
+
+  .sp-scope-select {
+    max-width: min(280px, 56vw);
   }
 
   .sp-feedback {
@@ -697,16 +913,21 @@
   }
 
   .sp-agent-select {
-    padding: 3px 8px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-sm);
-    color: var(--text-hi);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    appearance: none;
-    cursor: pointer;
     max-width: 220px;
+  }
+
+  .sp-scope-chip {
+    max-width: 240px;
+    overflow: hidden;
+    padding: 2px 7px;
+    border: 1px solid rgba(232, 135, 10, 0.2);
+    border-radius: 3px;
+    color: var(--accent);
+    background: var(--accent-dim);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .sp-token-count {
@@ -758,6 +979,12 @@
 
     .sp-fragment-header {
       flex-wrap: wrap;
+    }
+
+    .sp-header,
+    .sp-scope-control {
+      align-items: flex-start;
+      flex-direction: column;
     }
 
     .sp-preview-header {

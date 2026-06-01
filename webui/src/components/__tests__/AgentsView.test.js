@@ -316,6 +316,28 @@ describe('AgentsView', () => {
     });
   });
 
+  it('sends custom system prompt toggle changes from the agent detail pane', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('Custom system prompt');
+
+    const toggle = getButtonByAriaLabel('Custom system prompt');
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    toggle.click();
+    flushSync();
+
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      custom_system_prompt_enabled: true,
+    });
+  });
+
   it('does not render a duplicate fallback status below the fallback picker', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
@@ -1475,6 +1497,7 @@ function baseAgent() {
     thinking_effort: '',
     allowed_tools: ['*'],
     allowed_skills: ['*'],
+    custom_system_prompt_enabled: false,
     created_at: '2026-05-08T00:00:00+00:00',
     updated_at: '2026-05-08T00:00:00+00:00',
   };
