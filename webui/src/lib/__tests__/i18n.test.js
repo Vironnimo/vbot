@@ -133,11 +133,13 @@ describe('i18n t()', () => {
     const requiredKeys = [
       'agents.detail.identity',
       'agents.detail.model',
+      'agents.detail.systemPrompt',
       'agents.detail.access',
       'agents.detail.session',
       'agents.detail.idValue',
       'agents.form.modelPlaceholder',
       'agents.form.modelUnavailableOption',
+      'agents.form.customSystemPrompt',
       'agents.access.noSkills',
       'agents.access.toggleTool',
       'agents.access.toggleSkill',
@@ -152,6 +154,36 @@ describe('i18n t()', () => {
         model: 'custom/provider-model',
       }),
     ).toBe('Unavailable / custom: custom/provider-model');
+  });
+
+  it('contains System Prompt scope labels and states', () => {
+    const requiredKeys = [
+      'systemPrompt.scope.label',
+      'systemPrompt.scope.default',
+      'systemPrompt.fragmentEditor.save',
+      'systemPrompt.fragmentEditor.reset',
+      'systemPrompt.fragmentEditor.dirtyIndicator',
+      'systemPrompt.fragmentEditor.modifiedIndicator',
+      'systemPrompt.fragmentEditor.resetConfirm',
+      'systemPrompt.fragmentEditor.resetAgentConfirm',
+      'systemPrompt.preview.heading',
+      'systemPrompt.preview.refresh',
+      'systemPrompt.preview.copy',
+      'systemPrompt.preview.tokenCount',
+      'systemPrompt.preview.agentLabel',
+      'systemPrompt.preview.empty',
+      'systemPrompt.error.loadFailed',
+      'systemPrompt.error.saveFailed',
+      'systemPrompt.error.resetFailed',
+      'systemPrompt.error.previewFailed',
+      'systemPrompt.error.copyFailed',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+    expect(t('systemPrompt.scope.default')).toBe('Default');
+    expect(t('systemPrompt.preview.tokenCount', undefined, { count: 42 })).toBe(
+      '~42 tokens',
+    );
   });
 
   it('contains Toasted design labels for Settings sections', () => {

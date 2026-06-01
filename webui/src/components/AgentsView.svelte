@@ -994,6 +994,35 @@
 
         <div class="detail-group">
           <div class="detail-group-title">
+            {t('agents.detail.systemPrompt', 'System Prompt')}
+          </div>
+          <div class="agents-view__prompt-toggle-row">
+            <span class="agents-view__prompt-toggle-label">
+              {t('agents.form.customSystemPrompt', 'Custom system prompt')}
+            </span>
+            <button
+              class="tl-toggle agents-view__prompt-toggle"
+              class:on={formValues.custom_system_prompt_enabled}
+              type="button"
+              role="switch"
+              aria-checked={formValues.custom_system_prompt_enabled}
+              aria-label={t(
+                'agents.form.customSystemPrompt',
+                'Custom system prompt',
+              )}
+              disabled={formMode === AGENT_FORM_MODE_CREATE}
+              onclick={() => {
+                formValues.custom_system_prompt_enabled =
+                  !formValues.custom_system_prompt_enabled;
+              }}
+            >
+              <span class="t-knob"></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="detail-group">
+          <div class="detail-group-title">
             {t('agents.detail.access', 'Access')}
           </div>
 
@@ -1716,6 +1745,25 @@
     color: var(--text-med);
     font-family: var(--font-mono);
     font-size: 12px;
+  }
+
+  .agents-view__prompt-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .agents-view__prompt-toggle-label {
+    min-width: 0;
+    color: var(--text-med);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .agents-view__prompt-toggle {
+    flex-shrink: 0;
   }
 
   .agents-view__access-copy {

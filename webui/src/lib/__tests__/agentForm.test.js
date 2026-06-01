@@ -20,6 +20,7 @@ describe('agent form helpers', () => {
       thinking_effort: '',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
+      custom_system_prompt_enabled: false,
     });
   });
 
@@ -34,11 +35,13 @@ describe('agent form helpers', () => {
       thinking_effort: 'medium',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
+      custom_system_prompt_enabled: true,
     });
 
     expect(values.allowed_tools).toEqual(['read', 'write']);
     expect(values.allowed_skills).toEqual(['debugging']);
     expect(values.temperature).toBe('0.2');
+    expect(values.custom_system_prompt_enabled).toBe(true);
   });
 
   it('normalizes create payloads with trimmed scalar fields and array-based access lists', () => {
@@ -52,6 +55,7 @@ describe('agent form helpers', () => {
       thinking_effort: ' low ',
       allowed_tools: [' read ', '', 'write '],
       allowed_skills: [' debugging ', ''],
+      custom_system_prompt_enabled: true,
     });
 
     expect(result.isValid).toBe(true);
@@ -64,6 +68,7 @@ describe('agent form helpers', () => {
       thinking_effort: 'low',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
+      custom_system_prompt_enabled: true,
     });
     expect(result.payload).not.toHaveProperty('workspace');
   });
@@ -259,6 +264,34 @@ describe('agent form helpers', () => {
     expect(result.payload).toEqual({
       id: 'coder',
       name: 'Coder Prime',
+    });
+  });
+
+  it('sends changed custom system prompt toggle when editing with baseline values', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/workspace-coder',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+      custom_system_prompt_enabled: false,
+    });
+
+    const result = normalizeAgentForm(
+      {
+        ...initialValues,
+        custom_system_prompt_enabled: true,
+      },
+      {
+        mode: AGENT_FORM_MODE_EDIT,
+        initialValues,
+      },
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).toEqual({
+      id: 'coder',
+      custom_system_prompt_enabled: true,
     });
   });
 

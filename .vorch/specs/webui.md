@@ -242,6 +242,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     so inherited resolved defaults are not written back as explicit overrides.
     Clearing `temperature` or `thinking_effort` sends `null`; clearing model
     fields sends `""`.
+  - Includes `custom_system_prompt_enabled` as a boolean editable field. In edit
+    mode the toggle is omitted from sparse update payloads unless it changed.
 - `webui/src/components/AgentsView.svelte`
   - Loads `agent.list` plus the backend catalogs from `model.list`,
     `connection.list`, `tool.list`, and `skill.list` on mount.
@@ -253,6 +255,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - The Agent edit form uses backend-backed selects for `model`,
     `fallback_model`, and `thinking_effort`, plus a tool-toggle list sourced
     from `tool.list`.
+  - The Agent detail pane exposes only an on/off `Custom system prompt` toggle
+    for Agent-scoped prompt editing. It does not expose prompt-fragment editors
+    inside the Agents view.
   - The Agent edit form shows workspace once in the Identity section as an
     editable text field. Workspace changes are saved through `agent.update` and
     are not duplicated again in the Access section.
@@ -403,9 +408,18 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Edit flows preserve server-provided `session_id` values unless the user
     explicitly changes them.
 - `webui/src/components/SystemPromptView.svelte`
+  - Loads `prompt.list` and uses its `scopes` list to render the prompt-scope
+    selector. The selector shows `Default` plus enabled Agent scopes only.
+    Selecting an Agent scope reloads fragments with `scope` in `prompt.list`.
   - Renders the editable prompt fragments with reset controls near the fragment
     header. Fragment cards must clip their surface backgrounds to the rounded
     card corners so header bars do not bleed past the radius.
+  - Saves and resets use the selected prompt scope. Agent-scope reset asks for
+    Agent-specific confirmation and restores the current Default fragment
+    content into the Agent scope.
+  - The preview section shows a normal Agent picker for Default scope. For an
+    Agent scope it replaces the picker with the Agent scope chip and sends
+    `prompt.preview` with `{ agent_id, scope }` for that Agent.
   - Dirty fragments auto-save about 800 ms after the last edit using per-fragment
     debounce timers.
   - Manual save is a single global button at the bottom of the System Prompt
@@ -505,7 +519,7 @@ does not talk to providers directly. The product presents an Agent-first chat su
   last-selected Agent is restored through `localStorage` when available.
 - `New Session` is blocked while the selected Agent/current Session has an active
   Run. Switching to another Agent while a Run is active is allowed.
-- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, plus a preview section with agent picker, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Recall (session_search backend), Specialized Models (STT/TTS bindings), Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, and skill catalogs are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
+- `System Prompt` is functional — it renders five fragment editors (`system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`) with reset/variable-reference, one global save button for all fragments, a scope selector for Default plus enabled Agent scopes, plus a preview section with agent picker/chip, refresh, copy, and token count. `Settings` is functional and contains the General (server host, data directory), Skills (default skill path and extra scan directories), Defaults (project-wide Agent fallback values), Sub-Agents, Compaction, Recall (session_search backend), Specialized Models (STT/TTS bindings), Providers (credential status, model counts, model database refresh), and Appearance (language preference) sub-panels. In the Agents view, model, tool, skill, and custom-system-prompt toggle controls are backend-backed, and new Agent creation starts in the compact modal before advanced editing.
 - `Logs` is functional — it shows one selected daily log file, defaults to the
   newest file, keeps the current selection sticky when newer files appear, and
   applies level filtering, newest/oldest local ordering, and free-text search
