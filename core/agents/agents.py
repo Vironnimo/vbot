@@ -13,6 +13,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from core.memory import (
+    DEFAULT_MEMORY_PROMPT_MODE,
+    MEMORY_PROMPT_MODES,
+    MemoryPromptMode,
+    validate_memory_prompt_mode,
+)
 from core.sessions import ChatSessionManager
 from core.settings import SettingsValidationError, load_validated_agent_json
 
@@ -65,6 +71,7 @@ class Agent:
     updated_at: str
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
+    memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
 
 
 class AgentStore:
@@ -97,6 +104,7 @@ class AgentStore:
         workspace: str | Path | None = None,
         temperature: float | None = DEFAULT_TEMPERATURE,
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
+        memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
@@ -114,6 +122,7 @@ class AgentStore:
         )
         validated_temperature = _validate_temperature(temperature)
         validated_thinking_effort = _validate_thinking_effort(thinking_effort)
+        validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
         validated_allowed_tools = _validate_allowed_items("allowed_tools", allowed_tools)
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
         validated_custom_system_prompt_enabled = _validate_bool_field(
@@ -136,6 +145,7 @@ class AgentStore:
             workspace=str(workspace_path.resolve()),
             temperature=validated_temperature,
             thinking_effort=validated_thinking_effort,
+            memory_prompt_mode=validated_memory_prompt_mode,
             allowed_tools=validated_allowed_tools,
             allowed_skills=validated_allowed_skills,
             custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
@@ -213,6 +223,10 @@ class AgentStore:
             changes["temperature"] = _validate_temperature(changes["temperature"])
         if "thinking_effort" in changes:
             changes["thinking_effort"] = _validate_thinking_effort(changes["thinking_effort"])
+        if "memory_prompt_mode" in changes:
+            changes["memory_prompt_mode"] = _validate_memory_prompt_mode(
+                changes["memory_prompt_mode"]
+            )
         if "allowed_tools" in changes:
             changes["allowed_tools"] = _validate_allowed_items(
                 "allowed_tools", changes["allowed_tools"]
@@ -385,6 +399,16 @@ def _validate_thinking_effort(value: Any) -> str | None:
     return value
 
 
+def _validate_memory_prompt_mode(value: Any) -> MemoryPromptMode:
+    if not isinstance(value, str):
+        raise AgentError("memory_prompt_mode must be a string")
+    try:
+        return validate_memory_prompt_mode(value)
+    except ValueError as exc:
+        allowed = ", ".join(repr(item) for item in MEMORY_PROMPT_MODES)
+        raise AgentError(f"memory_prompt_mode must be one of: {allowed}") from exc
+
+
 def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
     if items is None:
         return list(DEFAULT_ALLOWED_ITEMS)
@@ -425,6 +449,9 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
         workspace=str(_workspace_from_data(data.get("workspace"), default_workspace)),
         temperature=_validate_temperature(data.get("temperature")),
         thinking_effort=_validate_thinking_effort(data.get("thinking_effort")),
+        memory_prompt_mode=_validate_memory_prompt_mode(
+            data.get("memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        ),
         allowed_tools=_validate_allowed_items("allowed_tools", data["allowed_tools"]),
         allowed_skills=_validate_allowed_items("allowed_skills", data["allowed_skills"]),
         custom_system_prompt_enabled=_validate_bool_field(

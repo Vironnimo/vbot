@@ -18,6 +18,7 @@ describe('agent form helpers', () => {
       workspace: '',
       temperature: '',
       thinking_effort: '',
+      memory_prompt_mode: 'agent_user',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
       custom_system_prompt_enabled: false,
@@ -33,6 +34,7 @@ describe('agent form helpers', () => {
       workspace: 'C:/workspace-coder',
       temperature: 0.2,
       thinking_effort: 'medium',
+      memory_prompt_mode: 'agent',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
       custom_system_prompt_enabled: true,
@@ -41,6 +43,7 @@ describe('agent form helpers', () => {
     expect(values.allowed_tools).toEqual(['read', 'write']);
     expect(values.allowed_skills).toEqual(['debugging']);
     expect(values.temperature).toBe('0.2');
+    expect(values.memory_prompt_mode).toBe('agent');
     expect(values.custom_system_prompt_enabled).toBe(true);
   });
 
@@ -53,6 +56,7 @@ describe('agent form helpers', () => {
       workspace: ' C:/workspace-coder ',
       temperature: '0.25',
       thinking_effort: ' low ',
+      memory_prompt_mode: ' off ',
       allowed_tools: [' read ', '', 'write '],
       allowed_skills: [' debugging ', ''],
       custom_system_prompt_enabled: true,
@@ -66,6 +70,7 @@ describe('agent form helpers', () => {
       fallback_model: '',
       temperature: 0.25,
       thinking_effort: 'low',
+      memory_prompt_mode: 'off',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
       custom_system_prompt_enabled: true,
@@ -88,6 +93,7 @@ describe('agent form helpers', () => {
     expect(result.isValid).toBe(true);
     expect(result.payload.temperature).toBeNull();
     expect(result.payload.thinking_effort).toBeNull();
+    expect(result.payload.memory_prompt_mode).toBe('agent_user');
   });
 
   it('round-trips all-tools access with the wildcard array', () => {
@@ -245,6 +251,7 @@ describe('agent form helpers', () => {
       workspace: 'C:/workspace-coder',
       temperature: 0.2,
       thinking_effort: 'high',
+      memory_prompt_mode: 'agent_user',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
     });
@@ -292,6 +299,34 @@ describe('agent form helpers', () => {
     expect(result.payload).toEqual({
       id: 'coder',
       custom_system_prompt_enabled: true,
+    });
+  });
+
+  it('sends changed memory prompt mode when editing with baseline values', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/workspace-coder',
+      allowed_tools: ['*'],
+      allowed_skills: ['*'],
+      memory_prompt_mode: 'agent_user',
+    });
+
+    const result = normalizeAgentForm(
+      {
+        ...initialValues,
+        memory_prompt_mode: 'agent',
+      },
+      {
+        mode: AGENT_FORM_MODE_EDIT,
+        initialValues,
+      },
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload).toEqual({
+      id: 'coder',
+      memory_prompt_mode: 'agent',
     });
   });
 

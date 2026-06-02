@@ -10,13 +10,17 @@ Persisted agent configuration and workspace lifecycle management.
 
 `Agent` fields match the current schema: `id`, `name`, `model`,
 `fallback_model`, `workspace`, `current_session_id`, `temperature`,
-`thinking_effort`, `allowed_tools`, `allowed_skills`,
+`thinking_effort`, `memory_prompt_mode`, `allowed_tools`, `allowed_skills`,
 `custom_system_prompt_enabled`, `created_at`, `updated_at`.
 
 - `id` is immutable and used as the filesystem directory name.
 - `model` is user-facing `<provider>/<model-id>` and may optionally carry a pinned local connection suffix as `<provider>/<model-id>::<connection-local-id>`. It may be empty until chat time.
 - `fallback_model` is an optional secondary `<provider>/<model-id>` with the same optional `::<connection-local-id>` suffix support. It is used when a retryable provider error escapes the primary adapter's built-in retries during a Run. Once activated, it stays active only for the rest of that Run; the next turn starts from `model` again.
 - Persisted `temperature` and `thinking_effort` may be `null` in `agent.json` to mean "no explicit per-agent override". `AgentStore` applies `settings.json` `defaults.agent` values at read time for `get()`, `list()`, and returned create/update results; raw disk state remains unresolved.
+- `memory_prompt_mode` controls prompt-visible pinned memory for the Agent:
+  `off` includes no pinned memory, `agent` includes only `MEMORY.md`, and
+  `agent_user` includes both `MEMORY.md` and `USER.md`. The default is
+  `agent_user`.
 - `workspace` defaults to `<data_dir>/workspace-<id>/` and is stored as an absolute path.
   Public WebUI/RPC create keeps workspace server-assigned, while public
   `agent.update` may change workspace. Updating workspace normalizes the new
@@ -67,8 +71,9 @@ Persisted agent configuration and workspace lifecycle management.
   `max`; `temperature` may also be `null`. `null` means "inherit
   defaults.agent" while `""` for `thinking_effort` means "provider default".
   `allowed_tools` and `allowed_skills` must be lists of strings. When present,
-  `custom_system_prompt_enabled` must be a boolean; when omitted, it defaults
-  to `false`.
+  `memory_prompt_mode` must be one of `off`, `agent`, or `agent_user`, and
+  `custom_system_prompt_enabled` must be a boolean; when omitted, the custom
+  prompt toggle defaults to `false`.
 - Enabling `custom_system_prompt_enabled` through public Agent RPC seeds the
   Agent prompt directory from the current effective default prompt fragments.
   Re-enabling preserves existing Agent prompt files.

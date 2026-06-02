@@ -72,6 +72,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "workspace": agent.workspace,
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,
+        "memory_prompt_mode": agent.memory_prompt_mode,
         "allowed_tools": list(agent.allowed_tools),
         "allowed_skills": list(agent.allowed_skills),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),

@@ -12,11 +12,26 @@ from typing import Literal
 from core.utils.errors import VBotError
 
 MemoryScope = Literal["user", "agent"]
+MemoryPromptMode = Literal["off", "agent", "agent_user"]
 
 MEMORY_SCOPES = ("user", "agent")
 MEMORY_FILES: dict[MemoryScope, str] = {
     "user": "USER.md",
     "agent": "MEMORY.md",
+}
+MEMORY_PROMPT_MODE_OFF: Literal["off"] = "off"
+MEMORY_PROMPT_MODE_AGENT: Literal["agent"] = "agent"
+MEMORY_PROMPT_MODE_AGENT_USER: Literal["agent_user"] = "agent_user"
+DEFAULT_MEMORY_PROMPT_MODE: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER
+MEMORY_PROMPT_MODES: tuple[MemoryPromptMode, ...] = (
+    MEMORY_PROMPT_MODE_OFF,
+    MEMORY_PROMPT_MODE_AGENT,
+    MEMORY_PROMPT_MODE_AGENT_USER,
+)
+MEMORY_PROMPT_FILES: dict[MemoryPromptMode, tuple[str, ...]] = {
+    MEMORY_PROMPT_MODE_OFF: (),
+    MEMORY_PROMPT_MODE_AGENT: (MEMORY_FILES["agent"],),
+    MEMORY_PROMPT_MODE_AGENT_USER: (MEMORY_FILES["agent"], MEMORY_FILES["user"]),
 }
 MEMORY_SECTION_HEADING = "## Entries"
 _BULLET_PREFIX = "- "
@@ -90,6 +105,17 @@ class FilePinnedMemoryBackend:
         _write_memory_parts(path, preamble, entries, suffix)
         return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
+    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        validated_mode = validate_memory_prompt_mode(mode)
+        blocks = [
+            _read_prompt_file(Path(workspace) / filename)
+            for filename in MEMORY_PROMPT_FILES[validated_mode]
+        ]
+        visible_blocks = [block for block in blocks if block]
+        if not visible_blocks:
+            return ""
+        return "<memory>\n" + "\n\n".join(visible_blocks) + "\n</memory>"
+
     def _path(self, workspace: Path, scope: MemoryScope) -> Path:
         workspace_path = Path(workspace)
         return workspace_path / MEMORY_FILES[scope]
@@ -119,6 +145,9 @@ class MemoryService:
     def remove_entry(self, workspace: Path, scope: MemoryScope, entry_id: int) -> MemoryEntry:
         return self._backend.remove_entry(workspace, scope, entry_id)
 
+    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        return self._backend.build_prompt_block(workspace, mode)
+
 
 def validate_memory_scope(scope: object) -> MemoryScope:
     if scope == "user":
@@ -127,6 +156,27 @@ def validate_memory_scope(scope: object) -> MemoryScope:
         return "agent"
     supported = ", ".join(MEMORY_SCOPES)
     raise MemoryError(f"scope must be one of: {supported}")
+
+
+def validate_memory_prompt_mode(mode: object) -> MemoryPromptMode:
+    if mode == MEMORY_PROMPT_MODE_OFF:
+        return MEMORY_PROMPT_MODE_OFF
+    if mode == MEMORY_PROMPT_MODE_AGENT:
+        return MEMORY_PROMPT_MODE_AGENT
+    if mode == MEMORY_PROMPT_MODE_AGENT_USER:
+        return MEMORY_PROMPT_MODE_AGENT_USER
+    supported = ", ".join(MEMORY_PROMPT_MODES)
+    raise MemoryError(f"memory_prompt_mode must be one of: {supported}")
+
+
+def _read_prompt_file(path: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        raise MemoryError(f"failed to read memory prompt file {path}: {exc}") from exc
+    return f'<file name="{path.name}">\n{content}\n</file>'
 
 
 def _read_memory_parts(path: Path) -> tuple[str, list[str], str]:

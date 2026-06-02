@@ -12,6 +12,7 @@ from html import escape
 from pathlib import Path
 from typing import Any, Protocol
 
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode, MemoryService
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -26,6 +27,7 @@ EDITABLE_PROMPT_FRAGMENT_NAMES = (
 )
 PROMPT_FRAGMENT_VARIABLES: dict[str, list[dict[str, str]]] = {
     "system.md": [
+        {"placeholder": "{memory}", "description": "Rendered memory fragment"},
         {"placeholder": "{runtime}", "description": "Rendered runtime fragment"},
         {"placeholder": "{tools}", "description": "Rendered tools fragment"},
         {"placeholder": "{channels}", "description": "Rendered channels fragment"},
@@ -98,6 +100,11 @@ class PromptAgent(Protocol):
     @property
     def thinking_effort(self) -> str | None:
         """Agent thinking effort setting."""
+        ...
+
+    @property
+    def memory_prompt_mode(self) -> MemoryPromptMode:
+        """Which pinned memory files are included in the system prompt."""
         ...
 
     @property
@@ -253,6 +260,14 @@ class ChannelPromptRegistry(Protocol):
         ...
 
 
+class MemoryPromptProvider(Protocol):
+    """Pinned memory renderer used by prompt assembly."""
+
+    def build_prompt_block(self, workspace: Path, mode: MemoryPromptMode) -> str:
+        """Return the prompt-visible memory block for one workspace."""
+        ...
+
+
 @dataclass(frozen=True)
 class PromptFragment:
     """Editable prompt fragment response model."""
@@ -383,6 +398,7 @@ class SystemPromptManager:
         app_version: str,
         app_dir: str | Path,
         data_root: str | Path,
+        memory_provider: MemoryPromptProvider | None = None,
         host: str | None = None,
         os_name: str | None = None,
         current_date: Callable[[], str] | None = None,
@@ -391,6 +407,7 @@ class SystemPromptManager:
         self._tool_registry = tool_registry
         self._skill_registry = skill_registry
         self._channel_registry = channel_registry
+        self._memory_provider = memory_provider or MemoryService()
         self._app_version = app_version
         self._app_dir = Path(app_dir)
         self._data_root = Path(data_root)
@@ -409,6 +426,8 @@ class SystemPromptManager:
 
         if "{app_version}" in prompt:
             prompt = prompt.replace("{app_version}", self._app_version)
+        if "{memory}" in prompt:
+            prompt = prompt.replace("{memory}", self._build_memory_block(agent))
         if "{runtime}" in prompt:
             prompt = prompt.replace("{runtime}", self._build_runtime_block(agent, prompt_scope))
         if "{tools}" in prompt:
@@ -430,6 +449,10 @@ class SystemPromptManager:
             *definitions,
             *self._tool_registry.provider_definitions(["skill"], include_internal=True),
         ]
+
+    def _build_memory_block(self, agent: PromptAgent) -> str:
+        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        return self._memory_provider.build_prompt_block(Path(agent.workspace), mode)
 
     def _build_runtime_block(self, agent: PromptAgent, scope: PromptScope) -> str:
         runtime = self._read_prompt_fragment(scope, agent.id, "runtime.md")

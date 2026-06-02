@@ -5,6 +5,7 @@
   import SearchableDropdown from './SearchableDropdown.svelte';
   import { rpc } from '$lib/api.js';
   import {
+    AGENT_MEMORY_PROMPT_MODES,
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
     createAgentFormValues,
@@ -108,6 +109,12 @@
     THINKING_EFFORT_OPTIONS.map((option) => ({
       value: option,
       label: thinkingEffortLabel(option),
+    })),
+  );
+  let memoryPromptOptions = $derived(
+    AGENT_MEMORY_PROMPT_MODES.map((option) => ({
+      value: option,
+      label: memoryPromptLabel(option),
     })),
   );
 
@@ -678,6 +685,10 @@
     return t(`agents.form.thinkingEffortOption.${option}`, option);
   }
 
+  function memoryPromptLabel(option) {
+    return t(`agents.form.memoryPromptModeOption.${option}`, option);
+  }
+
   function notifyAgentsChanged() {
     onAgentsChanged?.(agents);
   }
@@ -1018,6 +1029,22 @@
             >
               <span class="t-knob"></span>
             </button>
+          </div>
+          <div class="agents-view__prompt-memory-row">
+            <span class="agents-view__prompt-toggle-label">
+              {t('agents.form.memoryPromptMode', 'Memory')}
+            </span>
+            <Dropdown
+              id="agent-memory-prompt-mode"
+              value={formValues.memory_prompt_mode}
+              options={memoryPromptOptions}
+              ariaLabel={t('agents.form.memoryPromptMode', 'Memory')}
+              triggerClass="agents-view__memory-dropdown"
+              listClass="agents-view__memory-list"
+              onValueChange={(selectedValue) => {
+                formValues.memory_prompt_mode = selectedValue;
+              }}
+            />
           </div>
         </div>
 
@@ -1755,6 +1782,14 @@
     padding: 14px 16px;
   }
 
+  .agents-view__prompt-memory-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px 14px;
+  }
+
   .agents-view__prompt-toggle-label {
     min-width: 0;
     color: var(--text-med);
@@ -1764,6 +1799,14 @@
 
   .agents-view__prompt-toggle {
     flex-shrink: 0;
+  }
+
+  :global(.agents-view__memory-dropdown) {
+    width: 100%;
+  }
+
+  :global(.agents-view__memory-list) {
+    z-index: 12;
   }
 
   .agents-view__access-copy {
@@ -1959,6 +2002,10 @@
     }
 
     .detail-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .agents-view__prompt-memory-row {
       grid-template-columns: 1fr;
     }
 

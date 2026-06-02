@@ -46,6 +46,7 @@ def test_agent_dataclass_is_frozen() -> None:
         thinking_effort="",
         allowed_tools=["*"],
         allowed_skills=["*"],
+        memory_prompt_mode="agent_user",
         custom_system_prompt_enabled=False,
         current_session_id="session-one",
         created_at="2026-05-03T12:00:00Z",
@@ -69,6 +70,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["workspace"] == str((store.data_dir / "workspace-coder").resolve())
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
+    assert data["memory_prompt_mode"] == "agent_user"
     assert data["allowed_tools"] == ["*"]
     assert data["allowed_skills"] == ["*"]
     assert data["custom_system_prompt_enabled"] is False
@@ -98,6 +100,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         workspace=custom_workspace,
         temperature=0.7,
         thinking_effort="high",
+        memory_prompt_mode="agent",
         allowed_tools=[],
         allowed_skills=["memory"],
         custom_system_prompt_enabled=True,
@@ -106,6 +109,7 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     assert agent.workspace == str(custom_workspace.resolve())
     assert agent.allowed_tools == []
     assert agent.allowed_skills == ["memory"]
+    assert agent.memory_prompt_mode == "agent"
     assert agent.custom_system_prompt_enabled is True
     assert (custom_workspace / "SOUL.md").exists()
 
@@ -120,6 +124,8 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         ("temperature", -0.1, "temperature must be between"),
         ("temperature", 2.1, "temperature must be between"),
         ("thinking_effort", "extreme", "thinking_effort must be one of"),
+        ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
+        ("memory_prompt_mode", True, "memory_prompt_mode must be a string"),
         ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
@@ -217,6 +223,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         name="Updated Coder",
         model="openai/gpt-5.2",
         allowed_tools=["read_file"],
+        memory_prompt_mode="off",
         custom_system_prompt_enabled=True,
     )
 
@@ -226,6 +233,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
     assert updated.allowed_tools == ["read_file"]
+    assert updated.memory_prompt_mode == "off"
     assert updated.custom_system_prompt_enabled is True
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
@@ -259,6 +267,8 @@ def test_update_changes_workspace_and_seeds_templates(
         ("temperature", True, "temperature must be a number"),
         ("temperature", 3.0, "temperature must be between"),
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
+        ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
+        ("memory_prompt_mode", 1, "memory_prompt_mode must be a string"),
         ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),

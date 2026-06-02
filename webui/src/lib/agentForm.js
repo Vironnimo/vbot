@@ -9,6 +9,12 @@ export const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([
 export const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
+export const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
+export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
+  'off',
+  'agent',
+  DEFAULT_AGENT_MEMORY_PROMPT_MODE,
+]);
 
 const EDITABLE_AGENT_FIELDS = Object.freeze([
   'name',
@@ -16,6 +22,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'fallback_model',
   'temperature',
   'thinking_effort',
+  'memory_prompt_mode',
   'workspace',
   'allowed_tools',
   'allowed_skills',
@@ -36,6 +43,7 @@ export function createAgentFormValues(agent = {}) {
       ? String(agent.temperature)
       : DEFAULT_AGENT_TEMPERATURE,
     thinking_effort: asText(agent.thinking_effort),
+    memory_prompt_mode: normalizeMemoryPromptMode(agent.memory_prompt_mode),
     allowed_tools: normalizeList(
       agent.allowed_tools,
       DEFAULT_AGENT_ALLOWED_TOOLS,
@@ -129,6 +137,7 @@ function normalizeValues(values = {}) {
     workspace: asText(values.workspace).trim(),
     temperature: asText(values.temperature).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
+    memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
     allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: normalizeArrayList(values.allowed_skills),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
@@ -168,6 +177,13 @@ function normalizeTemperature(value) {
   return Number.isFinite(numberValue) ? numberValue : null;
 }
 
+function normalizeMemoryPromptMode(value) {
+  const mode = asText(value).trim();
+  return AGENT_MEMORY_PROMPT_MODES.includes(mode)
+    ? mode
+    : DEFAULT_AGENT_MEMORY_PROMPT_MODE;
+}
+
 function buildAgentPayload(normalized, temperature, options = {}) {
   const payload = {
     name: normalized.name,
@@ -175,6 +191,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     fallback_model: normalized.fallback_model,
     temperature,
     thinking_effort: normalized.thinking_effort || null,
+    memory_prompt_mode: normalized.memory_prompt_mode,
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
