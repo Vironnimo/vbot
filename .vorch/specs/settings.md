@@ -19,6 +19,9 @@ used by the Settings UI.
 Raw `settings.json` and the public `settings.update` RPC also accept
 `model_tasks`, a sparse mapping from supported specialized task types to
 configured targets and JSON-object options.
+Raw `settings.json` and the public `settings.update` RPC also accept
+`web_search`, an exact section for selecting the `web_search` provider and
+provider-owned options such as `searxng.base_url`.
 Raw `settings.json` accepts positive integer binary upload limits:
 `attachment_max_size_bytes` for stored attachments and
 `speech_upload_max_size_bytes` for speech transcription audio.
@@ -53,6 +56,7 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
 - `subagents` — requires `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` as positive integers.
 - `compaction` — requires `{ auto, threshold, tail_tokens, summary_model }`; `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | null`.
 - `recall` — `{ backend: "jsonl_scan" | "sqlite_fts" }`; updates the backend used by the `session_search` tool.
+- `web_search` — `{ provider: "brave" | "searxng", searxng?: { base_url: string } }`; updates the provider used by the `web_search` tool. `provider` is required in public updates; `searxng.base_url` defaults to `http://localhost:8888` when not persisted.
 - `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task
   types are owned by `core/model_tasks/`. `target` must be a string when
   present, `options` must be an object, and an empty target clears that task's
@@ -77,4 +81,7 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
   Sub-Agent and Compaction sections. Recall updates are small exact-section
   writes with only `backend`.
 - Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update. Recall backend changes are applied by server delegates through `runtime.reload_recall_backend()`.
+- `settings.web_search` is loaded by the `web_search` tool at call time, so
+  changing the selected search provider does not require a runtime restart or
+  tool re-registration.
 - Keep storage-level validation errors distinct from public schema errors so RPC error mapping remains stable.

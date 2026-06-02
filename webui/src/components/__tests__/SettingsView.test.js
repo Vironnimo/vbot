@@ -344,6 +344,42 @@ describe('SettingsView', () => {
     });
   });
 
+  it('renders and saves the Web Search provider settings', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openWebSearchPanel();
+
+    expect(document.body.textContent).toContain('Search provider');
+    expect(
+      getSimpleTrigger('settings-web-search-provider').textContent,
+    ).toContain('Brave Search');
+
+    openSimpleDropdown('settings-web-search-provider');
+    selectSimpleOption('settings-web-search-provider', 'SearXNG');
+
+    const baseUrlInput = document.body.querySelector(
+      '#settings-web-search-searxng-base-url',
+    );
+    expect(baseUrlInput).not.toBeNull();
+    baseUrlInput.value = 'http://localhost:9999';
+    baseUrlInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      web_search: {
+        provider: 'searxng',
+        searxng: {
+          base_url: 'http://localhost:9999',
+        },
+      },
+    });
+  });
+
   it('loads channels panel and resolves running status for each channel', async () => {
     rpcMock.mockImplementation(
       createSettingsRpcMock({
@@ -754,6 +790,15 @@ async function openRecallPanel() {
   );
 }
 
+async function openWebSearchPanel() {
+  await waitForCondition(() => buttonByText('Web Search'));
+  buttonByText('Web Search').click();
+  flushSync();
+  await waitForCondition(() =>
+    document.body.textContent.includes('Search provider'),
+  );
+}
+
 async function openDefaultsPanel() {
   await waitForCondition(() => buttonByText('Defaults'));
   buttonByText('Defaults').click();
@@ -1157,6 +1202,23 @@ function mergeSettingsPayload(currentSettings, patch) {
     };
   }
 
+  if (patch?.web_search && typeof patch.web_search === 'object') {
+    nextSettings.web_search = {
+      ...(nextSettings.web_search ?? {}),
+      ...patch.web_search,
+    };
+
+    if (
+      patch.web_search.searxng &&
+      typeof patch.web_search.searxng === 'object'
+    ) {
+      nextSettings.web_search.searxng = {
+        ...(nextSettings.web_search.searxng ?? {}),
+        ...patch.web_search.searxng,
+      };
+    }
+  }
+
   if (patch?.defaults && typeof patch.defaults === 'object') {
     nextSettings.defaults = {
       ...(nextSettings.defaults ?? {}),
@@ -1297,6 +1359,13 @@ function settingsPayload(options = {}) {
     recall: {
       backend: 'jsonl_scan',
       available_backends: ['jsonl_scan', 'sqlite_fts'],
+    },
+    web_search: {
+      provider: 'brave',
+      available_providers: ['brave', 'searxng'],
+      searxng: {
+        base_url: 'http://localhost:8888',
+      },
     },
     defaults: {
       agent: {},

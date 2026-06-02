@@ -303,6 +303,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Normalizes Sub-Agent settings from `settings.subagents` and builds update payloads for `settings.update`.
   - Normalizes Compaction settings from `settings.compaction` and builds the corresponding `settings.update` payload.
   - Normalizes Recall settings from `settings.recall`, derives backend dropdown options from `available_backends`, and builds `settings.update({ recall: { backend } })` payloads.
+  - Normalizes Web Search settings from `settings.web_search`, derives provider
+    dropdown options from `available_providers`, and builds
+    `settings.update({ web_search: { provider, searxng: { base_url } } })`
+    payloads.
 - `webui/src/components/SettingsView.svelte`
   - Includes a Defaults panel. It lets users edit project-wide Agent fallback
     values for `model`, `fallback_model`, `temperature`, and
@@ -317,6 +321,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Includes a Sub-Agents panel. It lets users edit `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` through `settings.update`.
   - Includes a Compaction panel. It lets users edit `auto`, `threshold`, `tail_tokens`, and `summary_model` through `settings.update`. `summary_model` uses the same backend-backed searchable model picker as Agents, with the empty value meaning the active Agent model.
   - Includes a Recall panel. It lets users choose the `session_search` recall backend with a simple dropdown backed by `settings.recall.available_backends`.
+  - Includes a Web Search panel. It lets users choose the provider used by the
+    `web_search` tool with a simple dropdown backed by
+    `settings.web_search.available_providers`; selecting SearXNG reveals a base
+    URL field persisted as `settings.web_search.searxng.base_url`.
   - Includes a Specialized Models panel. It renders Speech to Text and Text to
     Speech rows backed by `task_model.list_targets`, shows backend-owned option
     schemas from `task_model.options`, and saves sparse bindings through

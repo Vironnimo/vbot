@@ -483,6 +483,31 @@ class StubStorage:
             return {"backend": "jsonl_scan"}
         return {"backend": backend.strip()}
 
+    def load_web_search_settings(self) -> JsonObject:
+        stored = self._settings.get("web_search")
+        defaults: JsonObject = {
+            "provider": "brave",
+            "searxng": {"base_url": "http://localhost:8888"},
+        }
+        if not isinstance(stored, dict):
+            return defaults
+
+        provider = stored.get("provider")
+        if not isinstance(provider, str) or provider not in {"brave", "searxng"}:
+            provider = "brave"
+
+        searxng = stored.get("searxng")
+        if not isinstance(searxng, dict):
+            searxng = {}
+        base_url = searxng.get("base_url")
+        if not isinstance(base_url, str) or not base_url.strip():
+            base_url = "http://localhost:8888"
+
+        return {
+            "provider": provider,
+            "searxng": {"base_url": base_url.strip()},
+        }
+
     def load_model_task_settings(self) -> JsonObject:
         stored = self._settings.get("model_tasks")
         return dict(stored) if isinstance(stored, dict) else {}
@@ -496,6 +521,30 @@ class StubStorage:
             "recall": dict(self.load_recall_settings() | recall),
         }
         return self.load_recall_settings()
+
+    def update_web_search_settings(self, web_search: object) -> JsonObject:
+        if not isinstance(web_search, dict):
+            raise StorageError("Web search settings must be an object")
+
+        current = self.load_web_search_settings()
+        searxng = web_search.get("searxng")
+        if searxng is None:
+            searxng = {}
+        if not isinstance(searxng, dict):
+            raise StorageError("Expected settings.web_search.searxng to be an object")
+
+        self._settings = {
+            **self._settings,
+            "web_search": {
+                **current,
+                **web_search,
+                "searxng": {
+                    **current["searxng"],
+                    **searxng,
+                },
+            },
+        }
+        return self.load_web_search_settings()
 
     def update_compaction_settings(self, compaction: object) -> JsonObject:
         if not isinstance(compaction, dict):
@@ -1052,6 +1101,11 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         "recall": {
             "backend": "jsonl_scan",
             "available_backends": ["jsonl_scan", "sqlite_fts"],
+        },
+        "web_search": {
+            "provider": "brave",
+            "available_providers": ["brave", "searxng"],
+            "searxng": {"base_url": "http://localhost:8888"},
         },
     }
     assert "sk-live-secret" not in str(response)
@@ -2170,6 +2224,35 @@ async def test_settings_update_persists_recall_backend_and_reloads_runtime(
 
 
 @pytest.mark.asyncio
+async def test_settings_update_persists_web_search_provider(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "web_search": {
+                    "provider": "searxng",
+                    "searxng": {"base_url": "http://localhost:9999"},
+                }
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_web_search_settings() == {
+        "provider": "searxng",
+        "searxng": {"base_url": "http://localhost:9999"},
+    }
+    assert response["result"]["web_search"] == {
+        "provider": "searxng",
+        "available_providers": ["brave", "searxng"],
+        "searxng": {"base_url": "http://localhost:9999"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_settings_update_persists_agent_default_model_and_returns_defaults(
     tmp_path: Path,
 ) -> None:
@@ -2329,6 +2412,9 @@ async def test_settings_update_reloads_runtime_skills_for_immediate_skill_list(
         {"recall": []},
         {"recall": {"extra": True}},
         {"recall": {"backend": "unknown_backend"}},
+        {"web_search": []},
+        {"web_search": {"provider": "unknown"}},
+        {"web_search": {"provider": "searxng", "searxng": {"base_url": ""}}},
     ],
 )
 async def test_settings_update_rejects_unsupported_sections_and_fields(

@@ -6,6 +6,7 @@ from contextlib import suppress
 from typing import Any, cast
 
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
+from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import SettingsValidationError, parse_settings_update
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -87,6 +88,8 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         if "recall" in settings_update:
             storage.update_recall_settings(settings_update["recall"])
             should_reload_recall_backend = True
+        if "web_search" in settings_update:
+            storage.update_web_search_settings(settings_update["web_search"])
         if "model_tasks" in settings_update:
             storage.update_model_task_settings(settings_update["model_tasks"])
         if should_reload_skills:
@@ -170,6 +173,7 @@ def _settings_response(state: Any) -> JsonObject:
     subagents = runtime.storage.load_subagent_settings()
     compaction = runtime.storage.load_compaction_settings()
     recall = runtime.storage.load_recall_settings()
+    web_search = runtime.storage.load_web_search_settings()
     model_tasks = runtime.storage.load_model_task_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
@@ -199,6 +203,11 @@ def _settings_response(state: Any) -> JsonObject:
         "recall": {
             "backend": recall["backend"],
             "available_backends": sorted(FIRST_PARTY_RECALL_BACKENDS),
+        },
+        "web_search": {
+            "provider": web_search["provider"],
+            "available_providers": sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS),
+            "searxng": dict(web_search["searxng"]),
         },
         "model_tasks": model_tasks,
     }

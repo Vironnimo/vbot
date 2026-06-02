@@ -72,9 +72,15 @@ speech-transcription upload limit enforced by the server before provider/domain
 execution (default 20 MiB). `settings.json` may also include `model_tasks`, a
 mapping from specialized task types such as `speech_to_text` and
 `text_to_speech` to one provider/local target and options. Speech TTS artifacts
-are stored under `<data_dir>/speech/`.
+are stored under `<data_dir>/speech/`. `settings.json` may also include
+`web_search`, an object selecting the provider used by the built-in
+`web_search` tool. First-party providers currently include `brave` (uses
+`BRAVE_API_KEY`) and `searxng` (uses `web_search.searxng.base_url`, default
+`http://localhost:8888`).
 The Settings UI exposes the first-party recall backends and applies changes by
 reloading the runtime `session_search` backend without restart.
+It also exposes the first-party `web_search` providers; provider changes are
+read by the tool at call time and do not require restart.
 User-editable JSON configuration is validated through the central
 `core/settings/validation.py` layer before runtime code consumes it:
 `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and

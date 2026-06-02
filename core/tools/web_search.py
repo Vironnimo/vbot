@@ -1,15 +1,22 @@
-"""Built-in web_search tool backed by Brave Search."""
+"""Built-in web_search tool with selectable first-party search providers."""
 
 from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from core.search_config import (
+    DEFAULT_SEARXNG_BASE_URL,
+    DEFAULT_WEB_SEARCH_PROVIDER,
+    FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+    WEB_SEARCH_PROVIDER_SEARXNG,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -59,13 +66,24 @@ _BRAVE_FRESHNESS_MAP: dict[str, str] = {
     "year": "py",
     "y": "py",
 }
+_SEARXNG_TIME_RANGE_MAP: dict[str, str] = {
+    "pd": "day",
+    "day": "day",
+    "d": "day",
+    "pm": "month",
+    "month": "month",
+    "m": "month",
+    "py": "year",
+    "year": "year",
+    "y": "year",
+}
 
 _ALLOWED_ARGUMENTS = frozenset({"query", "count", "freshness", "date_after", "date_before"})
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_SEARCH_TOOL_DESCRIPTION = (
-    "Search the public web using Brave Search and return structured results "
-    "with title, url, and description."
+    "Search the public web using the configured search provider and return "
+    "structured results with title, url, and description."
 )
 WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -206,6 +224,42 @@ def _build_brave_filters(
     )
 
 
+def _build_searxng_filters(
+    freshness: str,
+    date_after: str,
+    date_before: str,
+) -> tuple[dict[str, str], list[str], str | None]:
+    warnings: list[str] = []
+    filters: dict[str, str] = {}
+
+    if date_after or date_before:
+        warnings.append("searxng does not support exact date ranges; date filters ignored")
+
+    if not freshness:
+        return filters, warnings, None
+
+    mapped = _SEARXNG_TIME_RANGE_MAP.get(freshness)
+    if mapped is not None:
+        filters["time_range"] = mapped
+        return filters, warnings, None
+
+    if freshness in {"pw", "week", "w"}:
+        warnings.append("searxng does not support week time_range; freshness ignored")
+        return filters, warnings, None
+
+    parsed_range = _parse_date_range_token(freshness)
+    if parsed_range is not None:
+        warnings.append("searxng does not support exact date ranges; freshness ignored")
+        return filters, warnings, None
+
+    return (
+        filters,
+        warnings,
+        "freshness must be one of day/week/month/year (or d/w/m/y, pd/pw/pm/py) "
+        "or YYYY-MM-DDtoYYYY-MM-DD",
+    )
+
+
 def _standardize_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
@@ -230,6 +284,38 @@ def _standardize_results(raw_results: Any) -> list[dict[str, Any]]:
                 "content_trust": "untrusted_web_content",
             }
         )
+
+    return normalized
+
+
+def _standardize_searxng_results(raw_results: Any, count: int) -> list[dict[str, Any]]:
+    if not isinstance(raw_results, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+
+        title = _normalize_text(raw.get("title"))
+        url = _normalize_text(raw.get("url"))
+        description = _normalize_text(raw.get("content"))
+        if not description:
+            description = _normalize_text(raw.get("description"))
+        if not title and not url and not description:
+            continue
+
+        normalized.append(
+            {
+                "rank": len(normalized) + 1,
+                "title": title,
+                "url": url,
+                "description": description,
+                "content_trust": "untrusted_web_content",
+            }
+        )
+        if len(normalized) >= count:
+            break
 
     return normalized
 
@@ -334,12 +420,135 @@ async def _search_brave(
     return None, "request failed"
 
 
+def _build_searxng_endpoint(base_url: str) -> tuple[str | None, str | None]:
+    parsed = urlsplit(base_url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, "SearXNG base_url must be an http or https URL"
+
+    base_path = parsed.path.rstrip("/")
+    search_path = f"{base_path}/search" if base_path else "/search"
+    endpoint = urlunsplit((parsed.scheme, parsed.netloc, search_path, "", ""))
+    return endpoint, None
+
+
+async def _search_searxng(
+    *,
+    base_url: str,
+    query: str,
+    count: int,
+    freshness: str,
+    date_after: str,
+    date_before: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    endpoint, endpoint_error = _build_searxng_endpoint(base_url)
+    if endpoint_error is not None:
+        return None, endpoint_error
+    if endpoint is None:
+        return None, "SearXNG endpoint could not be built"
+
+    filters, warnings, filter_error = _build_searxng_filters(freshness, date_after, date_before)
+    if filter_error is not None:
+        return None, filter_error
+
+    params: dict[str, Any] = {
+        "q": query,
+        "format": "json",
+        "pageno": 1,
+        "safesearch": 0,
+        "categories": "general",
+    }
+    params.update(filters)
+
+    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
+        for attempt in range(_RETRY_MAX_RETRIES + 1):
+            try:
+                response = await client.get(endpoint, params=params)
+            except httpx.RequestError as error:
+                if attempt >= _RETRY_MAX_RETRIES:
+                    return None, f"request failed: {error}"
+                await _sleep_for_retry(attempt)
+                continue
+
+            if response.status_code >= 400:
+                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < _RETRY_MAX_RETRIES:
+                    await _sleep_for_retry(attempt)
+                    continue
+                detail = _extract_error_detail(response)
+                if response.status_code == 403:
+                    detail = f"{detail}; ensure SearXNG search formats include json"
+                return None, f"HTTP {response.status_code}: {detail}"
+
+            try:
+                payload = response.json()
+            except ValueError:
+                return None, "provider returned invalid JSON"
+
+            raw_results = payload.get("results") if isinstance(payload, dict) else None
+            results = _standardize_searxng_results(raw_results, count)
+            normalized_payload: dict[str, Any] = {
+                "provider": WEB_SEARCH_PROVIDER_SEARXNG,
+                "query": query,
+                "count_requested": count,
+                "result_count": len(results),
+                "results": results,
+                "content_trust": "untrusted_web_content",
+            }
+            if filters:
+                normalized_payload["filters"] = filters
+            if warnings:
+                normalized_payload["warnings"] = warnings
+            return normalized_payload, None
+
+    return None, "request failed"
+
+
+def _normalize_web_search_settings(raw_settings: Any) -> tuple[dict[str, Any] | None, str | None]:
+    if raw_settings is None:
+        raw_settings = {}
+    if not isinstance(raw_settings, Mapping):
+        return None, "web_search settings must be an object"
+
+    provider = raw_settings.get("provider", DEFAULT_WEB_SEARCH_PROVIDER)
+    if not isinstance(provider, str) or provider not in FIRST_PARTY_WEB_SEARCH_PROVIDERS:
+        allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
+        return None, f"web_search provider must be one of: {allowed}"
+
+    searxng = raw_settings.get("searxng", {})
+    if searxng is None:
+        searxng = {}
+    if not isinstance(searxng, Mapping):
+        return None, "web_search.searxng must be an object"
+
+    base_url = searxng.get("base_url", DEFAULT_SEARXNG_BASE_URL)
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None, "web_search.searxng.base_url must be a non-empty string"
+
+    return {
+        "provider": provider,
+        "searxng": {"base_url": base_url.strip()},
+    }, None
+
+
+def _resolve_web_search_settings(
+    settings_resolver: Callable[[], Mapping[str, Any]] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if settings_resolver is None:
+        return _normalize_web_search_settings(None)
+
+    try:
+        raw_settings = settings_resolver()
+    except Exception as error:
+        return None, f"web_search settings could not be loaded: {error}"
+    return _normalize_web_search_settings(raw_settings)
+
+
 async def web_search_handler(
     context: ToolContext,
     arguments: JsonObject,
     credential_resolver: Callable[[str], str],
+    settings_resolver: Callable[[], Mapping[str, Any]] | None = None,
 ) -> JsonObject:
-    """Handle a Brave-only web_search tool call in the stable vBot envelope."""
+    """Handle a web_search tool call in the stable vBot envelope."""
     del context
 
     unknown_arguments = sorted(set(arguments) - _ALLOWED_ARGUMENTS)
@@ -380,6 +589,28 @@ async def web_search_handler(
     if filter_error is not None:
         return tool_failure("validation_error", filter_error)
 
+    settings, settings_error = _resolve_web_search_settings(settings_resolver)
+    if settings_error is not None:
+        return tool_failure("configuration_error", settings_error)
+    if settings is None:
+        return tool_failure("configuration_error", "web search settings could not be resolved")
+
+    provider = settings["provider"]
+    if provider == WEB_SEARCH_PROVIDER_SEARXNG:
+        payload, search_error = await _search_searxng(
+            base_url=settings["searxng"]["base_url"],
+            query=query,
+            count=count,
+            freshness=freshness,
+            date_after=date_after,
+            date_before=date_before,
+        )
+        if search_error is not None:
+            return tool_failure("provider_request_failed", search_error)
+        if payload is None:
+            return tool_failure("provider_request_failed", "web search failed")
+        return tool_success(payload)
+
     api_key = _normalize_text(credential_resolver("BRAVE_API_KEY"))
     if not api_key:
         return tool_failure(
@@ -405,11 +636,17 @@ async def web_search_handler(
 def register_web_search_tool(
     registry: ToolRegistry,
     credential_resolver: Callable[[str], str],
+    settings_resolver: Callable[[], Mapping[str, Any]] | None = None,
 ) -> None:
-    """Register the Brave-only web_search tool with a vBot tool registry."""
+    """Register the configurable web_search tool with a vBot tool registry."""
 
     async def _handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return await web_search_handler(context, arguments, credential_resolver)
+        return await web_search_handler(
+            context,
+            arguments,
+            credential_resolver,
+            settings_resolver,
+        )
 
     registry.register(
         WEB_SEARCH_TOOL_NAME,

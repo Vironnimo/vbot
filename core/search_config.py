@@ -1,0 +1,22 @@
+"""Shared configuration constants for web search provider selection."""
+
+from __future__ import annotations
+
+WEB_SEARCH_PROVIDER_BRAVE = "brave"
+WEB_SEARCH_PROVIDER_SEARXNG = "searxng"
+DEFAULT_WEB_SEARCH_PROVIDER = WEB_SEARCH_PROVIDER_BRAVE
+FIRST_PARTY_WEB_SEARCH_PROVIDERS = frozenset(
+    {
+        WEB_SEARCH_PROVIDER_BRAVE,
+        WEB_SEARCH_PROVIDER_SEARXNG,
+    }
+)
+DEFAULT_SEARXNG_BASE_URL = "http://localhost:8888"
+
+__all__ = [
+    "DEFAULT_SEARXNG_BASE_URL",
+    "DEFAULT_WEB_SEARCH_PROVIDER",
+    "FIRST_PARTY_WEB_SEARCH_PROVIDERS",
+    "WEB_SEARCH_PROVIDER_BRAVE",
+    "WEB_SEARCH_PROVIDER_SEARXNG",
+]

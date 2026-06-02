@@ -32,11 +32,18 @@ export const AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT =
   '__thinking_effort_no_default__';
 export const RECALL_BACKEND_JSONL_SCAN = 'jsonl_scan';
 export const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
+export const WEB_SEARCH_PROVIDER_BRAVE = 'brave';
+export const WEB_SEARCH_PROVIDER_SEARXNG = 'searxng';
 
 const RECALL_BACKEND_DEFAULTS = Object.freeze([
   RECALL_BACKEND_JSONL_SCAN,
   RECALL_BACKEND_SQLITE_FTS,
 ]);
+const WEB_SEARCH_PROVIDER_DEFAULTS = Object.freeze([
+  WEB_SEARCH_PROVIDER_BRAVE,
+  WEB_SEARCH_PROVIDER_SEARXNG,
+]);
+const DEFAULT_SEARXNG_BASE_URL = 'http://localhost:8888';
 
 const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'none',
@@ -369,6 +376,56 @@ export function buildRecallBackendOptions(recallSettings, translate) {
   );
 }
 
+export function normalizeWebSearchSettings(rawSettings) {
+  const webSearch = rawSettings?.web_search ?? {};
+  const availableProviders = normalizeWebSearchProviders(
+    webSearch.available_providers,
+  );
+  const provider =
+    typeof webSearch.provider === 'string' &&
+    availableProviders.includes(webSearch.provider)
+      ? webSearch.provider
+      : (availableProviders[0] ?? WEB_SEARCH_PROVIDER_BRAVE);
+  const searxngBaseUrl = textOrFallback(
+    webSearch.searxng?.base_url,
+    DEFAULT_SEARXNG_BASE_URL,
+  );
+
+  return {
+    provider,
+    available_providers: availableProviders,
+    searxng: {
+      base_url: searxngBaseUrl,
+    },
+  };
+}
+
+export function getWebSearchSettings(settings) {
+  return normalizeWebSearchSettings(settings);
+}
+
+export function buildWebSearchSettingsPayload(formValues) {
+  const normalized = normalizeWebSearchSettings({ web_search: formValues });
+
+  return {
+    web_search: {
+      provider: normalized.provider,
+      searxng: {
+        base_url: normalized.searxng.base_url,
+      },
+    },
+  };
+}
+
+export function buildWebSearchProviderOptions(webSearchSettings, translate) {
+  return normalizeWebSearchProviders(
+    webSearchSettings?.available_providers,
+  ).map((provider) => ({
+    value: provider,
+    label: translate(`settings.webSearch.providers.${provider}`, provider),
+  }));
+}
+
 export function buildSubAgentSettingsPayload(formValues) {
   return {
     subagents: normalizeSubAgentSettings({
@@ -569,6 +626,7 @@ export function normalizeSettingsForDisplay(settings, translate) {
     ),
     skillDirectories: getSkillDirectories(settings),
     subAgentSettings: normalizeSubAgentSettings(settings),
+    webSearchSettings: normalizeWebSearchSettings(settings),
     providerItems: getProviderItems(settings),
     availableLanguageOptions: buildLanguageOptions(settings?.appearance),
     persistedLanguageId: getPersistedLanguageId(settings),
@@ -598,6 +656,19 @@ function normalizeRecallBackends(backends) {
   return normalized.length > 0
     ? Array.from(new Set(normalized))
     : [...RECALL_BACKEND_DEFAULTS];
+}
+
+function normalizeWebSearchProviders(providers) {
+  const values = Array.isArray(providers)
+    ? providers
+    : WEB_SEARCH_PROVIDER_DEFAULTS;
+  const normalized = values
+    .map((provider) => textOrEmpty(provider))
+    .filter((provider) => provider.length > 0);
+
+  return normalized.length > 0
+    ? Array.from(new Set(normalized))
+    : [...WEB_SEARCH_PROVIDER_DEFAULTS];
 }
 
 function resolveAgentDefaultsSource(rawSettings) {
