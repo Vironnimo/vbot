@@ -12,6 +12,8 @@ import {
   buildRecallBackendOptions,
   buildRecallSettingsPayload,
   buildSubAgentSettingsPayload,
+  buildWebSearchProviderOptions,
+  buildWebSearchSettingsPayload,
   createLanguageUpdatePayload,
   createSkillDirectoriesUpdatePayload,
   describeProvider,
@@ -19,6 +21,7 @@ import {
   getDefaultSkillDirectoryValue,
   getRecallSettings,
   getSkillDirectories,
+  getWebSearchSettings,
   normalizeAgentDefaultsSettings,
   normalizeSubAgentSettings,
   providerStatusClass,
@@ -261,6 +264,73 @@ describe('SettingsView', () => {
     );
   });
 
+  it('selects and saves the web search provider', async () => {
+    const toastMock = vi.fn();
+    rpcMock
+      .mockResolvedValueOnce(createSettingsPayload())
+      .mockImplementationOnce(async (_method, params) =>
+        createSettingsPayload({
+          web_search: {
+            provider: params.web_search.provider,
+            available_providers: ['brave', 'searxng'],
+            searxng: params.web_search.searxng,
+          },
+        }),
+      );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+
+    await waitForText('0.0.0.0:9001');
+    clickButton('Web Search');
+
+    expect(document.body.textContent).toContain('Search provider');
+
+    const trigger = document.body.querySelector(
+      '#settings-web-search-provider',
+    );
+    expect(trigger).not.toBeNull();
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    const searxngOption = Array.from(
+      document.body.querySelectorAll('.dropdown-option'),
+    ).find((option) => option.textContent.trim() === 'SearXNG');
+    expect(searxngOption).toBeTruthy();
+    searxngOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    const baseUrlInput = document.body.querySelector(
+      '#settings-web-search-searxng-base-url',
+    );
+    expect(baseUrlInput).not.toBeNull();
+    baseUrlInput.value = 'http://localhost:9999';
+    baseUrlInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    clickButton('Save');
+
+    expect(rpcMock).toHaveBeenNthCalledWith(2, 'settings.update', {
+      web_search: {
+        provider: 'searxng',
+        searxng: {
+          base_url: 'http://localhost:9999',
+        },
+      },
+    });
+
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Web search settings updated.',
+        variant: 'success',
+      }),
+    );
+  });
+
   it('renders load failures and retries settings.get successfully', async () => {
     rpcMock
       .mockRejectedValueOnce(new Error('server offline'))
@@ -442,6 +512,51 @@ describe('settingsView helpers', () => {
         { value: 'sqlite_fts', label: 'SQLite FTS' },
       ],
     );
+    expect(getWebSearchSettings({})).toEqual({
+      provider: 'brave',
+      available_providers: ['brave', 'searxng'],
+      searxng: {
+        base_url: 'http://localhost:8888',
+      },
+    });
+    expect(
+      getWebSearchSettings({
+        web_search: {
+          provider: 'searxng',
+          available_providers: ['brave', 'searxng'],
+          searxng: {
+            base_url: ' http://localhost:9999 ',
+          },
+        },
+      }),
+    ).toEqual({
+      provider: 'searxng',
+      available_providers: ['brave', 'searxng'],
+      searxng: {
+        base_url: 'http://localhost:9999',
+      },
+    });
+    expect(
+      buildWebSearchSettingsPayload({
+        provider: 'searxng',
+        searxng: {
+          base_url: ' http://localhost:9999 ',
+        },
+      }),
+    ).toEqual({
+      web_search: {
+        provider: 'searxng',
+        searxng: {
+          base_url: 'http://localhost:9999',
+        },
+      },
+    });
+    expect(
+      buildWebSearchProviderOptions(getWebSearchSettings({}), translate),
+    ).toEqual([
+      { value: 'brave', label: 'Brave Search' },
+      { value: 'searxng', label: 'SearXNG' },
+    ]);
     expect(
       getDefaultSkillDirectoryValue(createSettingsPayload(), translate),
     ).toBe('C:/Users/test/.vbot/skills');
@@ -582,6 +697,13 @@ function createSettingsPayload(overrides = {}) {
       backend: 'jsonl_scan',
       available_backends: ['jsonl_scan', 'sqlite_fts'],
     },
+    web_search: {
+      provider: 'brave',
+      available_providers: ['brave', 'searxng'],
+      searxng: {
+        base_url: 'http://localhost:8888',
+      },
+    },
   };
 
   return mergeSettings(base, overrides);
@@ -668,6 +790,8 @@ function translate(key, fallback, values) {
     'settings.providers.status.placeholder': 'Placeholder',
     'settings.recall.backends.jsonl_scan': 'JSONL scan',
     'settings.recall.backends.sqlite_fts': 'SQLite FTS',
+    'settings.webSearch.providers.brave': 'Brave Search',
+    'settings.webSearch.providers.searxng': 'SearXNG',
   };
   const template = templates[key] ?? fallback ?? key;
 

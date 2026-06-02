@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
+from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 
 JsonObject = dict[str, Any]
 
@@ -18,7 +19,16 @@ AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thi
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 SETTINGS_UPDATE_SECTIONS = frozenset(
-    {"appearance", "skills", "subagents", "compaction", "defaults", "recall", "model_tasks"}
+    {
+        "appearance",
+        "skills",
+        "subagents",
+        "compaction",
+        "defaults",
+        "recall",
+        "model_tasks",
+        "web_search",
+    }
 )
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
@@ -65,7 +75,47 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "model_tasks" in params:
         parsed_update["model_tasks"] = _parse_model_tasks_update(params["model_tasks"])
 
+    if "web_search" in params:
+        parsed_update["web_search"] = _parse_web_search_update(params["web_search"])
+
     return parsed_update
+
+
+def _parse_web_search_update(web_search: Any) -> JsonObject:
+    if not isinstance(web_search, dict):
+        raise SettingsValidationError("params.web_search must be an object")
+
+    unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported web_search settings: {', '.join(unsupported_fields)}"
+        )
+
+    provider = web_search.get("provider")
+    if not isinstance(provider, str) or provider not in FIRST_PARTY_WEB_SEARCH_PROVIDERS:
+        allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
+        raise SettingsValidationError(f"params.web_search.provider must be one of: {allowed}")
+
+    parsed: JsonObject = {"provider": provider}
+    if "searxng" in web_search:
+        parsed["searxng"] = _parse_searxng_settings(web_search["searxng"])
+    return parsed
+
+
+def _parse_searxng_settings(searxng: Any) -> JsonObject:
+    if not isinstance(searxng, dict):
+        raise SettingsValidationError("params.web_search.searxng must be an object")
+
+    unsupported_fields = sorted(set(searxng) - {"base_url"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported SearXNG settings: {', '.join(unsupported_fields)}"
+        )
+
+    base_url = searxng.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise SettingsValidationError("params.web_search.searxng.base_url must be a string")
+    return {"base_url": base_url.strip()}
 
 
 def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:

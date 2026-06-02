@@ -48,6 +48,10 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 }
             },
             "recall": {"backend": "sqlite_fts"},
+            "web_search": {
+                "provider": "searxng",
+                "searxng": {"base_url": "http://localhost:8888"},
+            },
             "model_tasks": {
                 "speech_to_text": {
                     "target": "openrouter/openai/gpt-4o-transcribe::api-key",
@@ -80,6 +84,10 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             }
         },
         "recall": {"backend": "sqlite_fts"},
+        "web_search": {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
         "model_tasks": {
             "speech_to_text": {
                 "target": "openrouter/openai/gpt-4o-transcribe::api-key",
@@ -124,6 +132,15 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         (
             {"recall": {"backend": "unknown_backend"}},
             "params.recall.backend must be one of",
+        ),
+        ({"web_search": []}, "params.web_search must be an object"),
+        (
+            {"web_search": {"provider": "unknown"}},
+            "params.web_search.provider must be one of",
+        ),
+        (
+            {"web_search": {"provider": "searxng", "searxng": {"base_url": ""}}},
+            "params.web_search.searxng.base_url must be a string",
         ),
         ({"model_tasks": []}, "params.model_tasks must be an object"),
         (
@@ -173,6 +190,10 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                     "summary_model": None,
                 },
                 "recall": {"backend": "sqlite_fts"},
+                "web_search": {
+                    "provider": "searxng",
+                    "searxng": {"base_url": "http://localhost:8888"},
+                },
                 "defaults": {
                     "agent": {
                         "model": "openai/gpt-5.2",
@@ -236,6 +257,10 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
                 "speech_upload_max_size_bytes": 0,
                 "compaction": {"threshold": 2, "tail_tokens": False},
                 "defaults": {"agent": {"temperature": "warm", "unknown": True}},
+                "web_search": {
+                    "provider": "unknown",
+                    "searxng": {"base_url": ""},
+                },
                 "model_tasks": {"speech_to_text": {"target": "", "options": []}},
                 "typo": True,
             }
@@ -260,6 +285,8 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
             "unsupported defaults.agent setting: unknown",
         ),
         ("error", "$.defaults.agent.temperature", "must be a number"),
+        ("error", "$.web_search.provider", "must be one of: brave, searxng"),
+        ("error", "$.web_search.searxng.base_url", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.target", "must be a non-empty string"),
         ("error", "$.model_tasks.speech_to_text.options", "must be an object"),
     ]

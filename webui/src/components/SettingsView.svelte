@@ -48,6 +48,8 @@
     buildSubAgentSettingsPayload,
     buildRecallBackendOptions,
     buildRecallSettingsPayload,
+    buildWebSearchProviderOptions,
+    buildWebSearchSettingsPayload,
     describeProvider,
     formatAllowedChatIds,
     formatServerHost,
@@ -67,6 +69,7 @@
     isOAuthConnection,
     isLanguageSaveDisabled,
     getRecallSettings,
+    getWebSearchSettings,
   } from '$lib/settingsView.js';
 
   const COMPACTION_SETTING_DEFAULTS = Object.freeze({
@@ -229,6 +232,17 @@
       subtitle: () => t('settings.recall.subtitle', 'Session search backend.'),
     },
     {
+      id: 'web_search',
+      labelKey: 'settings.webSearch.title',
+      labelFallback: 'Web Search',
+      label: () => t('settings.webSearch.title', 'Web Search'),
+      subtitle: () =>
+        t(
+          'settings.webSearch.subtitle',
+          'Provider used by the web_search tool.',
+        ),
+    },
+    {
       id: 'specialized_models',
       labelKey: 'settings.specializedModels.title',
       labelFallback: 'Specialized Models',
@@ -297,6 +311,7 @@
   let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let recallSettings = $state(getRecallSettings(null));
+  let webSearchSettings = $state(getWebSearchSettings(null));
   let taskModelBindings = $state(normalizeTaskModelSettings(null));
   let taskModelTargetsByType = $state({});
   let taskModelSchemasByType = $state({});
@@ -330,6 +345,7 @@
   let subAgentSettingsAutoSaveTimer = null;
   let compactionSettingsAutoSaveTimer = null;
   let recallSettingsAutoSaveTimer = null;
+  let webSearchSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
@@ -381,6 +397,9 @@
   );
   let recallBackendOptions = $derived(
     buildRecallBackendOptions(recallSettings, t),
+  );
+  let webSearchProviderOptions = $derived(
+    buildWebSearchProviderOptions(webSearchSettings, t),
   );
   let thinkingEffortOptions = $derived([
     {
@@ -457,6 +476,11 @@
       saving ||
       recallSettingsMatch(recallSettings, getRecallSettings(settings)),
   );
+  let webSearchSettingsSaveDisabled = $derived(
+    loading ||
+      saving ||
+      webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
+  );
   let taskModelSaveDisabled = $derived(
     loading ||
       saving ||
@@ -477,6 +501,7 @@
       clearSubAgentSettingsAutoSaveTimer();
       clearCompactionSettingsAutoSaveTimer();
       clearRecallSettingsAutoSaveTimer();
+      clearWebSearchSettingsAutoSaveTimer();
     };
   });
 
@@ -597,6 +622,25 @@
     };
   });
 
+  $effect(() => {
+    if (activePanelId !== 'web_search') {
+      return;
+    }
+
+    if (webSearchSettingsSaveDisabled) {
+      return;
+    }
+
+    webSearchSettingsAutoSaveTimer = setTimeout(() => {
+      webSearchSettingsAutoSaveTimer = null;
+      void saveWebSearchSettings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearWebSearchSettingsAutoSaveTimer();
+    };
+  });
+
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
@@ -655,6 +699,7 @@
     subAgentSettings = normalizeSubAgentSettings(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
     recallSettings = getRecallSettings(nextSettings);
+    webSearchSettings = getWebSearchSettings(nextSettings);
     taskModelBindings = normalizeTaskModelSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
@@ -830,6 +875,32 @@
     }
   }
 
+  async function saveWebSearchSettings() {
+    if (webSearchSettingsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+
+    try {
+      const nextSettings = await rpc(
+        'settings.update',
+        buildWebSearchSettingsPayload(webSearchSettings),
+      );
+      commitSettings(nextSettings);
+      webSearchSettings = getWebSearchSettings(nextSettings);
+      showSettingsToast(
+        t('settings.webSearch.saveSuccess', 'Web search settings updated.'),
+        'success',
+      );
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   async function ensureTaskModelPanelLoaded() {
     if (taskModelPanelLoaded || taskModelLoading) {
       return;
@@ -950,6 +1021,13 @@
     }
   }
 
+  function clearWebSearchSettingsAutoSaveTimer() {
+    if (webSearchSettingsAutoSaveTimer !== null) {
+      clearTimeout(webSearchSettingsAutoSaveTimer);
+      webSearchSettingsAutoSaveTimer = null;
+    }
+  }
+
   function showAlreadySavedToast() {
     showSettingsToast(t('common.alreadySaved', 'Already saved'), 'success');
   }
@@ -1037,6 +1115,20 @@
     void saveRecallSettings();
   }
 
+  function handleManualWebSearchSettingsSave() {
+    if (saving) {
+      return;
+    }
+
+    if (webSearchSettingsSaveDisabled) {
+      showAlreadySavedToast();
+      return;
+    }
+
+    clearWebSearchSettingsAutoSaveTimer();
+    void saveWebSearchSettings();
+  }
+
   function handleManualTaskModelSave() {
     if (saving || taskModelSaving) {
       return;
@@ -1111,6 +1203,25 @@
     recallSettings = {
       ...recallSettings,
       backend,
+    };
+    saveError = '';
+  }
+
+  function handleWebSearchProviderChange(provider) {
+    webSearchSettings = {
+      ...webSearchSettings,
+      provider,
+    };
+    saveError = '';
+  }
+
+  function handleWebSearchSearxngBaseUrlChange(event) {
+    webSearchSettings = {
+      ...webSearchSettings,
+      searxng: {
+        ...(webSearchSettings.searxng ?? {}),
+        base_url: event.currentTarget.value,
+      },
     };
     saveError = '';
   }
@@ -1244,6 +1355,16 @@
     return (
       getRecallSettings({ recall: left }).backend ===
       getRecallSettings({ recall: right }).backend
+    );
+  }
+
+  function webSearchSettingsMatch(left, right) {
+    const normalizedLeft = getWebSearchSettings({ web_search: left });
+    const normalizedRight = getWebSearchSettings({ web_search: right });
+
+    return (
+      normalizedLeft.provider === normalizedRight.provider &&
+      normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
     );
   }
 
@@ -2441,6 +2562,73 @@
                 : t('settings.recall.save', 'Save')}
             </button>
           </div>
+        {:else if activePanelId === 'web_search'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('settings.webSearch.provider', 'Search provider')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'settings.webSearch.providerDescription',
+                  'Provider used whenever an agent calls web_search.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--web-search">
+              <Dropdown
+                id="settings-web-search-provider"
+                value={webSearchSettings.provider}
+                options={webSearchProviderOptions}
+                ariaLabel={t('settings.webSearch.provider', 'Search provider')}
+                triggerClass="settings-view__dropdown"
+                listClass="settings-view__thinking-list"
+                onValueChange={handleWebSearchProviderChange}
+              />
+            </div>
+          </div>
+
+          {#if webSearchSettings.provider === 'searxng'}
+            <div class="s-row">
+              <div class="s-row-info">
+                <div class="s-row-label">
+                  {t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
+                </div>
+                <div class="s-row-desc">
+                  {t(
+                    'settings.webSearch.searxngBaseUrlDescription',
+                    'Base URL of the local or remote SearXNG instance.',
+                  )}
+                </div>
+              </div>
+              <div class="s-row-control s-row-control--web-search-url">
+                <input
+                  id="settings-web-search-searxng-base-url"
+                  class="s-input"
+                  type="url"
+                  value={webSearchSettings.searxng.base_url}
+                  placeholder="http://localhost:8888"
+                  aria-label={t(
+                    'settings.webSearch.searxngBaseUrl',
+                    'SearXNG base URL',
+                  )}
+                  oninput={handleWebSearchSearxngBaseUrlChange}
+                />
+              </div>
+            </div>
+          {/if}
+
+          <div class="s-sticky-footer">
+            <button
+              class="btn-primary s-save-button s-save-button--inline"
+              type="button"
+              onclick={handleManualWebSearchSettingsSave}
+            >
+              {saving
+                ? t('common.saving', 'Saving…')
+                : t('settings.webSearch.save', 'Save')}
+            </button>
+          </div>
         {:else if activePanelId === 'specialized_models'}
           {#if taskModelLoading}
             <div class="s-feedback s-feedback--neutral">
@@ -3530,6 +3718,16 @@
     min-width: 220px;
   }
 
+  .s-row-control--web-search {
+    width: min(320px, 100%);
+    min-width: 220px;
+  }
+
+  .s-row-control--web-search-url {
+    width: min(420px, 100%);
+    min-width: 260px;
+  }
+
   .s-row-control--task-model {
     width: min(520px, 100%);
     min-width: 280px;
@@ -3936,6 +4134,8 @@
     .s-row-control--input-actions,
     .s-row-control--number,
     .s-row-control--recall,
+    .s-row-control--web-search,
+    .s-row-control--web-search-url,
     .s-row-control--task-model {
       width: 100%;
       min-width: 0;

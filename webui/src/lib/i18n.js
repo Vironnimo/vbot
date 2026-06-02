@@ -448,6 +448,18 @@ export const englishCatalog = Object.freeze({
   'settings.recall.backends.sqlite_fts': 'SQLite FTS',
   'settings.recall.save': 'Save',
   'settings.recall.saveSuccess': 'Recall backend updated.',
+  'settings.webSearch.title': 'Web Search',
+  'settings.webSearch.subtitle': 'Provider used by the web_search tool.',
+  'settings.webSearch.provider': 'Search provider',
+  'settings.webSearch.providerDescription':
+    'Provider used whenever an agent calls web_search.',
+  'settings.webSearch.providers.brave': 'Brave Search',
+  'settings.webSearch.providers.searxng': 'SearXNG',
+  'settings.webSearch.searxngBaseUrl': 'SearXNG base URL',
+  'settings.webSearch.searxngBaseUrlDescription':
+    'Base URL of the local or remote SearXNG instance.',
+  'settings.webSearch.save': 'Save',
+  'settings.webSearch.saveSuccess': 'Web search settings updated.',
   'settings.specializedModels.title': 'Specialized Models',
   'settings.specializedModels.subtitle':
     'Task-specific model bindings for speech and future media tools.',

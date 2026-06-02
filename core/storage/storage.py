@@ -13,6 +13,11 @@ from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.search_config import (
+    DEFAULT_SEARXNG_BASE_URL,
+    DEFAULT_WEB_SEARCH_PROVIDER,
+    FIRST_PARTY_WEB_SEARCH_PROVIDERS,
+)
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
@@ -47,6 +52,10 @@ SUBAGENT_SETTING_DEFAULTS = {
     "subagent_timeout_minutes": 60,
 }
 DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
+DEFAULT_WEB_SEARCH_SETTINGS = {
+    "provider": DEFAULT_WEB_SEARCH_PROVIDER,
+    "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
+}
 COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "auto": True,
     "threshold": 0.8,
@@ -267,6 +276,12 @@ class StorageManager:
         settings = self.load_settings()
         return self._normalize_recall_settings(settings.get("recall"))
 
+    def load_web_search_settings(self) -> dict[str, Any]:
+        """Return normalized persisted web search provider settings."""
+
+        settings = self.load_settings()
+        return self._normalize_web_search_settings(settings.get("web_search"))
+
     def load_model_task_settings(self) -> dict[str, dict[str, Any]]:
         """Return normalized persisted task-model bindings."""
 
@@ -289,6 +304,39 @@ class StorageManager:
         merged_settings["recall"] = normalized_recall
         self.save_settings(merged_settings)
         return dict(normalized_recall)
+
+    def update_web_search_settings(self, web_search: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist the supported web search provider settings and return them."""
+
+        if not isinstance(web_search, Mapping):
+            raise StorageError("Web search settings must be a mapping")
+
+        unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
+
+        settings = self.load_settings()
+        merged_settings = dict(settings)
+        current_settings = self._normalize_web_search_settings(settings.get("web_search"))
+        raw_searxng_update = web_search.get("searxng", {})
+        if raw_searxng_update is None:
+            raw_searxng_update = {}
+        if not isinstance(raw_searxng_update, Mapping):
+            raise StorageError("Expected settings.web_search.searxng to be an object")
+
+        normalized_web_search = self._normalize_web_search_settings(
+            {
+                **current_settings,
+                **dict(web_search),
+                "searxng": {
+                    **current_settings["searxng"],
+                    **dict(raw_searxng_update),
+                },
+            }
+        )
+        merged_settings["web_search"] = normalized_web_search
+        self.save_settings(merged_settings)
+        return dict(normalized_web_search)
 
     def update_model_task_settings(
         self,
@@ -746,6 +794,35 @@ class StorageManager:
         return {"backend": backend.strip()}
 
     @classmethod
+    def _normalize_web_search_settings(cls, web_search: Any) -> dict[str, Any]:
+        section = cls._coerce_web_search_section(web_search)
+        provider = section.get("provider", DEFAULT_WEB_SEARCH_SETTINGS["provider"])
+        if not isinstance(provider, str) or provider not in FIRST_PARTY_WEB_SEARCH_PROVIDERS:
+            allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
+            raise StorageError(f"Web search provider must be one of: {allowed}")
+
+        searxng = section.get("searxng", {})
+        if searxng is None:
+            searxng = {}
+        if not isinstance(searxng, Mapping):
+            raise StorageError("Expected settings.web_search.searxng to be an object")
+
+        unsupported_searxng_fields = sorted(set(searxng) - {"base_url"})
+        if unsupported_searxng_fields:
+            raise StorageError(
+                "Unsupported SearXNG settings: " + ", ".join(unsupported_searxng_fields)
+            )
+
+        base_url = searxng.get("base_url", DEFAULT_SEARXNG_BASE_URL)
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise StorageError("SearXNG base_url must be a non-empty string")
+
+        return {
+            "provider": provider,
+            "searxng": {"base_url": base_url.strip()},
+        }
+
+    @classmethod
     def _normalize_model_task_settings(cls, model_tasks: Any) -> dict[str, dict[str, Any]]:
         section = cls._coerce_model_tasks_section(model_tasks)
         normalized: dict[str, dict[str, Any]] = {}
@@ -783,6 +860,17 @@ class StorageManager:
         if not isinstance(model_tasks, Mapping):
             raise StorageError("Expected settings.model_tasks to be an object")
         return dict(model_tasks)
+
+    @staticmethod
+    def _coerce_web_search_section(web_search: Any) -> dict[str, Any]:
+        if web_search is None:
+            return {}
+        if not isinstance(web_search, Mapping):
+            raise StorageError("Expected settings.web_search to be an object")
+        unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
+        return dict(web_search)
 
     @classmethod
     def _normalize_json_object(cls, value: Any, path: str) -> dict[str, Any]:

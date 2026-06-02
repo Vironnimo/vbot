@@ -30,7 +30,9 @@ Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
   fragments, instantiates the runtime-owned `AttachmentStore` using
   `settings.json` `attachment_max_size_bytes`, instantiates `MemoryService`, wires services, starts the
   `ProcessManager` sweeper when startup
-  happens inside a running asyncio loop, registers built-in tools including `memory`, creates the
+  happens inside a running asyncio loop, registers built-in tools including
+  `memory`, registers `web_search` with a settings resolver so it reads the
+  current `settings.web_search` provider at call time, creates the
   `RecallBackendRegistry`, selects the configured recall backend from
   `settings.recall.backend` with fallback to `jsonl_scan`, registers
   `session_search` against that backend, creates the `TaskModelService` for

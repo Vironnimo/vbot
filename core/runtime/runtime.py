@@ -241,7 +241,11 @@ class Runtime:
         register_write_tool(self._tools)
         register_memory_tool(self._tools, self._memory_service)
         register_web_fetch_tool(self._tools)
-        register_web_search_tool(self._tools, self.resolve_environment_credential)
+        register_web_search_tool(
+            self._tools,
+            self.resolve_environment_credential,
+            self._storage.load_web_search_settings,
+        )
         register_homeassistant_tools(self._tools, self.resolve_environment_credential)
         register_process_tool(self._tools, self._process_manager)
         register_text_to_speech_tool(self._tools, self._speech)

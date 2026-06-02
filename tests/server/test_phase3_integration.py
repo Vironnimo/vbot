@@ -174,6 +174,12 @@ class IntegrationStorage:
     def load_recall_settings(self) -> JsonObject:
         return {"backend": "jsonl_scan"}
 
+    def load_web_search_settings(self) -> JsonObject:
+        return {
+            "provider": "brave",
+            "searxng": {"base_url": "http://localhost:8888"},
+        }
+
     def load_defaults(self) -> JsonObject:
         return {}
 
@@ -413,6 +419,11 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
             "recall": {
                 "backend": "jsonl_scan",
                 "available_backends": ["jsonl_scan", "sqlite_fts"],
+            },
+            "web_search": {
+                "provider": "brave",
+                "available_providers": ["brave", "searxng"],
+                "searxng": {"base_url": "http://localhost:8888"},
             },
             "defaults": {},
             "model_tasks": {},

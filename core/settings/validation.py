@@ -11,6 +11,7 @@ from typing import Any, Literal, cast
 
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ALLOWED_THINKING_EFFORTS,
@@ -41,6 +42,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "skill_directories",
         "speech_upload_max_size_bytes",
         "subagent_timeout_minutes",
+        "web_search",
     }
 )
 PORT_SETTING_KEYS = frozenset({"PORT", "SERVER_PORT", "port", "server_port"})
@@ -55,6 +57,8 @@ COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_mode
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
 RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+WEB_SEARCH_FIELDS = frozenset({"provider", "searxng"})
+WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
@@ -293,6 +297,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_compaction(diagnostics, data.get("compaction"))
     _validate_defaults(diagnostics, data.get("defaults"))
     _validate_recall(diagnostics, data.get("recall"))
+    _validate_web_search(diagnostics, data.get("web_search"))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     return diagnostics
 
@@ -663,6 +668,40 @@ def _validate_recall(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         return
     if RECALL_BACKEND_PATTERN.fullmatch(backend.strip()) is None:
         _error(diagnostics, "$.recall.backend", "must use lowercase snake_case")
+
+
+def _validate_web_search(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.web_search", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.web_search", value, WEB_SEARCH_FIELDS, "web_search field")
+    provider = value.get("provider")
+    if provider is not None and (
+        not isinstance(provider, str) or provider not in FIRST_PARTY_WEB_SEARCH_PROVIDERS
+    ):
+        allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
+        _error(diagnostics, "$.web_search.provider", f"must be one of: {allowed}")
+
+    searxng = value.get("searxng")
+    if searxng is None:
+        return
+    if not isinstance(searxng, Mapping):
+        _error(diagnostics, "$.web_search.searxng", "must be an object")
+        return
+
+    _warn_unknown_keys(
+        diagnostics,
+        "$.web_search.searxng",
+        searxng,
+        WEB_SEARCH_SEARXNG_FIELDS,
+        "SearXNG field",
+    )
+    base_url = searxng.get("base_url")
+    if "base_url" in searxng and (not isinstance(base_url, str) or not base_url.strip()):
+        _error(diagnostics, "$.web_search.searxng.base_url", "must be a non-empty string")
 
 
 def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None:

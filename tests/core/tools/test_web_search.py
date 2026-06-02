@@ -19,6 +19,7 @@ from core.tools.web_search import (
 )
 
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
+_SEARXNG_ENDPOINT = "http://localhost:8888/search"
 
 
 def make_context(workspace: Path, tool_name: str = WEB_SEARCH_TOOL_NAME) -> ToolContext:
@@ -383,6 +384,78 @@ async def test_web_search_handler_brave_success_with_date_range(tmp_path: Path) 
     assert data["result_count"] == 0
     request = route.calls[0].request
     assert request.url.params["freshness"] == "2025-01-01to2025-12-31"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_success_without_api_key(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    route = respx.get(_SEARXNG_ENDPOINT).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "title": "vBot docs",
+                        "url": "https://example.com/vbot",
+                        "content": "vBot documentation",
+                    },
+                    {
+                        "title": "vBot project",
+                        "url": "https://example.com/project",
+                        "content": "Project page",
+                    },
+                ]
+            },
+        )
+    )
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot", "count": 1, "freshness": "day"},
+        lambda key: "",
+        lambda: {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:8888"},
+        },
+    )
+
+    data = assert_success_envelope(result)
+    assert data["provider"] == "searxng"
+    assert data["query"] == "vbot"
+    assert data["count_requested"] == 1
+    assert data["result_count"] == 1
+    assert data["filters"] == {"time_range": "day"}
+
+    request = route.calls[0].request
+    assert request.url.params["q"] == "vbot"
+    assert request.url.params["format"] == "json"
+    assert request.url.params["categories"] == "general"
+    assert request.url.params["safesearch"] == "0"
+    assert request.url.params["time_range"] == "day"
+
+    results = data["results"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["title"] == "vBot docs"
+    assert results[0]["description"] == "vBot documentation"
+
+
+@pytest.mark.asyncio
+async def test_web_search_handler_searxng_rejects_invalid_base_url(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_search_handler(
+        make_context(workspace),
+        {"query": "vbot"},
+        _fake_credential_resolver,
+        lambda: {"provider": "searxng", "searxng": {"base_url": "localhost:8888"}},
+    )
+
+    assert_failure_envelope(result, "provider_request_failed")
 
 
 def test_api_key_not_in_schema() -> None:

@@ -369,6 +369,81 @@ def test_update_recall_settings_rejects_unsupported_fields(tmp_path: Path) -> No
         storage.update_recall_settings({"backend": "sqlite_fts", "unknown": True})
 
 
+def test_load_web_search_settings_defaults_to_brave(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_web_search_settings() == {
+        "provider": "brave",
+        "searxng": {"base_url": "http://localhost:8888"},
+    }
+
+
+def test_update_web_search_settings_persists_provider_and_searxng_url(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500})
+
+    updated = storage.update_web_search_settings(
+        {
+            "provider": "searxng",
+            "searxng": {"base_url": " http://localhost:9999/ "},
+        }
+    )
+
+    assert updated == {
+        "provider": "searxng",
+        "searxng": {"base_url": "http://localhost:9999/"},
+    }
+    assert storage.load_settings() == {
+        "server_port": 8500,
+        "web_search": updated,
+    }
+
+
+def test_update_web_search_settings_preserves_searxng_url_when_switching_provider(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.update_web_search_settings(
+        {
+            "provider": "searxng",
+            "searxng": {"base_url": "http://localhost:9999"},
+        }
+    )
+
+    updated = storage.update_web_search_settings({"provider": "brave"})
+
+    assert updated == {
+        "provider": "brave",
+        "searxng": {"base_url": "http://localhost:9999"},
+    }
+
+
+@pytest.mark.parametrize(
+    ("web_search", "message"),
+    [
+        ([], "Web search settings must be a mapping"),
+        ({"provider": "unknown"}, "Web search provider must be one of"),
+        (
+            {"provider": "searxng", "searxng": []},
+            "Expected settings.web_search.searxng to be an object",
+        ),
+        (
+            {"provider": "searxng", "searxng": {"base_url": ""}},
+            "SearXNG base_url must be a non-empty string",
+        ),
+    ],
+)
+def test_update_web_search_settings_rejects_invalid_payloads(
+    tmp_path: Path,
+    web_search: Any,
+    message: str,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError, match=message):
+        storage.update_web_search_settings(web_search)
+
+
 def test_model_task_settings_round_trip_and_preserve_other_settings(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.save_settings({"server_port": 8500})
