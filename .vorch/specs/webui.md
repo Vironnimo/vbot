@@ -207,7 +207,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     microphone access, stopping uploads the recorded blob to
     `/api/speech/transcribe`, and successful transcription inserts text into the
     composer without sending automatically. Existing draft text is preserved and
-    the transcript is appended on a new line.
+    the transcript is appended on a new line. The next submit carries
+    `{ inputOrigin: "speech_transcription" }` through ChatView, which maps it to
+    RPC `input_origin: "speech_transcription"` so the backend can add a hidden
+    system reminder for the model.
   - Cancels active recording and stops media tracks on submit and component
     destroy. Unsupported browser APIs, permission failures, and missing STT
     configuration surface through existing Chat action/toast feedback.

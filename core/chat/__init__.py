@@ -6,9 +6,13 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from core.chat.chat import (
+        INPUT_ORIGIN_SPEECH_TRANSCRIPTION as INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+    )
     from core.chat.chat import MAX_TOOL_ITERATIONS as MAX_TOOL_ITERATIONS
     from core.chat.chat import ChatLoop as ChatLoop
     from core.chat.chat import ChatMessage as ChatMessage
+    from core.chat.chat import InputOrigin as InputOrigin
     from core.chat.chat import ToolCall as ToolCall
     from core.chat.chat import parse_bare_model as parse_bare_model
     from core.chat.commands import CommandAction as CommandAction
@@ -35,6 +39,8 @@ _EXPORT_MODULES = {
     "CommandAction": "core.chat.commands",
     "CommandHandled": "core.chat.commands",
     "DispatchResult": "core.chat.commands",
+    "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",
+    "InputOrigin": "core.chat.chat",
     "MAX_TOOL_ITERATIONS": "core.chat.chat",
     "NotACommand": "core.chat.commands",
     "parse_bare_model": "core.chat.chat",

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, cast
 
 from core.chat.content_blocks import ContentBlock, ContentBlockError, content_block_from_dict
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
+CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION = "speech_transcription"
+CHAT_INPUT_ORIGINS = frozenset((CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION,))
+ChatInputOrigin = Literal["speech_transcription"]
 
 
 def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:
@@ -36,6 +39,19 @@ def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock
         RPC_ERROR_INVALID_REQUEST,
         f"params.{key} must be a non-empty string or a list of content blocks",
     )
+
+
+def _optional_chat_input_origin(params: JsonObject) -> ChatInputOrigin | None:
+    value = params.get("input_origin")
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in CHAT_INPUT_ORIGINS:
+        allowed = ", ".join(sorted(CHAT_INPUT_ORIGINS))
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.input_origin must be one of: {allowed}",
+        )
+    return cast(ChatInputOrigin, value)
 
 
 def _required_string(params: JsonObject, key: str) -> str:

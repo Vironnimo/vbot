@@ -14,7 +14,12 @@ vi.mock('$lib/api.js', () => ({
   uploadAttachment: vi.fn(),
 }));
 
+vi.mock('$lib/audioRecorder.js', () => ({
+  createAudioRecorder: vi.fn(),
+}));
+
 const { transcribeSpeech, uploadAttachment } = await import('$lib/api.js');
+const { createAudioRecorder } = await import('$lib/audioRecorder.js');
 
 const { default: ChatComposer } = await import('../ChatComposer.svelte');
 
@@ -27,6 +32,7 @@ describe('ChatComposer', () => {
     mountedComponent = null;
     transcribeSpeech.mockReset();
     uploadAttachment.mockReset();
+    createAudioRecorder.mockReset();
   });
 
   afterEach(async () => {
@@ -383,6 +389,48 @@ describe('ChatComposer', () => {
     );
     expect(input.value).toBe('');
     expect(input.style.height).toBe('');
+  });
+
+  it('marks submitted transcribed text with speech input origin', async () => {
+    const onSendMessage = vi.fn();
+    const recorder = {
+      start: vi.fn(),
+      stop: vi
+        .fn()
+        .mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' })),
+      filename: () => 'recording.webm',
+      cancel: vi.fn(),
+    };
+    createAudioRecorder.mockResolvedValue(recorder);
+    transcribeSpeech.mockResolvedValue({ text: 'hello world' });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    const microphoneButton = document.body.querySelector(
+      'button[aria-label="Start voice input"]',
+    );
+    microphoneButton.click();
+    await flushComposerAsyncWork();
+
+    document.body.querySelector('button[aria-label="Stop recording"]').click();
+    await flushComposerAsyncWork();
+    await flushComposerAsyncWork();
+    await flushComposerAsyncWork();
+
+    expect(transcribeSpeech).toHaveBeenCalledWith(expect.any(Blob), {
+      filename: 'recording.webm',
+    });
+    expect(composerInput().value).toBe('hello world');
+
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith('hello world', {
+      inputOrigin: 'speech_transcription',
+    });
   });
 
   it('sends uploaded text files as embedded text blocks', async () => {

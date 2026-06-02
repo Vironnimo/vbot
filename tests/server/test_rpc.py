@@ -3483,6 +3483,78 @@ async def test_chat_send_accepts_content_block_list(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_forward_speech_transcription_input_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    captured: JsonObject = {}
+    run = StubDelegateRun(
+        run_id="run-speech-origin",
+        agent_id="coder",
+        session_id="session-one",
+        status="running" if method == "chat.stream" else "completed",
+        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Done"),
+    )
+
+    async def fake_start_run(
+        agent_id: str,
+        content: str | list[Any],
+        *,
+        session_id: str,
+        input_origin: str | None = None,
+    ) -> StubDelegateRun:
+        captured["agent_id"] = agent_id
+        captured["content"] = content
+        captured["session_id"] = session_id
+        captured["input_origin"] = input_origin
+        return run
+
+    class StubStreamingLoop:
+        async def start_run(
+            self,
+            agent_id: str,
+            content: str | list[Any],
+            *,
+            session_id: str,
+            input_origin: str | None = None,
+        ) -> StubDelegateRun:
+            return await fake_start_run(
+                agent_id,
+                content,
+                session_id=session_id,
+                input_origin=input_origin,
+            )
+
+    monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
+    monkeypatch.setattr(delegates, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
+    monkeypatch.setattr(delegates, "_bridge_run_to_event_bus", lambda _state, _run: None)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "helo wrld",
+                "input_origin": "speech_transcription",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert captured == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "content": "helo wrld",
+        "input_origin": "speech_transcription",
+    }
+
+
+@pytest.mark.asyncio
 async def test_chat_stream_accepts_content_block_list(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3576,6 +3648,33 @@ async def test_chat_methods_reject_invalid_content_type(
     assert response["error"]["message"] == (
         "params.content must be a non-empty string or a list of content blocks"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_reject_invalid_input_origin(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "Hi",
+                "input_origin": "paste",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "params.input_origin" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

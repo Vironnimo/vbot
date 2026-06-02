@@ -89,6 +89,7 @@ MessageRole = Literal[
     "error",
     "compaction_checkpoint",
 ]
+InputOrigin = Literal["speech_transcription"]
 JsonObject = dict[str, Any]
 
 _LOGGER = get_logger("chat")
@@ -98,6 +99,12 @@ UTC_Z_SUFFIX = "Z"
 MAX_TOOL_ITERATIONS = 1000
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
+INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
+SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
+    "The following user message was produced by speech-to-text transcription. "
+    "It may contain transcription errors, missing punctuation, or misheard words. "
+    "Infer the user's likely intent when appropriate, but do not mention this unless it matters."
+)
 SKILL_SLASH_TRIGGER_PATTERN = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{0,63})(?=\s|$)")
 SKILL_INLINE_TRIGGER_PATTERN = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]{0,63})")
 ERROR_KIND_RATE_LIMIT = "rate_limit"
@@ -561,9 +568,16 @@ class ChatLoop:
         content: str | list[ContentBlock],
         *,
         session_id: str | None = None,
+        input_origin: InputOrigin | None = None,
     ) -> ChatMessage:
         """Run one persisted non-streaming chat turn and return the final assistant message."""
-        run = await self._start_run(agent_id, content, session_id=session_id, create_missing=True)
+        run = await self._start_run(
+            agent_id,
+            content,
+            session_id=session_id,
+            create_missing=True,
+            input_origin=input_origin,
+        )
         return cast(ChatMessage, await run.wait())
 
     async def start_run(
@@ -573,6 +587,7 @@ class ChatLoop:
         *,
         session_id: str,
         internal: bool = False,
+        input_origin: InputOrigin | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers."""
         return await self._start_run(
@@ -581,6 +596,7 @@ class ChatLoop:
             session_id=session_id,
             create_missing=False,
             internal=internal,
+            input_origin=input_origin,
         )
 
     async def queue_run(
@@ -590,6 +606,7 @@ class ChatLoop:
         *,
         session_id: str,
         internal: bool = False,
+        input_origin: InputOrigin | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle."""
         agent = self._runtime.agents.get(agent_id)
@@ -600,7 +617,12 @@ class ChatLoop:
         return await manager.enqueue(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content, internal=internal),
+            executor=lambda run: self._execute_run(
+                run,
+                content,
+                internal=internal,
+                input_origin=input_origin,
+            ),
             display_content=_display_content_preview(content),
             internal=internal,
         )
@@ -610,6 +632,7 @@ class ChatLoop:
         agent_id: str,
         session_id: str,
         content: str | list[ContentBlock],
+        input_origin: InputOrigin | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
         agent = self._runtime.agents.get(agent_id)
@@ -618,7 +641,7 @@ class ChatLoop:
         session = self._get_session(agent_id, session_id, create_missing=False)
         return (
             session.id,
-            lambda run: self._execute_run(run, content),
+            lambda run: self._execute_run(run, content, input_origin=input_origin),
             _display_content_preview(content),
         )
 
@@ -646,6 +669,7 @@ class ChatLoop:
         session_id: str | None,
         create_missing: bool,
         internal: bool = False,
+        input_origin: InputOrigin | None = None,
     ) -> Run:
         agent = self._runtime.agents.get(agent_id)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -655,7 +679,12 @@ class ChatLoop:
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content, internal=internal),
+            executor=lambda run: self._execute_run(
+                run,
+                content,
+                internal=internal,
+                input_origin=input_origin,
+            ),
         )
 
     async def _execute_run(
@@ -665,6 +694,7 @@ class ChatLoop:
         *,
         internal: bool = False,
         retry: bool = False,
+        input_origin: InputOrigin | None = None,
     ) -> ChatMessage:
         agent = self._runtime.agents.get(run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -714,6 +744,7 @@ class ChatLoop:
             else:
                 if content is None:
                     raise ChatError("content is required for non-retry runs")
+                _append_input_origin_note(session, input_origin)
                 user_message = ChatMessage.user(content)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
@@ -1505,6 +1536,15 @@ def _display_content_preview(content: str | list[ContentBlock]) -> str:
     if not text_blocks:
         return "[attachment]"
     return " ".join(text_blocks)[:500]
+
+
+def _append_input_origin_note(session: ChatSession, input_origin: InputOrigin | None) -> None:
+    if input_origin is None:
+        return
+    if input_origin == INPUT_ORIGIN_SPEECH_TRANSCRIPTION:
+        session.add_note(SPEECH_TRANSCRIPTION_SYSTEM_REMINDER)
+        return
+    raise ChatError(f"unsupported input origin: {input_origin}")
 
 
 def _agent_workspace(agent: Any, data_root: Path) -> Path:

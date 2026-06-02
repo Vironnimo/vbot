@@ -25,6 +25,7 @@ from server.rpc.runtime_access import (
     _streaming_chat_loop,
 )
 from server.rpc.validation import (
+    _optional_chat_input_origin,
     _optional_positive_integer,
     _optional_string,
     _parse_chat_content,
@@ -198,6 +199,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
+    input_origin = _optional_chat_input_origin(params)
 
     command_text = _extract_command_text(content)
     if command_text is not None:
@@ -212,14 +214,30 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
             return command_response
 
     try:
-        run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
-    except ActiveRunError:
-        try:
-            queued_item = await state.chat_loop.queue_run(
+        if input_origin is None:
+            run = await state.chat_loop.start_run(agent_id, content, session_id=session_id)
+        else:
+            run = await state.chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
+                input_origin=input_origin,
             )
+    except ActiveRunError:
+        try:
+            if input_origin is None:
+                queued_item = await state.chat_loop.queue_run(
+                    agent_id,
+                    content,
+                    session_id=session_id,
+                )
+            else:
+                queued_item = await state.chat_loop.queue_run(
+                    agent_id,
+                    content,
+                    session_id=session_id,
+                    input_origin=input_origin,
+                )
             _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -239,6 +257,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
+    input_origin = _optional_chat_input_origin(params)
 
     command_text = _extract_command_text(content)
     if command_text is not None:
@@ -254,14 +273,30 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
 
     streaming_chat_loop = _streaming_chat_loop(state)
     try:
-        run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
-    except ActiveRunError:
-        try:
-            queued_item = await streaming_chat_loop.queue_run(
+        if input_origin is None:
+            run = await streaming_chat_loop.start_run(agent_id, content, session_id=session_id)
+        else:
+            run = await streaming_chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
+                input_origin=input_origin,
             )
+    except ActiveRunError:
+        try:
+            if input_origin is None:
+                queued_item = await streaming_chat_loop.queue_run(
+                    agent_id,
+                    content,
+                    session_id=session_id,
+                )
+            else:
+                queued_item = await streaming_chat_loop.queue_run(
+                    agent_id,
+                    content,
+                    session_id=session_id,
+                    input_origin=input_origin,
+                )
             _bridge_queued_item_to_event_bus(state, queued_item)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -369,7 +404,9 @@ def _chat_queue_remove(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
-    unsupported_fields = sorted(set(params) - {"agent_id", "session_id", "item_id", "content"})
+    unsupported_fields = sorted(
+        set(params) - {"agent_id", "session_id", "item_id", "content", "input_origin"}
+    )
     if unsupported_fields:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
@@ -380,17 +417,31 @@ def _chat_queue_update(state: Any, params: JsonObject) -> JsonObject:
     session_id = _required_string(params, "session_id")
     item_id = _required_string(params, "item_id")
     content = _parse_chat_content(params, "content")
+    input_origin = _optional_chat_input_origin(params)
 
     try:
         chat_runs = _state_chat_runs(state)
         if not _queue_item_is_public(chat_runs, agent_id, session_id, item_id):
             raise RpcError(RPC_ERROR_QUEUE_ITEM_NOT_FOUND, f"queued item not found: {item_id}")
 
-        (
-            resolved_session_id,
-            updated_executor,
-            updated_display_content,
-        ) = _build_streaming_queue_update(state, agent_id, session_id, content)
+        if input_origin is None:
+            (
+                resolved_session_id,
+                updated_executor,
+                updated_display_content,
+            ) = _build_streaming_queue_update(state, agent_id, session_id, content)
+        else:
+            (
+                resolved_session_id,
+                updated_executor,
+                updated_display_content,
+            ) = _build_streaming_queue_update(
+                state,
+                agent_id,
+                session_id,
+                content,
+                input_origin=input_origin,
+            )
         updated = chat_runs.update_queued(
             agent_id,
             resolved_session_id,

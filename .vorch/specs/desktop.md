@@ -125,9 +125,11 @@ cannot immediately retrigger a second recording cycle.
 - `"active"` session behavior resolves the Agent's persisted
   `current_session_id` via `agent.get`; if unavailable, it falls back to the
   most recently active session from `session.list`, then creates a session.
-- Transcripts are submitted with `chat.stream` so the Desktop worker returns to
+- Transcripts are submitted with `chat.stream` and
+  `input_origin: "speech_transcription"` so the Desktop worker returns to
   listening after the server accepts the Run instead of blocking until the Run
-  completes.
+  completes, while the model still receives hidden context that the visible user
+  text came from speech-to-text.
 - After a successful voice turn, the worker resets the microphone stream before
   listening again. Isolated microphone read errors are recovered by reopening
   the stream; repeated read failures still transition to `error`.
