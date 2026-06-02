@@ -28,3 +28,6 @@ Pinned memory CRUD over `USER.md` and `MEMORY.md`.
 - Existing prose in `USER.md` or `MEMORY.md` must be preserved.
 - Use `user` scope for durable user facts and `agent` scope for stable agent/workflow notes.
 - The tool is for concise, durable facts. It is not a session transcript, scratchpad, or broad recall search surface.
+- Agent `memory_prompt_mode` controls whether and which pinned memory files are
+  inserted into the system prompt. Tool availability only controls whether the
+  model can call the memory CRUD tool.

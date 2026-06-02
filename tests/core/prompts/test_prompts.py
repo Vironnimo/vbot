@@ -9,6 +9,12 @@ import pytest
 
 from core.agents.agents import Agent
 from core.channels.channels import ChannelConfig
+from core.memory import (
+    MEMORY_PROMPT_MODE_AGENT,
+    MEMORY_PROMPT_MODE_AGENT_USER,
+    MEMORY_PROMPT_MODE_OFF,
+    MemoryPromptMode,
+)
 from core.prompts.prompts import (
     EDITABLE_PROMPT_FRAGMENT_NAMES,
     PromptAgent,
@@ -178,10 +184,7 @@ class StubChannels:
 @pytest.fixture
 def fragments() -> dict[str, str]:
     return {
-        "system.md": (
-            "{include:SOUL.md}\n{include:MEMORY.md}\n{runtime}\n"
-            "{include:USER.md}\n{tools}\n{channels}\n{skills}"
-        ),
+        "system.md": ("{include:SOUL.md}\n{memory}\n{runtime}\n{tools}\n{channels}\n{skills}"),
         "runtime.md": (
             "## Runtime\n"
             "- Host: {host}\n"
@@ -296,9 +299,59 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert "User text" in prompt
     assert '<file name="SOUL.md">' in prompt
     assert '<file name="MEMORY.md">' in prompt
+    assert '<file name="USER.md">' in prompt
     assert "{" not in prompt
     assert tools.prompt_allowlist == ["read_file"]
     assert skills.allowlist == ["agent-cli"]
+
+
+def test_memory_block_omits_workspace_memory_when_agent_memory_is_off(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(
+        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    )
+
+    assert "Soul text" in prompt
+    assert "Memory text" not in prompt
+    assert "User text" not in prompt
+    assert "<memory>" not in prompt
+
+
+def test_memory_block_can_include_only_agent_memory(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+
+    prompt = manager.build_system_prompt(
+        _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+    )
+
+    assert "<memory>" in prompt
+    assert '<file name="MEMORY.md">' in prompt
+    assert "Memory text" in prompt
+    assert '<file name="USER.md">' not in prompt
+    assert "User text" not in prompt
 
 
 def test_provider_tool_definitions_use_same_agent_allowlist(
@@ -671,6 +724,7 @@ def _agent(
     allowed_tools: list[str] | None = None,
     allowed_skills: list[str] | None = None,
     custom_system_prompt_enabled: bool = False,
+    memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER,
 ) -> Agent:
     return Agent(
         id=agent_id,
@@ -680,6 +734,7 @@ def _agent(
         workspace=str(workspace),
         temperature=0.1,
         thinking_effort="high",
+        memory_prompt_mode=memory_prompt_mode,
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
         custom_system_prompt_enabled=custom_system_prompt_enabled,

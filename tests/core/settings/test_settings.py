@@ -285,6 +285,7 @@ def _valid_agent_data() -> dict[str, object]:
         "fallback_model": "",
         "temperature": None,
         "thinking_effort": None,
+        "memory_prompt_mode": "agent_user",
         "allowed_tools": ["*"],
         "allowed_skills": ["*"],
         "custom_system_prompt_enabled": False,
@@ -315,3 +316,18 @@ def test_validate_agent_data_rejects_non_bool_custom_prompt_toggle() -> None:
             diagnostics=tuple(diagnostics),
         )
     ) == [("error", "$.custom_system_prompt_enabled", "must be a boolean")]
+
+
+def test_validate_agent_data_rejects_invalid_memory_prompt_mode() -> None:
+    data = _valid_agent_data()
+    data["memory_prompt_mode"] = "sometimes"
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("agent.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.memory_prompt_mode", "must be one of: agent, agent_user, off")]

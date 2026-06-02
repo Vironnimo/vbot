@@ -338,6 +338,31 @@ describe('AgentsView', () => {
     });
   });
 
+  it('sends memory prompt mode changes from the agent detail pane', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('Memory');
+
+    openSimpleDropdown('agent-memory-prompt-mode');
+    expect(simpleOptionLabels('agent-memory-prompt-mode')).toEqual([
+      'Off',
+      'MEMORY.md',
+      'MEMORY.md + USER.md',
+    ]);
+
+    selectSimpleOption('agent-memory-prompt-mode', 'MEMORY.md');
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      memory_prompt_mode: 'agent',
+    });
+  });
+
   it('does not render a duplicate fallback status below the fallback picker', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
@@ -1495,6 +1520,7 @@ function baseAgent() {
     current_session_id: 'session-1',
     temperature: '0.1',
     thinking_effort: '',
+    memory_prompt_mode: 'agent_user',
     allowed_tools: ['*'],
     allowed_skills: ['*'],
     custom_system_prompt_enabled: false,

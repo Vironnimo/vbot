@@ -1,10 +1,8 @@
 {include:SOUL.md}
 
-{include:MEMORY.md}
+{memory}
 
 {runtime}
-
-{include:USER.md}
 
 {tools}
 

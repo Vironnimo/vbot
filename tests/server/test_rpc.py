@@ -20,6 +20,7 @@ import server.delegates as delegates
 from core.automation import TriggerService
 from core.chat import ChatLoop, ChatMessage, ChatSessionManager
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
+from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
@@ -43,6 +44,7 @@ class StubAgent:
     workspace: str = "C:/workspace"
     temperature: float | None = 0.1
     thinking_effort: str | None = ""
+    memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
     custom_system_prompt_enabled: bool = False
@@ -2467,6 +2469,7 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
     assert list_response["result"]["agents"][0]["current_session_id"] == "current-one"
     assert create_response["result"]["id"] == "writer"
     assert create_response["result"]["custom_system_prompt_enabled"] is False
+    assert create_response["result"]["memory_prompt_mode"] == "agent_user"
     assert update_response["result"]["name"] == "Updated Writer"
     assert delete_response["result"]["agent_id"] == "writer"
 
@@ -2632,6 +2635,20 @@ async def test_agent_update_accepts_null_temperature_to_clear_override(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_agent_update_accepts_memory_prompt_mode(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "coder", "memory_prompt_mode": "off"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["memory_prompt_mode"] == "off"
+    assert state.runtime.agents.get("coder").memory_prompt_mode == "off"
+
+
+@pytest.mark.asyncio
 async def test_agent_get_reflects_configured_default_model(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.storage.update_defaults("agent", {"model": "openai/gpt-4.1-mini"})
@@ -2720,6 +2737,7 @@ async def test_agent_create_returns_and_publishes_resolved_defaults(tmp_path: Pa
         ("agent.update", {"id": "coder", "temperature": -0.1}),
         ("agent.update", {"id": "coder", "temperature": 2.1}),
         ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
+        ("agent.update", {"id": "coder", "memory_prompt_mode": "sometimes"}),
         ("agent.update", {"id": "coder", "name": ""}),
         ("agent.update", {"id": "coder", "model": 5}),
         ("agent.update", {"id": "coder", "custom_system_prompt_enabled": "yes"}),

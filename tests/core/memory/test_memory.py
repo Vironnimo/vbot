@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from core.memory import MemoryError, MemoryService
+from core.memory import (
+    MEMORY_PROMPT_MODE_AGENT,
+    MEMORY_PROMPT_MODE_AGENT_USER,
+    MEMORY_PROMPT_MODE_OFF,
+    MemoryError,
+    MemoryService,
+)
 
 
 def test_memory_service_preserves_preamble_and_manages_entries(tmp_path: Path) -> None:
@@ -60,3 +66,32 @@ def test_memory_service_rejects_invalid_entry_id(tmp_path: Path) -> None:
 
     with pytest.raises(MemoryError, match="entry_id"):
         service.remove_entry(tmp_path, "user", 1)
+
+
+def test_memory_service_builds_prompt_block_for_selected_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+    (workspace / "USER.md").write_text("User memory", encoding="utf-8")
+    service = MemoryService()
+
+    agent_only = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT)
+    agent_and_user = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+    disabled = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_OFF)
+
+    assert agent_only == '<memory>\n<file name="MEMORY.md">\nAgent memory\n</file>\n</memory>'
+    assert '<file name="MEMORY.md">' in agent_and_user
+    assert '<file name="USER.md">' in agent_and_user
+    assert disabled == ""
+
+
+def test_memory_service_prompt_block_omits_missing_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "MEMORY.md").write_text("Agent memory", encoding="utf-8")
+    service = MemoryService()
+
+    prompt_block = service.build_prompt_block(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+
+    assert "Agent memory" in prompt_block
+    assert "USER.md" not in prompt_block

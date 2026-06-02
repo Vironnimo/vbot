@@ -6,6 +6,7 @@ import math
 from typing import Any, cast
 
 from core.channels import ChannelConfigError
+from core.memory import MEMORY_PROMPT_MODES
 from server.events import AGENT_CREATED_EVENT, AGENT_DELETED_EVENT, AGENT_UPDATED_EVENT
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id, _channel_system_reminder
@@ -196,6 +197,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "name",
         "model",
         "fallback_model",
+        "memory_prompt_mode",
         "temperature",
         "thinking_effort",
         "allowed_tools",
@@ -234,6 +236,8 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return _validate_temperature(value, allow_none=True)
     if key == "thinking_effort":
         return _validate_thinking_effort(value, allow_none=True)
+    if key == "memory_prompt_mode":
+        return _validate_memory_prompt_mode(value)
     if key in {"allowed_tools", "allowed_skills"}:
         return _validate_string_list(key, value)
     if key == "custom_system_prompt_enabled":
@@ -244,6 +248,16 @@ def _validate_agent_field(key: str, value: Any) -> Any:
             )
         return value
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
+
+
+def _validate_memory_prompt_mode(value: Any) -> str:
+    if not isinstance(value, str) or value not in MEMORY_PROMPT_MODES:
+        allowed = ", ".join(repr(item) for item in MEMORY_PROMPT_MODES)
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.memory_prompt_mode must be one of: {allowed}",
+        )
+    return value
 
 
 def _validate_temperature(

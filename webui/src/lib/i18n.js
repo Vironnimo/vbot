@@ -217,6 +217,7 @@ export const englishCatalog = Object.freeze({
   'agents.form.allowedTools': 'Allowed tools',
   'agents.form.allowedSkills': 'Allowed skills',
   'agents.form.customSystemPrompt': 'Custom system prompt',
+  'agents.form.memoryPromptMode': 'Memory',
   'agents.form.idHelp': 'Agent IDs are immutable after creation.',
   'agents.form.listHelp': 'Enter one item per line.',
   'agents.form.modelPlaceholder': 'Default (no model selected)',
@@ -232,6 +233,9 @@ export const englishCatalog = Object.freeze({
   'agents.form.thinkingEffortOption.high': 'high',
   'agents.form.thinkingEffortOption.xhigh': 'xhigh',
   'agents.form.thinkingEffortOption.max': 'max',
+  'agents.form.memoryPromptModeOption.off': 'Off',
+  'agents.form.memoryPromptModeOption.agent': 'MEMORY.md',
+  'agents.form.memoryPromptModeOption.agent_user': 'MEMORY.md + USER.md',
   'agents.form.workspaceAssignedByServer':
     'Workspace is assigned by the server when the agent is created.',
   'agents.form.workspaceReadOnly': 'Workspace is read-only in this WebUI.',

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
@@ -66,6 +67,7 @@ AGENT_FIELDS = frozenset(
         "current_session_id",
         "fallback_model",
         "id",
+        "memory_prompt_mode",
         "model",
         "name",
         "temperature",
@@ -315,6 +317,12 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         "$.thinking_effort",
         data.get("thinking_effort"),
         allow_none=True,
+    )
+    _validate_optional_allowed_string(
+        diagnostics,
+        "$.memory_prompt_mode",
+        data.get("memory_prompt_mode"),
+        frozenset(MEMORY_PROMPT_MODES),
     )
     _validate_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     _validate_string_list(diagnostics, "$.allowed_skills", data.get("allowed_skills"))
@@ -733,6 +741,16 @@ def _validate_allowed_string(
 ) -> None:
     if value is None:
         _error(diagnostics, path, "is required")
+        return
+    if not isinstance(value, str) or value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        _error(diagnostics, path, f"must be one of: {choices}")
+
+
+def _validate_optional_allowed_string(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any, allowed: frozenset[str]
+) -> None:
+    if value is None:
         return
     if not isinstance(value, str) or value not in allowed:
         choices = ", ".join(sorted(allowed))

@@ -324,6 +324,7 @@ class Runtime:
             app_version=str(self._config.get("APP_VERSION", _DEFAULT_APP_VERSION)),
             app_dir=_PROJECT_ROOT,
             data_root=self._storage.data_dir,
+            memory_provider=self._memory_service,
         )
 
         self._log_startup_inventory()

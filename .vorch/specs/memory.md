@@ -15,6 +15,10 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
   - `agent` -> `MEMORY.md`, stable agent/workflow notes.
 - `MemoryEntry`: `id`, `scope`, `content`.
 - Tool-managed entries live under a `## Entries` section in the target Markdown file.
+- `MemoryPromptMode` controls prompt rendering:
+  - `off` -> no prompt-visible pinned memory.
+  - `agent` -> `MEMORY.md`.
+  - `agent_user` -> `MEMORY.md` plus `USER.md` (default).
 
 ## Interfaces
 
@@ -23,6 +27,7 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
   - `add_entry(workspace, scope, content) -> MemoryEntry`
   - `replace_entry(workspace, scope, entry_id, content) -> MemoryEntry`
   - `remove_entry(workspace, scope, entry_id) -> MemoryEntry`
+  - `build_prompt_block(workspace, mode) -> str`
 - `FilePinnedMemoryBackend` implements the same operations against workspace Markdown files.
 - `MemoryError` reports expected validation or file I/O failures.
 
@@ -33,6 +38,9 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 - Optional Markdown after a later `## ...` heading is preserved.
 - The memory backend only edits bullet entries inside `## Entries`.
 - Missing `MEMORY.md` is created on first write.
+- Prompt rendering reads the selected workspace Markdown files as raw file
+  blocks inside one `<memory>...</memory>` block. Missing selected files are
+  omitted.
 - Writes use a same-directory temp file plus atomic replace.
 - Entry content is normalized to single-line whitespace and capped at 2,000 characters.
 - Duplicate `add` returns the existing entry instead of writing another copy.
@@ -40,7 +48,9 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 ## Cross-Domain Rules
 
 - `core/tools/memory.py` owns the provider-visible tool contract and delegates all storage behavior to `MemoryService`.
-- `core/prompts/` includes workspace files through `{include:...}`; memory code does not assemble system prompts.
+- `core/prompts/` expands the `{memory}` placeholder by asking the memory service
+  to render the selected prompt block for the Agent's `memory_prompt_mode`.
+  Other workspace files may still be included through `{include:...}`.
 - `core/agents/` seeds `MEMORY.md` for new workspaces through the workspace-template mechanism.
 - Sessions and recall search are separate. Do not store chat transcripts or broad search indexes in this domain. SQLite FTS Session recall lives in `core/recall/` as a derived index.
 

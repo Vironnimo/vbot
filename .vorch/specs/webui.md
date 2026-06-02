@@ -242,8 +242,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     so inherited resolved defaults are not written back as explicit overrides.
     Clearing `temperature` or `thinking_effort` sends `null`; clearing model
     fields sends `""`.
-  - Includes `custom_system_prompt_enabled` as a boolean editable field. In edit
-    mode the toggle is omitted from sparse update payloads unless it changed.
+  - Includes `custom_system_prompt_enabled` as a boolean editable field and
+    `memory_prompt_mode` as an enum (`off`, `agent`, `agent_user`). In edit mode
+    unchanged values are omitted from sparse update payloads.
 - `webui/src/components/AgentsView.svelte`
   - Loads `agent.list` plus the backend catalogs from `model.list`,
     `connection.list`, `tool.list`, and `skill.list` on mount.
@@ -256,8 +257,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `fallback_model`, and `thinking_effort`, plus a tool-toggle list sourced
     from `tool.list`.
   - The Agent detail pane exposes only an on/off `Custom system prompt` toggle
-    for Agent-scoped prompt editing. It does not expose prompt-fragment editors
-    inside the Agents view.
+    for Agent-scoped prompt editing plus a Memory dropdown that controls whether
+    the runtime prompt includes no pinned memory, only `MEMORY.md`, or
+    `MEMORY.md + USER.md`. It does not expose prompt-fragment editors inside the
+    Agents view.
   - The Agent edit form shows workspace once in the Identity section as an
     editable text field. Workspace changes are saved through `agent.update` and
     are not duplicated again in the Access section.

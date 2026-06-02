@@ -34,7 +34,15 @@ Prompt fragments can be edited in scopes:
 
 - `core/prompts/__init__.py` exports `SystemPromptManager`, `PromptFragmentManager`, `PromptError`, prompt Protocols, editable fragment names, and variable metadata.
 - `SystemPromptManager(storage, tool_registry, skill_registry, app_version, app_dir, data_root, ...)`
-  - `build_system_prompt(agent, scope=None) -> str` expands `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and `{include:filename}`. The rendered runtime fragment expands `{app_version}` with the application version. With `scope=None`, it uses the Agent scope only when the Agent explicitly enables custom system prompts; otherwise it uses the default scope. Passing an explicit scope is used by preview and must match the preview Agent for Agent scopes.
+  - `build_system_prompt(agent, scope=None) -> str` expands `{memory}`,
+    `{runtime}`, `{tools}`, `{channels}`, `{skills}`, and
+    `{include:filename}`. The rendered memory fragment comes from the memory
+    service and follows the Agent's `memory_prompt_mode`. The rendered runtime
+    fragment expands `{app_version}` with the application version. With
+    `scope=None`, it uses the Agent scope only when the Agent explicitly enables
+    custom system prompts; otherwise it uses the default scope. Passing an
+    explicit scope is used by preview and must match the preview Agent for Agent
+    scopes.
   - `provider_tool_definitions(agent) -> list[dict]` returns provider tool schemas filtered by the Agent allowlist and adds the internal `skill` tool only when the Agent has loadable skills.
   - `update_skill_registry(skill_registry)` refreshes prompt-visible skill filtering after runtime skill reload.
 - `PromptFragmentManager(storage, agent_store=None)`
@@ -48,11 +56,14 @@ Prompt fragments can be edited in scopes:
 
 - Prompt domain code depends on Protocols for Agent, Tool, Skill, Channel, and Storage shapes. Avoid importing concrete AgentStore, ChannelService, or StorageManager classes here unless a new boundary genuinely needs it.
 - Workspace includes accept only safe flat filenames. `{include:filename}` resolves under the Agent workspace and wraps content as `<file name="filename">\n...\n</file>`.
-- The bundled default system prompt includes `SOUL.md`, `USER.md`, and `MEMORY.md`; missing workspace includes render as an empty tagged file rather than failing prompt assembly.
+- The bundled default system prompt includes `SOUL.md` through `{include:SOUL.md}`
+  and pinned memory through `{memory}`. It does not include `USER.md` or
+  `MEMORY.md` directly; those files belong to the memory service's rendered
+  block.
 - Custom Agent `system.md` expands optional blocks lazily: `{runtime}`,
-  `{tools}`, `{channels}`, and `{skills}` are rendered only when the placeholder
-  appears in the Agent's `system.md`. This keeps an empty or minimal Agent root
-  from implicitly pulling in default fragments.
+  `{memory}`, `{tools}`, `{channels}`, and `{skills}` are rendered only when the
+  placeholder appears in the Agent's `system.md`. This keeps an empty or minimal
+  Agent root from implicitly pulling in default fragments.
 - Skill prompt metadata is XML-escaped before insertion.
 - Prompt fragment variable metadata is descriptive UI data only; changing it is a user-visible contract change.
 - Provider tool permissions and schemas continue to come from `allowed_tools`.
