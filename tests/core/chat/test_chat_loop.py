@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 from core.chat import (
+    INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
     ChatError,
     ChatLoop,
     ChatMessage,
@@ -465,6 +466,32 @@ async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
     }
     assert request_messages[2]["content"] == "Hi"
     assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_speech_transcription_origin_adds_system_reminder_before_user_turn(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    await ChatLoop(runtime).send(
+        "coder",
+        "helo wrld",
+        session_id="session-one",
+        input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    request_messages = adapter.requests[0]["messages"]
+    assert [message.role for message in messages] == ["note", "user", "assistant"]
+    assert "speech-to-text transcription" in str(messages[0].content)
+    assert messages[1].content == "helo wrld"
+    assert [message["role"] for message in request_messages] == ["system", "user", "user"]
+    assert "speech-to-text transcription" in request_messages[1]["content"]
+    assert request_messages[2]["content"] == "helo wrld"
 
 
 @pytest.mark.asyncio

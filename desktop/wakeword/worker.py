@@ -404,6 +404,7 @@ class WakewordWorker:
                 "agent_id": agent_id,
                 "session_id": session_id,
                 "content": transcript,
+                "input_origin": "speech_transcription",
             },
         )
         return bool(result)

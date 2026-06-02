@@ -549,7 +549,12 @@ def test_send_transcript_uses_streaming_rpc(fake_bridge: FakeBridge) -> None:
     assert calls == [
         (
             "chat.stream",
-            {"agent_id": "main", "session_id": "session-one", "content": "hello"},
+            {
+                "agent_id": "main",
+                "session_id": "session-one",
+                "content": "hello",
+                "input_origin": "speech_transcription",
+            },
         )
     ]
 

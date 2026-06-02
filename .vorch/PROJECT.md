@@ -292,7 +292,10 @@ constraints, or things an agent would otherwise likely assume incorrectly.
   `role: "note"` entries for background events. The chat loop embeds them into
   provider requests as synthetic user messages wrapped in `<system-reminder>`
   tags; provider adapters must never receive `role: "note"`, and the normal UI
-  should not present notes as user messages.
+  should not present notes as user messages. Visible chat turns can also carry
+  `input_origin: "speech_transcription"` through RPC; the chat loop then adds a
+  hidden system-reminder note immediately before the unchanged visible user
+  message so the model knows the text may contain STT errors.
 - **Built-in commands and skill triggers are separate layers.** Recognized
   pure-text slash commands are handled before a Run starts. `/skill-name` and
   `$skill-name` are skill activation hints that preserve the original user

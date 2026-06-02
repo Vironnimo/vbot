@@ -171,10 +171,13 @@ Clients call the vBot server contract; provider wire details stay behind
   or adapter failure.
 - `chat.send` and `chat.stream` target an existing Session and start a core Run
   through the shared `ChatLoop.start_run()` execution model. `content` may be a
-  string or a JSON array of canonical content-block dicts. When the target
-  Session already has an active Run, these methods enqueue through the shared
-  `core.runs.ChatRunManager` queue and return `{ queued: true, item }` instead of an
-  `active_run` RPC error.
+  string or a JSON array of canonical content-block dicts. Optional
+  `input_origin` currently accepts only `"speech_transcription"`; when present,
+  the chat layer adds an internal system-reminder note before the visible user
+  message so the model knows the next message came from speech-to-text. When the
+  target Session already has an active Run, these methods enqueue through the
+  shared `core.runs.ChatRunManager` queue and return `{ queued: true, item }`
+  instead of an `active_run` RPC error.
 - Recognized built-in slash commands are intercepted before Run start only when
   `content` resolves to pure text. Current built-ins are `/compact`, `/help`,
   `/new`, `/retry`, `/status`, and `/stop`. Unknown slash text still goes
@@ -201,9 +204,9 @@ Clients call the vBot server contract; provider wire details stay behind
 - `chat.queue_remove` accepts `{ agent_id, session_id, item_id }`, removes one
   queued item from the shared session queue, and returns `{ ok: true }` or the
   stable RPC error code `queue_item_not_found`.
-- `chat.queue_update` accepts `{ agent_id, session_id, item_id, content }`,
-  rebuilds the queued executor/display preview through the streaming chat path,
-  and returns `{ ok: true }` or `queue_item_not_found`.
+- `chat.queue_update` accepts `{ agent_id, session_id, item_id, content,
+  input_origin? }`, rebuilds the queued executor/display preview through the
+  streaming chat path, and returns `{ ok: true }` or `queue_item_not_found`.
 - Server event bus events contain lifecycle summaries for WebSocket clients:
   `run_started`, `run_output`, `run_completed`, `run_cancelled`, and
   `run_failed`. Agent CRUD events: `agent.created`, `agent.updated`,

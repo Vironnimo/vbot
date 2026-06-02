@@ -38,12 +38,18 @@ def _build_streaming_queue_update(
     agent_id: str,
     session_id: str,
     content: str | list[ContentBlock],
+    input_origin: str | None = None,
 ) -> tuple[str, RunExecutor, str]:
     streaming_chat_loop = _streaming_chat_loop(state)
     build_queue_update = getattr(streaming_chat_loop, "build_queue_update", None)
     if not callable(build_queue_update):
         raise ChatError("streaming chat loop cannot update queued runs")
-    return cast(tuple[str, RunExecutor, str], build_queue_update(agent_id, session_id, content))
+    if input_origin is None:
+        return cast(tuple[str, RunExecutor, str], build_queue_update(agent_id, session_id, content))
+    return cast(
+        tuple[str, RunExecutor, str],
+        build_queue_update(agent_id, session_id, content, input_origin=input_origin),
+    )
 
 
 def _state_chat_runs(state: Any) -> ChatRunManager:

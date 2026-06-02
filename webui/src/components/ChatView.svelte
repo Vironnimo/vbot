@@ -582,28 +582,32 @@
     await loadHistoryForSession(agentId, normalizedSessionId);
   };
 
-  const handleSendMessage = async (content) => {
+  const handleSendMessage = async (content, options = {}) => {
     const agent = activeAgent;
     const sessionState = activeSessionState;
     if (!agent || !sessionState) {
       return;
     }
-    await sendStream(agent, sessionState, content);
+    await sendStream(agent, sessionState, content, options);
   };
 
   const handleTranscriptionError = (message) => {
     actionError = message;
   };
 
-  const sendStream = async (agent, sessionState, content) => {
+  const sendStream = async (agent, sessionState, content, options = {}) => {
     actionError = '';
     actionInfo = '';
     try {
-      const run = await rpc('chat.stream', {
+      const params = {
         agent_id: agent.id,
         session_id: sessionState.sessionId,
         content,
-      });
+      };
+      if (options.inputOrigin) {
+        params.input_origin = options.inputOrigin;
+      }
+      const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
         setActionInfo(run.reply);
         const newSessionId = newSessionIdFromCommandResponse(run);

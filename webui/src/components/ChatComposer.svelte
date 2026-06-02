@@ -27,6 +27,7 @@
   let isDragOver = $state(false);
   let attachmentToastMessage = $state('');
   let recordingState = $state('idle');
+  let inputOrigin = $state('');
   let activeRecorder = null;
   let attachmentToastTimeoutId = null;
   let _suppressSelectionUpdate = false;
@@ -276,6 +277,7 @@
       return;
     }
     content = content.trim() ? `${content.trimEnd()}\n${text}` : text;
+    inputOrigin = 'speech_transcription';
     triggerContext = null;
     activeSkillIndex = 0;
     await tick();
@@ -358,9 +360,14 @@
     }
 
     cancelActiveRecording();
+    const sendOptions = inputOrigin ? { inputOrigin } : null;
 
     if (!hasPendingAttachments) {
-      onSendMessage?.(content);
+      if (sendOptions) {
+        onSendMessage?.(content, sendOptions);
+      } else {
+        onSendMessage?.(content);
+      }
     } else {
       const contentBlocks = pendingAttachments
         .filter(
@@ -402,11 +409,16 @@
         return;
       }
 
-      onSendMessage?.(contentBlocks);
+      if (sendOptions) {
+        onSendMessage?.(contentBlocks, sendOptions);
+      } else {
+        onSendMessage?.(contentBlocks);
+      }
       clearPendingAttachments();
     }
 
     content = '';
+    inputOrigin = '';
     triggerContext = null;
     activeSkillIndex = 0;
     isDragOver = false;
@@ -503,6 +515,9 @@
 
   const handleInput = () => {
     _triggerClosed = false;
+    if (!content.trim()) {
+      inputOrigin = '';
+    }
     resizeInput();
     updateTriggerContext();
   };
