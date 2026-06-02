@@ -21,6 +21,7 @@ from core.memory import (
 )
 from core.sessions import ChatSessionManager
 from core.settings import SettingsValidationError, load_validated_agent_json
+from core.tools.availability import sanitize_configured_allowed_tools
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
@@ -416,6 +417,8 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
         raise AgentError(f"{field} must be a list of strings")
     if not all(isinstance(item, str) for item in items):
         raise AgentError(f"{field} must be a list of strings")
+    if field == "allowed_tools":
+        return sanitize_configured_allowed_tools(items)
     return list(items)
 
 

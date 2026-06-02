@@ -584,6 +584,30 @@ describe('AgentsView', () => {
     });
   });
 
+  it('hides memory from configurable tool access', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        tools: [
+          { name: 'bash', description: 'Run shell commands.' },
+          { name: 'memory', description: 'Manage pinned memory.' },
+          { name: 'write', description: 'Write files.' },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForText('write');
+
+    expect(document.body.textContent).toContain('Run shell commands.');
+    expect(document.body.textContent).toContain('Write files.');
+    expect(document.body.textContent).not.toContain('Manage pinned memory.');
+    expect(
+      document.body.querySelector('button[aria-label="Toggle tool memory"]'),
+    ).toBeNull();
+  });
+
   it('manual save cancels a pending agent autosave', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 

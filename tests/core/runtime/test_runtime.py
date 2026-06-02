@@ -740,8 +740,11 @@ def test_reload_skills_updates_provider_skill_tool_visibility(config: Config, tm
     runtime.reload_skills()
     definitions_after_reload = runtime.system_prompts.provider_tool_definitions(agent)
 
-    assert [definition["name"] for definition in definitions_before_reload] == []
-    assert [definition["name"] for definition in definitions_after_reload] == ["skill"]
+    assert [definition["name"] for definition in definitions_before_reload] == ["memory"]
+    assert [definition["name"] for definition in definitions_after_reload] == [
+        "memory",
+        "skill",
+    ]
 
 
 def _write_test_skill(skill_root: Path, name: str, description: str) -> None:

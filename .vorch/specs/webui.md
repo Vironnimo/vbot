@@ -255,7 +255,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     on missing tool/context metadata.
   - The Agent edit form uses backend-backed selects for `model`,
     `fallback_model`, and `thinking_effort`, plus a tool-toggle list sourced
-    from `tool.list`.
+    from `tool.list`. The tool-toggle list omits `memory`; the Memory dropdown
+    owns both prompt-visible pinned memory and the effective memory tool.
   - The Agent detail pane exposes only an on/off `Custom system prompt` toggle
     for Agent-scoped prompt editing plus a Memory dropdown that controls whether
     the runtime prompt includes no pinned memory, only `MEMORY.md`, or

@@ -112,6 +112,8 @@ class StubTools:
     def __init__(self) -> None:
         self.prompt_allowlist: list[str] | None = None
         self.provider_allowlist: list[str] | None = None
+        self.prompt_allowlist_calls: list[list[str] | None] = []
+        self.provider_allowlist_calls: list[list[str] | None] = []
 
     def prompt_definitions(
         self,
@@ -120,9 +122,11 @@ class StubTools:
         include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
+        self.prompt_allowlist_calls.append(self.prompt_allowlist)
         tools = [
             {"name": "read_file", "description": "Read a workspace file"},
             {"name": "shell", "description": "Run a shell command"},
+            {"name": "memory", "description": "Manage pinned memory"},
         ]
         return _filter_by_allowlist(tools, allowed_tools)
 
@@ -133,6 +137,7 @@ class StubTools:
         include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         self.provider_allowlist = list(allowed_tools) if allowed_tools is not None else None
+        self.provider_allowlist_calls.append(self.provider_allowlist)
         tools = [
             {
                 "name": "read_file",
@@ -142,6 +147,11 @@ class StubTools:
             {
                 "name": "shell",
                 "description": "Run a shell command",
+                "parameters": {"type": "object"},
+            },
+            {
+                "name": "memory",
+                "description": "Manage pinned memory",
                 "parameters": {"type": "object"},
             },
             {
@@ -301,7 +311,7 @@ def test_build_system_prompt_replaces_all_placeholders_and_includes_workspace_fi
     assert '<file name="MEMORY.md">' in prompt
     assert '<file name="USER.md">' in prompt
     assert "{" not in prompt
-    assert tools.prompt_allowlist == ["read_file"]
+    assert tools.prompt_allowlist_calls == [["read_file"], ["memory"]]
     assert skills.allowlist == ["agent-cli"]
 
 
@@ -377,9 +387,34 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
             "name": "read_file",
             "description": "Read a workspace file",
             "parameters": {"type": "object"},
-        }
+        },
+        {
+            "name": "memory",
+            "description": "Manage pinned memory",
+            "parameters": {"type": "object"},
+        },
     ]
-    assert tools.provider_allowlist == ["read_file"]
+    assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
+
+
+def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
+    fragments: dict[str, str],
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    manager = SystemPromptManager(
+        StubStorage(fragments),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+    )
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert "memory" not in [definition["name"] for definition in definitions]
 
 
 def test_build_system_prompt_renders_none_when_agent_has_no_active_channels(
@@ -420,7 +455,7 @@ def test_provider_tool_definitions_include_internal_skill_when_agent_has_skills(
 
     definitions = manager.provider_tool_definitions(agent)
 
-    assert [definition["name"] for definition in definitions] == ["skill"]
+    assert [definition["name"] for definition in definitions] == ["memory", "skill"]
 
 
 def test_provider_tool_definitions_omit_internal_skill_when_agent_has_no_skills(
@@ -457,7 +492,12 @@ def test_empty_tool_and_skill_allowlists_emit_empty_sections(
         data_root=tmp_path / "data",
         current_date=lambda: "2026-05-04",
     )
-    agent = _agent(workspace, allowed_tools=[], allowed_skills=[])
+    agent = _agent(
+        workspace,
+        allowed_tools=[],
+        allowed_skills=[],
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+    )
 
     prompt = manager.build_system_prompt(agent)
 

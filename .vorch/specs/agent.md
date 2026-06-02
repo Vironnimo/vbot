@@ -28,7 +28,9 @@ Persisted agent configuration and workspace lifecycle management.
 - `current_session_id` stores the agent's active Session. Every new Agent gets
   an initial empty Session immediately; configs without this field are
   normalized to a valid Session when loaded.
-- `allowed_tools` and `allowed_skills` default to `['*']`.
+- `allowed_tools` and `allowed_skills` default to `['*']`. `allowed_tools`
+  stores only independently configurable tools; `memory` is runtime-derived from
+  `memory_prompt_mode` and is stripped from persisted allowlists on create/update.
 - `custom_system_prompt_enabled` is an optional persisted boolean. Missing or
   `false` means the Agent uses the default prompt scope; `true` means chat and
   preview may read `<data_dir>/agents/<agent-id>/prompts/` for editable
@@ -72,6 +74,10 @@ Persisted agent configuration and workspace lifecycle management.
   defaults.agent" while `""` for `thinking_effort` means "provider default".
   `allowed_tools` and `allowed_skills` must be lists of strings. When present,
   `memory_prompt_mode` must be one of `off`, `agent`, or `agent_user`, and
+  controls both prompt-visible pinned memory and the effective `memory` tool:
+  `off` disables the tool, while the other modes enable it even when
+  `allowed_tools` is otherwise empty. The `memory` tool is not configured
+  independently through `allowed_tools`.
   `custom_system_prompt_enabled` must be a boolean; when omitted, the custom
   prompt toggle defaults to `false`.
 - Enabling `custom_system_prompt_enabled` through public Agent RPC seeds the
