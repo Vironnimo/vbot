@@ -1003,7 +1003,7 @@
           </div>
         </div>
 
-        <div class="detail-group">
+        <div class="detail-group agents-view__prompt-group">
           <div class="detail-group-title">
             {t('agents.detail.systemPrompt', 'System Prompt')}
           </div>
@@ -1667,11 +1667,13 @@
   }
 
   .agents-view__model-group,
+  .agents-view__prompt-group,
   .agents-view__model-fields {
     position: relative;
   }
 
-  .agents-view__model-group {
+  .agents-view__model-group,
+  .agents-view__prompt-group {
     overflow: visible;
     z-index: 1;
   }
