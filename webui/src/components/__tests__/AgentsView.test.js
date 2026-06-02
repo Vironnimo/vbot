@@ -1094,6 +1094,42 @@ describe('AgentsView', () => {
     expect(simpleList.getAttribute('aria-hidden')).toBe('false');
   });
 
+  it('lets the memory dropdown escape the system prompt card clipping', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => getSimpleTrigger('agent-memory-prompt-mode') !== null,
+      100,
+    );
+
+    const promptCard = Array.from(
+      document.body.querySelectorAll('.detail-group.agents-view__prompt-group'),
+    ).find((group) => group.textContent.includes('System Prompt'));
+    const identityCard = Array.from(
+      document.body.querySelectorAll('.detail-group'),
+    ).find((group) => group.textContent.includes('Identity'));
+    const simpleRoot = getSimpleRoot('agent-memory-prompt-mode');
+
+    expect(promptCard).toBeTruthy();
+    expect(identityCard).toBeTruthy();
+    expect(identityCard.classList.contains('agents-view__prompt-group')).toBe(
+      false,
+    );
+    expect(simpleRoot.closest('.detail-group')).toBe(promptCard);
+
+    openSimpleDropdown('agent-memory-prompt-mode');
+
+    const simpleList = getSimpleList('agent-memory-prompt-mode');
+    expect(simpleList).toBeTruthy();
+    expect(simpleList.classList.contains('agents-view__memory-list')).toBe(
+      true,
+    );
+    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+  });
+
   it('treats connection.list failure as a catalog load error', async () => {
     rpcMock.mockImplementation(async (method) => {
       if (method === 'model.list') {

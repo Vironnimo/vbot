@@ -260,7 +260,8 @@ does not talk to providers directly. The product presents an Agent-first chat su
     for Agent-scoped prompt editing plus a Memory dropdown that controls whether
     the runtime prompt includes no pinned memory, only `MEMORY.md`, or
     `MEMORY.md + USER.md`. It does not expose prompt-fragment editors inside the
-    Agents view.
+    Agents view. The Memory dropdown panel must escape the System Prompt card's
+    rounded clipping so all options remain visible near the card edge.
   - The Agent edit form shows workspace once in the Identity section as an
     editable text field. Workspace changes are saved through `agent.update` and
     are not duplicated again in the Access section.
