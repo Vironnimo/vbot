@@ -269,6 +269,43 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
                 "parameters": {"type": "object"},
             },
             {
+                "name": "memory",
+                "description": (
+                    "List or edit pinned memory entries in USER.md and MEMORY.md. Use "
+                    "'user' scope for durable user facts and 'agent' scope for stable "
+                    "agent/workflow notes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "add", "replace", "remove"],
+                            "description": "Memory operation to perform.",
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": ["user", "agent"],
+                            "description": (
+                                "Pinned memory file to operate on: user=USER.md, agent=MEMORY.md."
+                            ),
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": (
+                                "Entry content for add/replace. Keep it concise and durable."
+                            ),
+                        },
+                        "entry_id": {
+                            "type": "integer",
+                            "description": "1-based entry id for replace/remove.",
+                        },
+                    },
+                    "required": ["action", "scope"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "skill",
                 "description": (
                     "Load an allowed skill by name and add its instructions to session context."

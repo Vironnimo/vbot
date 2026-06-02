@@ -47,6 +47,14 @@ describe('agent form helpers', () => {
     expect(values.custom_system_prompt_enabled).toBe(true);
   });
 
+  it('removes memory from editable allowed tools because memory mode owns it', () => {
+    const values = createAgentFormValues({
+      allowed_tools: ['read', 'memory', 'write'],
+    });
+
+    expect(values.allowed_tools).toEqual(['read', 'write']);
+  });
+
   it('normalizes create payloads with trimmed scalar fields and array-based access lists', () => {
     const result = normalizeAgentForm({
       id: ' coder ',
@@ -76,6 +84,19 @@ describe('agent form helpers', () => {
       custom_system_prompt_enabled: true,
     });
     expect(result.payload).not.toHaveProperty('workspace');
+  });
+
+  it('removes memory from allowed tool payloads', () => {
+    const result = normalizeAgentForm({
+      id: 'coder',
+      name: 'Coder',
+      temperature: '0.1',
+      allowed_tools: ['read', 'memory'],
+      allowed_skills: ['*'],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.payload.allowed_tools).toEqual(['read']);
   });
 
   it('normalizes cleared temperature and thinking effort to null', () => {

@@ -19,6 +19,9 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
   - `off` -> no prompt-visible pinned memory.
   - `agent` -> `MEMORY.md`.
   - `agent_user` -> `MEMORY.md` plus `USER.md` (default).
+- The same mode controls the provider-visible `memory` tool:
+  `off` removes it from the Agent's effective tool set, while `agent` and
+  `agent_user` make it available regardless of the configurable tool allowlist.
 
 ## Interfaces
 
@@ -48,6 +51,9 @@ This domain is separate from Sessions. Sessions remain JSONL-canonical chat hist
 ## Cross-Domain Rules
 
 - `core/tools/memory.py` owns the provider-visible tool contract and delegates all storage behavior to `MemoryService`.
+- `core/tools/availability.py` derives `memory` tool availability from
+  `memory_prompt_mode`; Agent `allowed_tools` stores only independently
+  configurable tools and must not carry `memory` as a separate toggle.
 - `core/prompts/` expands the `{memory}` placeholder by asking the memory service
   to render the selected prompt block for the Agent's `memory_prompt_mode`.
   Other workspace files may still be included through `{include:...}`.

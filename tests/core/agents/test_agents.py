@@ -114,6 +114,23 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     assert (custom_workspace / "SOUL.md").exists()
 
 
+def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
+    store: AgentStore,
+) -> None:
+    agent = store.create(
+        "coder",
+        "Coder Agent",
+        allowed_tools=["read_file", "memory"],
+        memory_prompt_mode="agent_user",
+    )
+
+    agent_path = store.data_dir / "agents" / "coder" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+
+    assert agent.allowed_tools == ["read_file"]
+    assert data["allowed_tools"] == ["read_file"]
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -237,6 +254,16 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.custom_system_prompt_enabled is True
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
+
+
+def test_update_removes_runtime_derived_memory_tool_from_allowed_tools(
+    store: AgentStore,
+) -> None:
+    store.create("coder", "Coder Agent")
+
+    updated = store.update("coder", allowed_tools=["read_file", "memory"])
+
+    assert updated.allowed_tools == ["read_file"]
 
 
 def test_update_changes_workspace_and_seeds_templates(

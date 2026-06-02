@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
+from core.tools.availability import MEMORY_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -14,7 +15,6 @@ from core.tools.tools import (
     tool_success,
 )
 
-MEMORY_TOOL_NAME = "memory"
 MEMORY_TOOL_DESCRIPTION = (
     "List or edit pinned memory entries in USER.md and MEMORY.md. Use 'user' scope for "
     "durable user facts and 'agent' scope for stable agent/workflow notes."

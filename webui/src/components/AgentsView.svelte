@@ -8,6 +8,7 @@
     AGENT_MEMORY_PROMPT_MODES,
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
+    MEMORY_TOOL_NAME,
     createAgentFormValues,
     normalizeAgentForm,
   } from '$lib/agentForm.js';
@@ -543,7 +544,7 @@
   }
 
   function updateToolAccessItem(itemName, isAllowed) {
-    const allToolNames = availableTools.map((tool) => tool.name);
+    const allToolNames = configurableTools().map((tool) => tool.name);
 
     if (allToolNames.length === 0) {
       formValues.allowed_tools = [];
@@ -594,10 +595,14 @@
     const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
     const allowedItems = hasWildcard ? [] : currentItems;
 
-    return availableTools.map((tool) => ({
+    return configurableTools().map((tool) => ({
       ...tool,
       isAllowed: hasWildcard || allowedItems.includes(tool.name),
     }));
+  }
+
+  function configurableTools() {
+    return availableTools.filter((tool) => tool.name !== MEMORY_TOOL_NAME);
   }
 
   function skillAccessItems() {

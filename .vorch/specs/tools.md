@@ -26,6 +26,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolRegistry.dispatch(context, arguments, allowed_tools=None) -> dict` executes a tool and validates the result envelope.
 - Result-envelope validation failures raise `InvalidToolResultError` (a `ValueError` subclass), distinct from plain `ValueError` argument failures. The chat loop maps the former to an `invalid_tool_result` failure envelope and the latter to `invalid_arguments`, without inspecting error message text.
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
+- `core.tools.availability.effective_agent_allowed_tools(...)` applies
+  Agent-level derived availability before runtime dispatch. The `memory` tool is
+  added when `memory_prompt_mode` is not `off` and removed when it is `off`,
+  independent of persisted `allowed_tools`.
 
 ## Specific Specs
 
@@ -52,6 +56,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 ## Conventions
 
 - `allowed_tools=None` and `["*"]` mean all registered normal tools; `allowed_tools=[]` means no normal tools.
+- Agent `allowed_tools` is the configurable allowlist for normal tools except
+  `memory`; Memory mode owns that tool's effective availability.
 - Internal tools bypass normal `allowed_tools` filtering and must enforce their own domain rules.
 - Provider-visible definitions must not expose handlers, runtime context, internal flags, or display metadata.
 - Display labels are not tool parameters. Do not add generic arguments such as `description` only to affect UI chrome; use `ToolDisplay`.

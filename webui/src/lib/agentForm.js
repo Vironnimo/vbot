@@ -10,6 +10,7 @@ export const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
 export const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
+export const MEMORY_TOOL_NAME = 'memory';
 export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
   'off',
   'agent',
@@ -155,7 +156,7 @@ function normalizeList(items, fallback = []) {
 
   return items
     .map((item) => asText(item).trim())
-    .filter((item) => item.length > 0);
+    .filter((item) => item.length > 0 && item !== MEMORY_TOOL_NAME);
 }
 
 function normalizeArrayList(items, fallback = DEFAULT_AGENT_ALLOWED_SKILLS) {

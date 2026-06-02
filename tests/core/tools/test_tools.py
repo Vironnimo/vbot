@@ -22,6 +22,7 @@ from core.tools import (
     tool_failure,
     tool_success,
 )
+from core.tools.availability import effective_agent_allowed_tools, sanitize_configured_allowed_tools
 
 JsonObject = dict[str, Any]
 
@@ -369,6 +370,29 @@ class TestToolRegistryAllowlistFiltering:
         tools = registry.list_tools(["missing_tool"])
 
         assert tools == []
+
+
+class TestAgentToolAvailability:
+    def test_sanitizes_configured_memory_tool(self) -> None:
+        assert sanitize_configured_allowed_tools(["read_file", "memory"]) == ["read_file"]
+
+    def test_memory_mode_adds_memory_to_explicit_allowlist(self) -> None:
+        allowed_tools = effective_agent_allowed_tools(
+            ["read_file"],
+            "agent",
+            registered_tool_names=["memory", "read_file", "write_file"],
+        )
+
+        assert allowed_tools == ["read_file", "memory"]
+
+    def test_memory_off_removes_memory_from_wildcard_allowlist(self) -> None:
+        allowed_tools = effective_agent_allowed_tools(
+            ["*"],
+            "off",
+            registered_tool_names=["memory", "read_file", "write_file"],
+        )
+
+        assert allowed_tools == ["read_file", "write_file"]
 
 
 class TestToolRegistryDefinitions:

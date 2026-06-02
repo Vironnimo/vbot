@@ -70,6 +70,7 @@ from core.tools import (
     tool_failure,
 )
 from core.tools import ToolCall as ScheduledToolCall
+from core.tools.availability import effective_agent_allowed_tools
 from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -1321,7 +1322,7 @@ class ChatLoop:
                 workspace=_agent_workspace(agent, _runtime_data_root(self._runtime)),
                 app_root=_runtime_app_root(self._runtime),
                 data_root=_runtime_data_root(self._runtime),
-                allowed_tools=agent.allowed_tools,
+                allowed_tools=_runtime_allowed_tools(agent, self._runtime.tools),
                 allowed_skills=getattr(agent, "allowed_skills", ["*"]),
                 emit_hook=lambda event_type, payload: _emit_tool_context_event(
                     run,
@@ -1486,6 +1487,14 @@ def _runtime_app_root(runtime: Any) -> Path:
         return Path(app_root)
 
     return Path.cwd()
+
+
+def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[str] | None:
+    return effective_agent_allowed_tools(
+        getattr(agent, "allowed_tools", ["*"]),
+        getattr(agent, "memory_prompt_mode", "agent_user"),
+        registered_tool_names=[tool.name for tool in tool_registry.list_tools()],
+    )
 
 
 def _display_content_preview(content: str | list[ContentBlock]) -> str:

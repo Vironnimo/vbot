@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE, MemoryPromptMode, MemoryService
+from core.tools.availability import MEMORY_TOOL_NAME, memory_tool_enabled
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -441,7 +442,7 @@ class SystemPromptManager:
 
     def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist."""
-        definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
+        definitions = self._provider_definitions_for_agent(agent)
         if not self._agent_has_loadable_skills(agent):
             return definitions
 
@@ -472,10 +473,43 @@ class SystemPromptManager:
 
     def _build_tools_block(self, agent: PromptAgent, scope: PromptScope) -> str:
         tools = self._read_prompt_fragment(scope, agent.id, "tools.md")
-        tool_list = _format_tool_list(
-            self._tool_registry.prompt_definitions(agent.allowed_tools),
-        )
+        tool_list = _format_tool_list(self._prompt_definitions_for_agent(agent))
         return tools.replace("{tool_list}", tool_list)
+
+    def _provider_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
+        definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
+        return self._apply_memory_tool_visibility(
+            definitions,
+            agent,
+            self._tool_registry.provider_definitions,
+        )
+
+    def _prompt_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
+        definitions = self._tool_registry.prompt_definitions(agent.allowed_tools)
+        return self._apply_memory_tool_visibility(
+            definitions,
+            agent,
+            self._tool_registry.prompt_definitions,
+        )
+
+    def _apply_memory_tool_visibility(
+        self,
+        definitions: list[JsonObject],
+        agent: PromptAgent,
+        definition_loader: Callable[[Sequence[str]], list[JsonObject]],
+    ) -> list[JsonObject]:
+        mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        if not memory_tool_enabled(mode):
+            return [
+                definition
+                for definition in definitions
+                if definition.get("name") != MEMORY_TOOL_NAME
+            ]
+
+        if any(definition.get("name") == MEMORY_TOOL_NAME for definition in definitions):
+            return definitions
+
+        return [*definitions, *definition_loader([MEMORY_TOOL_NAME])]
 
     def _build_channels_block(self, agent: PromptAgent, scope: PromptScope) -> str:
         channels = self._read_prompt_fragment(scope, agent.id, "channels.md")

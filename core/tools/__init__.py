@@ -1,5 +1,10 @@
 """Tool registry, definitions, result envelopes, and execution scheduling."""
 
+from core.tools.availability import (
+    effective_agent_allowed_tools,
+    memory_tool_enabled,
+    sanitize_configured_allowed_tools,
+)
 from core.tools.bash import (
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_NAME,
@@ -267,4 +272,7 @@ __all__ = [
     "write_handler",
     "make_image_generation_handler",
     "register_image_generation_tool",
+    "effective_agent_allowed_tools",
+    "memory_tool_enabled",
+    "sanitize_configured_allowed_tools",
 ]
