@@ -1447,6 +1447,8 @@ textarea::placeholder {
 
 .tool-event-line {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
   padding: 2px 0;
@@ -1498,22 +1500,39 @@ textarea::placeholder {
 }
 
 .te-fn {
+  flex-shrink: 0;
   color: var(--text-med);
   font-size: 12px;
   font-weight: 500;
 }
 
 .te-arg {
+  display: inline-flex;
   min-width: 0;
-  max-width: min(42rem, calc(100vw - 520px));
+  max-width: min(30rem, max(12rem, calc(100vw - 560px)));
   overflow: hidden;
   color: var(--text-lo);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.te-arg.subagent-preview {
+  display: inline-block;
+}
+
+.te-arg-mark {
+  flex-shrink: 0;
+}
+
+.te-arg-value {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .te-time {
+  flex-shrink: 0;
   margin-left: 6px;
   color: var(--text-lo);
   font-size: 10.5px;
