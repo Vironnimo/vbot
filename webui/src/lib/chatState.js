@@ -291,6 +291,110 @@ export function highestRunEventSequence(sessionState) {
   );
 }
 
+export function highestContiguousRunEventSequence(sessionState) {
+  const runId = activeRunIdForReplay(sessionState);
+  if (!runId) {
+    return 0;
+  }
+
+  const sequences = new Set();
+  for (const event of sessionState?.runEvents ?? []) {
+    addSequenceForRun(sequences, event, runId);
+  }
+  for (const event of sessionState?.streamingRunEvents ?? []) {
+    if (event?.run_id !== runId) {
+      continue;
+    }
+    addCompressedStreamingEventSequences(sequences, event);
+  }
+  for (const eventKey of sessionState?.seenStreamingEventKeys ?? []) {
+    addStreamingEventKeySequenceForRun(sequences, eventKey, runId);
+  }
+
+  return highestContiguousSequence(sequences);
+}
+
+function activeRunIdForReplay(sessionState) {
+  if (sessionState?.currentRun?.runId) {
+    return sessionState.currentRun.runId;
+  }
+  return latestRunIdFromEvents([
+    ...(sessionState?.runEvents ?? []),
+    ...(sessionState?.streamingRunEvents ?? []),
+  ]);
+}
+
+function latestRunIdFromEvents(events) {
+  for (let index = (events ?? []).length - 1; index >= 0; index -= 1) {
+    const runId = events[index]?.run_id;
+    if (typeof runId === 'string' && runId.length > 0) {
+      return runId;
+    }
+  }
+  return '';
+}
+
+function addSequenceForRun(sequences, event, runId) {
+  if (event?.run_id !== runId) {
+    return;
+  }
+  addSequence(sequences, event.sequence);
+}
+
+function addCompressedStreamingEventSequences(sequences, event) {
+  const firstSequence = event?.sequence;
+  const latestSequence = streamEventLatestSequence(event);
+  const chunkCount = streamEventChunkCount(event);
+  if (
+    Number.isFinite(firstSequence) &&
+    Number.isFinite(latestSequence) &&
+    latestSequence >= firstSequence &&
+    latestSequence - firstSequence + 1 === chunkCount
+  ) {
+    for (
+      let sequence = firstSequence;
+      sequence <= latestSequence;
+      sequence += 1
+    ) {
+      addSequence(sequences, sequence);
+    }
+    return;
+  }
+  addSequence(sequences, firstSequence);
+  addSequence(sequences, latestSequence);
+}
+
+function addStreamingEventKeySequenceForRun(sequences, eventKey, runId) {
+  if (typeof eventKey !== 'string') {
+    return;
+  }
+  const parts = eventKey.split(':');
+  if (parts.length < 3) {
+    return;
+  }
+  const sequence = Number(parts.at(-1));
+  const eventRunId = parts.slice(0, -2).join(':');
+  if (eventRunId !== runId) {
+    return;
+  }
+  addSequence(sequences, sequence);
+}
+
+function addSequence(sequences, sequence) {
+  if (!Number.isFinite(sequence) || sequence < 1) {
+    return;
+  }
+  sequences.add(Math.trunc(sequence));
+}
+
+function highestContiguousSequence(sequences) {
+  let sequence = 0;
+  while (sequences.has(sequence + 1)) {
+    sequence += 1;
+  }
+  return sequence;
+}
+
 export function markSessionError(sessionState, error) {
   if (sessionState.currentRun) {
     sessionState.currentRun.status = CHAT_STATUS_FAILED;

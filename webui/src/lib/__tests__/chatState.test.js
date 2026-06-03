@@ -12,6 +12,7 @@ import {
   createChatState,
   currentSessionState,
   ensureSessionState,
+  highestContiguousRunEventSequence,
   highestRunEventSequence,
   loadHistory,
   removeQueuedMessage,
@@ -2888,6 +2889,100 @@ describe('chat state helpers', () => {
     });
 
     expect(highestRunEventSequence(sessionState)).toBe(3);
+  });
+
+  it('tracks the highest contiguous active-run sequence for replay handoff', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          type: 'run_started',
+          run_id: 'run-one',
+          sequence: 1,
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+      ],
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: { message: { role: 'user', content: 'Hi' } },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-one',
+      sequence: 5,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      },
+    });
+
+    expect(highestRunEventSequence(sessionState)).toBe(5);
+    expect(highestContiguousRunEventSequence(sessionState)).toBe(2);
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: { content_delta: 'Working' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: { reasoning_delta: 'Checking' },
+    });
+
+    expect(highestContiguousRunEventSequence(sessionState)).toBe(5);
+  });
+
+  it('ignores older run sequences when choosing the active-run replay handoff', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-old',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-old',
+      sequence: 8,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+    startRun(sessionState, {
+      run_id: 'run-new',
+      sse_url: '/api/runs/run-new/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          type: 'run_started',
+          run_id: 'run-new',
+          sequence: 1,
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+      ],
+    });
+
+    expect(highestRunEventSequence(sessionState)).toBe(8);
+    expect(highestContiguousRunEventSequence(sessionState)).toBe(1);
   });
 
   it('initializes usage as null in new session state', () => {

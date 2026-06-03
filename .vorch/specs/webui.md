@@ -181,6 +181,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - When the backend rejects `/compact` because the target Session already has an active Run, ChatView surfaces the handled reply inline and does not start a second Run.
   - Sends message submits to the server even while the Session has an active Run. When `chat.stream` returns `{ queued: true, item }`, ChatView adds that server queue item locally and does not open an SSE subscription for it.
   - Refreshes queued-message state from `chat.queue_list` after history load and after terminal Run events so the accessor reflects the server-owned queue after reloads, reconnects, and drain transitions.
+  - When history reload returns an `active_run` for the same Run already tracked
+    locally, ChatView merges the returned retained Run events before deciding
+    whether to resubscribe, so switching away from and back to a running Session
+    catches up SSE-only deltas that were not sent over WebSocket.
   - Owns the session drawer toggle plus local `viewingSessionId` override state.
     Selecting a session from the drawer loads its history without mutating the
     Agent's persisted `current_session_id`.
@@ -522,6 +526,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
   state. Stable Run lifecycle events such as tool start/result, sub-agent
   session links, assistant output, and terminal events flush immediately so
   short-lived tool states are visible in order.
+- SSE reconnects use the highest contiguous sequence for the active Run, not
+  the maximum seen sequence, because WebSocket lifecycle summaries intentionally
+  omit SSE-only deltas and may otherwise cause reconnect replay to skip them.
 - Assistant output Markdown rendering is accessor-side only. It applies to live
   streaming assistant text, completed assistant output, and persisted assistant
   history messages. User text, reasoning bodies, tool details, and error
