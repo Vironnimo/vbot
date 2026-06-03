@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T20:01:18.775763+00:00",
+  "fetched_at": "2026-06-03T21:58:08.226699+00:00",
   "models": {
     "claude-haiku-4.5": {
       "capabilities": {
@@ -1400,6 +1400,54 @@
       },
       "name": "GPT-5.5"
     },
+    "mai-code-1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "oswe-vscode-modelD",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "mai-code-1-flash"
+        }
+      },
+      "name": "MAI-Code-1-Flash"
+    },
     "oswe-vscode-prime": {
       "capabilities": {
         "input_modalities": [
@@ -1467,7 +1515,7 @@
         "vision": false
       },
       "context_window": 0,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "metadata": {
         "github_copilot": {
           "family": "text-embedding-3-small",
@@ -1498,7 +1546,7 @@
         "vision": false
       },
       "context_window": 0,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "metadata": {
         "github_copilot": {
           "family": "text-embedding-3-small",
@@ -1529,7 +1577,7 @@
         "vision": false
       },
       "context_window": 0,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "metadata": {
         "github_copilot": {
           "family": "text-embedding-ada-002",

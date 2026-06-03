@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T20:01:20.042973+00:00",
+  "fetched_at": "2026-06-03T21:58:10.270357+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -325,6 +325,30 @@
       "max_output_tokens": 131072,
       "name": "MiniMax M2.7"
     },
+    "minimax-m3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "name": "minimax-m3"
+    },
     "qwen3.5-plus": {
       "capabilities": {
         "input_modalities": [
@@ -400,8 +424,32 @@
         "vision": false
       },
       "context_window": 0,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "qwen3.7-max"
+    },
+    "qwen3.7-plus": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "name": "qwen3.7-plus"
     }
   },
   "provider_id": "opencode-go",

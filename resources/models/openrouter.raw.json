@@ -1,8 +1,120 @@
 {
-  "fetched_at": "2026-05-30T20:01:20.662464+00:00",
+  "fetched_at": "2026-06-03T21:58:10.916449+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Qwen"
+        },
+        "canonical_slug": "qwen/qwen3.7-plus-20260602",
+        "context_length": 1000000,
+        "created": 1780491783,
+        "default_parameters": {},
+        "description": "Qwen3.7-Plus is a cost-effective model in Alibaba's Qwen3.7 series. It supports text and image input with text output, building on the series' text capabilities with a comprehensive upgrade to its...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "qwen/qwen3.7-plus",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/qwen/qwen3.7-plus-20260602/endpoints"
+        },
+        "name": "Qwen: Qwen3.7 Plus",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000016",
+          "input_cache_read": "0.00000008",
+          "input_cache_write": "0.0000005",
+          "prompt": "0.0000004"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1000000,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+video->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "minimax/minimax-m3-20260531",
+        "context_length": 1048576,
+        "created": 1780245374,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": 1,
+          "top_k": null,
+          "top_p": 0.95
+        },
+        "description": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "minimax/minimax-m3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/minimax/minimax-m3-20260531/endpoints"
+        },
+        "name": "MiniMax: MiniMax M3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000012",
+          "input_cache_read": "0.00000006",
+          "prompt": "0.0000003"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "response_format",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 524288,
+          "is_moderated": false,
+          "max_completion_tokens": 512000
+        }
+      },
       {
         "architecture": {
           "input_modalities": [
@@ -434,6 +546,51 @@
           "context_length": 1000000,
           "is_moderated": true,
           "max_completion_tokens": 128000
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Router"
+        },
+        "canonical_slug": "openrouter/fusion",
+        "context_length": 128000,
+        "created": 1778603606,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Fusion turns your prompt into a small multi-model deliberation. A panel of expert models (see below) analyzes your prompt in parallel with web search and web fetch enabled, then a...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openrouter/fusion",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openrouter/fusion/endpoints"
+        },
+        "name": "OpenRouter: Fusion",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "-1",
+          "prompt": "-1"
+        },
+        "supported_parameters": [],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": null,
+          "is_moderated": false,
+          "max_completion_tokens": null
         }
       },
       {
@@ -2026,56 +2183,6 @@
         "description": "DeepSeek V4 Flash is an efficiency-optimized Mixture-of-Experts model from DeepSeek with 284B total parameters and 13B activated parameters, supporting a 1M-token context window. It is designed for fast inference and...",
         "expiration_date": null,
         "hugging_face_id": "deepseek-ai/DeepSeek-V4-Flash",
-        "id": "deepseek/deepseek-v4-flash:free",
-        "knowledge_cutoff": null,
-        "links": {
-          "details": "/api/v1/models/deepseek/deepseek-v4-flash-20260423/endpoints"
-        },
-        "name": "DeepSeek: DeepSeek V4 Flash (free)",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0",
-          "prompt": "0"
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "reasoning",
-          "tool_choice",
-          "tools"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 1048576,
-          "is_moderated": false,
-          "max_completion_tokens": 384000
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "DeepSeek"
-        },
-        "canonical_slug": "deepseek/deepseek-v4-flash-20260423",
-        "context_length": 1048576,
-        "created": 1777000666,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": null,
-          "top_k": null,
-          "top_p": null
-        },
-        "description": "DeepSeek V4 Flash is an efficiency-optimized Mixture-of-Experts model from DeepSeek with 284B total parameters and 13B activated parameters, supporting a 1M-token context window. It is designed for fast inference and...",
-        "expiration_date": null,
-        "hugging_face_id": "deepseek-ai/DeepSeek-V4-Flash",
         "id": "deepseek/deepseek-v4-flash",
         "knowledge_cutoff": null,
         "links": {
@@ -2875,10 +2982,8 @@
           "logprobs",
           "max_tokens",
           "min_p",
-          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
-          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -3673,125 +3778,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text",
-            "audio",
-            "image",
-            "video"
-          ],
-          "instruct_type": null,
-          "modality": "text+image+audio+video->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "xiaomi/mimo-v2-omni-20260318",
-        "context_length": 262144,
-        "created": 1773863703,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": 1,
-          "top_k": null,
-          "top_p": 0.95
-        },
-        "description": "MiMo-V2-Omni is a frontier omni-modal model that natively processes image, video, and audio inputs within a unified architecture. It combines strong multimodal perception with agentic capability - visual grounding, multi-step...",
-        "expiration_date": "2026-05-31",
-        "hugging_face_id": "",
-        "id": "xiaomi/mimo-v2-omni",
-        "knowledge_cutoff": null,
-        "links": {
-          "details": "/api/v1/models/xiaomi/mimo-v2-omni-20260318/endpoints"
-        },
-        "name": "Xiaomi: MiMo-V2-Omni",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000002",
-          "input_cache_read": "0.00000008",
-          "prompt": "0.0000004"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "response_format",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 262144,
-          "is_moderated": false,
-          "max_completion_tokens": 65536
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "xiaomi/mimo-v2-pro-20260318",
-        "context_length": 1048576,
-        "created": 1773863643,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": 1,
-          "top_k": null,
-          "top_p": 0.95
-        },
-        "description": "MiMo-V2-Pro is Xiaomi's flagship foundation model, featuring over 1T total parameters and a 1M context length, deeply optimized for agentic scenarios. It is highly adaptable to general agent frameworks like...",
-        "expiration_date": "2026-05-31",
-        "hugging_face_id": "",
-        "id": "xiaomi/mimo-v2-pro",
-        "knowledge_cutoff": null,
-        "links": {
-          "details": "/api/v1/models/xiaomi/mimo-v2-pro-20260318/endpoints"
-        },
-        "name": "Xiaomi: MiMo-V2-Pro",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000003",
-          "input_cache_read": "0.0000002",
-          "prompt": "0.000001"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "response_format",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 1048576,
-          "is_moderated": false,
-          "max_completion_tokens": 131072
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text"
           ],
           "instruct_type": null,
@@ -3824,7 +3810,7 @@
         "per_request_limits": null,
         "pricing": {
           "completion": "0.0000012",
-          "prompt": "0.00000026"
+          "prompt": "0.000000279"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -3851,7 +3837,7 @@
         "top_provider": {
           "context_length": 196608,
           "is_moderated": false,
-          "max_completion_tokens": null
+          "max_completion_tokens": 131072
         }
       },
       {
@@ -5492,60 +5478,6 @@
           "context_length": 262144,
           "is_moderated": false,
           "max_completion_tokens": 65536
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "minimax/minimax-m2.5-20260211",
-        "context_length": 204800,
-        "created": 1770908502,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": 1,
-          "top_k": null,
-          "top_p": 0.95
-        },
-        "description": "MiniMax-M2.5 is a SOTA large language model designed for real-world productivity. Trained in a diverse range of complex real-world digital working environments, M2.5 builds upon the coding expertise of M2.1...",
-        "expiration_date": null,
-        "hugging_face_id": "MiniMaxAI/MiniMax-M2.5",
-        "id": "minimax/minimax-m2.5:free",
-        "knowledge_cutoff": null,
-        "links": {
-          "details": "/api/v1/models/minimax/minimax-m2.5-20260211/endpoints"
-        },
-        "name": "MiniMax: MiniMax M2.5 (free)",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0",
-          "prompt": "0"
-        },
-        "supported_parameters": [
-          "include_reasoning",
-          "max_tokens",
-          "reasoning",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "tools"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 196608,
-          "is_moderated": true,
-          "max_completion_tokens": 8192
         }
       },
       {
@@ -7365,7 +7297,7 @@
           "top_p": null
         },
         "description": "DeepSeek V3.1 Nex-N1 is the flagship release of the Nex-N1 series \u2014 a post-trained model designed to highlight agent autonomy, tool use, and real-world productivity. Nex-N1 demonstrates competitive performance across...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-08",
         "hugging_face_id": "nex-agi/DeepSeek-V3.1-Nex-N1",
         "id": "nex-agi/deepseek-v3.1-nex-n1",
         "knowledge_cutoff": null,
@@ -7930,9 +7862,8 @@
         "name": "DeepSeek: DeepSeek V3.2",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000000378",
-          "input_cache_read": "0.0000000252",
-          "prompt": "0.000000252"
+          "completion": "0.0000003432",
+          "prompt": "0.0000002288"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -7955,9 +7886,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 131072,
+          "context_length": 128000,
           "is_moderated": false,
-          "max_completion_tokens": 65536
+          "max_completion_tokens": 64000
         }
       },
       {
@@ -9518,60 +9449,6 @@
           "context_length": 131072,
           "is_moderated": false,
           "max_completion_tokens": 16384
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "baidu/ernie-4.5-21b-a3b-thinking",
-        "context_length": 131072,
-        "created": 1760048887,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "temperature": 0.6,
-          "top_p": 0.95
-        },
-        "description": "ERNIE-4.5-21B-A3B-Thinking is Baidu's upgraded lightweight MoE model, refined to boost reasoning depth and quality for top-tier performance in logical puzzles, math, science, coding, text generation, and expert-level academic benchmarks.",
-        "expiration_date": null,
-        "hugging_face_id": "baidu/ERNIE-4.5-21B-A3B-Thinking",
-        "id": "baidu/ernie-4.5-21b-a3b-thinking",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/baidu/ernie-4.5-21b-a3b-thinking/endpoints"
-        },
-        "name": "Baidu: ERNIE 4.5 21B A3B Thinking",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000028",
-          "prompt": "0.00000007"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": 65536
         }
       },
       {
@@ -11263,60 +11140,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "baidu/ernie-4.5-21b-a3b",
-        "context_length": 131072,
-        "created": 1755034167,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "temperature": 0.8,
-          "top_p": 0.8
-        },
-        "description": "A sophisticated text-based Mixture-of-Experts (MoE) model featuring 21B total parameters with 3B activated per token, delivering exceptional multimodal understanding and generation through heterogeneous MoE structures and modality-isolated routing. Supporting an...",
-        "expiration_date": null,
-        "hugging_face_id": "baidu/ERNIE-4.5-21B-A3B-PT",
-        "id": "baidu/ernie-4.5-21b-a3b",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/baidu/ernie-4.5-21b-a3b/endpoints"
-        },
-        "name": "Baidu: ERNIE 4.5 21B A3B",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000028",
-          "prompt": "0.00000007"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 120000,
-          "is_moderated": false,
-          "max_completion_tokens": 8000
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text",
             "image"
           ],
@@ -12103,7 +11926,7 @@
           "tokenizer": "Qwen3"
         },
         "canonical_slug": "qwen/qwen3-30b-a3b-instruct-2507",
-        "context_length": 262144,
+        "context_length": 131072,
         "created": 1753806965,
         "default_parameters": {},
         "description": "Qwen3-30B-A3B-Instruct-2507 is a 30.5B-parameter mixture-of-experts language model from Qwen, with 3.3B active parameters per inference. It operates in non-thinking mode and is designed for high-quality instruction following, multilingual understanding, and...",
@@ -12117,8 +11940,8 @@
         "name": "Qwen: Qwen3 30B A3B Instruct 2507",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000003",
-          "prompt": "0.00000009"
+          "completion": "0.0000001716",
+          "prompt": "0.0000000428"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -12139,9 +11962,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 262144,
+          "context_length": 128000,
           "is_moderated": false,
-          "max_completion_tokens": 262144
+          "max_completion_tokens": 32000
         }
       },
       {
@@ -12341,8 +12164,9 @@
         "name": "Qwen: Qwen3 235B A22B Thinking 2507",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000001495",
-          "prompt": "0.0000001495"
+          "completion": "0.0000001",
+          "input_cache_read": "0.0000001",
+          "prompt": "0.0000001"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -12365,9 +12189,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 131072,
+          "context_length": 262144,
           "is_moderated": false,
-          "max_completion_tokens": null
+          "max_completion_tokens": 262144
         }
       },
       {
@@ -12789,114 +12613,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text",
-            "file"
-          ],
-          "instruct_type": null,
-          "modality": "text+file->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Mistral"
-        },
-        "canonical_slug": "mistralai/devstral-medium-2507",
-        "context_length": 131072,
-        "created": 1752161321,
-        "default_parameters": {
-          "temperature": 0.3
-        },
-        "description": "Devstral Medium is a high-performance code generation and agentic reasoning model developed jointly by Mistral AI and All Hands AI. Positioned as a step up from Devstral Small, it achieves...",
-        "expiration_date": null,
-        "hugging_face_id": "",
-        "id": "mistralai/devstral-medium",
-        "knowledge_cutoff": "2025-06-30",
-        "links": {
-          "details": "/api/v1/models/mistralai/devstral-medium-2507/endpoints"
-        },
-        "name": "Mistral: Devstral Medium",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000002",
-          "input_cache_read": "0.00000004",
-          "prompt": "0.0000004"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": null
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "file"
-          ],
-          "instruct_type": null,
-          "modality": "text+file->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Mistral"
-        },
-        "canonical_slug": "mistralai/devstral-small-2507",
-        "context_length": 131072,
-        "created": 1752160751,
-        "default_parameters": {
-          "temperature": 0.3
-        },
-        "description": "Devstral Small 1.1 is a 24B parameter open-weight language model for software engineering agents, developed by Mistral AI in collaboration with All Hands AI. Finetuned from Mistral Small 3.1 and...",
-        "expiration_date": null,
-        "hugging_face_id": "mistralai/Devstral-Small-2507",
-        "id": "mistralai/devstral-small",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/mistralai/devstral-small-2507/endpoints"
-        },
-        "name": "Mistral: Devstral Small 1.1",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.0000003",
-          "input_cache_read": "0.00000001",
-          "prompt": "0.0000001"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": null
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text"
           ],
           "instruct_type": null,
@@ -13131,55 +12847,6 @@
           "context_length": 123000,
           "is_moderated": false,
           "max_completion_tokens": 16000
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "baidu/ernie-4.5-300b-a47b",
-        "context_length": 131072,
-        "created": 1751300139,
-        "default_parameters": {},
-        "description": "ERNIE-4.5-300B-A47B is a 300B parameter Mixture-of-Experts (MoE) language model developed by Baidu as part of the ERNIE 4.5 series. It activates 47B parameters per token and supports text generation in...",
-        "expiration_date": null,
-        "hugging_face_id": "baidu/ERNIE-4.5-300B-A47B-PT",
-        "id": "baidu/ernie-4.5-300b-a47b",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/baidu/ernie-4.5-300b-a47b/endpoints"
-        },
-        "name": "Baidu: ERNIE 4.5 300B A47B ",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.0000011",
-          "prompt": "0.00000028"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 123000,
-          "is_moderated": false,
-          "max_completion_tokens": 12000
         }
       },
       {
@@ -13650,7 +13317,6 @@
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_p"
         ],
         "supported_voices": null,
@@ -14744,55 +14410,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
-          ],
-          "instruct_type": "alpaca",
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "alfredpros/codellama-7b-instruct-solidity",
-        "context_length": 4096,
-        "created": 1744641874,
-        "default_parameters": {},
-        "description": "A finetuned 7 billion parameters Code LLaMA - Instruct model to generate Solidity smart contract using 4-bit QLoRA finetuning provided by PEFT library.",
-        "expiration_date": null,
-        "hugging_face_id": "AlfredPros/CodeLlama-7b-Instruct-Solidity",
-        "id": "alfredpros/codellama-7b-instruct-solidity",
-        "knowledge_cutoff": "2023-06-30",
-        "links": {
-          "details": "/api/v1/models/alfredpros/codellama-7b-instruct-solidity/endpoints"
-        },
-        "name": "AlfredPros: CodeLLaMa 7B Instruct Solidity",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.0000012",
-          "prompt": "0.0000008"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 4096,
-          "is_moderated": false,
-          "max_completion_tokens": 4096
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text",
             "image"
           ],
@@ -14833,6 +14450,8 @@
           "stop",
           "structured_outputs",
           "temperature",
+          "tool_choice",
+          "tools",
           "top_k",
           "top_p"
         ],
@@ -15616,66 +15235,6 @@
         "architecture": {
           "input_modalities": [
             "text",
-            "image",
-            "file",
-            "audio",
-            "video"
-          ],
-          "instruct_type": null,
-          "modality": "text+image+file+audio+video->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Gemini"
-        },
-        "canonical_slug": "google/gemini-2.0-flash-lite-001",
-        "context_length": 1048576,
-        "created": 1740506212,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "temperature": null,
-          "top_p": null
-        },
-        "description": "Gemini 2.0 Flash Lite offers a significantly faster time to first token (TTFT) compared to [Gemini Flash 1.5](/google/gemini-flash-1.5), while maintaining quality on par with larger models like [Gemini Pro 1.5](/google/gemini-pro-1.5),...",
-        "expiration_date": "2026-06-01",
-        "hugging_face_id": "",
-        "id": "google/gemini-2.0-flash-lite-001",
-        "knowledge_cutoff": "2024-08-31",
-        "links": {
-          "details": "/api/v1/models/google/gemini-2.0-flash-lite-001/endpoints"
-        },
-        "name": "Google: Gemini 2.0 Flash Lite",
-        "per_request_limits": null,
-        "pricing": {
-          "audio": "0.000000075",
-          "completion": "0.0000003",
-          "image": "0.000000075",
-          "internal_reasoning": "0.0000003",
-          "prompt": "0.000000075",
-          "web_search": "0.014"
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 1048576,
-          "is_moderated": false,
-          "max_completion_tokens": 8192
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
             "file"
           ],
           "instruct_type": null,
@@ -15828,68 +15387,6 @@
           "context_length": 200000,
           "is_moderated": true,
           "max_completion_tokens": 100000
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "image",
-            "file",
-            "audio",
-            "video"
-          ],
-          "instruct_type": null,
-          "modality": "text+image+file+audio+video->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Gemini"
-        },
-        "canonical_slug": "google/gemini-2.0-flash-001",
-        "context_length": 1048576,
-        "created": 1738769413,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "temperature": null,
-          "top_p": null
-        },
-        "description": "Gemini Flash 2.0 offers a significantly faster time to first token (TTFT) compared to [Gemini Flash 1.5](/google/gemini-flash-1.5), while maintaining quality on par with larger models like [Gemini Pro 1.5](/google/gemini-pro-1.5). It...",
-        "expiration_date": "2026-06-01",
-        "hugging_face_id": "",
-        "id": "google/gemini-2.0-flash-001",
-        "knowledge_cutoff": "2024-08-31",
-        "links": {
-          "details": "/api/v1/models/google/gemini-2.0-flash-001/endpoints"
-        },
-        "name": "Google: Gemini 2.0 Flash",
-        "per_request_limits": null,
-        "pricing": {
-          "audio": "0.0000007",
-          "completion": "0.0000004",
-          "image": "0.0000001",
-          "input_cache_read": "0.000000025",
-          "input_cache_write": "0.00000008333333333333334",
-          "internal_reasoning": "0.0000004",
-          "prompt": "0.0000001",
-          "web_search": "0.014"
-        },
-        "supported_parameters": [
-          "max_tokens",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 1048576,
-          "is_moderated": false,
-          "max_completion_tokens": 8192
         }
       },
       {
@@ -16630,8 +16127,8 @@
         "name": "DeepSeek: DeepSeek V3",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000009144",
-          "prompt": "0.0000002288"
+          "completion": "0.0000008001",
+          "prompt": "0.0000002002"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17124,60 +16621,6 @@
           ],
           "tokenizer": "Mistral"
         },
-        "canonical_slug": "mistralai/mistral-large-2411",
-        "context_length": 131072,
-        "created": 1731978685,
-        "default_parameters": {
-          "temperature": 0.3
-        },
-        "description": "Mistral Large 2 2411 is an update of [Mistral Large 2](/mistralai/mistral-large) released together with [Pixtral Large 2411](/mistralai/pixtral-large-2411) It provides a significant upgrade on the previous [Mistral Large 24.07](/mistralai/mistral-large-2407), with notable...",
-        "expiration_date": null,
-        "hugging_face_id": "",
-        "id": "mistralai/mistral-large-2411",
-        "knowledge_cutoff": "2024-07-31",
-        "links": {
-          "details": "/api/v1/models/mistralai/mistral-large-2411/endpoints"
-        },
-        "name": "Mistral Large 2411",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000006",
-          "input_cache_read": "0.0000002",
-          "prompt": "0.000002"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": null
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "file"
-          ],
-          "instruct_type": null,
-          "modality": "text+file->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Mistral"
-        },
         "canonical_slug": "mistralai/mistral-large-2407",
         "context_length": 131072,
         "created": 1731978415,
@@ -17193,61 +16636,6 @@
           "details": "/api/v1/models/mistralai/mistral-large-2407/endpoints"
         },
         "name": "Mistral Large 2407",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000006",
-          "input_cache_read": "0.0000002",
-          "prompt": "0.000002"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": null
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "image",
-            "file"
-          ],
-          "instruct_type": null,
-          "modality": "text+image+file->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Mistral"
-        },
-        "canonical_slug": "mistralai/pixtral-large-2411",
-        "context_length": 131072,
-        "created": 1731977388,
-        "default_parameters": {
-          "temperature": 0.3
-        },
-        "description": "Pixtral Large is a 124B parameter, open-weight, multimodal model built on top of [Mistral Large 2](/mistralai/mistral-large-2411). The model is able to understand documents, charts and natural images. The model is...",
-        "expiration_date": null,
-        "hugging_face_id": "",
-        "id": "mistralai/pixtral-large-2411",
-        "knowledge_cutoff": "2024-07-31",
-        "links": {
-          "details": "/api/v1/models/mistralai/pixtral-large-2411/endpoints"
-        },
-        "name": "Mistral: Pixtral Large 2411",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.000006",
@@ -17526,12 +16914,9 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
-          "response_format",
           "seed",
           "stop",
           "temperature",
-          "tool_choice",
-          "tools",
           "top_k",
           "top_p"
         ],
@@ -17554,19 +16939,19 @@
           ],
           "tokenizer": "Other"
         },
-        "canonical_slug": "inflection/inflection-3-productivity",
+        "canonical_slug": "inflection/inflection-3-pi",
         "context_length": 8000,
         "created": 1728604800,
         "default_parameters": {},
-        "description": "Inflection 3 Productivity is optimized for following instructions. It is better for tasks requiring JSON output or precise adherence to provided guidelines. It has access to recent news. For emotional...",
+        "description": "Inflection 3 Pi powers Inflection's [Pi](https://pi.ai) chatbot, including backstory, emotional intelligence, productivity, and safety. It has access to recent news, and excels in scenarios like customer support and roleplay. Pi...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "inflection/inflection-3-productivity",
+        "id": "inflection/inflection-3-pi",
         "knowledge_cutoff": "2024-10-31",
         "links": {
-          "details": "/api/v1/models/inflection/inflection-3-productivity/endpoints"
+          "details": "/api/v1/models/inflection/inflection-3-pi/endpoints"
         },
-        "name": "Inflection: Inflection 3 Productivity",
+        "name": "Inflection: Inflection 3 Pi",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00001",
@@ -17597,19 +16982,19 @@
           ],
           "tokenizer": "Other"
         },
-        "canonical_slug": "inflection/inflection-3-pi",
+        "canonical_slug": "inflection/inflection-3-productivity",
         "context_length": 8000,
         "created": 1728604800,
         "default_parameters": {},
-        "description": "Inflection 3 Pi powers Inflection's [Pi](https://pi.ai) chatbot, including backstory, emotional intelligence, productivity, and safety. It has access to recent news, and excels in scenarios like customer support and roleplay. Pi...",
+        "description": "Inflection 3 Productivity is optimized for following instructions. It is better for tasks requiring JSON output or precise adherence to provided guidelines. It has access to recent news. For emotional...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "inflection/inflection-3-pi",
+        "id": "inflection/inflection-3-productivity",
         "knowledge_cutoff": "2024-10-31",
         "links": {
-          "details": "/api/v1/models/inflection/inflection-3-pi/endpoints"
+          "details": "/api/v1/models/inflection/inflection-3-productivity/endpoints"
         },
-        "name": "Inflection: Inflection 3 Pi",
+        "name": "Inflection: Inflection 3 Productivity",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00001",
@@ -17948,23 +17333,23 @@
           ],
           "tokenizer": "Cohere"
         },
-        "canonical_slug": "cohere/command-r-plus-08-2024",
+        "canonical_slug": "cohere/command-r-08-2024",
         "context_length": 128000,
         "created": 1724976000,
         "default_parameters": {},
-        "description": "command-r-plus-08-2024 is an update of the [Command R+](/models/cohere/command-r-plus) with roughly 50% higher throughput and 25% lower latencies as compared to the previous Command R+ version, while keeping the hardware footprint...",
+        "description": "command-r-08-2024 is an update of the [Command R](/models/cohere/command-r) with improved performance for multilingual retrieval-augmented generation (RAG) and tool use. More broadly, it is better at math, code and reasoning and...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "cohere/command-r-plus-08-2024",
+        "id": "cohere/command-r-08-2024",
         "knowledge_cutoff": "2024-03-31",
         "links": {
-          "details": "/api/v1/models/cohere/command-r-plus-08-2024/endpoints"
+          "details": "/api/v1/models/cohere/command-r-08-2024/endpoints"
         },
-        "name": "Cohere: Command R+ (08-2024)",
+        "name": "Cohere: Command R (08-2024)",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00001",
-          "prompt": "0.0000025"
+          "completion": "0.0000006",
+          "prompt": "0.00000015"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17999,23 +17384,23 @@
           ],
           "tokenizer": "Cohere"
         },
-        "canonical_slug": "cohere/command-r-08-2024",
+        "canonical_slug": "cohere/command-r-plus-08-2024",
         "context_length": 128000,
         "created": 1724976000,
         "default_parameters": {},
-        "description": "command-r-08-2024 is an update of the [Command R](/models/cohere/command-r) with improved performance for multilingual retrieval-augmented generation (RAG) and tool use. More broadly, it is better at math, code and reasoning and...",
+        "description": "command-r-plus-08-2024 is an update of the [Command R+](/models/cohere/command-r-plus) with roughly 50% higher throughput and 25% lower latencies as compared to the previous Command R+ version, while keeping the hardware footprint...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "cohere/command-r-08-2024",
+        "id": "cohere/command-r-plus-08-2024",
         "knowledge_cutoff": "2024-03-31",
         "links": {
-          "details": "/api/v1/models/cohere/command-r-08-2024/endpoints"
+          "details": "/api/v1/models/cohere/command-r-plus-08-2024/endpoints"
         },
-        "name": "Cohere: Command R (08-2024)",
+        "name": "Cohere: Command R+ (08-2024)",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000006",
-          "prompt": "0.00000015"
+          "completion": "0.00001",
+          "prompt": "0.0000025"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -18364,60 +17749,6 @@
           ],
           "tokenizer": "Llama3"
         },
-        "canonical_slug": "meta-llama/llama-3.1-70b-instruct",
-        "context_length": 131072,
-        "created": 1721692800,
-        "default_parameters": {},
-        "description": "Meta's latest class of model (Llama 3.1) launched with a variety of sizes & flavors. This 70B instruct-tuned version is optimized for high quality dialogue usecases. It has demonstrated strong...",
-        "expiration_date": null,
-        "hugging_face_id": "meta-llama/Meta-Llama-3.1-70B-Instruct",
-        "id": "meta-llama/llama-3.1-70b-instruct",
-        "knowledge_cutoff": "2023-12-31",
-        "links": {
-          "details": "/api/v1/models/meta-llama/llama-3.1-70b-instruct/endpoints"
-        },
-        "name": "Meta: Llama 3.1 70B Instruct",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.0000004",
-          "prompt": "0.0000004"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": 16384
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": "llama3",
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Llama3"
-        },
         "canonical_slug": "meta-llama/llama-3.1-8b-instruct",
         "context_length": 131072,
         "created": 1721692800,
@@ -18456,6 +17787,60 @@
         "supported_voices": null,
         "top_provider": {
           "context_length": 16384,
+          "is_moderated": false,
+          "max_completion_tokens": 16384
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": "llama3",
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Llama3"
+        },
+        "canonical_slug": "meta-llama/llama-3.1-70b-instruct",
+        "context_length": 131072,
+        "created": 1721692800,
+        "default_parameters": {},
+        "description": "Meta's latest class of model (Llama 3.1) launched with a variety of sizes & flavors. This 70B instruct-tuned version is optimized for high quality dialogue usecases. It has demonstrated strong...",
+        "expiration_date": null,
+        "hugging_face_id": "meta-llama/Meta-Llama-3.1-70B-Instruct",
+        "id": "meta-llama/llama-3.1-70b-instruct",
+        "knowledge_cutoff": "2023-12-31",
+        "links": {
+          "details": "/api/v1/models/meta-llama/llama-3.1-70b-instruct/endpoints"
+        },
+        "name": "Meta: Llama 3.1 70B Instruct",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000004",
+          "prompt": "0.0000004"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 131072,
           "is_moderated": false,
           "max_completion_tokens": 16384
         }
@@ -18794,63 +18179,6 @@
           ],
           "tokenizer": "GPT"
         },
-        "canonical_slug": "openai/gpt-4o",
-        "context_length": 128000,
-        "created": 1715558400,
-        "default_parameters": {},
-        "description": "GPT-4o (\"o\" for \"omni\") is OpenAI's latest AI model, supporting both text and image inputs with text outputs. It maintains the intelligence level of [GPT-4 Turbo](/models/openai/gpt-4-turbo) while being twice as...",
-        "expiration_date": null,
-        "hugging_face_id": null,
-        "id": "openai/gpt-4o",
-        "knowledge_cutoff": "2023-10-31",
-        "links": {
-          "details": "/api/v1/models/openai/gpt-4o/endpoints"
-        },
-        "name": "OpenAI: GPT-4o",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00001",
-          "prompt": "0.0000025"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_completion_tokens",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p",
-          "web_search_options"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 128000,
-          "is_moderated": false,
-          "max_completion_tokens": 16384
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "image",
-            "file"
-          ],
-          "instruct_type": null,
-          "modality": "text+image+file->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "GPT"
-        },
         "canonical_slug": "openai/gpt-4o-2024-05-13",
         "context_length": 128000,
         "created": 1715558400,
@@ -18892,6 +18220,63 @@
           "context_length": 128000,
           "is_moderated": false,
           "max_completion_tokens": 4096
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-4o",
+        "context_length": 128000,
+        "created": 1715558400,
+        "default_parameters": {},
+        "description": "GPT-4o (\"o\" for \"omni\") is OpenAI's latest AI model, supporting both text and image inputs with text outputs. It maintains the intelligence level of [GPT-4 Turbo](/models/openai/gpt-4-turbo) while being twice as...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-4o",
+        "knowledge_cutoff": "2023-10-31",
+        "links": {
+          "details": "/api/v1/models/openai/gpt-4o/endpoints"
+        },
+        "name": "OpenAI: GPT-4o",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.00001",
+          "prompt": "0.0000025"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p",
+          "web_search_options"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": false,
+          "max_completion_tokens": 16384
         }
       },
       {
@@ -19820,6 +19205,59 @@
           ],
           "tokenizer": "GPT"
         },
+        "canonical_slug": "openai/gpt-3.5-turbo",
+        "context_length": 16385,
+        "created": 1685232000,
+        "default_parameters": {},
+        "description": "GPT-3.5 Turbo is OpenAI's fastest model. It can understand and generate natural language or code, and is optimized for chat and traditional completion tasks.\n\nTraining data up to Sep 2021.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-3.5-turbo",
+        "knowledge_cutoff": "2021-09-30",
+        "links": {
+          "details": "/api/v1/models/openai/gpt-3.5-turbo/endpoints"
+        },
+        "name": "OpenAI: GPT-3.5 Turbo",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000015",
+          "prompt": "0.0000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 16385,
+          "is_moderated": true,
+          "max_completion_tokens": 4096
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
         "canonical_slug": "openai/gpt-4",
         "context_length": 8191,
         "created": 1685232000,
@@ -19865,54 +19303,87 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
+            "audio"
           ],
           "instruct_type": null,
-          "modality": "text->text",
+          "modality": "audio->transcription",
           "output_modalities": [
-            "text"
+            "transcription"
           ],
-          "tokenizer": "GPT"
+          "tokenizer": "Other"
         },
-        "canonical_slug": "openai/gpt-3.5-turbo",
-        "context_length": 16385,
-        "created": 1685232000,
+        "canonical_slug": "microsoft/mai-transcribe-1.5",
+        "context_length": 0,
+        "created": 1780425095,
         "default_parameters": {},
-        "description": "GPT-3.5 Turbo is OpenAI's fastest model. It can understand and generate natural language or code, and is optimized for chat and traditional completion tasks.\n\nTraining data up to Sep 2021.",
+        "description": "MAI-Transcribe 1.5 is Microsoft's fast transcription model powered by Azure AI Speech. It supports 100+ BCP-47 locales with automatic language detection, automatic punctuation, and duration-based per-second billing. Uses the Azure...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "openai/gpt-3.5-turbo",
-        "knowledge_cutoff": "2021-09-30",
+        "id": "microsoft/mai-transcribe-1.5",
+        "knowledge_cutoff": null,
         "links": {
-          "details": "/api/v1/models/openai/gpt-3.5-turbo/endpoints"
+          "details": "/api/v1/models/microsoft/mai-transcribe-1.5/endpoints"
         },
-        "name": "OpenAI: GPT-3.5 Turbo",
+        "name": "Microsoft: MAI-Transcribe 1.5",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000015",
-          "prompt": "0.0000005"
+          "completion": "0",
+          "prompt": "0.36"
         },
         "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
+          "max_completion_tokens",
           "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
           "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 16385,
-          "is_moderated": true,
-          "max_completion_tokens": 4096
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "audio"
+          ],
+          "instruct_type": null,
+          "modality": "audio->transcription",
+          "output_modalities": [
+            "transcription"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "microsoft/mai-transcribe-1.5",
+        "context_length": 0,
+        "created": 1780425095,
+        "default_parameters": {},
+        "description": "MAI-Transcribe 1.5 is Microsoft's fast transcription model powered by Azure AI Speech. It supports 100+ BCP-47 locales with automatic language detection, automatic punctuation, and duration-based per-second billing. Uses the Azure...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "microsoft/mai-transcribe-1.5",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/microsoft/mai-transcribe-1.5/endpoints"
+        },
+        "name": "Microsoft: MAI-Transcribe 1.5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.36"
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
         }
       },
       {
@@ -20824,6 +20295,102 @@
         "top_provider": {
           "context_length": 128000,
           "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "microsoft/mai-voice-2",
+        "context_length": 0,
+        "created": 1780425097,
+        "default_parameters": {},
+        "description": "MAI-Voice-2 is a high-fidelity, expressive text-to-speech model from Microsoft, powered by Azure AI Speech. It synthesizes natural-sounding speech across 10+ languages with support for expressive SSML styles (cheerful, sad, excited,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "microsoft/mai-voice-2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/microsoft/mai-voice-2/endpoints"
+        },
+        "name": "Microsoft: MAI-Voice-2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000022"
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "en-US-Harper:MAI-Voice-2",
+          "es-MX-Valeria:MAI-Voice-2",
+          "fr-FR-Soleil:MAI-Voice-2",
+          "de-DE-Klaus:MAI-Voice-2"
+        ],
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->speech",
+          "output_modalities": [
+            "speech"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "microsoft/mai-voice-2",
+        "context_length": 0,
+        "created": 1780425097,
+        "default_parameters": {},
+        "description": "MAI-Voice-2 is a high-fidelity, expressive text-to-speech model from Microsoft, powered by Azure AI Speech. It synthesizes natural-sounding speech across 10+ languages with support for expressive SSML styles (cheerful, sad, excited,...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "microsoft/mai-voice-2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/microsoft/mai-voice-2/endpoints"
+        },
+        "name": "Microsoft: MAI-Voice-2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000022"
+        },
+        "supported_parameters": [
+          "max_completion_tokens",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [
+          "en-US-Harper:MAI-Voice-2",
+          "es-MX-Valeria:MAI-Voice-2",
+          "fr-FR-Soleil:MAI-Voice-2",
+          "de-DE-Klaus:MAI-Voice-2"
+        ],
+        "top_provider": {
+          "context_length": 0,
+          "is_moderated": false,
           "max_completion_tokens": null
         }
       },
@@ -21948,145 +21515,87 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
+            "text",
+            "image"
           ],
           "instruct_type": null,
-          "modality": "text->speech",
+          "modality": "text+image->image",
           "output_modalities": [
-            "speech"
+            "image"
           ],
-          "tokenizer": "GPT"
+          "tokenizer": "Other"
         },
-        "canonical_slug": "openai/gpt-4o-mini-tts-2025-12-15",
+        "canonical_slug": "microsoft/mai-image-2.5",
         "context_length": 4096,
-        "created": 1776552477,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": null,
-          "top_k": null,
-          "top_p": null
-        },
-        "description": "GPT-4o Mini TTS is OpenAI's cost-efficient text-to-speech model. It converts text input into natural-sounding audio output, supporting a variety of voices and tones.",
+        "created": 1780424896,
+        "default_parameters": {},
+        "description": "Microsoft's MAI-Image-2.5 is a high-quality image generation model available via Azure AI Foundry. It produces photorealistic and artistic images from text prompts with support for various aspect ratios.",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "openai/gpt-4o-mini-tts-2025-12-15",
+        "id": "microsoft/mai-image-2.5",
         "knowledge_cutoff": null,
         "links": {
-          "details": "/api/v1/models/openai/gpt-4o-mini-tts-2025-12-15/endpoints"
+          "details": "/api/v1/models/microsoft/mai-image-2.5/endpoints"
         },
-        "name": "OpenAI: GPT-4o Mini TTS",
+        "name": "Microsoft: MAI-Image-2.5",
         "per_request_limits": null,
         "pricing": {
           "completion": "0",
-          "prompt": "0.0000006"
+          "prompt": "0.000005"
         },
         "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
+          "max_completion_tokens",
           "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_logprobs",
-          "top_p"
+          "temperature"
         ],
-        "supported_voices": [
-          "alloy",
-          "ash",
-          "ballad",
-          "coral",
-          "echo",
-          "fable",
-          "onyx",
-          "nova",
-          "sage",
-          "shimmer",
-          "verse",
-          "marin",
-          "cedar"
-        ],
+        "supported_voices": null,
         "top_provider": {
           "context_length": 4096,
-          "is_moderated": true,
-          "max_completion_tokens": null
+          "is_moderated": false,
+          "max_completion_tokens": 1024
         }
       },
       {
         "architecture": {
           "input_modalities": [
-            "text"
+            "text",
+            "image"
           ],
           "instruct_type": null,
-          "modality": "text->speech",
+          "modality": "text+image->image",
           "output_modalities": [
-            "speech"
+            "image"
           ],
-          "tokenizer": "GPT"
+          "tokenizer": "Other"
         },
-        "canonical_slug": "openai/gpt-4o-mini-tts-2025-12-15",
+        "canonical_slug": "microsoft/mai-image-2.5",
         "context_length": 4096,
-        "created": 1776552477,
-        "default_parameters": {
-          "frequency_penalty": null,
-          "presence_penalty": null,
-          "repetition_penalty": null,
-          "temperature": null,
-          "top_k": null,
-          "top_p": null
-        },
-        "description": "GPT-4o Mini TTS is OpenAI's cost-efficient text-to-speech model. It converts text input into natural-sounding audio output, supporting a variety of voices and tones.",
+        "created": 1780424896,
+        "default_parameters": {},
+        "description": "Microsoft's MAI-Image-2.5 is a high-quality image generation model available via Azure AI Foundry. It produces photorealistic and artistic images from text prompts with support for various aspect ratios.",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "openai/gpt-4o-mini-tts-2025-12-15",
+        "id": "microsoft/mai-image-2.5",
         "knowledge_cutoff": null,
         "links": {
-          "details": "/api/v1/models/openai/gpt-4o-mini-tts-2025-12-15/endpoints"
+          "details": "/api/v1/models/microsoft/mai-image-2.5/endpoints"
         },
-        "name": "OpenAI: GPT-4o Mini TTS",
+        "name": "Microsoft: MAI-Image-2.5",
         "per_request_limits": null,
         "pricing": {
           "completion": "0",
-          "prompt": "0.0000006"
+          "prompt": "0.000005"
         },
         "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
+          "max_completion_tokens",
           "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_logprobs",
-          "top_p"
+          "temperature"
         ],
-        "supported_voices": [
-          "alloy",
-          "ash",
-          "ballad",
-          "coral",
-          "echo",
-          "fable",
-          "onyx",
-          "nova",
-          "sage",
-          "shimmer",
-          "verse",
-          "marin",
-          "cedar"
-        ],
+        "supported_voices": null,
         "top_provider": {
           "context_length": 4096,
-          "is_moderated": true,
-          "max_completion_tokens": null
+          "is_moderated": false,
+          "max_completion_tokens": 1024
         }
       },
       {
