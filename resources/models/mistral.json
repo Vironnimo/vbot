@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T20:01:19.562127+00:00",
+  "fetched_at": "2026-06-03T21:58:09.270509+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -25,7 +25,7 @@
         "vision": false
       },
       "context_window": 256000,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "codestral-2508"
     },
     "codestral-latest": {
@@ -52,7 +52,7 @@
         "vision": false
       },
       "context_window": 256000,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "codestral-2508"
     },
     "devstral-2512": {
@@ -79,7 +79,7 @@
         "vision": false
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "devstral-2512"
     },
     "devstral-latest": {
@@ -106,35 +106,8 @@
         "vision": false
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "devstral-2512"
-    },
-    "devstral-medium-2507": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format",
-          "tools"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "devstral-medium-2507"
     },
     "devstral-medium-latest": {
       "capabilities": {
@@ -160,35 +133,8 @@
         "vision": false
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "devstral-2512"
-    },
-    "devstral-small-2507": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format",
-          "tools"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "devstral-small-2507"
     },
     "labs-leanstral-2603": {
       "capabilities": {
@@ -218,7 +164,7 @@
         "vision": true
       },
       "context_window": 196608,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "labs-leanstral-2603"
     },
     "magistral-medium-2509": {
@@ -249,7 +195,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "magistral-medium-2509"
     },
     "magistral-medium-latest": {
@@ -280,7 +226,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "magistral-medium-2509"
     },
     "magistral-small-2509": {
@@ -311,7 +257,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "magistral-small-2509"
     },
     "magistral-small-latest": {
@@ -342,7 +288,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-small-2603"
     },
     "ministral-14b-2512": {
@@ -372,7 +318,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-14b-2512"
     },
     "ministral-14b-latest": {
@@ -402,7 +348,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-14b-2512"
     },
     "ministral-3b-2512": {
@@ -432,7 +378,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-3b-2512"
     },
     "ministral-3b-latest": {
@@ -462,7 +408,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-3b-2512"
     },
     "ministral-8b-2512": {
@@ -492,7 +438,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-8b-2512"
     },
     "ministral-8b-latest": {
@@ -522,10 +468,10 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "ministral-8b-2512"
     },
-    "mistral-large-2411": {
+    "mistral-code-agent-latest": {
       "capabilities": {
         "input_modalities": [
           "text"
@@ -548,9 +494,63 @@
         "tools": true,
         "vision": false
       },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "mistral-large-2411"
+      "context_window": 262144,
+      "max_output_tokens": null,
+      "name": "devstral-2512"
+    },
+    "mistral-code-fim-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": null,
+      "name": "codestral-2508"
+    },
+    "mistral-code-latest": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": null,
+      "name": "codestral-2508"
     },
     "mistral-large-2512": {
       "capabilities": {
@@ -579,7 +579,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-large-2512"
     },
     "mistral-large-latest": {
@@ -609,38 +609,8 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-large-2512"
-    },
-    "mistral-large-pixtral-2411": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format",
-          "tools"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "pixtral-large-2411"
     },
     "mistral-medium": {
       "capabilities": {
@@ -669,7 +639,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-2508"
     },
     "mistral-medium-2505": {
@@ -699,7 +669,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-2505"
     },
     "mistral-medium-2508": {
@@ -729,7 +699,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-2508"
     },
     "mistral-medium-2604": {
@@ -760,7 +730,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-3": {
@@ -791,7 +761,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-3-5": {
@@ -822,7 +792,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-3.5": {
@@ -853,7 +823,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-c21211-r0-75": {
@@ -884,7 +854,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-medium-latest": {
@@ -914,7 +884,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-2508"
     },
     "mistral-small-2506": {
@@ -944,7 +914,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-small-2506"
     },
     "mistral-small-2603": {
@@ -975,7 +945,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-small-2603"
     },
     "mistral-small-latest": {
@@ -1006,7 +976,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-small-2603"
     },
     "mistral-tiny-2407": {
@@ -1033,7 +1003,7 @@
         "vision": false
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "open-mistral-nemo"
     },
     "mistral-tiny-latest": {
@@ -1060,7 +1030,7 @@
         "vision": false
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "open-mistral-nemo"
     },
     "mistral-vibe-cli-fast": {
@@ -1091,7 +1061,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-small-2603"
     },
     "mistral-vibe-cli-latest": {
@@ -1122,7 +1092,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-3-5"
     },
     "mistral-vibe-cli-with-tools": {
@@ -1152,7 +1122,7 @@
         "vision": true
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "mistral-medium-2508"
     },
     "open-mistral-nemo": {
@@ -1179,7 +1149,7 @@
         "vision": false
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "open-mistral-nemo"
     },
     "open-mistral-nemo-2407": {
@@ -1206,68 +1176,8 @@
         "vision": false
       },
       "context_window": 131072,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "open-mistral-nemo"
-    },
-    "pixtral-large-2411": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format",
-          "tools"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "pixtral-large-2411"
-    },
-    "pixtral-large-latest": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format",
-          "tools"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 131072,
-      "max_output_tokens": 4096,
-      "name": "pixtral-large-2411"
     },
     "voxtral-mini-2507": {
       "capabilities": {
@@ -1292,7 +1202,7 @@
         "vision": false
       },
       "context_window": 32768,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "voxtral-mini-2507"
     },
     "voxtral-mini-latest": {
@@ -1318,7 +1228,7 @@
         "vision": false
       },
       "context_window": 32768,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "voxtral-mini-2507"
     },
     "voxtral-small-2507": {
@@ -1345,7 +1255,7 @@
         "vision": false
       },
       "context_window": 32768,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "voxtral-small-2507"
     },
     "voxtral-small-latest": {
@@ -1372,7 +1282,7 @@
         "vision": false
       },
       "context_window": 32768,
-      "max_output_tokens": 4096,
+      "max_output_tokens": null,
       "name": "voxtral-small-2507"
     }
   },

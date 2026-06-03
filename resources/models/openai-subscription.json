@@ -1,0 +1,135 @@
+{
+  "fetched_at": "2026-06-03T21:58:09.794077+00:00",
+  "models": {
+    "codex-auto-review": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 272000,
+      "max_output_tokens": null,
+      "name": "Codex Auto Review"
+    },
+    "gpt-5.4": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 272000,
+      "max_output_tokens": null,
+      "name": "GPT-5.4"
+    },
+    "gpt-5.4-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 272000,
+      "max_output_tokens": null,
+      "name": "GPT-5.4-Mini"
+    },
+    "gpt-5.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning",
+          "response_format",
+          "tools"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 272000,
+      "max_output_tokens": null,
+      "name": "GPT-5.5"
+    }
+  },
+  "provider_id": "openai-subscription",
+  "source": "discovery"
+}

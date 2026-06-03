@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-05-30T20:01:18.775763+00:00",
+  "fetched_at": "2026-06-03T21:58:08.226699+00:00",
   "provider_id": "github-copilot",
   "raw_response": {
     "data": [
@@ -526,6 +526,45 @@
         ],
         "vendor": "OpenAI",
         "version": "gpt-5.5"
+      },
+      {
+        "capabilities": {
+          "family": "oswe-vscode-modelD",
+          "limits": {
+            "max_context_window_tokens": 256000,
+            "max_output_tokens": 128000,
+            "max_prompt_tokens": 128000
+          },
+          "object": "model_capabilities",
+          "supports": {
+            "parallel_tool_calls": true,
+            "reasoning_effort": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "streaming": true,
+            "structured_outputs": true,
+            "tool_calls": true
+          },
+          "tokenizer": "o200k_base",
+          "type": "chat"
+        },
+        "id": "mai-code-1-flash",
+        "model_picker_category": "versatile",
+        "model_picker_enabled": false,
+        "name": "MAI-Code-1-Flash",
+        "object": "model",
+        "policy": {
+          "state": "disabled",
+          "terms": ""
+        },
+        "preview": false,
+        "supported_endpoints": [
+          "/responses"
+        ],
+        "vendor": "Azure OpenAI",
+        "version": "mai-code-1-flash"
       },
       {
         "capabilities": {
@@ -1295,7 +1334,7 @@
         },
         "id": "gpt-4.1",
         "model_picker_category": "versatile",
-        "model_picker_enabled": true,
+        "model_picker_enabled": false,
         "name": "GPT-4.1",
         "object": "model",
         "policy": {
