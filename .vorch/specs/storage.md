@@ -50,6 +50,13 @@ as a read-only fallback credential source.
   process-env-over-data-dir credential snapshot without mutating process state.
 - `load_settings() -> dict` — returns `{}` when `settings.json` does not exist.
 - `save_settings(settings)` — atomically writes sorted, indented JSON.
+- `update_settings(mutator)` — runs one process-local locked read-modify-write
+  transaction against `settings.json` and persists the mutated mapping with one
+  atomic write.
+- `update_settings_sections(settings_update)` — persists one parsed public
+  `settings.update` payload as a single settings transaction. Multi-section
+  updates validate and merge in memory first; if any section fails, the
+  existing file is left unchanged.
 - `load_appearance_settings() -> dict[str, str]` and `update_appearance_settings(appearance)` — read/write the supported Appearance settings subset.
 - `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
 - `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
@@ -80,6 +87,9 @@ as a read-only fallback credential source.
 ## Conventions
 
 - Settings are UTF-8 JSON objects only.
+- Settings read-modify-write helpers, including single-section helpers and
+  `update_settings_sections`, are serialized by a process-local re-entrant
+  lock and perform one atomic replace per transaction.
 - `.env` parsing is conservative: `KEY=VALUE`, blank/comment lines ignored,
   matching single/double quotes stripped, no expansion or command substitution.
 - Do not log secret values from `.env`.

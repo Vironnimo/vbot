@@ -583,6 +583,90 @@ def test_update_compaction_settings_persists_under_compaction_key(tmp_path: Path
     assert storage.load_settings() == {"compaction": updated, "server_port": 8500}
 
 
+def test_update_settings_sections_persists_multiple_sections_with_one_save(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500})
+    save_count = 0
+    original_save_settings = storage.save_settings
+
+    def count_save(settings: dict[str, Any]) -> None:
+        nonlocal save_count
+        save_count += 1
+        original_save_settings(settings)
+
+    monkeypatch.setattr(storage, "save_settings", count_save)
+
+    updated = storage.update_settings_sections(
+        {
+            "appearance": {"language": "en"},
+            "subagents": {
+                "max_subagent_depth": 6,
+                "max_subagents_per_turn": 12,
+                "subagent_timeout_minutes": 90,
+            },
+            "compaction": {
+                "auto": False,
+                "threshold": 0.9,
+                "tail_tokens": 12_000,
+                "summary_model": None,
+            },
+            "recall": {"backend": "sqlite_fts"},
+        }
+    )
+
+    assert save_count == 1
+    assert updated == {
+        "appearance": {"language": "en"},
+        "subagents": {
+            "max_subagent_depth": 6,
+            "max_subagents_per_turn": 12,
+            "subagent_timeout_minutes": 90,
+        },
+        "compaction": {
+            "auto": False,
+            "threshold": 0.9,
+            "tail_tokens": 12_000,
+            "summary_model": None,
+        },
+        "recall": {"backend": "sqlite_fts"},
+    }
+    assert storage.load_settings() == {
+        "appearance": {"language": "en"},
+        "compaction": {
+            "auto": False,
+            "threshold": 0.9,
+            "tail_tokens": 12_000,
+            "summary_model": None,
+        },
+        "max_subagent_depth": 6,
+        "max_subagents_per_turn": 12,
+        "recall": {"backend": "sqlite_fts"},
+        "server_port": 8500,
+        "subagent_timeout_minutes": 90,
+    }
+
+
+def test_update_settings_sections_leaves_file_unchanged_when_section_fails(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    original_settings = {"server_port": 8500}
+    storage.save_settings(original_settings)
+
+    with pytest.raises(StorageError, match="Compaction setting threshold"):
+        storage.update_settings_sections(
+            {
+                "appearance": {"language": "en"},
+                "compaction": {"threshold": 2},
+            }
+        )
+
+    assert storage.load_settings() == original_settings
+
+
 def test_update_appearance_settings_persists_language_and_preserves_other_settings(
     tmp_path: Path,
 ) -> None:

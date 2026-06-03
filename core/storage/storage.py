@@ -6,10 +6,11 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Protocol, cast
+from threading import RLock
+from typing import Any, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
@@ -21,6 +22,8 @@ from core.search_config import (
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import build_environment_snapshot, read_env_file
 from core.utils.errors import VBotError
+
+SettingsUpdateResult = TypeVar("SettingsUpdateResult")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -51,6 +54,18 @@ SUBAGENT_SETTING_DEFAULTS = {
     "max_subagents_per_turn": 8,
     "subagent_timeout_minutes": 60,
 }
+SETTINGS_UPDATE_SECTIONS = frozenset(
+    {
+        "appearance",
+        "skills",
+        "subagents",
+        "compaction",
+        "defaults",
+        "recall",
+        "model_tasks",
+        "web_search",
+    }
+)
 DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
 DEFAULT_WEB_SEARCH_SETTINGS = {
     "provider": DEFAULT_WEB_SEARCH_PROVIDER,
@@ -108,6 +123,7 @@ class StorageManager:
     ) -> None:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
+        self._settings_lock = RLock()
 
     @property
     def settings_path(self) -> Path:
@@ -201,10 +217,88 @@ class StorageManager:
     def load_settings(self) -> dict[str, Any]:
         """Load ``settings.json`` or return an empty mapping when it does not exist."""
 
-        try:
-            return load_validated_settings_json(self.settings_path)
-        except SettingsValidationError as exc:
-            raise StorageError(str(exc)) from exc
+        with self._settings_lock:
+            try:
+                return load_validated_settings_json(self.settings_path)
+            except SettingsValidationError as exc:
+                raise StorageError(str(exc)) from exc
+
+    def update_settings(
+        self,
+        mutator: Callable[[dict[str, Any]], SettingsUpdateResult],
+    ) -> SettingsUpdateResult:
+        """Apply one read-modify-write transaction to ``settings.json``."""
+
+        if not callable(mutator):
+            raise StorageError("Settings mutator must be callable")
+
+        with self._settings_lock:
+            merged_settings = dict(self.load_settings())
+            result = mutator(merged_settings)
+            self.save_settings(merged_settings)
+            return result
+
+    def update_settings_sections(self, settings_update: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist a parsed public Settings update in one settings transaction."""
+
+        if not isinstance(settings_update, Mapping):
+            raise StorageError("Settings update must be a mapping")
+
+        unsupported_sections = sorted(set(settings_update) - SETTINGS_UPDATE_SECTIONS)
+        if unsupported_sections:
+            raise StorageError(f"Unsupported settings sections: {', '.join(unsupported_sections)}")
+
+        updated_sections: dict[str, Any] = {}
+
+        def apply_update(settings: dict[str, Any]) -> dict[str, Any]:
+            if "appearance" in settings_update:
+                updated_sections["appearance"] = self._apply_appearance_settings(
+                    settings,
+                    settings_update["appearance"],
+                )
+            if "skills" in settings_update:
+                skills_update = self._coerce_skills_update(settings_update["skills"])
+                updated_sections["skills"] = {
+                    "directories": self._apply_skill_directory_settings(
+                        settings,
+                        skills_update["directories"],
+                    )
+                }
+            if "subagents" in settings_update:
+                updated_sections["subagents"] = self._apply_subagent_settings(
+                    settings,
+                    settings_update["subagents"],
+                )
+            if "compaction" in settings_update:
+                updated_sections["compaction"] = self._apply_compaction_settings(
+                    settings,
+                    settings_update["compaction"],
+                )
+            if "defaults" in settings_update:
+                defaults_update = self._coerce_defaults_update(settings_update["defaults"])
+                updated_sections["defaults"] = self._apply_defaults(
+                    settings,
+                    "agent",
+                    defaults_update["agent"],
+                )
+            if "recall" in settings_update:
+                updated_sections["recall"] = self._apply_recall_settings(
+                    settings,
+                    settings_update["recall"],
+                )
+            if "web_search" in settings_update:
+                updated_sections["web_search"] = self._apply_web_search_settings(
+                    settings,
+                    settings_update["web_search"],
+                )
+            if "model_tasks" in settings_update:
+                updated_sections["model_tasks"] = self._apply_model_task_settings(
+                    settings,
+                    settings_update["model_tasks"],
+                )
+            return dict(updated_sections)
+
+        return self.update_settings(apply_update)
 
     def supported_appearance_languages(self) -> list[str]:
         """Return language codes supported by the persisted Settings surface."""
@@ -220,6 +314,17 @@ class StorageManager:
     def update_appearance_settings(self, appearance: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported Appearance Settings subset and return it."""
 
+        return self.update_settings(
+            lambda settings: self._apply_appearance_settings(settings, appearance)
+        )
+
+    def _apply_appearance_settings(
+        self,
+        settings: dict[str, Any],
+        appearance: Mapping[str, Any],
+    ) -> dict[str, str]:
+        """Merge Appearance settings into an in-memory settings mapping."""
+
         if not isinstance(appearance, Mapping):
             raise StorageError("Appearance settings must be a mapping")
 
@@ -230,11 +335,8 @@ class StorageManager:
         if "language" not in appearance:
             raise StorageError("Appearance settings must include language")
 
-        settings = self.load_settings()
-        merged_settings = dict(settings)
-        merged_settings["appearance"] = self._normalize_appearance_settings(appearance)
-        self.save_settings(merged_settings)
-        return dict(merged_settings["appearance"])
+        settings["appearance"] = self._normalize_appearance_settings(appearance)
+        return dict(settings["appearance"])
 
     def load_skill_directory_settings(self) -> list[str]:
         """Return normalized extra skill directory settings."""
@@ -245,11 +347,19 @@ class StorageManager:
     def update_skill_directory_settings(self, directories: Any) -> list[str]:
         """Persist the extra skill directory list and return it."""
 
+        return self.update_settings(
+            lambda settings: self._apply_skill_directory_settings(settings, directories)
+        )
+
+    def _apply_skill_directory_settings(
+        self,
+        settings: dict[str, Any],
+        directories: Any,
+    ) -> list[str]:
+        """Merge extra skill directories into an in-memory settings mapping."""
+
         normalized_directories = self._normalize_skill_directories(directories)
-        settings = self.load_settings()
-        merged_settings = dict(settings)
-        merged_settings["skill_directories"] = normalized_directories
-        self.save_settings(merged_settings)
+        settings["skill_directories"] = normalized_directories
         return normalized_directories
 
     def load_subagent_settings(self) -> dict[str, int]:
@@ -260,6 +370,32 @@ class StorageManager:
             key: self._normalize_subagent_integer(key, settings.get(key), default)
             for key, default in SUBAGENT_SETTING_DEFAULTS.items()
         }
+
+    def _apply_subagent_settings(
+        self,
+        settings: dict[str, Any],
+        subagents: Mapping[str, Any],
+    ) -> dict[str, int]:
+        """Merge Sub-Agent settings into an in-memory settings mapping."""
+
+        if not isinstance(subagents, Mapping):
+            raise StorageError("Sub-agent settings must be a mapping")
+
+        expected_fields = set(SUBAGENT_SETTING_DEFAULTS)
+        unsupported_fields = sorted(set(subagents) - expected_fields)
+        if unsupported_fields:
+            raise StorageError(f"Unsupported sub-agent settings: {', '.join(unsupported_fields)}")
+
+        missing_fields = sorted(expected_fields - set(subagents))
+        if missing_fields:
+            raise StorageError(f"Missing sub-agent settings: {', '.join(missing_fields)}")
+
+        normalized_subagents = {
+            key: self._normalize_subagent_integer(key, subagents[key], default)
+            for key, default in SUBAGENT_SETTING_DEFAULTS.items()
+        }
+        settings.update(normalized_subagents)
+        return normalized_subagents
 
     def load_compaction_settings(self) -> dict[str, Any]:
         """Return normalized persisted compaction settings."""
@@ -294,6 +430,15 @@ class StorageManager:
     def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported recall settings subset and return it."""
 
+        return self.update_settings(lambda settings: self._apply_recall_settings(settings, recall))
+
+    def _apply_recall_settings(
+        self,
+        settings: dict[str, Any],
+        recall: Mapping[str, Any],
+    ) -> dict[str, str]:
+        """Merge recall settings into an in-memory settings mapping."""
+
         if not isinstance(recall, Mapping):
             raise StorageError("Recall settings must be a mapping")
 
@@ -302,14 +447,22 @@ class StorageManager:
             raise StorageError(f"Unsupported recall settings: {', '.join(unsupported_fields)}")
 
         normalized_recall = self._normalize_recall_settings(recall)
-        settings = self.load_settings()
-        merged_settings = dict(settings)
-        merged_settings["recall"] = normalized_recall
-        self.save_settings(merged_settings)
+        settings["recall"] = normalized_recall
         return dict(normalized_recall)
 
     def update_web_search_settings(self, web_search: Mapping[str, Any]) -> dict[str, Any]:
         """Persist the supported web search provider settings and return them."""
+
+        return self.update_settings(
+            lambda settings: self._apply_web_search_settings(settings, web_search)
+        )
+
+    def _apply_web_search_settings(
+        self,
+        settings: dict[str, Any],
+        web_search: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge web search settings into an in-memory settings mapping."""
 
         if not isinstance(web_search, Mapping):
             raise StorageError("Web search settings must be a mapping")
@@ -318,8 +471,6 @@ class StorageManager:
         if unsupported_fields:
             raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
 
-        settings = self.load_settings()
-        merged_settings = dict(settings)
         current_settings = self._normalize_web_search_settings(settings.get("web_search"))
         raw_searxng_update = web_search.get("searxng", {})
         if raw_searxng_update is None:
@@ -337,8 +488,7 @@ class StorageManager:
                 },
             }
         )
-        merged_settings["web_search"] = normalized_web_search
-        self.save_settings(merged_settings)
+        settings["web_search"] = normalized_web_search
         return dict(normalized_web_search)
 
     def update_model_task_settings(
@@ -350,8 +500,17 @@ class StorageManager:
         if not isinstance(model_tasks, Mapping):
             raise StorageError("Model task settings must be a mapping")
 
-        settings = self.load_settings()
-        merged_settings = dict(settings)
+        return self.update_settings(
+            lambda settings: self._apply_model_task_settings(settings, model_tasks)
+        )
+
+    def _apply_model_task_settings(
+        self,
+        settings: dict[str, Any],
+        model_tasks: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Merge task-model bindings into an in-memory settings mapping."""
+
         merged_model_tasks = self._normalize_model_task_settings(settings.get("model_tasks"))
 
         for task_type, raw_binding in model_tasks.items():
@@ -392,12 +551,11 @@ class StorageManager:
             }
 
         if merged_model_tasks:
-            merged_settings["model_tasks"] = merged_model_tasks
+            settings["model_tasks"] = merged_model_tasks
         else:
-            merged_settings.pop("model_tasks", None)
+            settings.pop("model_tasks", None)
 
-        self.save_settings(merged_settings)
-        return self._normalize_model_task_settings(merged_settings.get("model_tasks"))
+        return self._normalize_model_task_settings(settings.get("model_tasks"))
 
     def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         """Persist normalized defaults for a single section and return persisted values."""
@@ -407,9 +565,19 @@ class StorageManager:
         if not isinstance(values, Mapping):
             raise StorageError("Defaults values must be a mapping")
 
-        settings = self.load_settings()
-        merged_settings = dict(settings)
-        merged_defaults = self._coerce_defaults_section(merged_settings.get("defaults"))
+        return self.update_settings(
+            lambda settings: self._apply_defaults(settings, section, values)
+        )
+
+    def _apply_defaults(
+        self,
+        settings: dict[str, Any],
+        section: str,
+        values: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge defaults into an in-memory settings mapping."""
+
+        merged_defaults = self._coerce_defaults_section(settings.get("defaults"))
 
         if section == "agent":
             current_agent_defaults = self._normalize_agent_defaults(merged_defaults.get("agent"))
@@ -427,29 +595,36 @@ class StorageManager:
                 merged_defaults.pop("agent", None)
 
         if merged_defaults:
-            merged_settings["defaults"] = merged_defaults
+            settings["defaults"] = merged_defaults
         else:
-            merged_settings.pop("defaults", None)
+            settings.pop("defaults", None)
 
-        self.save_settings(merged_settings)
         return self._normalize_defaults_settings(merged_defaults)
 
     def update_compaction_settings(self, compaction: Mapping[str, Any]) -> dict[str, Any]:
         """Persist compaction settings and return normalized values."""
 
+        return self.update_settings(
+            lambda settings: self._apply_compaction_settings(settings, compaction)
+        )
+
+    def _apply_compaction_settings(
+        self,
+        settings: dict[str, Any],
+        compaction: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge compaction settings into an in-memory settings mapping."""
+
         if not isinstance(compaction, Mapping):
             raise StorageError("Compaction settings must be a mapping")
 
-        settings = self.load_settings()
-        merged_settings = dict(settings)
         normalized_compaction = self._normalize_compaction_settings(
             {
                 **self._normalize_compaction_settings(settings.get("compaction")),
                 **dict(compaction),
             }
         )
-        merged_settings["compaction"] = normalized_compaction
-        self.save_settings(merged_settings)
+        settings["compaction"] = normalized_compaction
         return dict(normalized_compaction)
 
     def save_settings(self, settings: Mapping[str, Any]) -> None:
@@ -458,21 +633,22 @@ class StorageManager:
         if not isinstance(settings, Mapping):
             raise StorageError("Settings must be a mapping")
 
-        self.ensure_directories()
-        temp_path = self._temporary_path(self.settings_path)
-        try:
-            with temp_path.open("w", encoding="utf-8") as file:
-                json.dump(dict(settings), file, ensure_ascii=False, indent=2, sort_keys=True)
-                file.write("\n")
-            os.replace(temp_path, self.settings_path)
-        except TypeError as exc:
-            self._remove_temporary_file(temp_path)
-            raise StorageError(
-                f"Settings contain a value that cannot be serialized: {exc}"
-            ) from exc
-        except OSError as exc:
-            self._remove_temporary_file(temp_path)
-            raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
+        with self._settings_lock:
+            self.ensure_directories()
+            temp_path = self._temporary_path(self.settings_path)
+            try:
+                with temp_path.open("w", encoding="utf-8") as file:
+                    json.dump(dict(settings), file, ensure_ascii=False, indent=2, sort_keys=True)
+                    file.write("\n")
+                os.replace(temp_path, self.settings_path)
+            except TypeError as exc:
+                self._remove_temporary_file(temp_path)
+                raise StorageError(
+                    f"Settings contain a value that cannot be serialized: {exc}"
+                ) from exc
+            except OSError as exc:
+                self._remove_temporary_file(temp_path)
+                raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
 
     def copy_prompt_fragments(self, *, overwrite: bool = False) -> list[Path]:
         """Copy bundled prompt fragments into ``<data_dir>/prompts``.
@@ -684,6 +860,30 @@ class StorageManager:
         if not isinstance(appearance, Mapping):
             raise StorageError("Expected settings.appearance to be an object")
         return dict(appearance)
+
+    @staticmethod
+    def _coerce_skills_update(skills: Any) -> dict[str, Any]:
+        if not isinstance(skills, Mapping):
+            raise StorageError("Skills settings must be a mapping")
+        unsupported_fields = sorted(set(skills) - {"directories"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported skills settings: {', '.join(unsupported_fields)}")
+        if "directories" not in skills:
+            raise StorageError("Skills settings must include directories")
+        return dict(skills)
+
+    @staticmethod
+    def _coerce_defaults_update(defaults: Any) -> dict[str, Any]:
+        if not isinstance(defaults, Mapping):
+            raise StorageError("Defaults settings must be a mapping")
+        unsupported_sections = sorted(set(defaults) - {"agent"})
+        if unsupported_sections:
+            raise StorageError(f"Unsupported defaults settings: {', '.join(unsupported_sections)}")
+        if "agent" not in defaults:
+            raise StorageError("Defaults settings must include agent")
+        if not isinstance(defaults["agent"], Mapping):
+            raise StorageError("Defaults agent settings must be a mapping")
+        return dict(defaults)
 
     @staticmethod
     def _validate_appearance_language(value: Any) -> str:

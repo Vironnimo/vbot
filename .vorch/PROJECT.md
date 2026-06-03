@@ -51,7 +51,10 @@ separate non-agentic streaming path.
 and bot tokens (belongs to the user, read at startup as fallback credential
 source). Both live in the data directory (`~/.vbot`). Process environment keeps
 higher precedence than the data-dir `.env`; vBot does not rewrite `os.environ`
-from `.env` values. `settings.json` may include `skill_directories`, an array of
+from `.env` values. Settings read-modify-write operations are serialized through
+a process-local storage transaction and persisted with one atomic JSON replace;
+`settings.update` applies all accepted sections in one transaction before any
+runtime reload hooks run. `settings.json` may include `skill_directories`, an array of
 absolute or home-relative additional skill scan roots configured from the
 Settings UI. Saving skill directories through `settings.update` reloads the
 runtime skill registry immediately. `settings.json` may also include
