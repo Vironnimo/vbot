@@ -43,6 +43,9 @@ as a read-only fallback credential source.
   credentials from `<data_dir>/.env` without mutating `os.environ`.
 - `load_data_dir_credentials() -> dict[str, str]` — reads `<data_dir>/.env`
   as a fallback credential source.
+- `set_data_dir_credential(key, value)` — validates and atomically writes or
+  replaces one single-line credential in `<data_dir>/.env` through a temp file
+  under `<data_dir>/.tmp/` plus `os.replace()`.
 - `build_environment_snapshot() -> dict[str, str]` — returns a merged
   process-env-over-data-dir credential snapshot without mutating process state.
 - `load_settings() -> dict` — returns `{}` when `settings.json` does not exist.
