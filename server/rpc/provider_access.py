@@ -165,9 +165,15 @@ def _connection_response(runtime: Any, provider_id: str, connection: Any) -> Jso
 
 def _provider_settings_connection(runtime: Any, provider_id: str, connection: Any) -> JsonObject:
     connection_id = f"{provider_id}:{connection.id}"
-    return {
+    response = {
         "id": connection_id,
         "type": connection.type,
         "label": connection.label,
         "configured": _connection_has_credentials(runtime, provider_id, connection_id),
     }
+    if getattr(connection, "type", "") == "oauth":
+        oauth_config = getattr(connection, "oauth", None)
+        response["connectable"] = bool(
+            oauth_config is not None and getattr(oauth_config, "flow", "") == "device"
+        )
+    return response

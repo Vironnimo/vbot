@@ -361,10 +361,13 @@ does not talk to providers directly. The product presents an Agent-first chat su
     "Already saved" when clean. Read-only fields (engine, microphone, wake
     phrase) display the current Desktop configuration.
   - The Providers panel renders OAuth connections with Connect/Disconnect
-    controls. `provider.connect` opens an inline Device Flow dialog with the user
-    code, copy control, and verification link; `provider_auth_completed` closes
-    it and refreshes settings. Settings sends public compositional connection IDs such as
-    `github-copilot:oauth` in provider RPC payloads.
+    controls only when the settings connection metadata has `connectable: true`.
+    Static OAuth-token connections without Device Flow metadata render like
+    credential status rows instead of offering a dead Connect action.
+    `provider.connect` opens an inline Device Flow dialog with the user code,
+    copy control, and verification link; `provider_auth_completed` closes it
+    and refreshes settings. Settings sends public compositional connection IDs
+    such as `github-copilot:oauth` in provider RPC payloads.
 - `webui/src/components/ChatTimeline.svelte`
   - When older history is available, scrolling to the top calls back to ChatView
     to prepend older messages and preserves the user's scroll anchor after the

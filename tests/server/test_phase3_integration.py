@@ -387,6 +387,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "type": "oauth",
                                 "label": "OAuth",
                                 "configured": True,
+                                "connectable": False,
                             },
                             {
                                 "id": "openai:api-key",

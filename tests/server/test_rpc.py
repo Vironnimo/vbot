@@ -1122,6 +1122,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "oauth",
                             "label": "OAuth",
                             "configured": False,
+                            "connectable": False,
                         },
                         {
                             "id": "openai:api-key",
@@ -1170,6 +1171,47 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
     assert "sk-live-secret" not in str(response)
     assert "show_token_counts" not in str(response)
     assert "origin" not in response["result"]["general"]["server"]
+
+
+@pytest.mark.asyncio
+async def test_settings_get_marks_device_flow_oauth_connections_connectable(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="github-copilot",
+            name="GitHub Copilot",
+            base_url="https://api.githubcopilot.com",
+            models_endpoint=None,
+            connections=[
+                SimpleNamespace(
+                    id="oauth",
+                    type="oauth",
+                    label="Sign in with GitHub",
+                    auth=SimpleNamespace(credential_key=""),
+                    oauth=SimpleNamespace(flow="device"),
+                )
+            ],
+        )
+    )
+    state.runtime.models._models["github-copilot"] = []
+
+    response = await dispatch_rpc(state, {"method": "settings.get", "params": {}})
+
+    assert response["ok"] is True
+    provider = next(
+        item for item in response["result"]["providers"]["items"] if item["id"] == "github-copilot"
+    )
+    assert provider["connections"] == [
+        {
+            "id": "github-copilot:oauth",
+            "type": "oauth",
+            "label": "Sign in with GitHub",
+            "configured": False,
+            "connectable": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio

@@ -66,6 +66,7 @@
     getOAuthConnectionStatus,
     getPublicConnectionId,
     getPersistedLanguageId,
+    isOAuthDeviceFlowConnection,
     isOAuthConnection,
     isLanguageSaveDisabled,
     getRecallSettings,
@@ -2852,20 +2853,25 @@
                             {connection.label ?? connection.id}
                           </div>
                           <div class="s-row-desc">
-                            {isOAuthConnection(connection)
+                            {isOAuthDeviceFlowConnection(connection)
                               ? t(
                                   'settings.providers.oauthDescription',
                                   'OAuth device authorization managed by the provider.',
                                 )
-                              : t(
-                                  'settings.providers.apiKeyDescription',
-                                  'Static credential configured from environment or data directory.',
-                                )}
+                              : isOAuthConnection(connection)
+                                ? t(
+                                    'settings.providers.oauthTokenDescription',
+                                    'OAuth token configured from environment or data directory.',
+                                  )
+                                : t(
+                                    'settings.providers.apiKeyDescription',
+                                    'Static credential configured from environment or data directory.',
+                                  )}
                           </div>
                         </div>
 
                         <div class="s-row-control">
-                          {#if isOAuthConnection(connection)}
+                          {#if isOAuthDeviceFlowConnection(connection)}
                             {@const state = getOAuthState(connection.id)}
                             {@const status = oauthStatus(connection)}
                             <div class="s-row-actions s-row-actions--provider">

@@ -1897,10 +1897,6 @@
     line-height: 1.35;
   }
 
-  .agents-view__access-meta {
-    border-top: 1px solid var(--border);
-  }
-
   :global(.agents-view__dropdown) {
     width: 100%;
   }
@@ -1979,11 +1975,6 @@
 
   .agents-view__invalid {
     border-color: var(--red) !important;
-  }
-
-  .agents-view__muted-value {
-    color: var(--text-lo);
-    font-size: 13px;
   }
 
   .agents-view__wrap-value {
