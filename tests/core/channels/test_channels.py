@@ -454,6 +454,33 @@ async def test_channel_service_notifies_hook_when_adapter_crashes(
 
 
 @pytest.mark.asyncio
+async def test_channel_service_ignores_stale_adapter_task_done_callback(
+    tmp_path: Path,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    stale_task = asyncio.create_task(asyncio.sleep(0))
+    current_task = asyncio.create_task(asyncio.sleep(60))
+    await stale_task
+
+    service._adapters[config.id] = adapter
+    service._adapter_tasks[config.id] = current_task
+
+    service._on_adapter_task_done(config.id, stale_task)
+
+    assert service._adapters[config.id] is adapter
+    assert service._adapter_tasks[config.id] is current_task
+
+    current_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await current_task
+
+
+@pytest.mark.asyncio
 async def test_channel_service_send_raises_for_inactive_channel(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 

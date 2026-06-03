@@ -741,8 +741,10 @@ class ChannelService:
                 )
 
     def _on_adapter_task_done(self, channel_id: str, task: asyncio.Task[None]) -> None:
-        if self._adapter_tasks.get(channel_id) is task:
-            self._adapter_tasks.pop(channel_id, None)
+        if self._adapter_tasks.get(channel_id) is not task:
+            return
+
+        self._adapter_tasks.pop(channel_id, None)
         self._adapters.pop(channel_id, None)
 
         if task.cancelled():
