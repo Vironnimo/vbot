@@ -158,7 +158,7 @@ class StorageManager:
         if "\n" in value or "\r" in value:
             raise StorageError("Credential value must be a single line")
 
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.ensure_directories()
         env_path = self.data_dir / ".env"
         try:
             lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
@@ -182,9 +182,12 @@ class StorageManager:
         if not replaced:
             updated_lines.append(new_line)
 
+        temp_path = self._temporary_path(env_path)
         try:
-            env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            temp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            os.replace(temp_path, env_path)
         except OSError as exc:
+            self._remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
     def build_environment_snapshot(self) -> dict[str, str]:

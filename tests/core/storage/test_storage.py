@@ -123,6 +123,29 @@ def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines
     )
 
 
+def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text("OPENROUTER_API_KEY=old\nOTHER_KEY=value\n", encoding="utf-8")
+    replace_calls: list[tuple[Path, Path]] = []
+
+    def fail_replace(source: Path, target: Path) -> None:
+        replace_calls.append((source, target))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("core.storage.storage.os.replace", fail_replace)
+
+    with pytest.raises(StorageError, match="Cannot write"):
+        storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
+
+    assert replace_calls and replace_calls[0][1] == env_path
+    assert env_path.read_text(encoding="utf-8") == "OPENROUTER_API_KEY=old\nOTHER_KEY=value\n"
+    assert list((tmp_path / ".tmp").iterdir()) == []
+
+
 @pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])
 def test_set_data_dir_credential_rejects_invalid_env_key(tmp_path: Path, key: str) -> None:
     storage = StorageManager(tmp_path)
