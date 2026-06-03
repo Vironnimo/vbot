@@ -236,6 +236,7 @@ async def test_run_once_job_fires_and_marks_completed(
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
+    assert not service._once_fire_claim_path(job.id).exists()
 
 
 @pytest.mark.asyncio
@@ -269,6 +270,80 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
     assert updated.status == "completed"
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
+    assert not service._once_fire_claim_path(job.id).exists()
+
+
+@pytest.mark.asyncio
+async def test_run_once_job_retries_completed_save_without_refiring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+    )
+    monkeypatch.setattr(cron_module.asyncio, "sleep", AsyncMock())
+    save_attempts = 0
+
+    original_save_jobs = service._save_jobs
+
+    def fail_first_save_after_fire() -> None:
+        nonlocal save_attempts
+        save_attempts += 1
+        if save_attempts == 1:
+            raise CronStorageError("disk full")
+        original_save_jobs()
+
+    monkeypatch.setattr(service, "_save_jobs", fail_first_save_after_fire)
+
+    # Act
+    await service._run_once_job(job)
+
+    # Assert
+    trigger_service.trigger_run.assert_awaited_once_with("agent-one", "Once prompt", None)
+    assert save_attempts == 2
+    updated = service.get_job(job.id)
+    assert updated.status == "completed"
+    assert updated.last_fired_at is not None
+    assert not service._once_fire_claim_path(job.id).exists()
+
+
+def test_start_completes_claimed_once_job_without_refiring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrange
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+    )
+    service._write_once_fire_claim(job, datetime.now(UTC).isoformat())
+
+    restarted_service, restarted_trigger_service = make_service(tmp_path)
+
+    def fail_if_once_task_starts(_job: cron_module.CronJob) -> None:
+        raise AssertionError("claimed once job should not start")
+
+    monkeypatch.setattr(restarted_service, "_start_job_task", fail_if_once_task_starts)
+
+    # Act
+    restarted_service.start()
+
+    # Assert
+    restarted_trigger_service.trigger_run.assert_not_called()
+    updated = restarted_service.get_job(job.id)
+    assert updated.status == "completed"
+    assert updated.last_fired_at is not None
+    persisted_jobs = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert persisted_jobs[0]["status"] == "completed"
+    assert not restarted_service._once_fire_claim_path(job.id).exists()
 
 
 @pytest.mark.asyncio
