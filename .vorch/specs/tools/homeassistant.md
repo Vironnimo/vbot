@@ -36,7 +36,8 @@ in agent allowlists.
 
 - HA endpoint: `POST /api/services/{domain}/{service}`
 - Schema: required `domain` (string), required `service` (string), optional `entity_id` (string), optional `data` (object); `additionalProperties: false`.
-- `domain` and `service` validated with `^[a-z][a-z0-9_]*$`.
+- `domain` and `service` validated with `^[a-z][a-z0-9_]*$`; `entity_id` is validated with `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$` when provided.
+- `data` must not include `entity_id`; callers use the top-level `entity_id` field so entity targeting always passes the strict validator.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.
 - Display: `summary_fields=("domain", "service", "entity_id")`.
 

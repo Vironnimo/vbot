@@ -529,6 +529,61 @@ async def test_call_service_invalid_domain(domain: str) -> None:
     assert_failure_envelope(result, "validation_error")
 
 
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entity_id",
+    [
+        "invalid",
+        "light.",
+        ".living_room",
+        "light/../sensor",
+        "light..living_room",
+        "Light.Living_Room",
+    ],
+)
+async def test_call_service_invalid_entity_id(entity_id: str) -> None:
+    route = respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(
+        registry,
+        HA_CALL_SERVICE_NAME,
+        {"domain": "light", "service": "turn_on", "entity_id": entity_id},
+    )
+
+    assert_failure_envelope(result, "validation_error")
+    assert route.called is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_call_service_rejects_entity_id_in_data() -> None:
+    route = respx.post(f"{_HASS_URL}/api/services/light/turn_on").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    registry = ToolRegistry()
+    register_homeassistant_tools(registry, _credential_resolver)
+
+    result = await _dispatch(
+        registry,
+        HA_CALL_SERVICE_NAME,
+        {
+            "domain": "light",
+            "service": "turn_on",
+            "data": {"entity_id": "light/../sensor"},
+        },
+    )
+
+    assert_failure_envelope(result, "validation_error")
+    assert route.called is False
+
+
 # ---------------------------------------------------------------------------
 # Network / retry
 # ---------------------------------------------------------------------------
