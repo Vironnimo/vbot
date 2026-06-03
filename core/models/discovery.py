@@ -18,6 +18,7 @@ import httpx
 from core.models.models import Model, ModelRegistry
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -392,6 +393,7 @@ _DISCOVERY_ADAPTER_MAP = {
     "openai_compatible": OpenAICompatibleAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
+    "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,
 }

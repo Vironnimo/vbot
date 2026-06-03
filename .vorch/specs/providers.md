@@ -38,6 +38,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `providers/openrouter.md` - OpenRouter-specific runtime/catalog behavior
 - `providers/opencode-go.md` - OpenCode Go routing and reasoning replay behavior
 - `providers/mistral.md` - Mistral-specific reasoning and catalog normalization
+- `providers/minimax.md` - MiniMax OpenAI-compatible endpoint, sparse catalog normalization, and thinking controls
 - `providers/github-copilot.md` - GitHub Copilot OAuth, endpoint routing, policy, and catalog metadata
 
 ## Adding A Provider

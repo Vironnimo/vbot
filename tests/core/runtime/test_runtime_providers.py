@@ -14,6 +14,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
+from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -51,6 +52,7 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     assert "openai" in ids
     assert "anthropic" in ids
     assert "openrouter" in ids
+    assert "minimax" in ids
 
 
 def test_runtime_provider_config_fields(runtime: Runtime) -> None:
@@ -59,6 +61,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     openai_config = runtime.providers.get("openai")
     openrouter_config = runtime.providers.get("openrouter")
     github_copilot_config = runtime.providers.get("github-copilot")
+    minimax_config = runtime.providers.get("minimax")
 
     # Assert
     assert openai_config.id == "openai"
@@ -72,6 +75,10 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
     assert openrouter_config.adapter == "openrouter"
     assert github_copilot_config.adapter == "github_copilot"
+    assert minimax_config.adapter == "minimax"
+    assert minimax_config.base_url == "https://api.minimaxi.com/v1"
+    assert minimax_config.models_endpoint == "/models"
+    assert minimax_config.get_connection("api-key").auth.credential_key == "MINIMAX_API_KEY"
 
 
 def test_provider_credential_resolver_has_credentials_for_connection(
@@ -561,6 +568,42 @@ def test_runtime_wires_mistral_adapter_with_model_lookup_for_reasoning_suppressi
     )
     assert "reasoning_effort" not in payload
     assert "prompt_mode" not in payload
+
+
+def test_runtime_wires_minimax_adapter(runtime: Runtime) -> None:
+    """MiniMax provider configs resolve to the MiniMax adapter."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="minimax",
+        name="MiniMax",
+        adapter="minimax",
+        base_url="https://api.minimaxi.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API / Token Plan Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="MINIMAX_API_KEY",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
+    )
+    runtime._providers = ProviderRegistry({"minimax": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"MINIMAX_API_KEY": "minimax-token"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("minimax", "minimax:api-key")
+
+    # Assert
+    assert isinstance(adapter, MiniMaxAdapter)
 
 
 # ------------------------------------------------------------------
