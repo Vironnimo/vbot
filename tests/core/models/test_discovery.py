@@ -199,6 +199,22 @@ class TestApplyOverrides:
         merged = apply_overrides({"model-c": model_data("Original")}, overrides_path)
         assert merged["model-c"] == full_override
 
+    def test_override_full_model_definition_allows_unknown_max_output_tokens(
+        self,
+        tmp_path: Path,
+    ):
+        overrides_path = tmp_path / "openrouter.overrides.json"
+        full_override = model_data("Full Override")
+        full_override["max_output_tokens"] = None
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openrouter", "models": {"model-c": full_override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert merged["model-c"]["max_output_tokens"] is None
+
     def test_override_validation_tolerates_optional_metadata(self, tmp_path: Path):
         overrides_path = tmp_path / "github-copilot.overrides.json"
         override = model_data("GPT-5.2")
@@ -327,7 +343,7 @@ class TestRefreshModels:
         assert raw_output_data["provider_id"] == "openrouter"
         assert raw_output_data["fetched_at"] == output_data["fetched_at"]
         assert model_b.name == "Model B"
-        assert model_b.max_output_tokens == 8192
+        assert model_b.max_output_tokens is None
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
         assert route.calls.last.request.headers["X-Title"] == "vBot"
 

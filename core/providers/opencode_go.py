@@ -151,7 +151,11 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
 
         for candidate in _model_lookup_candidates(model_id):
             model = self._model_lookup(candidate)
-            if model is not None and model.max_output_tokens > 0:
+            if (
+                model is not None
+                and model.max_output_tokens is not None
+                and model.max_output_tokens > 0
+            ):
                 return model.max_output_tokens
         return None
 

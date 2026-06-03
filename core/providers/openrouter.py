@@ -8,7 +8,7 @@ from typing import Any
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
-    _provider_default_max_tokens,
+    _parse_optional_int,
     _read_int,
     _read_mapping,
     _read_string,
@@ -64,10 +64,6 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             else ["text"]
         )
 
-        max_completion_tokens = top_provider.get("max_completion_tokens")
-        if max_completion_tokens is None:
-            max_completion_tokens = _provider_default_max_tokens(defaults)
-
         return Model(
             model_id=_read_string(raw, "id"),
             name=_read_string(raw, "name"),
@@ -89,7 +85,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 supported_parameters=tuple(supported_parameters),
             ),
             context_window=_read_int(raw, "context_length"),
-            max_output_tokens=int(max_completion_tokens),
+            max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
             metadata=_openrouter_runtime_metadata(architecture),
         )
 

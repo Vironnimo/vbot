@@ -43,6 +43,9 @@ Endpoint selection uses model metadata first:
 ## Catalog Normalization
 
 - `normalize_catalog_entry()` reads Copilot `capabilities.limits.max_context_window_tokens`, `capabilities.limits.max_output_tokens`, and `capabilities.supports`.
+- Missing or non-numeric `capabilities.limits.max_output_tokens` is stored as
+  `null`; reported numeric values remain authoritative even when they are small
+  values such as `4096`.
 - Reasoning is supported when Copilot advertises reasoning effort or thinking-budget support.
 - Normalized `Model.capabilities` includes chat-oriented modality/task defaults
   plus Copilot-advertised vision/tools/structured-output/reasoning facts.

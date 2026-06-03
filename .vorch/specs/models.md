@@ -56,12 +56,14 @@ class Model:
     name: str                  # Human-readable name (e.g. "Claude Sonnet 4")
     capabilities: Capabilities  # Provider-specific capability flags
     context_window: int         # Total context window in tokens
-    max_output_tokens: int      # Maximum output tokens
+    max_output_tokens: int | None  # Maximum output tokens, or unknown
     metadata: Mapping[str, Any] # Optional provider-specific runtime facts
 ```
 
 - `model_id` is the exact string the API expects. `"anthropic/claude-sonnet-4"` at OpenRouter is sent as `"model": "anthropic/claude-sonnet-4"`. No rewriting, no overrides, no indirection.
-- `context_window` and `max_output_tokens` are provider-specific. Not canonical values.
+- `context_window` and `max_output_tokens` are provider-specific. Not canonical
+  values. `max_output_tokens: null` means the provider catalog did not expose a
+  usable per-model output limit; it is not a runtime request limit.
 - `metadata` is optional provider-specific data needed at runtime. It must stay
   sanitized and small; do not store full raw provider catalog entries or
   credentials here.
@@ -161,6 +163,10 @@ The app-facing catalog remains one JSON file per provider at
 - Individual model entries may include optional `metadata`. `ModelRegistry.load()`
   preserves this on `Model.metadata` for runtime consumers and freezes nested
   mappings/lists so loaded model data remains immutable.
+- `max_output_tokens` may be `null` when discovery cannot distinguish a real
+  provider limit from an application fallback. Runtime adapters use provider
+  request defaults such as `defaults.max_tokens` separately instead of storing
+  those defaults as model facts.
 
 `refresh_models()` writes the sanitized file after provider-specific
 normalization and optional overrides. The app, runtime, and UI use only this
@@ -335,13 +341,13 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   `capabilities.limits.max_context_window_tokens` and
   `capabilities.limits.max_output_tokens`. Vision/tools/structured output and
   reasoning indicators come from `capabilities.supports`. The reported value is
-  authoritative even when it equals an old fallback value, such as `gpt-4o`
+  authoritative even when it equals a common fallback value, such as `gpt-4o`
   reporting `max_output_tokens: 4096`. The top-level `capabilities` object is
   required, but nested `limits` and `supports` sections may be missing or
   malformed and are treated as empty mappings. Individual numeric limit fields
   are also optional per model; missing context limits fall back to `0`, and
-  missing output limits fall back to provider `max_tokens` or the hard default
-  so one partial Copilot entry does not fail the whole refresh.
+  missing output limits are stored as `null` so one partial Copilot entry does
+  not fail the whole refresh.
 - **GitHub Copilot capability facts are not the same as runtime control
   support.** `reasoning.supported` in the catalog means the model is advertised
   as reasoning-capable through Copilot; it does not by itself authorize the

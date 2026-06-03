@@ -307,7 +307,7 @@ def _validate_model_data(model_id: str, model_data: Mapping[str, Any]) -> None:
     _read_string_list(caps, "supported_parameters")
     _read_string_list(caps, "task_types")
     _read_int(model_data, "context_window")
-    _read_int(model_data, "max_output_tokens")
+    _read_optional_int(model_data, "max_output_tokens")
     if not model_id:
         raise ValueError("Override-only model id must not be empty")
 
@@ -362,6 +362,15 @@ def _read_int(data: Mapping[str, Any], key: str) -> int:
     value = data.get(key)
     if not isinstance(value, int):
         raise ValueError(f"Expected '{key}' to be an integer")
+    return value
+
+
+def _read_optional_int(data: Mapping[str, Any], key: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Expected '{key}' to be an integer or null")
     return value
 
 

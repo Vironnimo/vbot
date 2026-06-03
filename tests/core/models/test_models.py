@@ -313,6 +313,36 @@ class TestModelRegistryLoad:
             "/chat/completions",
         )
 
+    def test_load_preserves_unknown_max_output_tokens(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("test-provider.json").write_text(
+            """
+            {
+              "provider_id": "test-provider",
+              "models": {
+                "minimal-model": {
+                  "name": "Minimal Model",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": true,
+                    "json_mode": false,
+                    "reasoning": {"supported": false}
+                  },
+                  "context_window": 0,
+                  "max_output_tokens": null
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("test-provider", "minimal-model")
+
+        assert model.max_output_tokens is None
+
     def test_load_catalog_without_metadata_keeps_empty_mapping(self):
         registry = ModelRegistry.load(FIXTURES_DIR)
 
@@ -536,7 +566,7 @@ class TestModelRegistryRealResources:
 
     @pytest.mark.parametrize(
         "provider_id",
-        ["openai", "openrouter", "anthropic", "github-copilot"],
+        ["openai", "openrouter", "anthropic", "github-copilot", "mistral"],
     )
     def test_provider_loads_and_has_models(self, provider_id: str):
         registry = ModelRegistry.load(RESOURCES_DIR)
@@ -556,5 +586,6 @@ class TestModelRegistryRealResources:
             assert isinstance(model.capabilities.task_types, tuple)
             assert isinstance(model.context_window, int)
             assert model.context_window >= 0
-            assert isinstance(model.max_output_tokens, int)
-            assert model.max_output_tokens >= 0
+            if model.max_output_tokens is not None:
+                assert isinstance(model.max_output_tokens, int)
+                assert model.max_output_tokens >= 0

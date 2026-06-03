@@ -141,7 +141,7 @@ def test_build_payload_uses_default_max_tokens_when_caller_omits_it() -> None:
     assert payload == {
         "model": "claude-sonnet-4.6",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
     }
 
 
@@ -260,7 +260,7 @@ def test_build_payload_omits_unsupported_tools_and_reasoning_controls() -> None:
     assert payload == {
         "model": model_id,
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
     }
 
 
@@ -294,7 +294,7 @@ def test_build_payload_omits_temperature_for_sonnet_when_adaptive_thinking_is_ac
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
         "thinking": {"type": "adaptive", "display": "summarized"},
         "output_config": {"effort": "high"},
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "top_p": 0.9,
     }
     assert "temperature" not in payload
@@ -316,7 +316,7 @@ def test_build_payload_keeps_temperature_for_haiku_when_adaptive_thinking_is_act
         "model": "claude-haiku-4.5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
         "thinking": {"type": "adaptive", "display": "summarized"},
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.25,
         "top_p": 0.9,
     }
@@ -344,7 +344,7 @@ def test_build_payload_haiku_requests_visible_thinking_without_reasoning_effort_
         "model": "claude-haiku-4.5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
         "thinking": {"type": "adaptive", "display": "summarized"},
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.25,
         "top_p": 0.9,
     }
@@ -375,7 +375,7 @@ def test_build_payload_haiku_ignores_budget_controls_from_bundled_metadata_shape
         "model": "claude-haiku-4.5",
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
         "thinking": {"type": "adaptive", "display": "summarized"},
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.25,
     }
     assert "output_config" not in payload
@@ -400,7 +400,7 @@ def test_build_payload_runtime_metadata_without_adaptive_thinking_omits_visible_
     assert payload == {
         "model": model_id,
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Think."}]}],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.25,
     }
 

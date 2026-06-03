@@ -233,13 +233,13 @@ def test_normalize_catalog_entry_preserves_non_text_outputs() -> None:
     assert "file_input" in model.capabilities.task_types
 
 
-def test_normalize_catalog_entry_uses_provider_default_for_null_max_tokens() -> None:
+def test_normalize_catalog_entry_preserves_unknown_null_max_tokens() -> None:
     model = OpenRouterAdapter.normalize_catalog_entry(
         raw_openrouter_model(max_completion_tokens=None),
         {"max_tokens": 8192},
     )
 
-    assert model.max_output_tokens == 8192
+    assert model.max_output_tokens is None
 
 
 @pytest.mark.parametrize(

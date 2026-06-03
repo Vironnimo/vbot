@@ -128,7 +128,7 @@ def test_normalize_catalog_entry_maps_chat_model_capabilities() -> None:
             ),
         ),
         context_window=128000,
-        max_output_tokens=8192,
+        max_output_tokens=None,
     )
 
 
@@ -185,10 +185,10 @@ def test_normalize_catalog_entry_defaults_missing_context_window_to_zero() -> No
     assert model.context_window == 0
 
 
-def test_normalize_catalog_entry_uses_provider_default_for_missing_max_output_tokens() -> None:
+def test_normalize_catalog_entry_preserves_unknown_max_output_tokens() -> None:
     model = MistralAdapter.normalize_catalog_entry(raw_mistral_model(), {"max_tokens": 8192})
 
-    assert model.max_output_tokens == 8192
+    assert model.max_output_tokens is None
 
 
 def test_normalize_catalog_entry_sets_json_mode_true_for_chat_models() -> None:
