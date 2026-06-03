@@ -999,7 +999,7 @@
     plainObjectKeys(value).length === 1 &&
     hasMeaningfulToolDetail(value.content);
 
-  const preferredToolResultValue = (value, toolName = '') => {
+  const preferredToolResultValue = (value, toolName = '', tool = null) => {
     const sanitizedValue = sanitizeToolDetailNode(value);
 
     if (!isPlainObject(sanitizedValue)) {
@@ -1015,6 +1015,10 @@
       isSuccessfulToolResult(sanitizedValue) &&
       isPlainObject(sanitizedValue.data)
     ) {
+      if (toolName === 'bash') {
+        return preferredBashResultValue(sanitizedValue.data, tool);
+      }
+
       if (
         ['read', 'glob', 'grep'].includes(toolName) &&
         hasMeaningfulToolDetail(sanitizedValue.data.content)
@@ -1038,6 +1042,20 @@
     return sanitizedValue;
   };
 
+  const preferredBashResultValue = (data, tool) => {
+    const hasStreamedOutput = Boolean(tool?.stdout || tool?.stderr);
+    if (!hasStreamedOutput && hasMeaningfulToolDetail(data.output)) {
+      return sanitizeToolDetailNode(data.output);
+    }
+
+    const { output, ...summary } = data;
+    if (hasMeaningfulToolDetail(summary)) {
+      return sanitizeToolDetailNode(summary);
+    }
+
+    return sanitizeToolDetailNode(output);
+  };
+
   const toolNameForRunTool = (tool) =>
     tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
@@ -1046,7 +1064,7 @@
     { preferPayload = false, toolName = '', tool = null } = {},
   ) => {
     const processed = preferPayload
-      ? preferredToolResultValue(value, toolName)
+      ? preferredToolResultValue(value, toolName, tool)
       : sanitizeToolDetailNode(
           value,
           tool

@@ -588,8 +588,6 @@ async def _completion_result(
         {
             "status": "completed",
             "exit_code": session.exit_code,
-            "stdout": _decode_foreground(session.stdout_lines),
-            "stderr": _decode_foreground(session.stderr_lines),
             "output": output,
             "truncated": session.truncated,
         }
@@ -604,10 +602,6 @@ async def _combined_output(
     log_result = await process_manager.log(session_id, context.agent_id, offset=0, limit=None)
     output = log_result.get("output", "")
     return output if isinstance(output, str) else ""
-
-
-def _decode_foreground(chunks: list[bytes]) -> str:
-    return b"".join(chunks).decode("utf-8", errors="replace")
 
 
 __all__ = [

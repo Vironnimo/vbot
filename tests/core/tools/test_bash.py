@@ -86,9 +86,9 @@ async def test_short_command_completes_and_streams_stdout(
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["exit_code"] == 0
-    assert result["data"]["stdout"].replace("\r\n", "\n") == "hello\n"
-    assert result["data"]["stderr"] == ""
-    assert "hello" in result["data"]["output"]
+    assert result["data"]["output"].replace("\r\n", "\n") == "hello\n"
+    assert "stdout" not in result["data"]
+    assert "stderr" not in result["data"]
     assert events == [
         (
             "tool_call_stdout",
@@ -383,7 +383,7 @@ async def test_non_zero_exit_code_is_successful_tool_result(
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["exit_code"] == 7
-    assert "bad" in result["data"]["stderr"]
+    assert "bad" in result["data"]["output"]
 
 
 @pytest.mark.asyncio
@@ -418,9 +418,9 @@ async def test_env_overrides_are_sanitised(
     )
 
     assert result["ok"] is True
-    assert "allowed" in result["data"]["stdout"]
-    assert "original-path" in result["data"]["stdout"]
-    assert "blocked-path" not in result["data"]["stdout"]
+    assert "allowed" in result["data"]["output"]
+    assert "original-path" in result["data"]["output"]
+    assert "blocked-path" not in result["data"]["output"]
 
 
 @pytest.mark.asyncio
@@ -435,7 +435,7 @@ async def test_workdir_defaults_to_workspace(
     result = await bash_handler(context, {"command": "import os; print(os.getcwd())"}, manager)
 
     assert result["ok"] is True
-    assert result["data"]["stdout"].strip() == str(tmp_path)
+    assert result["data"]["output"].strip() == str(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -474,7 +474,6 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
         )
 
         assert result["ok"] is True
-        assert result["data"]["stdout"] == "a" * 32
         assert result["data"]["output"] == "a" * 32
         assert result["data"]["truncated"] is True
     finally:

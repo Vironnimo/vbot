@@ -629,7 +629,8 @@ describe('chat state helpers', () => {
         role: 'tool',
         tool_call_id: 'call-bash',
         name: 'bash',
-        content: '{"ok": true, "stdout": "file.txt"}',
+        content:
+          '{"ok":true,"data":{"status":"completed","exit_code":0,"output":"file.txt","truncated":false},"error":null,"artifacts":[]}',
       },
       {
         id: 'assistant-final',
