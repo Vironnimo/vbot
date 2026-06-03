@@ -20,6 +20,11 @@ from core.chat.chat import (
 from core.chat.content_blocks import FileBlock, TextBlock
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
+FIXED_TIMING = {
+    "started_at": "2026-05-03T14:30:01+00:00",
+    "completed_at": "2026-05-03T14:30:02+00:00",
+    "duration_ms": 1234,
+}
 
 
 class TestToolCall:
@@ -184,6 +189,35 @@ class TestChatMessageFactories:
             "name": "get_weather",
         }
 
+    def test_tool_message_preserves_timing(self):
+        message = ChatMessage.tool(
+            tool_call_id="call_abc",
+            name="get_weather",
+            content='{"temp":22}',
+            timing=FIXED_TIMING,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.timing == FIXED_TIMING
+        assert message.to_dict()["timing"] == FIXED_TIMING
+
+    def test_run_summary_contains_run_status_and_timing(self):
+        message = ChatMessage.run_summary(
+            run_id="run-one",
+            status="completed",
+            timing=FIXED_TIMING,
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.to_dict() == {
+            "id": message.id,
+            "timestamp": "2026-05-03T14:30:00+00:00",
+            "role": "run_summary",
+            "timing": FIXED_TIMING,
+            "run_id": "run-one",
+            "status": "completed",
+        }
+
     def test_assistant_message_with_usage(self):
         message = ChatMessage.assistant(
             model="openai/gpt-4.1",
@@ -255,6 +289,37 @@ class TestChatMessageParsing:
         message = ChatMessage.from_dict(data)
 
         assert message.to_dict() == data
+
+    def test_from_dict_round_trips_run_summary(self):
+        data = {
+            "id": "summary-one",
+            "timestamp": "2026-05-03T14:30:05+00:00",
+            "role": "run_summary",
+            "run_id": "run-one",
+            "status": "completed",
+            "timing": FIXED_TIMING,
+        }
+
+        message = ChatMessage.from_dict(data)
+
+        assert message.to_dict() == data
+
+    def test_from_dict_rejects_bad_timing_duration(self):
+        with pytest.raises(ChatMessageValidationError, match="duration_ms"):
+            ChatMessage.from_dict(
+                {
+                    "id": "summary-one",
+                    "timestamp": "2026-05-03T14:30:05+00:00",
+                    "role": "run_summary",
+                    "run_id": "run-one",
+                    "status": "completed",
+                    "timing": {
+                        "started_at": "2026-05-03T14:30:01+00:00",
+                        "completed_at": "2026-05-03T14:30:02+00:00",
+                        "duration_ms": -1,
+                    },
+                }
+            )
 
     def test_from_dict_accepts_z_utc_timestamp(self):
         data = {

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import re
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from copy import deepcopy
@@ -88,6 +90,7 @@ MessageRole = Literal[
     "note",
     "error",
     "compaction_checkpoint",
+    "run_summary",
 ]
 InputOrigin = Literal["speech_transcription"]
 JsonObject = dict[str, Any]
@@ -168,11 +171,14 @@ class ChatMessage:
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
     usage: JsonObject | None = None
+    timing: JsonObject | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     name: str | None = None
     error_kind: str | None = None
     tail_boundary_id: str | None = None
+    run_id: str | None = None
+    status: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -259,6 +265,7 @@ class ChatMessage:
         tool_call_id: str,
         name: str,
         content: str,
+        timing: JsonObject | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a tool result message."""
@@ -269,6 +276,26 @@ class ChatMessage:
             content=content,
             tool_call_id=tool_call_id,
             name=name,
+            timing=dict(timing) if timing is not None else None,
+        )
+
+    @classmethod
+    def run_summary(
+        cls,
+        *,
+        run_id: str,
+        status: str,
+        timing: JsonObject,
+        timestamp: datetime | None = None,
+    ) -> ChatMessage:
+        """Create an append-only run summary annotation."""
+        return cls(
+            id=_new_message_id(),
+            timestamp=_format_timestamp(timestamp),
+            role="run_summary",
+            run_id=run_id,
+            status=status,
+            timing=dict(timing),
         )
 
     @classmethod
@@ -307,12 +334,15 @@ class ChatMessage:
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
         _add_if_not_none(message, "usage", self.usage)
+        _add_if_not_none(message, "timing", self.timing)
         if self.tool_calls is not None:
             message["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
         _add_if_not_none(message, "tool_call_id", self.tool_call_id)
         _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
         _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
+        _add_if_not_none(message, "run_id", self.run_id)
+        _add_if_not_none(message, "status", self.status)
         return message
 
     @classmethod
@@ -326,6 +356,9 @@ class ChatMessage:
         usage = data.get("usage")
         if usage is not None and not isinstance(usage, dict):
             raise ChatMessageValidationError("usage must be an object")
+        timing = data.get("timing")
+        if timing is not None and not isinstance(timing, dict):
+            raise ChatMessageValidationError("timing must be an object")
 
         message = cls(
             id=_require_string(data, "id"),
@@ -336,11 +369,14 @@ class ChatMessage:
             reasoning=_optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
             usage=dict(usage) if usage is not None else None,
+            timing=dict(timing) if timing is not None else None,
             tool_calls=tool_calls,
             tool_call_id=_optional_string(data, "tool_call_id"),
             name=_optional_string(data, "name"),
             error_kind=_optional_string(data, "error_kind"),
             tail_boundary_id=_optional_string(data, "tail_boundary_id"),
+            run_id=_optional_string(data, "run_id"),
+            status=_optional_string(data, "status"),
         )
         message.validate()
         return message
@@ -363,6 +399,8 @@ class ChatMessage:
                 _validate_error_message(self)
             case "compaction_checkpoint":
                 _validate_compaction_checkpoint_message(self)
+            case "run_summary":
+                _validate_run_summary_message(self)
 
 
 class _EmittingToolRegistry(ToolRegistry):
@@ -377,6 +415,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._registry = registry
         self._run = run
         self._extension_registry = extension_registry
+        self._tool_timings: dict[str, JsonObject] = {}
 
     async def dispatch(
         self,
@@ -385,6 +424,8 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None = None,
     ) -> JsonObject:
         self._run.raise_if_cancelled()
+        started_at = datetime.now(UTC)
+        started_perf = time.perf_counter()
         original_arguments = deepcopy(arguments)
         self._run.emit(
             TOOL_CALL_STARTED_EVENT,
@@ -475,6 +516,8 @@ class _EmittingToolRegistry(ToolRegistry):
                     if validated_patch is not None:
                         result = validated_patch
 
+        timing = _timing_payload(started_at, started_perf)
+        self._tool_timings[context.tool_call_id] = timing
         self._run.raise_if_cancelled()
         self._run.emit(
             TOOL_CALL_RESULT_EVENT,
@@ -485,9 +528,15 @@ class _EmittingToolRegistry(ToolRegistry):
                     "name": context.tool_name,
                 },
                 "result": result,
+                "timing": timing,
             },
         )
         return result
+
+    def timing_for_call(self, tool_call_id: str) -> JsonObject | None:
+        """Return measured timing for a completed tool call."""
+        timing = self._tool_timings.get(tool_call_id)
+        return dict(timing) if timing is not None else None
 
     async def _dispatch_with_failure_envelope(
         self,
@@ -709,6 +758,8 @@ class ChatLoop:
             run.agent_id,
             run.session_id,
         )
+        run_timing_started_at = datetime.now(UTC)
+        run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
 
         try:
@@ -854,6 +905,11 @@ class ChatLoop:
                 _run_succeeded = False
                 _persist_run_error(run, session, exc)
                 raise
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                _run_succeeded = False
+                raise
         finally:
             outcome: Literal["success", "error", "cancelled"]
             if run.cancel_requested:
@@ -862,6 +918,15 @@ class ChatLoop:
                 outcome = "success"
             else:
                 outcome = "error"
+            session.append(
+                ChatMessage.run_summary(
+                    run_id=run.id,
+                    status={"success": "completed", "error": "failed", "cancelled": "cancelled"}[
+                        outcome
+                    ],
+                    timing=_timing_payload(run_timing_started_at, run_timing_started_perf),
+                )
+            )
 
             extension_registry = _runtime_extensions(self._runtime)
             if extension_registry is not None:
@@ -1057,7 +1122,7 @@ class ChatLoop:
                 for tool_message in tool_messages:
                     run.raise_if_cancelled()
                     session.append(tool_message)
-                    messages.append(tool_message.to_dict())
+                    messages.append(_message_to_request_dict(tool_message))
             finally:
                 session.flush_deferred_notes()
 
@@ -1330,13 +1395,12 @@ class ChatLoop:
         run: Run,
     ) -> list[ChatMessage]:
         run.raise_if_cancelled()
-        executor = ToolExecutor(
-            _EmittingToolRegistry(
-                self._runtime.tools,
-                run,
-                _runtime_extensions(self._runtime),
-            )
+        emitting_registry = _EmittingToolRegistry(
+            self._runtime.tools,
+            run,
+            _runtime_extensions(self._runtime),
         )
+        executor = ToolExecutor(emitting_registry)
         results = await executor.execute_many(
             [
                 ScheduledToolCall(
@@ -1372,6 +1436,7 @@ class ChatLoop:
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
                 content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                timing=emitting_registry.timing_for_call(tool_call.id),
             )
             for tool_call, result in zip(tool_calls, results, strict=True)
         ]
@@ -1848,6 +1913,7 @@ def _message_to_request_dict(message: ChatMessage) -> JsonObject:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
         data.pop("usage", None)
+    data.pop("timing", None)
     return data
 
 
@@ -1860,6 +1926,7 @@ def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
     """
     data = message.to_dict()
     data.pop("usage", None)
+    data.pop("timing", None)
     return data
 
 
@@ -1892,6 +1959,9 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
         if message.role == "error":
             if message.error_kind is not None and error_kind_llm_visible(message.error_kind):
                 pending_notes.append(message)
+            continue
+
+        if message.role == "run_summary":
             continue
 
         if message.role == "tool":
@@ -2053,9 +2123,11 @@ def _require_role(data: JsonObject) -> MessageRole:
         "note",
         "error",
         "compaction_checkpoint",
+        "run_summary",
     ):
         raise ChatMessageValidationError(
-            "role must be system, user, assistant, tool, note, error, or compaction_checkpoint"
+            "role must be system, user, assistant, tool, note, error, "
+            "compaction_checkpoint, or run_summary"
         )
     return cast(MessageRole, role)
 
@@ -2103,6 +2175,36 @@ def _is_valid_iso_utc_timestamp(timestamp: str) -> bool:
     return value.tzinfo is not None and value.utcoffset() == UTC.utcoffset(value)
 
 
+def _timing_payload(started_at: datetime, started_perf: float) -> JsonObject:
+    completed_at = datetime.now(UTC)
+    duration_ms = max(0, round((time.perf_counter() - started_perf) * 1000))
+    return {
+        "started_at": _format_timestamp(started_at),
+        "completed_at": _format_timestamp(completed_at),
+        "duration_ms": duration_ms,
+    }
+
+
+def _validate_timing_payload(timing: JsonObject | None) -> None:
+    if timing is None:
+        return
+    if not isinstance(timing, dict):
+        raise ChatMessageValidationError("timing must be an object")
+    started_at = timing.get("started_at")
+    completed_at = timing.get("completed_at")
+    duration_ms = timing.get("duration_ms")
+    if not isinstance(started_at, str) or not started_at:
+        raise ChatMessageValidationError("timing.started_at must be a non-empty string")
+    if not isinstance(completed_at, str) or not completed_at:
+        raise ChatMessageValidationError("timing.completed_at must be a non-empty string")
+    if not _has_explicit_utc_offset(started_at):
+        raise ChatMessageValidationError("timing.started_at must include explicit UTC offset")
+    if not _has_explicit_utc_offset(completed_at):
+        raise ChatMessageValidationError("timing.completed_at must include explicit UTC offset")
+    if isinstance(duration_ms, bool) or not isinstance(duration_ms, int) or duration_ms < 0:
+        raise ChatMessageValidationError("timing.duration_ms must be a non-negative integer")
+
+
 def _validate_system_message(message: ChatMessage) -> None:
     if message.model is None:
         raise ChatMessageValidationError("system messages require model")
@@ -2115,11 +2217,14 @@ def _validate_system_message(message: ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "usage",
+        "timing",
         "tool_calls",
         "tool_call_id",
         "name",
         "error_kind",
         "tail_boundary_id",
+        "run_id",
+        "status",
     )
 
 
@@ -2141,11 +2246,14 @@ def _validate_user_message(message: ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "usage",
+        "timing",
         "tool_calls",
         "tool_call_id",
         "name",
         "error_kind",
         "tail_boundary_id",
+        "run_id",
+        "status",
     )
 
 
@@ -2166,7 +2274,16 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError(
             "assistant messages require content, reasoning, reasoning_meta, or tool_calls"
         )
-    _reject_fields(message, "tool_call_id", "name", "error_kind", "tail_boundary_id")
+    _reject_fields(
+        message,
+        "timing",
+        "tool_call_id",
+        "name",
+        "error_kind",
+        "tail_boundary_id",
+        "run_id",
+        "status",
+    )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
     if message.usage is not None and not isinstance(message.usage, dict):
@@ -2191,7 +2308,10 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "tool_calls",
         "error_kind",
         "tail_boundary_id",
+        "run_id",
+        "status",
     )
+    _validate_timing_payload(message.timing)
 
 
 def _validate_note_message(message: ChatMessage) -> None:
@@ -2205,11 +2325,14 @@ def _validate_note_message(message: ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "usage",
+        "timing",
         "tool_calls",
         "tool_call_id",
         "name",
         "error_kind",
         "tail_boundary_id",
+        "run_id",
+        "status",
     )
 
 
@@ -2226,10 +2349,13 @@ def _validate_error_message(message: ChatMessage) -> None:
         "reasoning",
         "reasoning_meta",
         "usage",
+        "timing",
         "tool_calls",
         "tool_call_id",
         "name",
         "tail_boundary_id",
+        "run_id",
+        "status",
     )
 
 
@@ -2261,10 +2387,38 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
         "model",
         "reasoning",
         "reasoning_meta",
+        "timing",
         "tool_calls",
         "tool_call_id",
         "name",
         "error_kind",
+        "run_id",
+        "status",
+    )
+
+
+def _validate_run_summary_message(message: ChatMessage) -> None:
+    if not message.run_id:
+        raise ChatMessageValidationError("run summaries require run_id")
+    if message.status not in {"completed", "failed", "cancelled"}:
+        raise ChatMessageValidationError(
+            "run summaries status must be completed, failed, or cancelled"
+        )
+    if message.timing is None:
+        raise ChatMessageValidationError("run summaries require timing")
+    _validate_timing_payload(message.timing)
+    _reject_fields(
+        message,
+        "content",
+        "model",
+        "reasoning",
+        "reasoning_meta",
+        "usage",
+        "tool_calls",
+        "tool_call_id",
+        "name",
+        "error_kind",
+        "tail_boundary_id",
     )
 
 

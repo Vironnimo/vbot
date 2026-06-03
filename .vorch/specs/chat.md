@@ -23,16 +23,18 @@ container; a Run is one active execution inside that session.
   - `system`: `model`, `content`
   - `user`: `content` (`str` or `list[ContentBlock]`)
   - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `tool_calls`
-  - `tool`: `tool_call_id`, `name`, `content`
+  - `tool`: `tool_call_id`, `name`, `content`, optional `timing`
   - `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
   - `compaction_checkpoint`: `content` (summary text), `tail_boundary_id`, optional `usage.compacted_token_count`; persisted summary anchor used to rebuild shorter future request history
   - `error`: `content`, `error_kind`; persisted run-time failure visible in normal history
+  - `run_summary`: `run_id`, `status`, `timing`; append-only run annotation persisted after a Run reaches `completed`, `failed`, or `cancelled`
 - `reasoning` is readable thinking text. `reasoning_meta` is opaque provider data and must not be interpreted by chat.
+- `timing` is a canonical timing object `{ started_at, completed_at, duration_ms }`. Durations are non-negative milliseconds measured with a monotonic clock; timestamps are UTC ISO 8601 values used only for persistence and display. `timing` is not token usage and must not be stored under `usage`.
 - Activated skill context is persisted as a special internal `note` whose content begins with `[skill-context] `. These notes are not converted to `<system-reminder>` blocks; instead the chat loop restores them as `<skill_content>` user-context messages before provider requests.
 
 ## Interfaces
 
-- `ChatMessage.system(content, model)` / `.user(content)` / `.assistant(...)` / `.tool(...)` / `.note(content)` / `.compaction_checkpoint(summary, tail_boundary_id, compacted_token_count)` / `.error(error_kind, content)` — constructors for role-specific messages.
+- `ChatMessage.system(content, model)` / `.user(content)` / `.assistant(...)` / `.tool(...)` / `.note(content)` / `.compaction_checkpoint(summary, tail_boundary_id, compacted_token_count)` / `.error(error_kind, content)` / `.run_summary(run_id, status, timing)` — constructors for role-specific messages.
 - `ChatMessage.to_dict()` / `ChatMessage.from_dict(data)` — canonical JSON-compatible conversion.
 - `error_kind_llm_visible(kind)` — returns whether a persisted error should be embedded into the next provider request.
 - Session persistence interfaces live in `.vorch/specs/sessions.md` and are exported from `core.sessions`.
@@ -44,7 +46,7 @@ container; a Run is one active execution inside that session.
 - `core.runs.ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, allows parallel Runs in different Sessions, and owns the in-memory FIFO queue of pending `QueuedRunItem`s per Session with enqueue/list/remove/update plus automatic drain when the active Run finishes.
 - `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins either return a handled result with optional reply text/data or a command action for accessor-level execution; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins are `/compact`, `/help`, `/new`, `/retry`, `/status`, and `/stop`. `/status` reports the current Session and includes run activity (`running` or `idle`) plus active Run `created_at`/`updated_at` timestamps when present.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
-- Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result }`, where `result` is the stable tool result envelope. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
+- Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result, timing }`, where `result` is the stable tool result envelope and `timing` is the completed tool-call timing object. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
 - Error persistence Run event: `error_message_persisted` has the same message payload shape as other output-message events and indicates that a `role: "error"` message was appended to the Session.
 - `ChatLoop(runtime, max_tool_iterations=1000, streaming=False, attachment_resolver=None, compaction_service=None)` — agentic loop with non-streaming and streaming modes over the same Run/session/tool dispatch infrastructure. The optional compaction service comes from `core.compaction`.
   - `send(agent_id, content, session_id=None, input_origin=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
@@ -108,6 +110,7 @@ container; a Run is one active execution inside that session.
   tool, note, and error messages remain string-or-null content only.
 - Current-turn `reasoning` and `reasoning_meta` must be preserved unchanged during tool-use loops when the same assistant turn continues after tool results. Old completed-turn `reasoning` and `reasoning_meta` are not resent on later turns by default.
 - Notes are kernel-internal background events. They remain in JSONL history as `role: "note"` but are embedded into provider requests as synthetic user messages containing one or more `<system-reminder>...</system-reminder>` blocks. Provider adapters must never receive `role: "note"`.
+- Run summaries are kernel/UI annotations. They remain in JSONL history as `role: "run_summary"`, are returned by normal history RPCs, and are never embedded into provider requests or rendered as normal chat bubbles.
 - `role: "compaction_checkpoint"` stays in the Session JSONL history but is never sent directly to providers. When the chat loop sees the latest checkpoint, it rebuilds request history as system prompt + skill context + one synthetic `<system-reminder>` summary message + the verbatim tail starting at `tail_boundary_id`.
 - Notes generated during a tool-use turn must not appear between an assistant message with `tool_calls` and that turn's tool-result messages, either in JSONL persistence or in the provider request history. Such notes are deferred until after the last tool result for that assistant turn.
 - Normal visible user turns may carry `input_origin="speech_transcription"`.
@@ -147,7 +150,7 @@ container; a Run is one active execution inside that session.
 - `ChatMessage.assistant()` accepts an optional `usage: JsonObject | None` field (canonical keys: `input_tokens`, `output_tokens`; optional `estimated` boolean). Usage is only valid on assistant messages and is rejected on other roles by `from_dict()`.
 - `_message_to_request_dict()` strips `usage`, `reasoning`, and `reasoning_meta` from assistant history before it is sent to provider APIs. Readable `reasoning` still round-trips for reasoning-aware adapters on the active tool-continuation path, but stale completed-turn reasoning must not be resent on later follow-up turns.
 - The live tool-continuation request for the current turn appends the assistant message via a helper that strips `usage` while preserving `reasoning`/`reasoning_meta`, so per-turn token accounting is never echoed back to the provider even mid-loop.
-- The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal events for failed or cancelled runs do not include usage.
+- The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal Run events include `timing`; terminal events for failed or cancelled runs do not include usage.
 - In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
 - GitHub Copilot endpoint helpers must emit the same normalized streaming shapes
   as other adapters. Copilot `/responses` usage is normalized from completed

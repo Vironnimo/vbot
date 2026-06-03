@@ -59,6 +59,14 @@ from core.utils.tokens import estimate_tokens
 JsonObject = dict[str, Any]
 
 
+def persisted_roles(messages: list[ChatMessage]) -> list[str]:
+    return [message.role for message in messages if message.role != "run_summary"]
+
+
+def persisted_dict_roles(messages: list[JsonObject]) -> list[str]:
+    return [str(message["role"]) for message in messages if message.get("role") != "run_summary"]
+
+
 @dataclass(frozen=True)
 class StubAgent:
     id: str
@@ -373,7 +381,7 @@ class StubCompactionService:
     ) -> ChatMessage:
         self.compact_calls.append(
             {
-                "message_roles": [message.role for message in messages],
+                "message_roles": persisted_roles(messages),
                 "agent_id": getattr(agent, "id", None),
                 "summary_adapter": summary_adapter,
                 "summary_model_id": summary_model_id,
@@ -399,7 +407,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     session = runtime.chat_sessions.get("coder", "session-one")
     messages = session.load()
     assert assistant.content == "Hello"
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[0].content == "Hi"
     assert messages[1].content == "Hello"
     assert runtime.adapter_provider_id == "openrouter"
@@ -486,7 +494,7 @@ async def test_speech_transcription_origin_adds_system_reminder_before_user_turn
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     request_messages = adapter.requests[0]["messages"]
-    assert [message.role for message in messages] == ["note", "user", "assistant"]
+    assert persisted_roles(messages) == ["note", "user", "assistant"]
     assert "speech-to-text transcription" in str(messages[0].content)
     assert messages[1].content == "helo wrld"
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
@@ -514,7 +522,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     request_messages = adapter.requests[0]["messages"]
-    assert [message.role for message in messages] == ["note", "assistant"]
+    assert persisted_roles(messages) == ["note", "assistant"]
     assert messages[0].content == content
     assert [event.type for event in run.events] == [
         "run_started",
@@ -648,7 +656,7 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
     await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
 
     persisted_after_first_turn = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in persisted_after_first_turn] == [
+    assert persisted_roles(persisted_after_first_turn) == [
         "user",
         "assistant",
         "tool",
@@ -933,7 +941,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         run=run,
     )
 
-    assert [message.role for message in session.load()] == [
+    assert persisted_roles(session.load()) == [
         "user",
         "assistant",
         "compaction_checkpoint",
@@ -1093,7 +1101,7 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
         )
 
     assert result == messages
-    assert [message.role for message in session.load()] == ["user", "assistant"]
+    assert persisted_roles(session.load()) == ["user", "assistant"]
     assert any(
         "Compaction failed; continuing without compaction" in record.message
         for record in caplog.records
@@ -1151,7 +1159,7 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
     assert second_request_messages[-1]["content"] == "continue"
     persisted_messages = runtime.chat_sessions.get("coder", "session-one").load()
     visible_messages = [message for message in persisted_messages if message.role != "note"]
-    assert [message.role for message in visible_messages] == [
+    assert persisted_roles(visible_messages) == [
         "user",
         "assistant",
         "user",
@@ -1333,7 +1341,7 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "rate_limit"
     assert messages[1].content == "too many requests"
     assert [event.type for event in run.events] == [
@@ -1375,7 +1383,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
         event for event in run.events if event.type == MODEL_FALLBACK_ACTIVATED_EVENT
     ]
     assert assistant.content == "Recovered"
-    assert [message.role for message in messages] == ["user", "note", "assistant"]
+    assert persisted_roles(messages) == ["user", "note", "assistant"]
     assert messages[1].content == (
         "Primary model unavailable. Switched to anthropic/claude-sonnet-4::api-key for this run."
     )
@@ -1413,7 +1421,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     event_types = [event.type for event in run.events]
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert ERROR_MESSAGE_PERSISTED_EVENT in event_types
     assert MODEL_FALLBACK_ACTIVATED_EVENT not in event_types
 
@@ -1487,7 +1495,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
     assert fallback_adapter.requests == []
 
@@ -1504,7 +1512,7 @@ async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert not any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
 
 
@@ -1584,8 +1592,9 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     assert run.status == RunStatus.FAILED
     assert len(error_events) == 1
     assert any(event.type == MODEL_FALLBACK_ACTIVATED_EVENT for event in run.events)
-    assert [message.role for message in messages] == ["user", "note", "error"]
-    assert messages[-1].error_kind == "rate_limit"
+    assert persisted_roles(messages) == ["user", "note", "error"]
+    error_message = next(message for message in messages if message.role == "error")
+    assert error_message.error_kind == "rate_limit"
 
 
 @pytest.mark.asyncio
@@ -1621,10 +1630,20 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
     ]
     assert assistant.content == "Sunny"
-    assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
+    assert [message["role"] for message in persisted] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "run_summary",
+    ]
     assert persisted[1]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
     assert persisted[2]["tool_call_id"] == "call_abc"
+    assert persisted[2]["timing"]["duration_ms"] >= 0
     assert json.loads(persisted[2]["content"]) == tool_success({"temp": 22, "city": "Berlin"})
+    assert persisted[4]["run_id"]
+    assert persisted[4]["status"] == "completed"
+    assert persisted[4]["timing"]["duration_ms"] >= 0
     assert [message["role"] for message in adapter.requests[1]["messages"]] == [
         "system",
         "user",
@@ -1638,6 +1657,13 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     # usage is persisted on the assistant turn but never sent to the provider.
     assert persisted[1]["usage"] == {"input_tokens": 11, "output_tokens": 7}
     assert "usage" not in adapter.requests[1]["messages"][2]
+    assert "timing" not in adapter.requests[1]["messages"][3]
+    tool_result_events = [
+        event
+        for event in runtime.chat_runs.get(persisted[4]["run_id"]).events
+        if event.type == "tool_call_result"
+    ]
+    assert tool_result_events[0].payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -1668,7 +1694,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert assistant.content == "Hello world"
     assert assistant.reasoning == "Think"
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant"]
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
@@ -1738,7 +1764,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
     ]
     assert assistant.content == "Sunny"
-    assert [message["role"] for message in persisted] == ["user", "assistant", "tool", "assistant"]
+    assert persisted_dict_roles(persisted) == ["user", "assistant", "tool", "assistant"]
     assert persisted[1]["reasoning_meta"] == {"signature": "opaque"}
     assert persisted[1]["tool_calls"] == [
         {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
@@ -1767,10 +1793,13 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
         "arguments": {"city": "Berlin"},
     }
     tool_result = next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT)
-    assert tool_result.payload == {
-        "tool_call": {"id": "call_abc", "index": 0, "name": "get_weather"},
-        "result": tool_success({"temp": 22, "city": "Berlin"}),
+    assert tool_result.payload["tool_call"] == {
+        "id": "call_abc",
+        "index": 0,
+        "name": "get_weather",
     }
+    assert tool_result.payload["result"] == tool_success({"temp": 22, "city": "Berlin"})
+    assert tool_result.payload["timing"]["duration_ms"] >= 0
     assert all(
         "reasoning_meta" not in event.payload.get("message", {})
         for event in run.events
@@ -1807,7 +1836,7 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
     messages = runtime.chat_sessions.get("coder", "session-one").load()
 
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert persisted_roles(messages) == ["user", "note", "error"]
     assert messages[1].content == "Partial thinking before interruption:\nNeed to write the file."
     assert messages[2].error_kind == "provider_error"
     assert "malformed or incomplete arguments" in (messages[2].content or "")
@@ -1837,7 +1866,7 @@ async def test_streaming_mode_requires_finish_delta(tmp_path: Path) -> None:
     messages = runtime.chat_sessions.get("coder", "session-one").load()
 
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "network_error"
     assert [event.type for event in run.events] == [
         "run_started",
@@ -1890,7 +1919,7 @@ async def test_streaming_mode_does_not_fallback_on_generic_provider_error(tmp_pa
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "provider_fatal"
     # No non-streaming fallback request was issued for a generic provider error.
     assert len(adapter.stream_requests) == 1
@@ -1916,7 +1945,7 @@ async def test_streaming_mode_does_not_fallback_after_visible_delta(tmp_path: Pa
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "provider_fatal"
     assert [event.type for event in run.events] == [
         "run_started",
@@ -1944,7 +1973,7 @@ async def test_streaming_mode_chunk_timeout_fails_run(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.FAILED
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "timeout"
     assert [event.type for event in run.events] == [
         "run_started",
@@ -1975,7 +2004,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_ignores_late_delta
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert adapter.closed is True
     assert run.status == RunStatus.CANCELLED
-    assert [message.role for message in messages] == ["user"]
+    assert persisted_roles(messages) == ["user"]
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
@@ -1996,7 +2025,7 @@ async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_n
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "note"]
+    assert persisted_roles(messages) == ["user", "note"]
     assert messages[1].content == "Partial thinking before interruption:\nNeed network."
 
 
@@ -2020,7 +2049,7 @@ async def test_streaming_network_error_with_reasoning_persists_partial_thinking_
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "note", "error"]
+    assert persisted_roles(messages) == ["user", "note", "error"]
     assert messages[1].content == "Partial thinking before interruption:\nNeed network."
     assert messages[2].error_kind == "network_error"
 
@@ -2045,7 +2074,7 @@ async def test_streaming_network_error_without_reasoning_does_not_add_partial_no
         await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
 
 
 @pytest.mark.asyncio
@@ -2110,7 +2139,7 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
     assert request_messages[1]["content"] == "Previous question"
     assert request_messages[2]["content"] == "Follow up"
-    assert [message.role for message in persisted] == ["user", "assistant", "user", "assistant"]
+    assert persisted_roles(persisted) == ["user", "assistant", "user", "assistant"]
     assert persisted[1].content is None
     assert persisted[1].reasoning == "Old readable reasoning"
     assert persisted[1].reasoning_meta == {"opaque": "provider-signed"}
@@ -2144,7 +2173,7 @@ async def test_retry_run_reuses_last_user_turn_without_appending_new_user_messag
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert assistant.content == "Retried"
-    assert [message.role for message in messages] == ["user", "error", "assistant"]
+    assert persisted_roles(messages) == ["user", "error", "assistant"]
     assert sum(1 for message in messages if message.role == "user") == 1
 
 
@@ -2266,7 +2295,7 @@ async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> No
 
     session_messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert run.status == RunStatus.CANCELLED
-    assert [message.role for message in session_messages] == ["user"]
+    assert persisted_roles(session_messages) == ["user"]
     assert "assistant_output" not in [event.type for event in run.events]
 
 
@@ -2296,7 +2325,7 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
     await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == tool_failure(
@@ -2401,10 +2430,12 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == failure
-    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
-        "tool_call": {"id": "call_grep", "index": 0, "name": "grep"},
-        "result": failure,
-    }
+    result_payload = next(
+        event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
+    ).payload
+    assert result_payload["tool_call"] == {"id": "call_grep", "index": 0, "name": "grep"}
+    assert result_payload["result"] == failure
+    assert result_payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -2530,10 +2561,12 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == tool_failure("tool_execution_error", "boom")
-    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
-        "tool_call": {"id": "call_1", "index": 0, "name": "explode"},
-        "result": tool_failure("tool_execution_error", "boom"),
-    }
+    result_payload = next(
+        event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
+    ).payload
+    assert result_payload["tool_call"] == {"id": "call_1", "index": 0, "name": "explode"}
+    assert result_payload["result"] == tool_failure("tool_execution_error", "boom")
+    assert result_payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -2575,10 +2608,12 @@ async def test_tool_non_envelope_result_is_failure_envelope(tmp_path: Path) -> N
     assert isinstance(tool_message_content, str)
     assert json.loads(tool_message_content) == failure
     run = next(iter(runtime.chat_runs._runs.values()))
-    assert next(event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT).payload == {
-        "tool_call": {"id": "call_1", "index": 0, "name": "invalid"},
-        "result": failure,
-    }
+    result_payload = next(
+        event for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
+    ).payload
+    assert result_payload["tool_call"] == {"id": "call_1", "index": 0, "name": "invalid"}
+    assert result_payload["result"] == failure
+    assert result_payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -2611,7 +2646,7 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
         )
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "assistant", "error"]
+    assert persisted_roles(messages) == ["user", "assistant", "error"]
     assert messages[2].error_kind == "tool_iterations_exceeded"
 
 
@@ -2666,7 +2701,7 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert all(message.role != "error" for message in messages)
-    assert [message.role for message in messages] == [
+    assert persisted_roles(messages) == [
         "user",
         "assistant",
         "tool",
@@ -2692,7 +2727,7 @@ async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_pat
         await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "error"]
+    assert persisted_roles(messages) == ["user", "error"]
     assert messages[1].error_kind == "provider_fatal"
     assert adapter.requests[0]["model_id"] == "unknown-new-model"
 
@@ -2894,10 +2929,9 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
     run = next(iter(runtime.chat_runs._runs.values()))
     completed = [event for event in run.events if event.type == "run_completed"]
     assert len(completed) == 1
-    assert completed[0].payload == {
-        "status": "completed",
-        "usage": {"input_tokens": 150, "output_tokens": 12},
-    }
+    assert completed[0].payload["status"] == "completed"
+    assert completed[0].payload["usage"] == {"input_tokens": 150, "output_tokens": 12}
+    assert completed[0].payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -2929,10 +2963,9 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
     run = next(iter(runtime.chat_runs._runs.values()))
     completed = [event for event in run.events if event.type == "run_completed"]
     assert len(completed) == 1
-    assert completed[0].payload == {
-        "status": "completed",
-        "usage": {"input_tokens": 200, "output_tokens": 25},
-    }
+    assert completed[0].payload["status"] == "completed"
+    assert completed[0].payload["usage"] == {"input_tokens": 200, "output_tokens": 25}
+    assert completed[0].payload["timing"]["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -3333,6 +3366,48 @@ class TestMessageToRequestDict:
 
         assert "usage" not in result
         assert result["content"] == "What is the weather?"
+
+    def test_strips_timing_from_tool_messages(self):
+        from core.chat.chat import _message_to_request_dict
+
+        message = ChatMessage.tool(
+            tool_call_id="call-one",
+            name="read",
+            content='{"ok":true,"error":null,"data":{},"artifacts":[]}',
+            timing={
+                "started_at": "2026-05-03T14:30:01+00:00",
+                "completed_at": "2026-05-03T14:30:02+00:00",
+                "duration_ms": 1000,
+            },
+        )
+
+        result = _message_to_request_dict(message)
+
+        assert result["role"] == "tool"
+        assert "timing" not in result
+
+    def test_run_summary_is_omitted_from_request_history(self):
+        from core.chat.chat import _embed_notes_into_request
+
+        messages = [
+            ChatMessage.user("Previous question"),
+            ChatMessage.assistant(model="openai/gpt-4", content="Previous answer"),
+            ChatMessage.run_summary(
+                run_id="run-one",
+                status="completed",
+                timing={
+                    "started_at": "2026-05-03T14:30:01+00:00",
+                    "completed_at": "2026-05-03T14:30:02+00:00",
+                    "duration_ms": 1000,
+                },
+            ),
+            ChatMessage.user("Follow up"),
+        ]
+
+        result = _embed_notes_into_request(messages)
+
+        assert [message["role"] for message in result] == ["user", "assistant", "user"]
+        assert all("timing" not in message for message in result)
 
 
 class TestErrorKindClassification:

@@ -27,6 +27,15 @@ from core.runs import (
 pytestmark = pytest.mark.asyncio
 
 
+def assert_timing_payload(payload: dict[str, Any]) -> None:
+    timing = payload.get("timing")
+    assert isinstance(timing, dict)
+    assert isinstance(timing.get("started_at"), str)
+    assert isinstance(timing.get("completed_at"), str)
+    assert isinstance(timing.get("duration_ms"), int)
+    assert timing["duration_ms"] >= 0
+
+
 async def test_replays_events_to_late_subscriber() -> None:
     manager = ChatRunManager()
 
@@ -106,6 +115,7 @@ async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
         {"step": "before"}
     ]
     assert run.events[-1].type == "run_cancelled"
+    assert_timing_payload(run.events[-1].payload)
 
 
 async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
@@ -751,9 +761,11 @@ async def test_run_completed_includes_usage_from_result_object() -> None:
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
     assert len(completed_events) == 1
-    assert completed_events[0].payload == {
-        "status": "completed",
-        "usage": {"input_tokens": 200, "output_tokens": 30},
+    assert_timing_payload(completed_events[0].payload)
+    assert completed_events[0].payload["status"] == "completed"
+    assert completed_events[0].payload["usage"] == {
+        "input_tokens": 200,
+        "output_tokens": 30,
     }
 
 
@@ -769,7 +781,9 @@ async def test_run_completed_omits_usage_when_result_has_no_usage() -> None:
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
     assert len(completed_events) == 1
-    assert completed_events[0].payload == {"status": "completed"}
+    assert_timing_payload(completed_events[0].payload)
+    assert completed_events[0].payload["status"] == "completed"
+    assert "usage" not in completed_events[0].payload
 
 
 async def test_run_started_callbacks_are_notified_and_removable() -> None:
@@ -833,4 +847,6 @@ async def test_run_completed_omits_usage_when_usage_is_none() -> None:
 
     completed_events = [event for event in run.events if event.type == "run_completed"]
     assert len(completed_events) == 1
-    assert completed_events[0].payload == {"status": "completed"}
+    assert_timing_payload(completed_events[0].payload)
+    assert completed_events[0].payload["status"] == "completed"
+    assert "usage" not in completed_events[0].payload

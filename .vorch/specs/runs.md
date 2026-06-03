@@ -72,6 +72,12 @@ to render without re-inferring tool semantics from raw arguments.
 - `Run.emit()` returns `None` when suppression drops an event; callers must tolerate that.
 - Terminal events are the only events allowed after cancellation suppression starts.
 - All timestamps are UTC ISO 8601 strings with explicit offsets.
+- Terminal lifecycle events (`run_completed`, `run_failed`, and
+  `run_cancelled`) include `payload.timing` with `{ started_at, completed_at,
+  duration_ms }`. The duration is measured with a monotonic clock and stored as
+  non-negative milliseconds; timestamps are UTC ISO values for display and
+  persistence only. `run_completed` may also include token `usage`, but timing
+  must remain separate from usage.
 - Run timelines are process-local replay buffers, not durable history. The
   manager retains only a bounded number of completed Runs, and each Run retains
   only a bounded number of recent events. Live subscribers receive events as
