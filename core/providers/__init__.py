@@ -14,6 +14,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
@@ -31,6 +32,7 @@ __all__ = [
     "MiniMaxAdapter",
     "MistralAdapter",
     "OpenAICompatibleAdapter",
+    "OpenAISubscriptionAdapter",
     "OpenCodeGoAdapter",
     "OpenRouterAdapter",
     "ProviderCredentialResolver",

@@ -16,6 +16,7 @@ import pytest
 from core.providers.providers import (
     AuthConfig,
     ConnectionConfig,
+    OAuthConfig,
     ProviderConfig,
     ProviderRegistry,
     _registry_cache,
@@ -307,6 +308,64 @@ class TestConnectionParsing:
 
         # Assert
         assert config.get_connection("api-key").base_url == "https://enterprise.example.com/v1"
+
+    def test_openai_subscription_oauth_device_flow_fields_parse(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """OpenAI Subscription's Codex Device Flow metadata parses from JSON."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = {
+            "id": "openai-subscription",
+            "name": "OpenAI Subscription",
+            "adapter": "openai_subscription",
+            "base_url": "https://chatgpt.com/backend-api",
+            "models_endpoint": "/codex/models",
+            "connections": [
+                {
+                    "id": "oauth",
+                    "type": "oauth",
+                    "label": "ChatGPT Plus/Pro",
+                    "auth": {"header": "Authorization", "prefix": "Bearer "},
+                    "oauth": {
+                        "flow": "device",
+                        "device_flow": "openai_codex",
+                        "client_id": "client-id",
+                        "device_auth_url": "https://auth.openai.com/device/usercode",
+                        "token_url": "https://auth.openai.com/oauth/token",
+                        "verification_uri": "https://auth.openai.com/codex/device",
+                        "redirect_uri": "https://auth.openai.com/deviceauth/callback",
+                        "expires_in": 600,
+                        "scopes": ["openid"],
+                    },
+                }
+            ],
+        }
+        (prov_dir / "openai-subscription.json").write_text(
+            json.dumps(data),
+            encoding="utf-8",
+        )
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        config = registry.get("openai-subscription")
+        oauth = config.get_connection("oauth").oauth
+
+        # Assert
+        assert config.models_endpoint == "/codex/models"
+        assert oauth == OAuthConfig(
+            flow="device",
+            client_id="client-id",
+            device_auth_url="https://auth.openai.com/device/usercode",
+            token_url="https://auth.openai.com/oauth/token",
+            scopes=["openid"],
+            device_flow="openai_codex",
+            verification_uri="https://auth.openai.com/codex/device",
+            redirect_uri="https://auth.openai.com/deviceauth/callback",
+            expires_in=600,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +741,28 @@ class TestProviderRegistryConnectionTypes:
 
         # Act / Assert
         with pytest.raises(ConfigError, match="Unknown OAuth flow"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_unknown_oauth_device_flow_raises_config_error(self, tmp_path: Path) -> None:
+        """OAuth Device Flow variants are validated explicitly."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][0])
+        connection["oauth"] = {
+            "flow": "device",
+            "device_flow": "unknown",
+            "client_id": "client-id",
+            "device_auth_url": "https://github.com/login/device/code",
+            "token_url": "https://github.com/login/oauth/access_token",
+            "scopes": ["copilot"],
+        }
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="Unknown OAuth device_flow"):
             ProviderRegistry.load(tmp_path)
 
 

@@ -1429,6 +1429,14 @@
     );
   }
 
+  function providerDisplayName(provider) {
+    return provider?.name ?? provider?.id ?? 'Provider';
+  }
+
+  function providerTranslationValues(provider) {
+    return { provider: providerDisplayName(provider) };
+  }
+
   async function startOAuthConnect(provider, connection) {
     const connectionId = getPublicConnectionId(connection);
 
@@ -1482,7 +1490,7 @@
     }
   }
 
-  async function completeOAuthFlow(connectionId) {
+  async function completeOAuthFlow(connectionId, provider) {
     copiedDeviceFlowConnectionId = '';
     updateOAuthState(connectionId, {
       flowActive: false,
@@ -1492,7 +1500,8 @@
     showSettingsToast(
       t(
         'settings.providers.device_flow.success_toast',
-        'GitHub Copilot connected successfully',
+        '{provider} connected successfully',
+        providerTranslationValues(provider),
       ),
       'success',
     );
@@ -1577,24 +1586,25 @@
 
   function handleProviderAuthEvent(event) {
     const payload = event.payload ?? event;
-    const connectionStateId = findConnectionStateId(
+    const connectionContext = findConnectionContext(
       payload.provider_id,
       payload.connection_id,
     );
+    const connectionStateId = connectionContext.connectionStateId;
 
     if (!connectionStateId || !getOAuthState(connectionStateId).flowActive) {
       return;
     }
 
     if (payload.success === true) {
-      completeOAuthFlow(connectionStateId);
+      completeOAuthFlow(connectionStateId, connectionContext.provider);
       return;
     }
 
     failOAuthFlow(connectionStateId);
   }
 
-  function findConnectionStateId(providerId, connectionId) {
+  function findConnectionContext(providerId, connectionId) {
     const provider = providerItems.find((item) => item.id === providerId);
     const connections = Array.isArray(provider?.connections)
       ? provider.connections
@@ -1603,7 +1613,11 @@
       (item) => getPublicConnectionId(item) === connectionId,
     );
 
-    return connection?.id ?? '';
+    return {
+      provider,
+      connection,
+      connectionStateId: connection?.id ?? '',
+    };
   }
 
   async function refreshModelDatabase() {
@@ -2863,7 +2877,8 @@
                                   ></span>
                                   {t(
                                     'settings.providers.device_flow.waiting',
-                                    'Waiting for authorization in GitHub…',
+                                    'Waiting for {provider} authorization…',
+                                    providerTranslationValues(provider),
                                   )}
                                 </span>
                                 <button
@@ -2927,7 +2942,8 @@
                                   <h3 id={`device-flow-title-${connection.id}`}>
                                     {t(
                                       'settings.providers.device_flow.title',
-                                      'Connect GitHub Copilot',
+                                      'Connect {provider}',
+                                      providerTranslationValues(provider),
                                     )}
                                   </h3>
                                 </div>
@@ -2983,7 +2999,8 @@
                                   <span>
                                     {t(
                                       'settings.providers.device_flow.waiting',
-                                      'Waiting for authorization in GitHub…',
+                                      'Waiting for {provider} authorization…',
+                                      providerTranslationValues(provider),
                                     )}
                                   </span>
                                 </div>

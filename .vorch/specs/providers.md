@@ -4,12 +4,14 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 ## Overview
 
-`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime wires adapters with connection-scoped credentials and provider-scoped model lookup. Concrete provider behavior lives in child specs under `.vorch/specs/providers/`.
+`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime wires adapters with connection-scoped credentials and provider-scoped model lookup. Concrete provider behavior lives in child specs under `.vorch/specs/providers/`. Direct OpenAI Platform access and ChatGPT subscription access are separate providers because they use different credentials, base URLs, account headers, and runtime endpoints.
 
 ## Data Model
 
 - `AuthConfig`: auth header name, value prefix, and credential key for API-key connections.
-- `OAuthConfig`: device-flow endpoints, scopes, optional token exchange URL.
+- `OAuthConfig`: device-flow endpoints, scopes, optional token exchange URL,
+  and provider-specific device-flow metadata such as `device_flow`,
+  `verification_uri`, `redirect_uri`, and configured expiry.
 - `ConnectionConfig`: provider-local connection id, type (`api_key` or `oauth`), display label, auth metadata, optional base URL override, optional OAuth metadata.
 - `ProviderConfig`: id, name, adapter selector, base URL, connections, defaults, extra headers, and optional `models_endpoint`.
 - `ProviderRegistry`: loads provider JSON configs, rejects duplicate ids, and returns configs by id.
@@ -40,6 +42,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `providers/mistral.md` - Mistral-specific reasoning and catalog normalization
 - `providers/minimax.md` - MiniMax OpenAI-compatible endpoint, sparse catalog normalization, and thinking controls
 - `providers/github-copilot.md` - GitHub Copilot OAuth, endpoint routing, policy, and catalog metadata
+- `providers/openai-subscription.md` - OpenAI Subscription Codex OAuth, account header, model discovery, and Responses routing
 
 ## Adding A Provider
 
@@ -75,7 +78,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 ## Constraints & Gotchas
 
 - `runtime.get_adapter()` requires an explicit connection id; there is no runtime fallback to the first usable connection.
-- API-key credentials resolve at adapter creation from process env or data-dir `.env`; OAuth credentials come from `TokenStore` and may refresh during requests.
+- API-key credentials resolve at adapter creation from process env or data-dir `.env`; OAuth credentials come from `TokenStore` and may refresh during requests. Standard device flows poll token endpoints directly; provider-specific flows such as `openai_codex` can add custom polling/exchange semantics inside the auth flow engine.
 - API-key provider setup through CLI/RPC is credential-key based: callers name a
     provider and optional connection, and vBot chooses the configured env key from
     provider metadata. CLI output must not include credential values.

@@ -34,9 +34,9 @@ task-model bindings and target discovery; task-specific execution stays in
 domains such as `speech/`. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
 adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
-GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities,
-MiniMax sparse catalog/thinking handling, and error classes in addition to the
-registry.
+GitHub Copilot endpoint helpers and runtime policy, OpenAI Subscription Codex
+OAuth/Responses handling, shared HTTP utilities, MiniMax sparse catalog/thinking
+handling, and error classes in addition to the registry.
 Automation now includes both `TriggerService` for queued programmatic run starts
 and `CronService` for persisted time-based scheduling rooted at `<data_dir>/cron/`.
 
@@ -104,6 +104,7 @@ Domain-specific documentation lives in `.vorch/specs/`. A **domain** is any modu
 |---|---|---|
 | `.vorch/specs/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
 | `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview and index to provider-specific specs |
+| `.vorch/specs/providers/openai-subscription.md` | OpenAI Subscription provider | Codex OAuth, ChatGPT account header, model discovery, Responses routing |
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |

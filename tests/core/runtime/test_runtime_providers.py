@@ -17,6 +17,7 @@ from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
@@ -50,6 +51,7 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     # Assert
     ids = runtime.providers.list_ids()
     assert "openai" in ids
+    assert "openai-subscription" in ids
     assert "anthropic" in ids
     assert "openrouter" in ids
     assert "minimax" in ids
@@ -59,6 +61,7 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     """Provider configs have the expected field values."""
     # Act
     openai_config = runtime.providers.get("openai")
+    openai_subscription_config = runtime.providers.get("openai-subscription")
     openrouter_config = runtime.providers.get("openrouter")
     github_copilot_config = runtime.providers.get("github-copilot")
     minimax_config = runtime.providers.get("minimax")
@@ -73,6 +76,12 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
         "api-key",
     ]
     assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
+    assert openai_subscription_config.adapter == "openai_subscription"
+    assert openai_subscription_config.base_url == "https://chatgpt.com/backend-api"
+    assert openai_subscription_config.models_endpoint == "/codex/models"
+    openai_subscription_oauth = openai_subscription_config.get_connection("oauth").oauth
+    assert openai_subscription_oauth is not None
+    assert openai_subscription_oauth.device_flow == "openai_codex"
     assert openrouter_config.adapter == "openrouter"
     assert github_copilot_config.adapter == "github_copilot"
     assert minimax_config.adapter == "minimax"
@@ -325,6 +334,45 @@ def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runt
 
     # Assert
     assert isinstance(adapter, OpenAICompatibleAdapter)
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+
+
+def test_runtime_wires_openai_subscription_adapter_with_model_lookup(runtime: Runtime) -> None:
+    """OpenAI Subscription provider configs resolve to the Responses adapter."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai-subscription",
+        name="OpenAI Subscription",
+        adapter="openai_subscription",
+        base_url="https://chatgpt.com/backend-api",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="Test Token",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_SUBSCRIPTION_TEST_TOKEN",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"openai-subscription": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OPENAI_SUBSCRIPTION_TEST_TOKEN": "header.payload.signature"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter(
+        "openai-subscription",
+        "openai-subscription:api-key",
+    )
+
+    # Assert
+    assert isinstance(adapter, OpenAISubscriptionAdapter)
     assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
