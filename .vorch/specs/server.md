@@ -52,7 +52,9 @@ Clients call the vBot server contract; provider wire details stay behind
   API-key refresh keeps using the central static credential resolver.
 - `model.list` returns models only for providers with at least one usable connection as `{ id, provider_id, model_id, name, capabilities,
   context_window, max_output_tokens }`, where `id` uses the user-facing
-  `<provider>/<model-id-at-provider>` format. `capabilities` includes the
+  `<provider>/<model-id-at-provider>` format. `max_output_tokens` may be `null`
+  when the provider catalog did not expose a reliable per-model output limit.
+  `capabilities` includes the
   boolean chat-era fields (`vision`, `tools`, `json_mode`, `reasoning`) plus
   `input_modalities`, `output_modalities`, `supported_parameters`, and
   `task_types`. Optional filters are accepted as `provider_id`,

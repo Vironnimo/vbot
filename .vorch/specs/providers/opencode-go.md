@@ -14,6 +14,9 @@ OpenAI-compatible provider with provider-specific reasoning replay and selected 
 - Internal assistant messages with non-empty `reasoning` are echoed on the wire as `reasoning_content`.
 - `minimax-m2.7`, `minimax-m2.5`, and `qwen3.5-plus` route through an internal `AnthropicAdapter` to `POST /messages`.
 - `qwen3.6-plus` is live-verified on `/chat/completions`; all other OpenCode Go models use the default OpenAI-compatible path.
+- When a catalog entry has a known `max_output_tokens`, OpenCode Go uses it as
+  the request `max_tokens` unless the caller supplied an explicit output limit.
+  Unknown (`null`) catalog limits fall back to the provider request default.
 
 ## Reasoning Replay
 

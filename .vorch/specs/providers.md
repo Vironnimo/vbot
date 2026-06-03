@@ -54,6 +54,10 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Provider JSON uses `connections`; old single-provider `auth` JSON is not supported.
 - Runtime adapter creation injects provider-scoped `model_lookup(model_id) -> Model | None` so adapters can use normalized catalog facts without file I/O.
 - Provider defaults are applied with lower priority than caller kwargs.
+- Provider request defaults are runtime controls, not model facts. When catalog
+  discovery lacks a per-model output limit, normalized `max_output_tokens` stays
+  `null`; request shaping uses provider defaults such as `defaults.max_tokens`
+  separately. Bundled chat provider defaults use `max_tokens: 8192`.
 - Streaming adapters yield normalized vBot deltas only, never raw provider chunks.
 - Catalog normalization should preserve discoverable model modalities,
   supported request parameters, and other small runtime-relevant facts in the

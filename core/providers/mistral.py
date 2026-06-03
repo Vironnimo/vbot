@@ -16,7 +16,6 @@ from core.providers.openai_compatible import (
     _first_choice_message,
     _normalize_openai_finish_reason,
     _parse_optional_int,
-    _provider_default_max_tokens,
     _read_optional_non_empty_string,
     _read_string,
 )
@@ -78,7 +77,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 supported_parameters=tuple(supported_parameters),
             ),
             context_window=context_window,
-            max_output_tokens=_provider_default_max_tokens(defaults),
+            max_output_tokens=None,
         )
 
     def _build_payload(

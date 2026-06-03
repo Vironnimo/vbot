@@ -266,7 +266,7 @@ def test_missing_optional_copilot_limits_fall_back_without_dropping_model() -> N
     assert model.max_output_tokens == 2048
 
 
-def test_non_integer_optional_copilot_limits_use_provider_defaults() -> None:
+def test_non_integer_optional_copilot_output_limit_is_unknown() -> None:
     raw_model = {
         "id": "partial-copilot-model",
         "name": "Partial Copilot Model",
@@ -282,10 +282,10 @@ def test_non_integer_optional_copilot_limits_use_provider_defaults() -> None:
     model = GitHubCopilotAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
     assert model.context_window == 0
-    assert model.max_output_tokens == 8192
+    assert model.max_output_tokens is None
 
 
-def test_missing_or_non_object_copilot_limits_use_defaults() -> None:
+def test_missing_or_non_object_copilot_output_limits_are_unknown() -> None:
     raw_model_with_missing_limits = {
         "id": "missing-limits-model",
         "name": "Missing Limits Model",
@@ -316,9 +316,9 @@ def test_missing_or_non_object_copilot_limits_use_defaults() -> None:
     )
 
     assert missing_limits_model.context_window == 0
-    assert missing_limits_model.max_output_tokens == 8192
+    assert missing_limits_model.max_output_tokens is None
     assert null_limits_model.context_window == 0
-    assert null_limits_model.max_output_tokens == 8192
+    assert null_limits_model.max_output_tokens is None
 
 
 def test_missing_or_non_object_copilot_supports_use_empty_mapping() -> None:

@@ -158,7 +158,7 @@ class Model:
     name: str
     capabilities: Capabilities
     context_window: int
-    max_output_tokens: int
+    max_output_tokens: int | None
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:

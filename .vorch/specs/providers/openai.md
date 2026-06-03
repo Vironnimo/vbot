@@ -42,6 +42,9 @@ Direct OpenAI provider configuration and the generic OpenAI-compatible adapter b
 - Sparse OpenAI-compatible catalogs that provide only IDs remain usable as
   text-in/text-out chat catalogs. Missing optional capability facts should not
   make local providers disappear from Agent model selection.
+- Missing per-model output-token limits remain `max_output_tokens: null` in the
+  normalized catalog. The generic runtime fallback for requests without an
+  explicit limit is `8192` tokens.
 
 ## Error Classification
 

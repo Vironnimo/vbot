@@ -2094,14 +2094,14 @@ class TestNormalizeCatalogEntry:
         )
         assert "image_generation" in model.capabilities.task_types
 
-    def test_missing_optional_fields_use_defaults(self):
+    def test_missing_optional_fields_preserve_unknown_output_limit(self):
         raw_model = {"id": "minimal-model"}
 
         model = OpenAICompatibleAdapter.normalize_catalog_entry(raw_model, {"max_tokens": 8192})
 
         assert model.name == "minimal-model"
         assert model.context_window == 0
-        assert model.max_output_tokens == 8192
+        assert model.max_output_tokens is None
         assert model.capabilities.tools is True
         assert model.capabilities.json_mode is False
         assert model.capabilities.reasoning.supported is False

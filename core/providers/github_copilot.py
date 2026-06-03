@@ -37,7 +37,6 @@ from core.providers.github_copilot_responses import (
 )
 from core.providers.openai_compatible import (
     DEFAULT_CONTEXT_WINDOW,
-    DEFAULT_MAX_OUTPUT_TOKENS,
     OpenAICompatibleAdapter,
     _read_mapping,
     _read_non_empty_string,
@@ -325,16 +324,12 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     )
                 ),
             ),
-            context_window=_read_optional_token_limit(
+            context_window=_read_token_limit_or_default(
                 limits,
                 "max_context_window_tokens",
                 DEFAULT_CONTEXT_WINDOW,
             ),
-            max_output_tokens=_read_optional_token_limit(
-                limits,
-                "max_output_tokens",
-                _provider_default_max_tokens(defaults),
-            ),
+            max_output_tokens=_read_optional_token_limit(limits, "max_output_tokens"),
             metadata=_copilot_runtime_metadata(raw, capabilities, supports),
         )
 
@@ -416,29 +411,24 @@ def _copilot_runtime_metadata(
 def _read_optional_token_limit(
     data: Mapping[str, Any],
     key: str,
-    fallback: int,
-) -> int:
+) -> int | None:
     value = data.get(key)
     if isinstance(value, bool):
-        return fallback
+        return None
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdecimal():
         return int(value)
-    return fallback
+    return None
 
 
-def _provider_default_max_tokens(defaults: Mapping[str, Any] | None) -> int:
-    if defaults is None:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    max_tokens = defaults.get("max_tokens")
-    if isinstance(max_tokens, bool):
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    if isinstance(max_tokens, int):
-        return max_tokens
-    if isinstance(max_tokens, str) and max_tokens.isdecimal():
-        return int(max_tokens)
-    return DEFAULT_MAX_OUTPUT_TOKENS
+def _read_token_limit_or_default(
+    data: Mapping[str, Any],
+    key: str,
+    fallback: int,
+) -> int:
+    value = _read_optional_token_limit(data, key)
+    return value if value is not None else fallback
 
 
 def _normalize_copilot_chat_response(response: dict[str, Any]) -> dict[str, Any]:

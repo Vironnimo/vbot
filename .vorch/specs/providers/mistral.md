@@ -25,7 +25,9 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 - Persists normalized input/output modalities, supported parameters, and task
   types using chat-oriented defaults for Mistral chat models.
 - `context_window` comes from `max_context_length`.
-- Per-model max output limits are not provided by `/models`, so `max_output_tokens` falls back to provider defaults.
+- Per-model max output limits are not provided by `/models`, so normalized
+  `max_output_tokens` is `null`. Runtime requests still use provider defaults
+  such as `max_tokens: 8192`.
 
 ## Constraints & Gotchas
 

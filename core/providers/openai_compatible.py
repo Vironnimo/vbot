@@ -46,7 +46,7 @@ OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "thinking")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
 OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 DEFAULT_CONTEXT_WINDOW = 0
 CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
 MAX_OUTPUT_TOKEN_KEYS = (
@@ -161,8 +161,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             or DEFAULT_CONTEXT_WINDOW,
             max_output_tokens=_read_first_optional_int(top_provider, MAX_OUTPUT_TOKEN_KEYS)
             or _read_first_optional_int(raw, MAX_OUTPUT_TOKEN_KEYS)
-            or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS)
-            or _provider_default_max_tokens(defaults),
+            or _read_first_optional_int(architecture, MAX_OUTPUT_TOKEN_KEYS),
         )
 
     async def _build_headers(self) -> dict[str, str]:
