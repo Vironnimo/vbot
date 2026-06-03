@@ -363,13 +363,13 @@
     }
     const displaySummary = trimmedString(toolDisplayFromEvent(event)?.summary);
     if (displaySummary) {
-      return `(${displaySummary})`;
+      return displaySummary;
     }
     const label = humanReadableToolLabel(
       toolCall?.name ?? '',
       toolCall.arguments ?? {},
     );
-    return label ? `(${label})` : '';
+    return label;
   };
 
   const toolRowFromEvent = (event) => ({
@@ -657,7 +657,7 @@
   const toolArgumentSummary = (tool) => {
     const displaySummary = trimmedString(toolDisplay(tool)?.summary);
     if (displaySummary) {
-      return `(${displaySummary})`;
+      return displaySummary;
     }
 
     const argumentsValue = toolArguments(tool);
@@ -668,7 +668,7 @@
       toolNameForRunTool(tool),
       argumentsValue,
     );
-    return label ? `(${label})` : '';
+    return label;
   };
 
   const isSubAgentTool = (tool) =>
@@ -1527,6 +1527,14 @@
   </summary>
 {/snippet}
 
+{#snippet toolArgumentLine(summary)}
+  <span class="te-arg">
+    <span class="te-arg-mark">(</span>
+    <span class="te-arg-value">{summary}</span>
+    <span class="te-arg-mark">)</span>
+  </span>
+{/snippet}
+
 {#snippet userContentBlock(block)}
   {#if isTextContentBlock(block)}
     <p class="msg-body-text msg-body-text--user">{block.text}</p>
@@ -1810,9 +1818,7 @@
                         >
                         <span class="te-fn">{toolNameForRunTool(child)}</span>
                         {#if toolArgumentSummary(child)}
-                          <span class="te-arg"
-                            >{toolArgumentSummary(child)}</span
-                          >
+                          {@render toolArgumentLine(toolArgumentSummary(child))}
                         {/if}
                         {#if toolStatusLabel(child)}
                           <span
@@ -1980,9 +1986,9 @@
                     >
                     <span class="te-fn">{toolNameForEvent(item.event)}</span>
                     {#if toolArgumentForEvent(item.event)}
-                      <span class="te-arg"
-                        >{toolArgumentForEvent(item.event)}</span
-                      >
+                      {@render toolArgumentLine(
+                        toolArgumentForEvent(item.event),
+                      )}
                     {/if}
                   </summary>
                   <div class="tool-event-body">

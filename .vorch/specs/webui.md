@@ -379,6 +379,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `tool_call_started.payload.display.summary` when available. Legacy
     argument-label fallbacks exist only for history or old events without a
     display payload; empty summaries render no parenthesized argument text.
+    Long summaries may truncate only the argument value itself; fixed row
+    markers such as the closing parenthesis and duration/status text must remain
+    visible.
   - Renders Assistant Run duration in the run header and completed tool-call
     duration in tool rows. It prefers `timing.duration_ms` from live events or
     persisted history and only reconstructs from event timestamps as a fallback.

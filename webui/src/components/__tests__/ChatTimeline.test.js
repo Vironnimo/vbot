@@ -1599,6 +1599,67 @@ describe('ChatTimeline', () => {
     );
   });
 
+  it('keeps long bash command truncation separate from closing marker and timing', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-long-bash-command',
+    );
+    const command =
+      'powershell -Command "Get-Item C:\\Users\\Viro\\.vbot\\workspace-main\\todo-v2\\* | Select-Object FullName,Length,LastWriteTime"';
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-long-bash-command',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-long-bash-command',
+          index: 0,
+          name: 'bash',
+          arguments: { command },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-long-bash-command',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-long-bash-command',
+          index: 0,
+          name: 'bash',
+        },
+        result: {
+          ok: true,
+          data: { content: 'listed files' },
+        },
+        timing: {
+          duration_ms: 1234,
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const summaryLine = document.querySelector('.tool-event-line');
+    const argumentValue = summaryLine.querySelector('.te-arg-value');
+    const argumentMarkers = summaryLine.querySelectorAll('.te-arg-mark');
+
+    expect(argumentValue.textContent).toBe(command);
+    expect(argumentMarkers[0].textContent).toBe('(');
+    expect(argumentMarkers[1].textContent).toBe(')');
+    expect(summaryLine.querySelector('.te-time').textContent).toContain('1.2s');
+  });
+
   it('renders Args detail as compact inline value', () => {
     const sessionState = ensureSessionState(
       createChatState(),
