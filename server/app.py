@@ -7,8 +7,8 @@ import json
 import logging
 import os
 from collections import OrderedDict
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
@@ -723,14 +723,15 @@ def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | N
     return None
 
 
-async def _sse_run_events(run: Any, *, after_sequence: int = 0) -> AsyncIterator[str]:
-    async for event in run.subscribe(after_sequence=after_sequence):
-        data = _remove_opaque_provider_metadata(event.to_dict())
-        yield (
-            f"id: {event.sequence}\n"
-            f"event: {event.type}\n"
-            f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
-        )
+async def _sse_run_events(run: Any, *, after_sequence: int = 0) -> AsyncGenerator[str, None]:
+    async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
+        async for event in events:
+            data = _remove_opaque_provider_metadata(event.to_dict())
+            yield (
+                f"id: {event.sequence}\n"
+                f"event: {event.type}\n"
+                f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
+            )
 
 
 def _remove_opaque_provider_metadata(value: Any) -> Any:

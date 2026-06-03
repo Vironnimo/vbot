@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.runs import Run
 from core.tools import register_read_tool
-from server.app import create_app
+from server.app import _sse_run_events, create_app
 from tests.server.test_rpc import StubAdapter, StubRuntime
 
 EXPECTED_SSE_EVENT_NAMES = [
@@ -170,6 +174,29 @@ def test_sse_endpoint_clamps_malformed_sequence_controls(tmp_path: Path) -> None
 
     assert _event_names(malformed_response.text) == EXPECTED_SSE_EVENT_NAMES
     assert _event_names(negative_response.text) == EXPECTED_SSE_EVENT_NAMES
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_close_removes_run_subscriber() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    stream = _sse_run_events(run)
+    next_event = asyncio.create_task(_read_next_sse_event(stream))
+
+    await asyncio.sleep(0)
+    assert len(run._subscribers) == 1
+
+    run.emit("visible", {"content": "hello"})
+    rendered_event = await next_event
+    assert "event: visible" in rendered_event
+    assert len(run._subscribers) == 1
+
+    await stream.aclose()
+
+    assert len(run._subscribers) == 0
+
+
+async def _read_next_sse_event(stream: AsyncIterator[str]) -> str:
+    return await anext(stream)
 
 
 def _stream_test_run(
