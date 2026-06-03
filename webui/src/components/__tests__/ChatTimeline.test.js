@@ -3108,6 +3108,27 @@ describe('ChatTimeline', () => {
       sequence: 3,
       payload: { tool_call_id: 'call-one', data: 'warn\n' },
     });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-tool-output',
+      sequence: 4,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+        },
+        result: {
+          ok: true,
+          data: {
+            status: 'completed',
+            exit_code: 0,
+            output: 'hello\nwarn\n',
+            truncated: false,
+          },
+        },
+      },
+    });
 
     mountedComponent = mount(ChatTimeline, {
       target: document.body,
@@ -3122,6 +3143,75 @@ describe('ChatTimeline', () => {
     expect(document.body.textContent).toContain('hello');
     expect(document.body.textContent).toContain('Stderr');
     expect(document.body.textContent).toContain('warn');
+
+    const resultRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Result',
+    );
+    const resultText = resultRow.querySelector('.teb-code').textContent;
+    expect(resultText).toContain('status: completed');
+    expect(resultText).toContain('exit_code: 0');
+    expect(resultText).not.toContain('hello');
+    expect(resultText).not.toContain('warn');
+  });
+
+  it('renders bash result output when no streamed output is available', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-bash-result-output',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-bash-result-output',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+          arguments: { command: 'printf hello' },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-bash-result-output',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-one',
+          index: 0,
+          name: 'bash',
+        },
+        result: {
+          ok: true,
+          data: {
+            status: 'completed',
+            exit_code: 0,
+            output: 'hello from history\n',
+            truncated: false,
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const resultRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (el) => el.querySelector('.teb-label')?.textContent === 'Result',
+    );
+
+    expect(resultRow.querySelector('.teb-code').textContent).toContain(
+      'hello from history',
+    );
   });
 
   it('renders a stable-sized thinking chevron and only rotates it when expanded', () => {

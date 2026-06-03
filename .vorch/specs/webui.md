@@ -407,6 +407,12 @@ does not talk to providers directly. The product presents an Agent-first chat su
   - Does not render streamed tool-call preparation as a standalone timeline
     card. Tool-call deltas stay inside the live assistant-run model until the
     real tool row is available.
+  - Renders live Bash stdout/stderr deltas in dedicated tool detail rows. When
+    the final Bash result also includes `data.output`, the Result row suppresses
+    that duplicate output if live stdout/stderr are already present and shows
+    only completion metadata such as status, exit code, and truncation. Reloaded
+    history without live stdout/stderr still shows `data.output` in the Result
+    row.
   - Renders automatic follow-up Runs triggered by Sub-Agent batch completion as
     distinct Assistant Run blocks with their normal Assistant title bar instead
     of adding a separate inline divider. History grouping must split consecutive

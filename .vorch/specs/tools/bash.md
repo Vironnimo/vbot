@@ -7,7 +7,12 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 - Tool name: `bash`
 - Registration: `register_bash_tool(registry, process_manager, trigger_service=None)`
 - Schema: required `command`; optional `workdir`, `env`, `yield_after`, `background`, and `timeout`; `additionalProperties: false`.
-- Foreground success returns completion data; background runs return a `session_id` for the `process` tool.
+- Foreground success returns `{ status, exit_code, output, truncated }`, where
+  `output` is the combined stdout/stderr process log. The final tool result does
+  not include separate `stdout` or `stderr` fields; live stdout/stderr remain
+  SSE-only Run events.
+- Background runs return a `session_id` for the `process` tool plus combined
+  `output` captured before backgrounding.
 - Display: summary field `command`.
 
 ## Conventions
