@@ -10,7 +10,8 @@ import httpx
 
 from core.providers._http_shared import wrap_network_error
 from core.providers.errors import ProviderAuthError, ProviderError, ProviderRateLimitError
-from core.providers.providers import OAuthConfig
+from core.providers.openai_subscription_auth import openai_subscription_token_extra
+from core.providers.providers import OPENAI_CODEX_DEVICE_FLOW, OAuthConfig
 from core.providers.token_store import OAuthToken, TokenStore
 from core.utils.retry import retry_async
 
@@ -86,24 +87,49 @@ class OAuthTokenGetter:
     async def _refresh_expired_token(self, token: OAuthToken) -> str:
         token_exchange_url = self._oauth_config.token_exchange_url
         github_oauth_token = token.extra.get(GITHUB_OAUTH_TOKEN_EXTRA_KEY)
-        if not token_exchange_url or not github_oauth_token:
-            raise ProviderAuthError("OAuth token expired — please reconnect")
+        if token_exchange_url and github_oauth_token:
+            return await self._refresh_token_exchange(token, token_exchange_url, github_oauth_token)
+        if token.refresh_token:
+            return await self._refresh_oauth_token(token)
+        raise ProviderAuthError("OAuth token expired — please reconnect")
 
+    async def _refresh_token_exchange(
+        self,
+        token: OAuthToken,
+        token_exchange_url: str,
+        github_oauth_token: str,
+    ) -> str:
         now = datetime.now(UTC)
         response_data = await retry_async(
             self._exchange_token,
             token_exchange_url,
             github_oauth_token,
         )
-        access_token = response_data.get("token")
-        if not isinstance(access_token, str) or not access_token:
-            raise ProviderAuthError("OAuth token refresh failed — please reconnect")
-
+        access_token = _required_token_string(response_data.get("token"))
         refreshed_token = OAuthToken(
             access_token=access_token,
             refresh_token=token.refresh_token,
             expires_at=_parse_exchange_expiry(response_data.get("expires_at"), now),
             extra={**token.extra, GITHUB_OAUTH_TOKEN_EXTRA_KEY: github_oauth_token},
+        )
+        self._token_store.save(self._provider_id, self._local_connection_id, refreshed_token)
+        return refreshed_token.access_token
+
+    async def _refresh_oauth_token(self, token: OAuthToken) -> str:
+        if not token.refresh_token:
+            raise ProviderAuthError("OAuth token expired — please reconnect")
+        now = datetime.now(UTC)
+        response_data = await retry_async(self._post_refresh_token, token.refresh_token)
+        access_token = _required_token_string(response_data.get("access_token"))
+        refresh_token = response_data.get("refresh_token")
+        extra = dict(token.extra)
+        if self._oauth_config.device_flow == OPENAI_CODEX_DEVICE_FLOW:
+            extra.update(openai_subscription_token_extra(access_token))
+        refreshed_token = OAuthToken(
+            access_token=access_token,
+            refresh_token=refresh_token if isinstance(refresh_token, str) else token.refresh_token,
+            expires_at=_parse_oauth_expiry(response_data, now),
+            extra=extra,
         )
         self._token_store.save(self._provider_id, self._local_connection_id, refreshed_token)
         return refreshed_token.access_token
@@ -141,6 +167,37 @@ class OAuthTokenGetter:
             raise ProviderAuthError("OAuth token refresh failed — please reconnect")
         return data
 
+    async def _post_refresh_token(self, refresh_token: str) -> dict[str, object]:
+        client = self._client
+        close_client = False
+        if client is None:
+            client = httpx.AsyncClient(timeout=60.0)
+            close_client = True
+        try:
+            try:
+                response = await client.post(
+                    self._oauth_config.token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "client_id": self._oauth_config.client_id,
+                    },
+                    headers={"Accept": "application/json"},
+                )
+            except httpx.TimeoutException as exc:
+                raise wrap_network_error(exc) from exc
+            except httpx.ConnectError as exc:
+                raise wrap_network_error(exc) from exc
+        finally:
+            if close_client:
+                await client.aclose()
+
+        _classify_token_exchange_status(response.status_code, response.text)
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+        return data
+
 
 def _is_expiring(token: OAuthToken) -> bool:
     if token.expires_at is None:
@@ -160,6 +217,34 @@ def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
+    expires_at = data.get("expires_at")
+    if isinstance(expires_at, str) and expires_at:
+        try:
+            parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
+
+    expires_in = data.get("expires_in")
+    if isinstance(expires_in, bool):
+        expires_in = None
+    if isinstance(expires_in, int):
+        return now + timedelta(seconds=expires_in)
+    if isinstance(expires_in, str) and expires_in.isdecimal():
+        return now + timedelta(seconds=int(expires_in))
+    return now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
+
+
+def _required_token_string(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ProviderAuthError("OAuth token refresh failed — please reconnect")
+    return value
 
 
 def _classify_token_exchange_status(status_code: int, response_body: str) -> None:

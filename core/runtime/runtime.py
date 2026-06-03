@@ -29,6 +29,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
@@ -96,6 +97,7 @@ _ADAPTER_MAP: dict[
     type[ProviderAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
+    "openai_subscription": OpenAISubscriptionAdapter,
     "openrouter": OpenRouterAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,

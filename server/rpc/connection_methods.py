@@ -297,6 +297,7 @@ async def _connect_provider(state: Any, params: JsonObject) -> JsonObject:
                 session.interval,
                 session.expires_in,
                 on_complete,
+                user_code=session.user_code,
             )
         )
         poll_task.add_done_callback(_on_device_flow_poll_done)

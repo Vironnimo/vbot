@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models"
+OPENAI_SUBSCRIPTION_MODELS_URL = "https://chatgpt.com/backend-api/codex/models"
 OPENCODE_GO_MODELS_URL = "https://opencode-go.example/v1/models"
 STUB_DISCOVERY_MODELS_URL = "https://stub-provider.example/v1/models"
 API_KEY = "test-openrouter-key"
@@ -138,6 +140,33 @@ def raw_openrouter_model(
     }
 
 
+@pytest.fixture()
+def openai_subscription_config() -> ProviderConfig:
+    return ProviderConfig(
+        id="openai-subscription",
+        name="OpenAI Subscription",
+        adapter="openai_subscription",
+        base_url="https://chatgpt.com/backend-api",
+        connections=[
+            ConnectionConfig(
+                id="oauth",
+                type="oauth",
+                label="ChatGPT Plus/Pro",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                ),
+            )
+        ],
+        defaults={"max_tokens": 8192},
+        extra_headers={
+            "OpenAI-Beta": "responses=experimental",
+            "originator": "vbot",
+        },
+        models_endpoint="/codex/models",
+    )
+
+
 def model_data(name: str = "Model Name") -> dict:
     return {
         "name": name,
@@ -154,6 +183,18 @@ def model_data(name: str = "Model Name") -> dict:
         "context_window": 32000,
         "max_output_tokens": 4096,
     }
+
+
+def jwt_with_openai_account(account_id: str = "acct_vbot") -> str:
+    payload = {
+        "https://api.openai.com/auth": {
+            "chatgpt_account_id": account_id,
+        }
+    }
+    encoded_payload = (
+        base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
+    )
+    return f"header.{encoded_payload}.signature"
 
 
 class TestApplyOverrides:
@@ -271,6 +312,49 @@ class TestPassthroughFilters:
 
 
 class TestRefreshModels:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_supports_openai_subscription_discovery_headers(
+        self,
+        tmp_path: Path,
+        openai_subscription_config: ProviderConfig,
+    ):
+        resources_dir = tmp_path / "resources"
+        access_token = jwt_with_openai_account("acct_openai")
+        route = respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": "gpt-5-codex", "name": "GPT-5 Codex"}]},
+            )
+        )
+
+        result = await refresh_models(
+            openai_subscription_config,
+            access_token,
+            resources_dir,
+            credential_connection=openai_subscription_config.connections[0],
+        )
+
+        registry = ModelRegistry.load(resources_dir)
+        model = registry.get("openai-subscription", "gpt-5-codex")
+        request_headers = route.calls.last.request.headers
+        assert result["provider_id"] == "openai-subscription"
+        assert result["model_count"] == 1
+        assert model.name == "GPT-5 Codex"
+        assert model.capabilities.tools is True
+        assert model.capabilities.json_mode is True
+        assert model.capabilities.reasoning.supported is True
+        assert set(model.capabilities.supported_parameters) == {
+            "tools",
+            "response_format",
+            "reasoning",
+            "parallel_tool_calls",
+        }
+        assert request_headers["Authorization"] == f"Bearer {access_token}"
+        assert request_headers["chatgpt-account-id"] == "acct_openai"
+        assert request_headers["OpenAI-Beta"] == "responses=experimental"
+        assert request_headers["originator"] == "vbot"
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_refresh_models_supports_opencode_go_discovery_adapter(

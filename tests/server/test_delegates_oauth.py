@@ -19,7 +19,7 @@ from server.events import PROVIDER_AUTH_COMPLETED_EVENT, ServerEventBus
 class StubDeviceFlowEngine:
     def __init__(self) -> None:
         self.started: list[tuple[str, str, OAuthConfig]] = []
-        self.polls: list[tuple[str, str, OAuthConfig, str, int, int, Any]] = []
+        self.polls: list[tuple[str, str, OAuthConfig, str, int, int, Any, str]] = []
         self.cancelled: list[tuple[str, str]] = []
         self._active_flows: dict[tuple[str, str], asyncio.Task[None]] = {}
 
@@ -47,6 +47,7 @@ class StubDeviceFlowEngine:
         interval: int,
         expires_in: int,
         on_complete: Any,
+        user_code: str = "",
     ) -> None:
         self.polls.append(
             (
@@ -57,6 +58,7 @@ class StubDeviceFlowEngine:
                 interval,
                 expires_in,
                 on_complete,
+                user_code,
             )
         )
 
@@ -74,6 +76,7 @@ class FailingPollDeviceFlowEngine(StubDeviceFlowEngine):
         interval: int,
         expires_in: int,
         on_complete: Any,
+        user_code: str = "",
     ) -> None:
         await super()._poll_for_token(
             provider_id,
@@ -83,6 +86,7 @@ class FailingPollDeviceFlowEngine(StubDeviceFlowEngine):
             interval,
             expires_in,
             on_complete,
+            user_code=user_code,
         )
         raise RuntimeError("poll crashed")
 

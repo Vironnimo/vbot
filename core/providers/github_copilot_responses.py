@@ -11,10 +11,9 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from core.providers.errors import ProviderError
-from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 
 RESPONSES_DONE_MARKER = "[DONE]"
 REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content"
@@ -25,6 +24,28 @@ REASONING_SUMMARY_DELTA_EVENTS = {
 }
 RESPONSES_ERROR_EVENTS = {"error", "response.failed", "response.incomplete"}
 _REASONING_META_KEYS = ("reasoning_items", "response_output")
+
+
+class ResponsesRequestPolicy(Protocol):
+    """Provider policy surface needed by the shared Responses payload builder."""
+
+    @property
+    def supports_tools(self) -> bool: ...
+
+    @property
+    def supports_parallel_tool_calls(self) -> bool: ...
+
+    @property
+    def supports_structured_outputs(self) -> bool: ...
+
+    @property
+    def allows_any_reasoning_controls(self) -> bool: ...
+
+    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]: ...
+
+    def closest_reasoning_effort(self, effort: Any) -> str | None: ...
+
+    def supports_request_parameter(self, parameter_name: str) -> bool: ...
 
 
 @dataclass
@@ -42,7 +63,7 @@ def build_responses_payload(
     messages: list[dict[str, Any]],
     *,
     model_id: str,
-    policy: GitHubCopilotModelPolicy,
+    policy: ResponsesRequestPolicy,
     stream: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -200,7 +221,7 @@ def _is_reasoning_item(item: Any) -> bool:
 def _apply_responses_tools(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
+    policy: ResponsesRequestPolicy,
 ) -> None:
     tools = request_kwargs.pop("tools", None)
     tool_choice = request_kwargs.pop("tool_choice", None)
@@ -233,7 +254,7 @@ def _to_responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
 def _apply_responses_reasoning(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
+    policy: ResponsesRequestPolicy,
 ) -> None:
     reasoning = request_kwargs.pop("reasoning", None)
     effort = request_kwargs.pop("reasoning_effort", None) or request_kwargs.pop(
@@ -255,7 +276,7 @@ def _apply_responses_reasoning(
 def _apply_responses_text_format(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
+    policy: ResponsesRequestPolicy,
 ) -> None:
     response_format = request_kwargs.pop("response_format", None)
     text = request_kwargs.pop("text", None)
@@ -274,7 +295,7 @@ def _apply_responses_text_format(
 def _apply_remaining_kwargs(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
-    policy: GitHubCopilotModelPolicy,
+    policy: ResponsesRequestPolicy,
 ) -> None:
     request_kwargs.pop("include", None)
     request_kwargs.pop("cache_control", None)
@@ -295,7 +316,7 @@ def _apply_remaining_kwargs(
         payload["parallel_tool_calls"] = parallel_tool_calls
 
 
-def _supports_responses_temperature(policy: GitHubCopilotModelPolicy) -> bool:
+def _supports_responses_temperature(policy: ResponsesRequestPolicy) -> bool:
     """Return whether this Copilot Responses route should forward ``temperature``.
 
     GPT-5 reasoning models on the Responses API reject temperature changes, so

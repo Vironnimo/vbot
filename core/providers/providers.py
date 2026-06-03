@@ -42,6 +42,9 @@ class AuthConfig:
 
 VALID_CONNECTION_TYPES = frozenset({"api_key", "oauth"})
 VALID_OAUTH_FLOWS = frozenset({"device"})
+STANDARD_DEVICE_FLOW = "oauth2"
+OPENAI_CODEX_DEVICE_FLOW = "openai_codex"
+VALID_DEVICE_FLOWS = frozenset({STANDARD_DEVICE_FLOW, OPENAI_CODEX_DEVICE_FLOW})
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,10 @@ class OAuthConfig:
     token_url: str
     scopes: list[str]
     token_exchange_url: str | None = None
+    device_flow: str = STANDARD_DEVICE_FLOW
+    verification_uri: str | None = None
+    redirect_uri: str | None = None
+    expires_in: int | None = None
 
 
 @dataclass(frozen=True)
@@ -302,6 +309,22 @@ class ProviderRegistry:
                 f"Unknown OAuth flow '{flow}' for provider '{provider_id}' connection '{local_id}'"
             )
 
+        device_flow = oauth_data.get("device_flow", STANDARD_DEVICE_FLOW)
+        if not isinstance(device_flow, str) or device_flow not in VALID_DEVICE_FLOWS:
+            raise ConfigError(
+                f"Unknown OAuth device_flow '{device_flow}' for provider "
+                f"'{provider_id}' connection '{local_id}'"
+            )
+
+        expires_in = oauth_data.get("expires_in")
+        if expires_in is not None and (
+            isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0
+        ):
+            raise ConfigError(
+                f"Provider '{provider_id}' connection '{local_id}' OAuth expires_in "
+                "must be a positive integer"
+            )
+
         return OAuthConfig(
             flow=flow,
             client_id=oauth_data["client_id"],
@@ -309,4 +332,8 @@ class ProviderRegistry:
             token_url=oauth_data["token_url"],
             scopes=list(oauth_data.get("scopes", [])),
             token_exchange_url=oauth_data.get("token_exchange_url"),
+            device_flow=device_flow,
+            verification_uri=oauth_data.get("verification_uri"),
+            redirect_uri=oauth_data.get("redirect_uri"),
+            expires_in=expires_in,
         )

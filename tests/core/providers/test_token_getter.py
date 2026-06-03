@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -18,6 +21,7 @@ from core.providers.token_store import OAuthToken, TokenStore
 PROVIDER_ID = "github-copilot"
 CONNECTION_ID = "oauth"
 TOKEN_EXCHANGE_URL = "https://api.github.com/copilot_internal/v2/token"
+OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
 
 class StubAsyncClient:
@@ -50,6 +54,29 @@ def oauth_config() -> OAuthConfig:
         scopes=["read:user"],
         token_exchange_url=TOKEN_EXCHANGE_URL,
     )
+
+
+def _openai_oauth_config() -> OAuthConfig:
+    return OAuthConfig(
+        flow="device",
+        client_id="openai-client-id",
+        device_auth_url="https://auth.openai.com/api/accounts/deviceauth/usercode",
+        token_url=OPENAI_TOKEN_URL,
+        scopes=["openid", "profile", "email", "offline_access"],
+        device_flow="openai_codex",
+    )
+
+
+def _jwt_with_account(account_id: str = "acct_vbot") -> str:
+    payload = {
+        "https://api.openai.com/auth": {
+            "chatgpt_account_id": account_id,
+        }
+    }
+    encoded_payload = (
+        base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
+    )
+    return f"header.{encoded_payload}.signature"
 
 
 @pytest.mark.asyncio
@@ -127,6 +154,61 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
     assert stored.access_token == "fresh-copilot-token"
     assert stored.expires_at == expires_at
     assert stored.extra["github_oauth_token"] == "github-oauth-secret"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_oauth_token_getter_refreshes_expired_openai_subscription_token(
+    tmp_path: Path,
+) -> None:
+    """Expired OpenAI Subscription tokens refresh through the OAuth refresh_token grant."""
+
+    token_store = TokenStore(tmp_path)
+    token_store.save(
+        "openai-subscription",
+        CONNECTION_ID,
+        OAuthToken(
+            access_token=_jwt_with_account("acct_old"),
+            refresh_token="refresh-secret",
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+            extra={"chatgpt_account_id": "acct_old"},
+        ),
+    )
+    refreshed_access_token = _jwt_with_account("acct_new")
+    route = respx.post(OPENAI_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": refreshed_access_token,
+                "refresh_token": "new-refresh-secret",
+                "expires_in": 120,
+            },
+        )
+    )
+    getter = OAuthTokenGetter(
+        token_store,
+        "openai-subscription",
+        CONNECTION_ID,
+        _openai_oauth_config(),
+    )
+
+    token = await getter()
+
+    assert token == refreshed_access_token
+    assert route.call_count == 1
+    refresh_request = parse_qs(route.calls.last.request.content.decode("utf-8"))
+    assert refresh_request == {
+        "grant_type": ["refresh_token"],
+        "refresh_token": ["refresh-secret"],
+        "client_id": ["openai-client-id"],
+    }
+    stored = token_store.load("openai-subscription", CONNECTION_ID)
+    assert stored is not None
+    assert stored.access_token == refreshed_access_token
+    assert stored.refresh_token == "new-refresh-secret"
+    assert stored.expires_at is not None
+    assert stored.expires_at > datetime.now(UTC)
+    assert stored.extra == {"chatgpt_account_id": "acct_new"}
 
 
 @pytest.mark.asyncio

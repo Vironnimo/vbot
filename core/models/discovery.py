@@ -21,6 +21,7 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
+from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
@@ -88,6 +89,7 @@ async def refresh_models(
             url,
             provider_config,
             credential_value,
+            adapter_class,
             credential_connection,
         )
 
@@ -104,6 +106,7 @@ async def refresh_models(
                         supplementary_url,
                         provider_config,
                         credential_value,
+                        adapter_class,
                         credential_connection,
                     )
                 except (httpx.HTTPError, ValueError) as exc:
@@ -211,9 +214,15 @@ async def _fetch_raw_models(
     url: str,
     provider_config: ProviderConfig,
     credential_value: str,
+    adapter_class: Any,
     credential_connection: ConnectionConfig | None = None,
 ) -> tuple[Any, list[Mapping[str, Any]]]:
-    headers = _build_headers(provider_config, credential_value, credential_connection)
+    headers = _build_headers(
+        provider_config,
+        credential_value,
+        adapter_class,
+        credential_connection,
+    )
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(url, headers=headers)
         response.raise_for_status()
@@ -232,6 +241,7 @@ async def _fetch_raw_models(
 def _build_headers(
     provider_config: ProviderConfig,
     credential_value: str,
+    adapter_class: Any,
     credential_connection: ConnectionConfig | None = None,
 ) -> dict[str, str]:
     headers = dict(provider_config.extra_headers or {})
@@ -239,6 +249,9 @@ def _build_headers(
     if connection is not None:
         auth = connection.auth
         headers[auth.header] = f"{auth.prefix}{credential_value}"
+    discovery_headers = getattr(adapter_class, "discovery_headers", None)
+    if callable(discovery_headers):
+        return dict(discovery_headers(provider_config, credential_value, headers))
     return headers
 
 
@@ -396,4 +409,5 @@ _DISCOVERY_ADAPTER_MAP = {
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,
+    "openai_subscription": OpenAISubscriptionAdapter,
 }
