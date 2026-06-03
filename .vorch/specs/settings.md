@@ -30,6 +30,10 @@ Storage still owns raw `settings.json` file I/O, process-local locked
 read-modify-write transactions, atomic writes, prompt fragments, and normalized
 persistence helpers. Server delegates own RPC error mapping and side effects
 such as reloading skills after skill directory changes.
+The raw `settings.set_key` RPC validates the merged raw `settings.json` mapping
+with `validate_settings_data()` before persisting; warnings such as unknown
+top-level keys are allowed, but schema errors for known sections are rejected as
+RPC `invalid_request`.
 
 ## Interfaces
 

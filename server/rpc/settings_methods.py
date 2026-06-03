@@ -6,7 +6,7 @@ from typing import Any
 
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
-from core.settings import SettingsValidationError, parse_settings_update
+from core.settings import SettingsValidationError, parse_settings_update, validate_settings_data
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -41,6 +41,7 @@ def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
 
     def set_key(settings: JsonObject) -> JsonObject:
         settings[key] = value
+        _validate_raw_settings(settings)
         return dict(settings)
 
     try:
@@ -49,6 +50,18 @@ def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
     return {"settings": settings}
+
+
+def _validate_raw_settings(settings: JsonObject) -> None:
+    errors = [
+        diagnostic
+        for diagnostic in validate_settings_data(settings)
+        if diagnostic.severity == "error"
+    ]
+    if not errors:
+        return
+    details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in errors)
+    raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid settings: {details}")
 
 
 def _get_settings(state: Any, params: JsonObject) -> JsonObject:
