@@ -30,6 +30,11 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 ## Current Storage Contract
 
 - Session files use `.jsonl` and are append-only during normal chat operation.
+- Session history may include `role: "tool"` messages with optional `timing`
+  and `role: "run_summary"` annotations with `run_id`, terminal `status`, and
+  `timing`. Run summaries are append-only records that annotate the preceding
+  Assistant Run for reload/UI display; they are not provider-visible chat
+  messages.
 - Metadata sidecars use `<session-id>.meta.json` beside the session file.
 - Session IDs must be 1-128 ASCII letters, digits, hyphen, or underscore and must not start with punctuation.
 - Public/server-facing session identifiers are UUID strings. Internal helpers may accept custom IDs, but must validate them before any path construction.

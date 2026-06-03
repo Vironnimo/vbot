@@ -81,6 +81,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
     queued messages. Visible timeline aggregation groups Run events into one
     `assistant_run` item per Run so thinking, tool lifecycle rows, and assistant
     output render together.
+  - Live terminal Run events and persisted `role: "run_summary"` messages merge
+    `timing.duration_ms` into the corresponding `assistant_run` item. Live
+    `tool_call_result.payload.timing` and persisted tool-message `timing` merge
+    into the matching tool row, so reload history and live streaming render the
+    same durations.
   - Live `model_fallback_activated` Run events are aggregated into the current
     `assistant_run` as a `model_fallback` child item so the switch appears inline
     with the rest of the Run rather than as a standalone chat message.
@@ -374,6 +379,10 @@ does not talk to providers directly. The product presents an Agent-first chat su
     `tool_call_started.payload.display.summary` when available. Legacy
     argument-label fallbacks exist only for history or old events without a
     display payload; empty summaries render no parenthesized argument text.
+  - Renders Assistant Run duration in the run header and completed tool-call
+    duration in tool rows. It prefers `timing.duration_ms` from live events or
+    persisted history and only reconstructs from event timestamps as a fallback.
+    Cancelled tool rows continue to show the cancelled status label.
   - Renders `subagent` and `subagent_result` tool calls with a Sub-Agent label, target Agent identifier, compact argument preview, status text, and a session navigation link when the tool result includes `agent_id` and `session_id`. When a later `subagent_result` completes the same child session, the original `subagent` spawn row should no longer appear stuck in `running` state.
   - Merges live `subagent_session_started` Run events into the matching
     `subagent` tool row so `view session` is available while a blocking child

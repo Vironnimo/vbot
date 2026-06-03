@@ -197,6 +197,7 @@ def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
     assert [message["role"] for message in history_response.json()["result"]["messages"]] == [
         "user",
         "assistant",
+        "run_summary",
     ]
 
 

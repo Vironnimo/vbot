@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 import uuid
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
@@ -306,12 +307,15 @@ class Run:
         self.emit(RUN_FAILED_EVENT, payload)
         self._done.set()
 
-    def mark_cancelled(self) -> None:
+    def mark_cancelled(self, payload_extras: JsonObject | None = None) -> None:
         """Move the run to cancelled and publish the terminal event."""
         if self.status != RunStatus.RUNNING:
             return
         self.status = RunStatus.CANCELLED
-        self.emit(RUN_CANCELLED_EVENT, {"status": self.status.value})
+        payload: JsonObject = {"status": self.status.value}
+        if payload_extras:
+            payload.update(payload_extras)
+        self.emit(RUN_CANCELLED_EVENT, payload)
         self._done.set()
 
 
@@ -483,22 +487,36 @@ class ChatRunManager:
         session_key: tuple[str, str],
         executor: RunExecutor,
     ) -> None:
+        timing_started_at = datetime.now(UTC)
+        timing_started_perf = time.perf_counter()
+
+        def terminal_timing() -> JsonObject:
+            completed_at = datetime.now(UTC)
+            duration_ms = max(0, round((time.perf_counter() - timing_started_perf) * 1000))
+            return {
+                "started_at": timing_started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "duration_ms": duration_ms,
+            }
+
         try:
             run.emit(RUN_STARTED_EVENT, {"status": RunStatus.RUNNING.value})
             result = await executor(run)
             if run.cancel_requested:
-                run.mark_cancelled()
+                run.mark_cancelled(payload_extras={"timing": terminal_timing()})
                 return
             result_usage = getattr(result, "usage", None) if result is not None else None
-            payload_extras = {"usage": result_usage} if result_usage else None
+            payload_extras: JsonObject = {"timing": terminal_timing()}
+            if result_usage:
+                payload_extras["usage"] = result_usage
             run.mark_completed(result, payload_extras=payload_extras)
         except asyncio.CancelledError:
-            run.mark_cancelled()
+            run.mark_cancelled(payload_extras={"timing": terminal_timing()})
         except BaseException as exc:
             if run.cancel_requested:
-                run.mark_cancelled()
+                run.mark_cancelled(payload_extras={"timing": terminal_timing()})
                 return
-            run.mark_failed(exc)
+            run.mark_failed(exc, payload_extras={"timing": terminal_timing()})
         finally:
             async with self._lock:
                 if self._active_by_session.get(session_key) is run:

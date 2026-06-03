@@ -118,6 +118,73 @@ describe('ChatTimeline', () => {
     expect(dateSeparators[1].textContent.trim()).toBe('Today');
   });
 
+  it('renders persisted run and tool durations after history load', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-timing',
+    );
+    const timing = {
+      started_at: '2026-05-03T14:30:01+00:00',
+      completed_at: '2026-05-03T14:30:02.250+00:00',
+      duration_ms: 1250,
+    };
+    loadHistory(sessionState, [
+      {
+        id: 'user-one',
+        role: 'user',
+        content: 'Run tool',
+        timestamp: '2026-05-03T14:30:00+00:00',
+      },
+      {
+        id: 'assistant-tool',
+        role: 'assistant',
+        content: null,
+        timestamp: '2026-05-03T14:30:00+00:00',
+        tool_calls: [{ id: 'call-one', name: 'read', arguments: {} }],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-one',
+        name: 'read',
+        content: '{"ok":true,"error":null,"data":{},"artifacts":[]}',
+        timestamp: '2026-05-03T14:30:02+00:00',
+        timing,
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'Done',
+        timestamp: '2026-05-03T14:30:03+00:00',
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+        timestamp: '2026-05-03T14:30:03+00:00',
+        timing,
+      },
+    ]);
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.assistant-run').textContent).toContain(
+      '1.3s',
+    );
+    expect(document.querySelector('.run-tool-event').textContent).toContain(
+      '1.3s',
+    );
+  });
+
   it('loads older history at the top and preserves the scroll anchor', async () => {
     const sessionState = ensureSessionState(
       createChatState(),

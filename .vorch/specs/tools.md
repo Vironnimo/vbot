@@ -12,6 +12,10 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolDisplay`: per-invocation presentation metadata. It builds `{ summary, hidden_argument_keys }` for `tool_call_started` events without adding provider-visible parameters.
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, plus emit/cancel/note/skill hooks.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
+- Tool timing is not part of the result envelope. Completed tool calls expose a
+  sibling `timing` object on `tool_call_result` Run events and on persisted
+  `role: "tool"` ChatMessages: `{ started_at, completed_at, duration_ms }`.
+  Durations are non-negative milliseconds measured with a monotonic clock.
 - `ToolCall`: one requested tool invocation with stable id, name, and arguments; execution index is assigned when scheduling a sibling batch.
 
 ## Interfaces
@@ -63,6 +67,8 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - Display labels are not tool parameters. Do not add generic arguments such as `description` only to affect UI chrome; use `ToolDisplay`.
 - Tool result failures should be returned as failure envelopes where possible instead of raising through the Run.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
+- Tool timing metadata must never be forwarded to provider adapters; provider
+  tool messages contain only the tool role, call correlation, name, and content.
 
 ## Constraints & Gotchas
 

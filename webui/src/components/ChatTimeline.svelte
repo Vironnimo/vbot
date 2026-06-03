@@ -425,6 +425,13 @@
   };
 
   const formatRunDuration = (assistantRun) => {
+    const durationFromTiming = formatDurationMs(
+      assistantRun.durationMs,
+      'chat.runDurationSeconds',
+    );
+    if (durationFromTiming) {
+      return durationFromTiming;
+    }
     const start = timestampToMs(
       assistantRun.startTimestamp ?? assistantRun.timestamp,
     );
@@ -432,13 +439,23 @@
     if (start === null || end === null || end < start) {
       return '';
     }
-    const elapsedSeconds = (end - start) / 1000;
+    return formatDurationMs(end - start, 'chat.runDurationSeconds');
+  };
+
+  const formatDurationMs = (
+    durationMs,
+    i18nKey = 'chat.runDurationSeconds',
+  ) => {
+    if (!Number.isFinite(durationMs) || durationMs < 0) {
+      return '';
+    }
+    const elapsedSeconds = durationMs / 1000;
     if (elapsedSeconds < 10) {
-      return t('chat.runDurationSeconds', '{seconds}s', {
+      return t(i18nKey, '{seconds}s', {
         seconds: elapsedSeconds.toFixed(1),
       });
     }
-    return t('chat.runDurationSeconds', '{seconds}s', {
+    return t(i18nKey, '{seconds}s', {
       seconds: Math.round(elapsedSeconds),
     });
   };
@@ -474,7 +491,26 @@
     if (toolStatus(tool) === 'cancelled') {
       return t('chat.toolCancelled', 'cancelled');
     }
-    return '';
+    if (toolStatus(tool) === 'running') {
+      return '';
+    }
+    return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
+  };
+
+  const toolDurationMs = (tool) => {
+    if (Number.isFinite(tool?.durationMs) && tool.durationMs >= 0) {
+      return tool.durationMs;
+    }
+    const start = timestampToMs(
+      tool?.timing?.started_at ?? tool?.startedEvent?.timestamp,
+    );
+    const end = timestampToMs(
+      tool?.timing?.completed_at ?? tool?.resultEvent?.timestamp,
+    );
+    if (start === null || end === null || end < start) {
+      return null;
+    }
+    return end - start;
   };
 
   const toolArguments = (tool) => tool.arguments ?? tool.toolCall?.arguments;
@@ -1721,6 +1757,14 @@
                             {t('chat.subagent.starting', 'starting')}
                           </span>
                         {/if}
+                        {#if toolStatusLabel(child)}
+                          <span
+                            class="te-time"
+                            class:cancelled={toolStatus(child) === 'cancelled'}
+                          >
+                            {toolStatusLabel(child)}
+                          </span>
+                        {/if}
                       </summary>
                       <div class="tool-event-body">
                         {@render toolDetailSection(
@@ -1771,7 +1815,10 @@
                           >
                         {/if}
                         {#if toolStatusLabel(child)}
-                          <span class="te-time cancelled">
+                          <span
+                            class="te-time"
+                            class:cancelled={toolStatus(child) === 'cancelled'}
+                          >
                             {toolStatusLabel(child)}
                           </span>
                         {/if}

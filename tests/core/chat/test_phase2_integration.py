@@ -103,7 +103,7 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
         assert assistant.content == "Phase 2 works"
         assert runtime.has_provider_credentials("fake-provider") is True
         assert runtime.get_provider_credentials("fake-provider") == "test-key"
-        assert [message.role for message in messages] == ["user", "assistant"]
+        assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
         assert messages[1].content == "Phase 2 works"
@@ -155,7 +155,15 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         assert isinstance(tool_message_content, str)
         tool_result = json.loads(tool_message_content)
         assert assistant.content == "I read: file content"
-        assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+        assert [message.role for message in messages] == [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "run_summary",
+        ]
+        assert messages[-1].status == "completed"
+        assert messages[-1].timing is not None
         assert tool_result["ok"] is True
         assert tool_result["error"] is None
         assert tool_result["data"] == {"content": "file content"}
@@ -204,7 +212,15 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
         assert isinstance(tool_message_content, str)
         tool_result = json.loads(tool_message_content)
         assert assistant.content == "The file was missing, so I recovered."
-        assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+        assert [message.role for message in messages] == [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "run_summary",
+        ]
+        assert messages[-1].status == "completed"
+        assert messages[-1].timing is not None
         assert tool_result["ok"] is False
         assert tool_result["error"]["code"] == "file_not_found"
         assert "missing.txt" in tool_result["error"]["message"]

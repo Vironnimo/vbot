@@ -582,6 +582,16 @@ function historyTimelineItems(messages) {
       continue;
     }
 
+    if (message?.role === 'run_summary') {
+      if (activeAssistantRun) {
+        appendHistoryRunSummary(activeAssistantRun, message);
+        pushActiveAssistantRun(timelineItems, activeAssistantRun);
+        activeAssistantRun = null;
+      }
+      previousVisibleRole = 'run_summary';
+      continue;
+    }
+
     if (message?.role === 'user') {
       pushActiveAssistantRun(timelineItems, activeAssistantRun);
       activeAssistantRun = null;
@@ -646,6 +656,7 @@ function isVisibleHistoryMessage(message) {
     'tool',
     'error',
     'compaction_checkpoint',
+    'run_summary',
   ].includes(message?.role);
 }
 
@@ -926,6 +937,8 @@ function createAssistantRunItem({ id, runId, source, sequence, timestamp }) {
     startTimestamp: timestamp,
     endTimestamp: null,
     status: CHAT_STATUS_RUNNING,
+    timing: null,
+    durationMs: null,
     items: [],
     reasoning: [],
     outputs: [],
@@ -960,7 +973,15 @@ function appendLiveRunEvent(assistantRun, event) {
   }
 
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
+    const timing = normalizedTiming(event.payload?.timing);
     assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
+    assistantRun.startTimestamp =
+      timing?.started_at ?? assistantRun.startTimestamp;
+    assistantRun.endTimestamp =
+      timing?.completed_at ?? assistantRun.endTimestamp;
+    assistantRun.timing = timing ?? assistantRun.timing;
+    assistantRun.durationMs =
+      timingDurationMs(timing) ?? assistantRun.durationMs;
     assistantRun.status = event.payload?.status ?? terminalStatus(event.type);
     assistantRun.terminalEvent = event;
     if (event.type === 'run_cancelled') {
@@ -1095,11 +1116,25 @@ function appendHistoryToolResult(assistantRun, message) {
       },
       result: message.content,
       message,
+      timing: message.timing,
     },
   });
   assistantRun.status = hasResultFailure(message.content)
     ? CHAT_STATUS_FAILED
     : CHAT_STATUS_COMPLETED;
+}
+
+function appendHistoryRunSummary(assistantRun, message) {
+  const timing = normalizedTiming(message?.timing);
+  assistantRun.runId = message.run_id ?? assistantRun.runId;
+  assistantRun.run_id = assistantRun.runId;
+  assistantRun.status = message.status ?? assistantRun.status;
+  assistantRun.timing = timing ?? assistantRun.timing;
+  assistantRun.startTimestamp =
+    timing?.started_at ?? assistantRun.startTimestamp;
+  assistantRun.endTimestamp = timing?.completed_at ?? assistantRun.endTimestamp;
+  assistantRun.durationMs = timingDurationMs(timing) ?? assistantRun.durationMs;
+  assistantRun.runSummaryMessage = message;
 }
 
 function appendTextSection(
@@ -1331,6 +1366,10 @@ function mergeToolResult(assistantRun, event) {
   tool.name = toolCall.name ?? tool.name;
   tool.result = event.payload?.result ?? event.payload?.message?.content;
   tool.resultEvent = event;
+  tool.timing =
+    normalizedTiming(event.payload?.timing ?? event.payload?.message?.timing) ??
+    tool.timing;
+  tool.durationMs = timingDurationMs(tool.timing) ?? tool.durationMs;
   tool.status = hasToolResultFailure(event) ? CHAT_STATUS_FAILED : 'success';
   tool.events = [...tool.events, event];
   syncAssistantRunCollections(assistantRun);
@@ -1388,6 +1427,8 @@ function upsertToolRow(assistantRun, key, event, toolCall = {}) {
     toolCall: null,
     startedEvent: null,
     resultEvent: null,
+    timing: null,
+    durationMs: null,
     stdout: '',
     stderr: '',
     outputEvents: [],
@@ -1656,6 +1697,26 @@ function parseResult(result) {
   } catch {
     return result;
   }
+}
+
+function normalizedTiming(timing) {
+  if (!isPlainObject(timing)) {
+    return null;
+  }
+  const durationMs = timing.duration_ms;
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return null;
+  }
+  return {
+    ...timing,
+    duration_ms: Math.max(0, Math.round(durationMs)),
+  };
+}
+
+function timingDurationMs(timing) {
+  return Number.isFinite(timing?.duration_ms) && timing.duration_ms >= 0
+    ? timing.duration_ms
+    : null;
 }
 
 function isPlainObject(value) {

@@ -18,7 +18,7 @@ import pytest
 
 import server.delegates as delegates
 from core.automation import TriggerService
-from core.chat import ChatLoop, ChatMessage, ChatSessionManager
+from core.chat import ChatLoop, ChatMessage, ChatSessionManager, ToolCall
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ReasoningCapabilities
@@ -3153,6 +3153,55 @@ async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_chat_history_includes_tool_timing_and_run_summary(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    session = state.runtime.chat_sessions.create("coder", session_id="timing-session")
+    state.runtime.agents.update("coder", current_session_id="timing-session")
+    timing = {
+        "started_at": "2026-05-03T14:30:01+00:00",
+        "completed_at": "2026-05-03T14:30:02+00:00",
+        "duration_ms": 1000,
+    }
+    session.append(ChatMessage.user(content="Run this"))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content=None,
+            tool_calls=[ToolCall(id="call-one", name="read", arguments={"path": "a.txt"})],
+        )
+    )
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="call-one",
+            name="read",
+            content='{"ok":true,"error":null,"data":{},"artifacts":[]}',
+            timing=timing,
+        )
+    )
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Done"))
+    session.append(ChatMessage.run_summary(run_id="run-one", status="completed", timing=timing))
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "chat.history", "params": {"agent_id": "coder"}},
+    )
+
+    assert response["ok"] is True
+    messages = response["result"]["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "run_summary",
+    ]
+    assert messages[2]["timing"] == timing
+    assert messages[4]["run_id"] == "run-one"
+    assert messages[4]["status"] == "completed"
+    assert messages[4]["timing"] == timing
+
+
+@pytest.mark.asyncio
 async def test_chat_send_requires_existing_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4204,6 +4253,21 @@ class TestVisibleMessage:
         result = delegates._visible_message(message)
         assert "usage" not in result
 
+    def test_visible_message_preserves_tool_timing(self) -> None:
+        timing = {
+            "started_at": "2026-05-03T14:30:01+00:00",
+            "completed_at": "2026-05-03T14:30:02+00:00",
+            "duration_ms": 1000,
+        }
+        message = ChatMessage.tool(
+            tool_call_id="call-one",
+            name="read",
+            content='{"ok":true,"error":null,"data":{},"artifacts":[]}',
+            timing=timing,
+        )
+        result = delegates._visible_message(message)
+        assert result["timing"] == timing
+
 
 class TestServerEventFromRunEvent:
     """Tests for _server_event_from_run_event preserving usage in run_completed."""
@@ -4286,6 +4350,21 @@ class TestServerEventFromRunEvent:
 
         assert result["payload"]["status"] == "completed"
         assert result["payload"]["usage"] == {"input_tokens": 200, "output_tokens": 30}
+
+    def test_terminal_event_includes_timing(self) -> None:
+        timing = {
+            "started_at": "2026-05-03T14:30:01+00:00",
+            "completed_at": "2026-05-03T14:30:02+00:00",
+            "duration_ms": 1000,
+        }
+        event = self._make_event(
+            delegates.RUN_FAILED_EVENT,
+            {"status": "failed", "timing": timing},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["payload"]["status"] == "failed"
+        assert result["payload"]["timing"] == timing
 
     def test_non_completed_terminal_event_excludes_usage(self) -> None:
         """run_failed and run_cancelled should not carry usage even if payload has it."""

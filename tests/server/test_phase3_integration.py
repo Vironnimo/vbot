@@ -503,7 +503,15 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
     ]
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "run_summary",
+    ]
+    assert messages[-1].status == "completed"
+    assert messages[-1].timing is not None
     assert messages[1].reasoning_meta == {"encrypted_content": "opaque"}
     tool_message_content = messages[2].content
     assert isinstance(tool_message_content, str)
@@ -630,7 +638,9 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
         "tool_call_started",
         "run_cancelled",
     ]
-    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
+    assert messages[-1].status == "cancelled"
+    assert messages[-1].timing is not None
     assert tool_results == []
     assert len(adapter.stream_requests) == 1
 

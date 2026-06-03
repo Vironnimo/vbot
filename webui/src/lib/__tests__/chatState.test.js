@@ -80,6 +80,131 @@ describe('chat state helpers', () => {
     expect(sessionState.queue).toHaveLength(1);
   });
 
+  it('merges persisted tool timing and run summary into history assistant runs', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-timing-history',
+    );
+    const timing = {
+      started_at: '2026-05-03T14:30:01+00:00',
+      completed_at: '2026-05-03T14:30:02.250+00:00',
+      duration_ms: 1250,
+    };
+
+    loadHistory(sessionState, [
+      {
+        id: 'user-one',
+        role: 'user',
+        content: 'Run tool',
+        timestamp: '2026-05-03T14:30:00+00:00',
+      },
+      {
+        id: 'assistant-tool',
+        role: 'assistant',
+        content: null,
+        timestamp: '2026-05-03T14:30:00+00:00',
+        tool_calls: [{ id: 'call-one', name: 'read', arguments: {} }],
+      },
+      {
+        id: 'tool-one',
+        role: 'tool',
+        tool_call_id: 'call-one',
+        name: 'read',
+        content: '{"ok":true,"error":null,"data":{},"artifacts":[]}',
+        timestamp: '2026-05-03T14:30:02+00:00',
+        timing,
+      },
+      {
+        id: 'assistant-final',
+        role: 'assistant',
+        content: 'Done',
+        timestamp: '2026-05-03T14:30:03+00:00',
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+        timestamp: '2026-05-03T14:30:03+00:00',
+        timing,
+      },
+    ]);
+
+    const assistantRun = visibleTimelineItems(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        runId: 'run-one',
+        status: CHAT_STATUS_COMPLETED,
+        durationMs: 1250,
+      }),
+    );
+    expect(assistantRun.tools[0]).toEqual(
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        durationMs: 1250,
+      }),
+    );
+  });
+
+  it('merges live tool and run timing from events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-timing-live',
+    );
+    const timing = {
+      started_at: '2026-05-03T14:30:01+00:00',
+      completed_at: '2026-05-03T14:30:02.250+00:00',
+      duration_ms: 1250,
+    };
+
+    appendRunEvent(sessionState, {
+      sequence: 1,
+      run_id: 'run-one',
+      type: 'run_started',
+      timestamp: '2026-05-03T14:30:00+00:00',
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      sequence: 2,
+      run_id: 'run-one',
+      type: 'tool_call_started',
+      timestamp: '2026-05-03T14:30:01+00:00',
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read', arguments: {} },
+      },
+    });
+    appendRunEvent(sessionState, {
+      sequence: 3,
+      run_id: 'run-one',
+      type: 'tool_call_result',
+      timestamp: '2026-05-03T14:30:02+00:00',
+      payload: {
+        tool_call: { id: 'call-one', index: 0, name: 'read' },
+        result: { ok: true, error: null, data: {}, artifacts: [] },
+        timing,
+      },
+    });
+    appendRunEvent(sessionState, {
+      sequence: 4,
+      run_id: 'run-one',
+      type: 'run_completed',
+      timestamp: '2026-05-03T14:30:03+00:00',
+      payload: { status: CHAT_STATUS_COMPLETED, timing },
+    });
+
+    const assistantRun = visibleTimelineItems(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+
+    expect(assistantRun.durationMs).toBe(1250);
+    expect(assistantRun.tools[0].durationMs).toBe(1250);
+  });
+
   it('prepends older history without duplicating loaded messages', () => {
     const sessionState = ensureSessionState(
       createChatState(),
