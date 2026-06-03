@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed"))
 _RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
 _ONCE_RETRY_DELAY_SECONDS = 60.0
+_ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 _MUTABLE_FIELDS = frozenset(
     (
         "agent_id",
@@ -118,6 +120,7 @@ class CronService:
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
+        self._once_fire_claims_dir = self._cron_dir / _ONCE_FIRE_CLAIMS_DIR_NAME
         self._jobs: dict[str, CronJob] = {}
         self._jobs_loaded = False
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
@@ -210,6 +213,7 @@ class CronService:
 
         self._jobs.pop(job_id)
         self._save_jobs()
+        self._remove_once_fire_claim(job_id)
         self._cancel_job_task(job_id)
 
     def enable_job(self, job_id: str) -> CronJob:
@@ -242,10 +246,24 @@ class CronService:
         self._started = True
         reference_time = _utc_now()
         needs_save = False
+        once_claims_to_remove: list[str] = []
 
         for job in self._jobs.values():
             if job.status != "active":
                 continue
+            if job.schedule_type == "once":
+                claimed_at = self._read_once_fire_claimed_at(job.id)
+                if claimed_at is not None:
+                    _LOGGER.warning(
+                        "Marking claimed once job as completed (id=%s claimed_at=%s)",
+                        job.id,
+                        claimed_at,
+                    )
+                    job.status = "completed"
+                    job.last_fired_at = claimed_at
+                    needs_save = True
+                    once_claims_to_remove.append(job.id)
+                    continue
             if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
                 _LOGGER.warning(
                     "Marking missed once job as completed (id=%s run_at=%s)",
@@ -259,6 +277,8 @@ class CronService:
 
         if needs_save:
             self._save_jobs()
+            for job_id in once_claims_to_remove:
+                self._remove_once_fire_claim(job_id)
 
     def stop(self) -> None:
         """Cancel all running cron tasks. Idempotent."""
@@ -387,7 +407,21 @@ class CronService:
             if latest is None or latest.status != "active" or latest.schedule_type != "once":
                 return
 
+            claimed_at = _utc_now_iso()
+            try:
+                self._write_once_fire_claim(latest, claimed_at)
+            except CronStorageError as error:
+                _LOGGER.error(
+                    "Cron once job fire claim failed for job=%s: %s",
+                    latest.id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+                continue
+
             if not await self._trigger_job_run(latest):
+                self._remove_once_fire_claim(latest.id)
                 await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
                 continue
 
@@ -398,7 +432,9 @@ class CronService:
             latest.status = "completed"
             latest.last_fired_at = _utc_now_iso()
             self._jobs[latest.id] = latest
-            self._save_jobs_after_fire(latest.id)
+            while not self._save_jobs_after_fire(latest.id):
+                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+            self._remove_once_fire_claim(latest.id)
             return
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
@@ -421,16 +457,19 @@ class CronService:
 
         return True
 
-    def _save_jobs_after_fire(self, job_id: str) -> None:
+    def _save_jobs_after_fire(self, job_id: str) -> bool:
         try:
             self._save_jobs()
-        except Exception as error:
+        except CronStorageError as error:
             _LOGGER.error(
                 "Cron job state save failed after firing job=%s: %s",
                 job_id,
                 error,
                 exc_info=(type(error), error, error.__traceback__),
             )
+            return False
+
+        return True
 
     def _ensure_jobs_loaded(self) -> None:
         if self._jobs_loaded:
@@ -558,6 +597,62 @@ class CronService:
         if job.schedule_type != "once":
             return False
         return self._parse_run_at_utc(job) < reference_time_utc
+
+    def _write_once_fire_claim(self, job: CronJob, claimed_at: str) -> None:
+        self._ensure_storage_exists()
+        claim_path = self._once_fire_claim_path(job.id)
+        temp_path = claim_path.with_name(f"{claim_path.name}.{uuid4().hex}.tmp")
+        payload = {
+            "job_id": job.id,
+            "claimed_at": claimed_at,
+            "run_at": job.run_at,
+        }
+
+        try:
+            self._once_fire_claims_dir.mkdir(parents=True, exist_ok=True)
+            with temp_path.open("w", encoding="utf-8") as file:
+                json.dump(payload, file, ensure_ascii=False, indent=2, sort_keys=True)
+                file.write("\n")
+            os.replace(temp_path, claim_path)
+        except OSError as error:
+            self._safe_remove_temporary_file(temp_path)
+            raise CronStorageError(f"Cannot write {claim_path}: {error}") from error
+
+    def _read_once_fire_claimed_at(self, job_id: str) -> str | None:
+        claim_path = self._once_fire_claim_path(job_id)
+        if not claim_path.exists():
+            return None
+
+        try:
+            payload = json.loads(claim_path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise CronStorageError(f"Cannot read {claim_path}: {error}") from error
+        except json.JSONDecodeError as error:
+            raise CronStorageError(f"Invalid once fire claim {claim_path}: {error}") from error
+
+        if not isinstance(payload, dict) or payload.get("job_id") != job_id:
+            raise CronStorageError(f"Invalid once fire claim {claim_path}: job_id mismatch")
+
+        claimed_at = payload.get("claimed_at")
+        if not isinstance(claimed_at, str):
+            raise CronStorageError(f"Invalid once fire claim {claim_path}: claimed_at is required")
+        self._parse_utc_timestamp(claimed_at, field_name="claimed_at")
+        return claimed_at
+
+    def _remove_once_fire_claim(self, job_id: str) -> None:
+        claim_path = self._once_fire_claim_path(job_id)
+        try:
+            claim_path.unlink(missing_ok=True)
+        except OSError as error:
+            _LOGGER.warning(
+                "Cannot remove once job fire claim for job=%s: %s",
+                job_id,
+                error,
+            )
+
+    def _once_fire_claim_path(self, job_id: str) -> Path:
+        digest = hashlib.sha256(job_id.encode("utf-8")).hexdigest()
+        return self._once_fire_claims_dir / f"{digest}.json"
 
     @staticmethod
     def _clone_job(job: CronJob) -> CronJob:
