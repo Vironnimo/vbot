@@ -30,6 +30,11 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 ## Current Storage Contract
 
 - Session files use `.jsonl` and are append-only during normal chat operation.
+- Session appends write one UTF-8 encoded line through an append-only file
+  descriptor and fsync before returning. If a crash leaves an invalid final line
+  without a trailing newline, `load()` treats that line as an incomplete write,
+  truncates it, logs a warning, and returns the preceding valid messages.
+  Complete invalid JSON/message lines remain hard errors.
 - Session history may include `role: "tool"` messages with optional `timing`
   and `role: "run_summary"` annotations with `run_id`, terminal `status`, and
   `timing`. Run summaries are append-only records that annotate the preceding
