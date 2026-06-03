@@ -164,7 +164,7 @@ class AnthropicAdapter(ProviderAdapter):
         array) and assembles model, messages, defaults, and overrides.
         """
         request_kwargs = dict(kwargs)
-        system_content: str | list[dict[str, Any]] | None = None
+        system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
 
         for message in messages:
@@ -174,7 +174,7 @@ class AnthropicAdapter(ProviderAdapter):
                 # field, not in the messages array.
                 content = message.get("content")
                 if isinstance(content, (str, list)):
-                    system_content = content
+                    system_parts.append(content)
             else:
                 conversation_messages.append(message)
 
@@ -182,6 +182,7 @@ class AnthropicAdapter(ProviderAdapter):
             "model": model_id,
             "messages": _to_anthropic_messages(conversation_messages),
         }
+        system_content = _merge_anthropic_system_parts(system_parts)
         if system_content is not None:
             payload["system"] = system_content
         _apply_anthropic_tools(payload, request_kwargs)
@@ -644,6 +645,27 @@ def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
     return anthropic_messages
 
 
+def _merge_anthropic_system_parts(
+    parts: list[str | list[dict[str, Any]]],
+) -> str | list[dict[str, Any]] | None:
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    if all(isinstance(part, str) for part in parts):
+        return "\n\n".join(part for part in parts if isinstance(part, str))
+
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        if isinstance(part, str):
+            blocks.append({"type": "text", "text": part})
+            continue
+        blocks.extend(
+            dict(block) if isinstance(block, dict) else _text_block(block) for block in part
+        )
+    return blocks
+
+
 def _to_anthropic_message(message: dict[str, Any]) -> dict[str, Any]:
     role = message.get("role")
     if role == "tool":
@@ -710,7 +732,11 @@ def _to_anthropic_user_content_block(block: Any) -> dict[str, Any]:
 def _to_anthropic_text_content(content: Any) -> list[dict[str, Any]]:
     if isinstance(content, list):
         return content
-    return [{"type": "text", "text": "" if content is None else str(content)}]
+    return [_text_block(content)]
+
+
+def _text_block(content: Any) -> dict[str, Any]:
+    return {"type": "text", "text": "" if content is None else str(content)}
 
 
 def _to_anthropic_assistant_content(message: dict[str, Any]) -> list[dict[str, Any]]:
