@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
-from typing import Any, cast
+from typing import Any
 
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
@@ -40,10 +39,12 @@ def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
     key = _required_string(params, "key")
     value = params["value"]
 
-    try:
-        settings = dict(state.runtime.storage.load_settings())
+    def set_key(settings: JsonObject) -> JsonObject:
         settings[key] = value
-        state.runtime.storage.save_settings(settings)
+        return dict(settings)
+
+    try:
+        settings = state.runtime.storage.update_settings(set_key)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -66,32 +67,11 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     storage = state.runtime.storage
-    original_settings: JsonObject | None = None
-    should_reload_recall_backend = False
-    should_reload_skills = False
+    should_reload_recall_backend = "recall" in settings_update
+    should_reload_skills = "skills" in settings_update
 
     try:
-        original_settings = dict(storage.load_settings())
-        if "appearance" in settings_update:
-            storage.update_appearance_settings(settings_update["appearance"])
-        if "skills" in settings_update:
-            storage.update_skill_directory_settings(settings_update["skills"]["directories"])
-            should_reload_skills = True
-        if "subagents" in settings_update:
-            _update_subagent_settings(storage, settings_update["subagents"])
-        if "compaction" in settings_update:
-            storage.update_compaction_settings(settings_update["compaction"])
-        if "defaults" in settings_update:
-            defaults_update = cast(JsonObject, settings_update["defaults"])
-            if "agent" in defaults_update:
-                storage.update_defaults("agent", defaults_update["agent"])
-        if "recall" in settings_update:
-            storage.update_recall_settings(settings_update["recall"])
-            should_reload_recall_backend = True
-        if "web_search" in settings_update:
-            storage.update_web_search_settings(settings_update["web_search"])
-        if "model_tasks" in settings_update:
-            storage.update_model_task_settings(settings_update["model_tasks"])
+        storage.update_settings_sections(settings_update)
         if should_reload_skills:
             reload_skills = getattr(state.runtime, "reload_skills", None)
             if callable(reload_skills):
@@ -102,9 +82,6 @@ def _update_settings(state: Any, params: JsonObject) -> JsonObject:
                 reload_recall_backend()
         return _settings_response(state)
     except Exception as exc:
-        if original_settings is not None:
-            with suppress(Exception):
-                storage.save_settings(original_settings)
         raise _map_expected_error(exc) from exc
 
 
@@ -218,14 +195,6 @@ def _settings_response(state: Any) -> JsonObject:
             "directories": skill_directory_loader(),
         }
     return response
-
-
-def _update_subagent_settings(storage: Any, subagents: JsonObject) -> None:
-    settings = storage.load_settings()
-    merged_settings = dict(settings)
-    for field in SUBAGENT_SETTING_FIELDS:
-        merged_settings[field] = subagents[field]
-    storage.save_settings(merged_settings)
 
 
 def _server_bind_response(state: Any) -> JsonObject:

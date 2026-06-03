@@ -26,7 +26,10 @@ Raw `settings.json` accepts positive integer binary upload limits:
 `attachment_max_size_bytes` for stored attachments and
 `speech_upload_max_size_bytes` for speech transcription audio.
 
-Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes.
+Storage still owns raw `settings.json` file I/O, process-local locked
+read-modify-write transactions, atomic writes, prompt fragments, and normalized
+persistence helpers. Server delegates own RPC error mapping and side effects
+such as reloading skills after skill directory changes.
 
 ## Interfaces
 
@@ -81,6 +84,8 @@ Storage still owns raw `settings.json` file I/O, atomic writes, prompt fragments
   Sub-Agent and Compaction sections. Recall updates are small exact-section
   writes with only `backend`.
 - Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update. Recall backend changes are applied by server delegates through `runtime.reload_recall_backend()`.
+- Accepted multi-section `settings.update` payloads are persisted by storage in
+  one locked settings transaction before server-side reload hooks run.
 - `settings.web_search` is loaded by the `web_search` tool at call time, so
   changing the selected search provider does not require a runtime restart or
   tool re-registration.

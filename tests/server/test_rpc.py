@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import pytest
 
@@ -33,6 +33,12 @@ from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
 
 JsonObject = dict[str, Any]
+SettingsUpdateResult = TypeVar("SettingsUpdateResult")
+STUB_SUBAGENT_SETTING_FIELDS = (
+    "max_subagent_depth",
+    "max_subagents_per_turn",
+    "subagent_timeout_minutes",
+)
 
 
 @dataclass(frozen=True)
@@ -659,6 +665,58 @@ class StubStorage:
 
     def load_settings(self) -> JsonObject:
         return dict(self._settings)
+
+    def update_settings(
+        self,
+        mutator: Callable[[JsonObject], SettingsUpdateResult],
+    ) -> SettingsUpdateResult:
+        merged_settings = dict(self._settings)
+        result = mutator(merged_settings)
+        self.save_settings(merged_settings)
+        return result
+
+    def update_settings_sections(self, settings_update: JsonObject) -> JsonObject:
+        updated_sections: JsonObject = {}
+        if "appearance" in settings_update:
+            updated_sections["appearance"] = self.update_appearance_settings(
+                settings_update["appearance"]
+            )
+        if "skills" in settings_update:
+            updated_sections["skills"] = {
+                "directories": self.update_skill_directory_settings(
+                    settings_update["skills"]["directories"]
+                )
+            }
+        if "subagents" in settings_update:
+            subagents = settings_update["subagents"]
+            merged_settings = dict(self._settings)
+            for field in STUB_SUBAGENT_SETTING_FIELDS:
+                merged_settings[field] = subagents[field]
+            self.save_settings(merged_settings)
+            updated_sections["subagents"] = {
+                field: subagents[field] for field in STUB_SUBAGENT_SETTING_FIELDS
+            }
+        if "compaction" in settings_update:
+            updated_sections["compaction"] = self.update_compaction_settings(
+                settings_update["compaction"]
+            )
+        if "defaults" in settings_update:
+            defaults_update = settings_update["defaults"]
+            if "agent" in defaults_update:
+                updated_sections["defaults"] = self.update_defaults(
+                    "agent",
+                    defaults_update["agent"],
+                )
+        if "recall" in settings_update:
+            updated_sections["recall"] = self.update_recall_settings(settings_update["recall"])
+        if "web_search" in settings_update:
+            updated_sections["web_search"] = self.update_web_search_settings(
+                settings_update["web_search"]
+            )
+        if "model_tasks" in settings_update:
+            self._settings = {**self._settings, "model_tasks": settings_update["model_tasks"]}
+            updated_sections["model_tasks"] = self.load_model_task_settings()
+        return updated_sections
 
     def save_settings(self, settings: JsonObject) -> None:
         self._settings = dict(settings)
@@ -2472,7 +2530,7 @@ async def test_settings_update_rejects_compaction_threshold_out_of_range(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_settings_update_rolls_back_partial_writes_on_storage_error(
+async def test_settings_update_maps_storage_section_error_without_partial_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2483,13 +2541,13 @@ async def test_settings_update_rolls_back_partial_writes_on_storage_error(
     }
     state.runtime.storage.save_settings(original_settings)
 
-    def fail_compaction_update(_compaction: object) -> JsonObject:
+    def fail_settings_update(_settings_update: object) -> JsonObject:
         raise StorageError("compaction write failed")
 
     monkeypatch.setattr(
         state.runtime.storage,
-        "update_compaction_settings",
-        fail_compaction_update,
+        "update_settings_sections",
+        fail_settings_update,
     )
 
     response = await dispatch_rpc(
