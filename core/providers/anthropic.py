@@ -29,6 +29,7 @@ from core.providers._http_shared import (
     classify_http_status,
     iter_sse_data,
     parse_sse_json_data,
+    provider_chat_timeout,
     wrap_network_error,
 )
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -100,7 +101,7 @@ class AnthropicAdapter(ProviderAdapter):
         super().__init__(model_lookup=model_lookup)
         self._client = httpx.AsyncClient(
             base_url=base_url or config.base_url,
-            timeout=60.0,
+            timeout=provider_chat_timeout(),
         )
 
     # ------------------------------------------------------------------

@@ -605,7 +605,7 @@ def _make_subagent_executor(
 ) -> tuple[Any, RunExecutor]:
     from core.chat import ChatLoop
 
-    sub_loop = ChatLoop(runtime, streaming=False)
+    sub_loop = ChatLoop(runtime, streaming=True)
     sub_loop._nesting_depth = context.nesting_depth + 1  # noqa: SLF001 - planned depth handoff.
     return sub_loop, lambda run: sub_loop._execute_run(run, content)  # noqa: SLF001
 

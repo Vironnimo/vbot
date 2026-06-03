@@ -230,6 +230,15 @@ def custom_adapter():
     return AnthropicAdapter(CUSTOM_CONFIG, API_KEY)
 
 
+def test_client_timeout_allows_long_generation_reads(anthropic_adapter):
+    timeout = anthropic_adapter._client.timeout  # noqa: SLF001 - verify adapter wiring.
+
+    assert timeout.connect == 60.0
+    assert timeout.read is None
+    assert timeout.write == 60.0
+    assert timeout.pool == 60.0
+
+
 def _anthropic_test_model(model_id: str, *, reasoning: bool) -> Model:
     return Model(
         model_id=model_id,

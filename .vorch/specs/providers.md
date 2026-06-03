@@ -54,6 +54,11 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Provider JSON uses `connections`; old single-provider `auth` JSON is not supported.
 - Runtime adapter creation injects provider-scoped `model_lookup(model_id) -> Model | None` so adapters can use normalized catalog facts without file I/O.
 - Provider defaults are applied with lower priority than caller kwargs.
+- Provider chat HTTP clients keep connect, write, and pool timeouts bounded at
+  60 seconds but do not enforce an HTTP read timeout. Long non-streaming model
+  generations may legitimately take longer than one minute before returning a
+  complete response; streaming stalls are guarded by the chat streaming chunk
+  timeout instead.
 - Provider request defaults are runtime controls, not model facts. When catalog
   discovery lacks a per-model output limit, normalized `max_output_tokens` stays
   `null`; request shaping uses provider defaults such as `defaults.max_tokens`

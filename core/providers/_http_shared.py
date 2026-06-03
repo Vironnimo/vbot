@@ -31,6 +31,18 @@ _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503})
 
 # Auth-related HTTP status codes — not retryable.
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
+_PROVIDER_HTTP_TIMEOUT_SECONDS = 60.0
+
+
+def provider_chat_timeout() -> httpx.Timeout:
+    """Return timeout settings for long-running provider generation requests."""
+    return httpx.Timeout(
+        connect=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+        read=None,
+        write=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+        pool=_PROVIDER_HTTP_TIMEOUT_SECONDS,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Error classification
