@@ -19,7 +19,7 @@
     createChatState,
     currentSessionState,
     ensureSessionState,
-    highestRunEventSequence,
+    highestContiguousRunEventSequence,
     isRunActive,
     loadHistory,
     markSessionError,
@@ -647,7 +647,7 @@
     existingSubscription?.close();
     clearPendingReconnect(sessionState.key);
     const afterSequence =
-      options.afterSequence ?? highestRunEventSequence(sessionState);
+      options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
     const retryAttempt = options.retryAttempt ?? 0;
     const subscription = subscribeRunEvents(
       sseUrl,
@@ -687,15 +687,27 @@
       currentRun.status = run.status ?? currentRun.status;
       currentRun.sseUrl = sseUrl;
     }
+    mergeRetainedRunEvents(sessionState, run.events, { fromServerEvent: true });
 
     if (!alreadySubscribed) {
       subscribeToRun(sessionState, sseUrl, {
         afterSequence:
-          options.afterSequence ?? highestRunEventSequence(sessionState),
+          options.afterSequence ??
+          highestContiguousRunEventSequence(sessionState),
       });
     }
 
     return true;
+  };
+
+  const mergeRetainedRunEvents = (sessionState, events, options = {}) => {
+    if (!Array.isArray(events) || events.length === 0) {
+      return;
+    }
+    for (const eventData of events) {
+      const event = appendRunEvent(sessionState, eventData);
+      handleAppendedRunEvent(sessionState, event, options);
+    }
   };
 
   const queueRunEvent = (sessionState, eventData) => {
@@ -823,7 +835,7 @@
           return;
         }
         subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
-          afterSequence: highestRunEventSequence(sessionState),
+          afterSequence: highestContiguousRunEventSequence(sessionState),
           retryAttempt: retryAttempt + 1,
         });
       }, SSE_RECONNECT_DELAY_MS);
@@ -860,7 +872,7 @@
           sse_url: sseUrlForRun(event.run_id),
           events: [],
         },
-        { afterSequence: highestRunEventSequence(sessionState) },
+        { afterSequence: highestContiguousRunEventSequence(sessionState) },
       );
     }
   };

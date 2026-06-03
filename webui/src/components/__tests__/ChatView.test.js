@@ -1098,6 +1098,89 @@ describe('ChatView', () => {
     );
   });
 
+  it('merges retained active-run events when reloading the same displayed session', async () => {
+    const activeRuns = {
+      'session-1': {
+        run_id: 'active-parent-run',
+        sse_url: '/api/runs/active-parent-run/events',
+        status: 'running',
+        events: [
+          {
+            type: 'run_started',
+            run_id: 'active-parent-run',
+            agent_id: 'alpha',
+            session_id: 'session-1',
+            sequence: 1,
+            payload: { status: 'running' },
+          },
+        ],
+      },
+    };
+    rpcMock.mockImplementation(createChatRpcMock({ activeRuns }));
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T00:01:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    activeRuns['session-1'] = {
+      ...activeRuns['session-1'],
+      events: [
+        ...activeRuns['session-1'].events,
+        {
+          type: 'assistant_output_delta',
+          run_id: 'active-parent-run',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          sequence: 2,
+          payload: { content_delta: 'Recovered ' },
+        },
+        {
+          type: 'assistant_output_delta',
+          run_id: 'active-parent-run',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          sequence: 3,
+          payload: { content_delta: 'draft' },
+        },
+      ],
+    };
+
+    findButtonByText('Sessions')?.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('session-1'),
+      100,
+    );
+
+    findButtonByText('session-1')?.click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Recovered draft'),
+      100,
+    );
+
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('attaches to SSE when a run starts for the displayed session', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
