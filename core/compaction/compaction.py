@@ -9,7 +9,7 @@ from typing import Any, Protocol, cast
 from core.chat.chat import ChatMessage
 from core.chat.content_blocks import content_block_to_dict
 from core.utils.errors import VBotError
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_message_tokens
 
 TOOL_RESULT_CONTENT_PLACEHOLDER = "[tool result content omitted during compaction]"
 
@@ -156,10 +156,10 @@ class CompactionService:
         return (input_tokens / context_window) >= threshold
 
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
-        """Estimate total tokens using message content text representations."""
+        """Estimate total tokens using provider-relevant message fields."""
         total_tokens = 0
         for message in messages:
-            estimated_tokens, _ = estimate_tokens(str(message.get("content")))
+            estimated_tokens, _ = estimate_message_tokens(message)
             total_tokens += estimated_tokens
         return total_tokens
 
@@ -178,7 +178,7 @@ def _estimate_token_span(messages: list[ChatMessage]) -> int:
 
 
 def _estimate_message_tokens(message: ChatMessage) -> int:
-    estimated_tokens, _ = estimate_tokens(str(message.content))
+    estimated_tokens, _ = estimate_message_tokens(message.to_dict())
     return estimated_tokens
 
 
