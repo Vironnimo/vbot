@@ -465,6 +465,25 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_combines_multiple_system_messages(self, anthropic_adapter):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {"role": "system", "content": "Follow the project rules."},
+            {"role": "system", "content": "Keep answers concise."},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["system"] == "Follow the project rules.\n\nKeep answers concise."
+        for msg in request_body["messages"]:
+            assert msg["role"] != "system"
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_no_system_message(self, anthropic_adapter):
         """When no system message is present, the system field is omitted."""
         # Arrange
@@ -631,6 +650,53 @@ class TestSendRequestFormat:
         # Assert
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["system"] == system_blocks
+        for msg in request_body["messages"]:
+            assert msg["role"] != "system"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_combines_multiple_system_content_block_messages(
+        self,
+        anthropic_adapter,
+    ):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        first_blocks = [{"type": "text", "text": "Follow the project rules."}]
+        second_blocks = [{"type": "text", "text": "Keep answers concise."}]
+        messages = [
+            {"role": "system", "content": first_blocks},
+            {"role": "system", "content": second_blocks},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["system"] == [*first_blocks, *second_blocks]
+        for msg in request_body["messages"]:
+            assert msg["role"] != "system"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_combines_mixed_system_content_messages(self, anthropic_adapter):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        blocks = [{"type": "text", "text": "Keep answers concise."}]
+        messages = [
+            {"role": "system", "content": "Follow the project rules."},
+            {"role": "system", "content": blocks},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["system"] == [
+            {"type": "text", "text": "Follow the project rules."},
+            *blocks,
+        ]
         for msg in request_body["messages"]:
             assert msg["role"] != "system"
 
