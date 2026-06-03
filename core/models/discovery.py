@@ -81,9 +81,12 @@ async def refresh_models(
     model_filter = model_filter or PassthroughModelFilter()
 
     fetched_at = datetime.now(UTC).isoformat()
-    url = _join_url(provider_config.base_url, provider_config.models_endpoint)
     try:
         adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+        url = _append_query_params(
+            _join_url(provider_config.base_url, provider_config.models_endpoint),
+            _get_discovery_params(adapter_class),
+        )
 
         raw_payload, raw_models = await _fetch_raw_models(
             url,
@@ -122,9 +125,7 @@ async def refresh_models(
                     if isinstance(model_id, str) and model_id not in seen_ids:
                         raw_models.append(model)
                         seen_ids.add(model_id)
-                        # Also merge into the raw payload so the dump is complete.
-                        if isinstance(raw_payload, dict) and "data" in raw_payload:
-                            raw_payload["data"].append(model)
+                        _append_raw_payload_model(raw_payload, model)
 
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -228,14 +229,30 @@ async def _fetch_raw_models(
         response.raise_for_status()
         payload = response.json()
 
-    raw_models = payload.get("data") if isinstance(payload, dict) else payload
+    raw_models = _raw_models_from_payload(payload)
     if not isinstance(raw_models, list):
-        raise ValueError("Models response must contain a list or a data list")
+        raise ValueError("Models response must contain a list, a data list, or a models list")
 
     for raw_model in raw_models:
         if not isinstance(raw_model, dict):
             raise ValueError("Every raw model entry must be an object")
     return payload, raw_models
+
+
+def _raw_models_from_payload(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    if "data" in payload:
+        return payload.get("data")
+    return payload.get("models")
+
+
+def _append_raw_payload_model(raw_payload: Any, model: Mapping[str, Any]) -> None:
+    if not isinstance(raw_payload, dict):
+        return
+    raw_models = _raw_models_from_payload(raw_payload)
+    if isinstance(raw_models, list):
+        raw_models.append(model)
 
 
 def _build_headers(
@@ -347,6 +364,16 @@ def _get_supplementary_params(adapter_class: Any) -> list[dict[str, str]]:
         result: list[dict[str, str]] = method()
         return result
     return []
+
+
+def _get_discovery_params(adapter_class: Any) -> dict[str, str]:
+    """Return query parameters for the primary model-discovery request."""
+
+    method = getattr(adapter_class, "discovery_params", None)
+    if callable(method):
+        result: dict[str, str] = method()
+        return result
+    return {}
 
 
 def _append_query_params(url: str, params: dict[str, str]) -> str:

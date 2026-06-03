@@ -321,10 +321,20 @@ class TestRefreshModels:
     ):
         resources_dir = tmp_path / "resources"
         access_token = jwt_with_openai_account("acct_openai")
-        route = respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
+        route = respx.get(f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.136.0").mock(
             return_value=httpx.Response(
                 200,
-                json={"data": [{"id": "gpt-5-codex", "name": "GPT-5 Codex"}]},
+                json={
+                    "models": [
+                        {
+                            "slug": "gpt-5-codex",
+                            "display_name": "GPT-5 Codex",
+                            "input_modalities": ["text", "image"],
+                            "context_window": 272000,
+                            "supports_parallel_tool_calls": True,
+                        }
+                    ]
+                },
             )
         )
 
@@ -354,6 +364,7 @@ class TestRefreshModels:
         assert request_headers["chatgpt-account-id"] == "acct_openai"
         assert request_headers["OpenAI-Beta"] == "responses=experimental"
         assert request_headers["originator"] == "vbot"
+        assert route.calls.last.request.url.params["client_version"] == "0.136.0"
 
     @respx.mock
     @pytest.mark.asyncio

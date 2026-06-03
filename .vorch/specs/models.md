@@ -316,12 +316,13 @@ Protocol interface: `ModelRegistryProtocol` in `core/runtime/interfaces.py`.
   normalization lives in `OpenRouterAdapter`; GitHub Copilot catalog
   normalization lives in `GitHubCopilotAdapter`. Discovery should not branch on
   provider IDs or contain provider-specific normalizer functions.
-- **Provider discovery headers can be adapter-specific.** Discovery builds the
-  selected connection's auth header plus provider `extra_headers`, then calls an
-  optional `adapter_class.discovery_headers(provider_config, credential_value,
-  headers)` hook. Use this for catalog-only provider requirements such as
-  OpenAI Subscription's `chatgpt-account-id`, not provider-id branches in
-  discovery.
+- **Provider discovery headers and primary query params can be adapter-specific.**
+  Discovery builds the selected connection's auth header plus provider
+  `extra_headers`, then calls optional hooks:
+  `adapter_class.discovery_headers(provider_config, credential_value, headers)`
+  and `adapter_class.discovery_params()`. Use these for catalog-only provider
+  requirements such as OpenAI Subscription's `chatgpt-account-id` and
+  `client_version`, not provider-id branches in discovery.
 - **Supplementary discovery fetches task-specific models.** Some providers
   (notably OpenRouter) default to returning only text-output models from their
   `/models` endpoint. Dedicated STT/TTS models require separate API calls with
