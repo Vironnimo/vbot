@@ -42,6 +42,7 @@ DISCOVERY_JSON_PARAMETER_NAMES = frozenset({"response_format", "structured_outpu
 DISCOVERY_REASONING_PARAMETER_NAMES = frozenset(
     {"reasoning", "reasoning_effort", "include_reasoning", "thinking_effort"}
 )
+CODEX_CLIENT_VERSION = "0.136.0"
 
 
 class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
@@ -64,6 +65,12 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         return {**headers, "chatgpt-account-id": account_id}
 
     @classmethod
+    def discovery_params(cls) -> dict[str, str]:
+        """Return query parameters required by `/codex/models` discovery."""
+
+        return {"client_version": CODEX_CLIENT_VERSION}
+
+    @classmethod
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -71,21 +78,22 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
     ) -> Model:
         """Normalize one OpenAI Subscription `/codex/models` entry."""
 
-        base_model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
-        capabilities = _optional_mapping(raw.get("capabilities"))
+        normalized_raw = _normalize_catalog_raw(raw)
+        base_model = OpenAICompatibleAdapter.normalize_catalog_entry(normalized_raw, defaults)
+        capabilities = _optional_mapping(normalized_raw.get("capabilities"))
         supports = _optional_mapping(capabilities.get("supports"))
-        raw_parameters = _string_set(raw.get("supported_parameters"))
+        raw_parameters = _string_set(normalized_raw.get("supported_parameters"))
         tools_supported = _subscription_capability_supported(
             raw_parameters,
             base_model.capabilities.tools,
-            (raw, capabilities, supports),
+            (normalized_raw, capabilities, supports),
             ("supports_tools", "tools", "tool_calls", "function_calling"),
             DISCOVERY_TOOL_PARAMETER_NAMES,
         )
         json_supported = _subscription_capability_supported(
             raw_parameters,
             base_model.capabilities.json_mode or not raw_parameters,
-            (raw, capabilities, supports),
+            (normalized_raw, capabilities, supports),
             (
                 "supports_json_mode",
                 "json_mode",
@@ -97,7 +105,7 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         reasoning_supported = _subscription_capability_supported(
             raw_parameters,
             base_model.capabilities.reasoning.supported or not raw_parameters,
-            (raw, capabilities, supports),
+            (normalized_raw, capabilities, supports),
             ("supports_reasoning", "reasoning_supported", "reasoning"),
             DISCOVERY_REASONING_PARAMETER_NAMES,
         )
@@ -365,6 +373,25 @@ class OpenAISubscriptionResponsesPolicy:
 def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:
     reason = response.text if body is None else body
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
+
+
+def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:
+    normalized = dict(raw)
+    if not _optional_string(normalized.get("id")):
+        slug = _optional_string(normalized.get("slug")) or _optional_string(normalized.get("model"))
+        if slug:
+            normalized["id"] = slug
+    if not _optional_string(normalized.get("name")):
+        display_name = _optional_string(normalized.get("display_name")) or _optional_string(
+            normalized.get("title")
+        )
+        if display_name:
+            normalized["name"] = display_name
+    return normalized
+
+
+def _optional_string(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _optional_mapping(value: Any) -> Mapping[str, Any]:

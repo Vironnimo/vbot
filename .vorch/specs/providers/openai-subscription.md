@@ -60,7 +60,13 @@ and the ChatGPT Codex backend.
   `model.refresh_db` after the OAuth connection is usable.
 - Discovery sends the same auth and account-routing headers as runtime
   requests: `Authorization`, `chatgpt-account-id`, bundled `OpenAI-Beta`, and
-  `originator`.
+  `originator`. `/codex/models` also requires a `client_version` query
+  parameter in plain semantic-version format; the adapter sends the verified
+  Codex client compatibility version `0.136.0`. Older values such as `0.1.0`
+  can return a valid but empty model list.
+- `/codex/models` may return model entries in a top-level `models` list rather
+  than the OpenAI-compatible `data` list, with ids/names exposed as `slug` and
+  `display_name`.
 - `OpenAISubscriptionAdapter.normalize_catalog_entry()` owns catalog
   normalization. It preserves provider-discovered ids, names, modalities, and
   limits, and normalizes capability parameters to vBot runtime names such as
