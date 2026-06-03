@@ -444,6 +444,10 @@ export function isOAuthConnection(connection) {
   return connection?.type === 'oauth';
 }
 
+export function isOAuthDeviceFlowConnection(connection) {
+  return isOAuthConnection(connection) && connection?.connectable === true;
+}
+
 export function getPublicConnectionId(connection) {
   return typeof connection?.id === 'string' ? connection.id : '';
 }

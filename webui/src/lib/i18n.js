@@ -518,6 +518,8 @@ export const englishCatalog = Object.freeze({
     'Static credential configured from environment or data directory.',
   'settings.providers.oauthDescription':
     'OAuth device authorization managed by the provider.',
+  'settings.providers.oauthTokenDescription':
+    'OAuth token configured from environment or data directory.',
   'settings.providers.device_flow.eyebrow': 'OAuth',
   'settings.providers.device_flow.title': 'Connect {provider}',
   'settings.providers.device_flow.instructions':
