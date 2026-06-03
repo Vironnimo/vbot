@@ -133,11 +133,46 @@ class TestChatSession:
             tool_message.to_dict(),
         ]
 
+    def test_load_recovers_partial_trailing_json_line(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)
+        session.append(message)
+        valid_content = session.path.read_bytes()
+        session.path.write_bytes(valid_content + b'{"id":"partial"')
+
+        messages = session.load()
+
+        assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
+        assert session.path.read_bytes() == valid_content
+
+    def test_load_recovers_partial_trailing_utf8_sequence(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        message = ChatMessage.user("Valid", timestamp=FIXED_TIMESTAMP)
+        session.append(message)
+        valid_content = session.path.read_bytes()
+        partial_line = '{"id":"partial","content":"Grü'.encode()[:-1]
+        session.path.write_bytes(valid_content + partial_line)
+
+        messages = session.load()
+
+        assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
+        assert session.path.read_bytes() == valid_content
+
     def test_load_rejects_invalid_json_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
         session.path.write_text("{not-json}\n", encoding="utf-8")
 
         with pytest.raises(ChatSessionError, match="invalid JSON at line 1"):
+            session.load()
+
+    def test_load_rejects_invalid_final_message_line(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.path.write_text(
+            '{"id":"d4e5f6","timestamp":"2026-05-03T14:30:01+00:00","role":"user"}',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ChatSessionError, match="invalid message at line 1"):
             session.load()
 
     def test_load_rejects_invalid_message_line(self, tmp_path):

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.chat.chat import ChatMessage
@@ -23,8 +24,11 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SESSION_FILE_EXTENSION = ".jsonl"
 SESSION_LINE_ENDING = "\n"
+SESSION_LINE_ENDING_BYTES = b"\n"
+SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+_LOGGER = get_logger("sessions")
 
 
 class ChatSession:
@@ -65,9 +69,12 @@ class ChatSession:
     def append(self, message: ChatMessage) -> None:
         """Append one canonical message as a single JSONL line."""
         payload = json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        line = (payload + SESSION_LINE_ENDING).encode("utf-8")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8", newline="") as session_file:
-            session_file.write(payload + SESSION_LINE_ENDING)
+        try:
+            _append_bytes(self.path, line)
+        except OSError as exc:
+            raise ChatSessionError(f"failed to append message to session: {self.id}") from exc
 
     def begin_defer_notes(self) -> None:
         """Defer note persistence until tool-result messages have been appended."""
@@ -155,11 +162,34 @@ class ChatSession:
             raise ChatSessionError(f"session does not exist: {self.path}")
 
         messages: list[ChatMessage] = []
-        with self.path.open("r", encoding="utf-8") as session_file:
-            for line_number, line in enumerate(session_file, start=1):
-                if not line.strip():
+        with self.path.open("rb") as session_file:
+            line_number = 0
+            while True:
+                line_start_offset = session_file.tell()
+                line_bytes = session_file.readline()
+                if line_bytes == b"":
+                    break
+                line_number += 1
+                if not line_bytes.strip():
                     continue
-                messages.append(self._parse_line(line, line_number))
+                try:
+                    messages.append(self._parse_line_bytes(line_bytes, line_number))
+                except UnicodeDecodeError as exc:
+                    if _is_unterminated_line(line_bytes):
+                        self._truncate_partial_tail(
+                            byte_offset=line_start_offset,
+                            line_number=line_number,
+                        )
+                        break
+                    raise ChatSessionError(f"invalid UTF-8 at line {line_number}") from exc
+                except json.JSONDecodeError as exc:
+                    if _is_unterminated_line(line_bytes):
+                        self._truncate_partial_tail(
+                            byte_offset=line_start_offset,
+                            line_number=line_number,
+                        )
+                        break
+                    raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
         return messages
 
     def delete(self) -> None:
@@ -169,12 +199,21 @@ class ChatSession:
 
     @staticmethod
     def _parse_line(line: str, line_number: int) -> ChatMessage:
-        from core.chat.chat import ChatMessage
-
         try:
             data = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
+
+        return ChatSession._message_from_data(data, line_number)
+
+    @staticmethod
+    def _parse_line_bytes(line: bytes, line_number: int) -> ChatMessage:
+        data = json.loads(line.decode("utf-8"))
+        return ChatSession._message_from_data(data, line_number)
+
+    @staticmethod
+    def _message_from_data(data: Any, line_number: int) -> ChatMessage:
+        from core.chat.chat import ChatMessage
 
         if not isinstance(data, dict):
             raise ChatSessionError(f"message at line {line_number} must be an object")
@@ -183,6 +222,27 @@ class ChatSession:
             return ChatMessage.from_dict(data)
         except ChatMessageValidationError as exc:
             raise ChatSessionError(f"invalid message at line {line_number}: {exc}") from exc
+
+    def _truncate_partial_tail(
+        self,
+        *,
+        byte_offset: int,
+        line_number: int,
+    ) -> None:
+        try:
+            with self.path.open("r+b") as session_file:
+                session_file.truncate(byte_offset)
+                session_file.flush()
+                os.fsync(session_file.fileno())
+        except OSError as exc:
+            raise ChatSessionError(
+                f"failed to recover partial session write at line {line_number}"
+            ) from exc
+        _LOGGER.warning(
+            "Recovered session %s by truncating partial JSONL line %s",
+            self.id,
+            line_number,
+        )
 
 
 class ChatSessionManager:
@@ -362,6 +422,28 @@ def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]
         if isinstance(name, str) and isinstance(content, str):
             contexts[name] = content
     return contexts
+
+
+def _append_bytes(path: Path, data: bytes) -> None:
+    file_descriptor = os.open(path, SESSION_APPEND_FLAGS, 0o600)
+    try:
+        _write_all(file_descriptor, data)
+        os.fsync(file_descriptor)
+    finally:
+        os.close(file_descriptor)
+
+
+def _write_all(file_descriptor: int, data: bytes) -> None:
+    written_bytes = 0
+    while written_bytes < len(data):
+        chunk_bytes = os.write(file_descriptor, data[written_bytes:])
+        if chunk_bytes == 0:
+            raise OSError("session append wrote zero bytes")
+        written_bytes += chunk_bytes
+
+
+def _is_unterminated_line(line: bytes) -> bool:
+    return not line.endswith(SESSION_LINE_ENDING_BYTES)
 
 
 def _format_timestamp(timestamp: datetime | None) -> str:
