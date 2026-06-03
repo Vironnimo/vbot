@@ -161,6 +161,10 @@ def _normalize_json_object(raw: Any) -> JsonObject | None:
     return None
 
 
+def _invalid_entity_id_failure(entity_id: str) -> JsonObject:
+    return tool_failure("validation_error", f"invalid entity_id format: {entity_id}")
+
+
 async def _sleep_for_retry(attempt: int) -> None:
     base_delay = _RETRY_INITIAL_DELAY_SECONDS * (_RETRY_BACKOFF_FACTOR**attempt)
     jitter = random.uniform(0, base_delay * _RETRY_JITTER_FACTOR)
@@ -313,7 +317,7 @@ async def _handle_get_state(
     if not entity_id:
         return tool_failure("validation_error", "entity_id is required")
     if not _ENTITY_ID_RE.match(entity_id):
-        return tool_failure("validation_error", f"invalid entity_id format: {entity_id}")
+        return _invalid_entity_id_failure(entity_id)
 
     payload, error = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token)
     if error is not None:
@@ -412,6 +416,10 @@ async def _handle_call_service(
         return tool_failure("validation_error", f"invalid domain: {domain}")
     if not _DOMAIN_SERVICE_RE.match(service):
         return tool_failure("validation_error", f"invalid service: {service}")
+    if entity_id and not _ENTITY_ID_RE.match(entity_id):
+        return _invalid_entity_id_failure(entity_id)
+    if data is not None and "entity_id" in data:
+        return tool_failure("validation_error", "data.entity_id is not allowed; use entity_id")
 
     if domain in _BLOCKED_DOMAINS:
         return tool_failure(
