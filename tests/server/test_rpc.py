@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import re
 from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
@@ -1256,6 +1257,41 @@ async def test_settings_set_key_updates_settings_and_returns_raw_payload(tmp_pat
         "server_host": "127.0.0.1",
         "server_port": 9000,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        (
+            {"key": "compaction", "value": "hello"},
+            r"\$\.compaction: must be an object",
+        ),
+        (
+            {"key": "attachment_max_size_bytes", "value": -1},
+            r"\$\.attachment_max_size_bytes: must be a positive integer",
+        ),
+        (
+            {"key": "server_port", "value": 0},
+            r"\$\.server_port: must be between 1 and 65535",
+        ),
+    ],
+)
+async def test_settings_set_key_rejects_invalid_raw_settings_without_partial_write(
+    tmp_path: Path,
+    params: JsonObject,
+    message: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    original_settings = {"server_port": 9000, "feature_flags": {"logs": True}}
+    state.runtime.storage.save_settings(original_settings)
+
+    response = await dispatch_rpc(state, {"method": "settings.set_key", "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert re.search(message, response["error"]["message"])
+    assert state.runtime.storage.load_settings() == original_settings
 
 
 @pytest.mark.asyncio
