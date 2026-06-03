@@ -216,11 +216,13 @@ class FakeRunManager:
 
 class FakeChatLoop:
     seen_depths: list[int] = []
+    seen_streaming: list[bool] = []
 
     def __init__(self, runtime: Any, *, streaming: bool = False) -> None:
         self._runtime = runtime
         self._streaming = streaming
         self._nesting_depth = 0
+        self.seen_streaming.append(streaming)
 
     async def _execute_run(self, run: Run, content: str) -> ChatMessage:
         self.seen_depths.append(self._nesting_depth)
@@ -914,6 +916,7 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
 ) -> None:
     # Arrange
     FakeChatLoop.seen_depths = []
+    FakeChatLoop.seen_streaming = []
     monkeypatch.setattr(chat_api, "ChatLoop", FakeChatLoop)
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -938,6 +941,7 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     assert result["data"]["status"] == "running"
     assert manager.started[0][0] == "parent"
     assert FakeChatLoop.seen_depths == [4]
+    assert FakeChatLoop.seen_streaming == [True]
 
 
 async def test_subagent_completion_tracker_logs_unexpected_failures(

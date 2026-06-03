@@ -26,6 +26,9 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 ## Conventions
 
 - With `session_id`, spawning routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
+- Child Runs execute through a streaming `ChatLoop`, matching normal live Runs
+  and allowing long provider generations to make progress through stream deltas
+  instead of waiting for one complete non-streaming response.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.
 - Blocking mode waits for completion and returns the result payload.
 - The `subagent` tool emits `subagent_session_started` Run events as soon as a
