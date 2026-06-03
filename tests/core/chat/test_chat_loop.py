@@ -54,7 +54,7 @@ from core.tools import (
     tool_success,
 )
 from core.utils.errors import ConfigError, ProviderError
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_message_tokens
 
 JsonObject = dict[str, Any]
 
@@ -1667,6 +1667,113 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
+    tmp_path: Path,
+) -> None:
+    class SingleCheckpointCompactionService:
+        def __init__(self) -> None:
+            self.compacted = False
+            self.compact_calls = 0
+
+        def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
+            return 90
+
+        def should_auto_compact(
+            self,
+            _input_tokens: int,
+            _context_window: int,
+            _threshold: float,
+        ) -> bool:
+            return not self.compacted
+
+        async def compact(
+            self,
+            messages: list[ChatMessage],
+            *,
+            agent: Any,
+            summary_adapter: Any,
+            summary_model_id: str,
+            storage: Any,
+            settings: Any,
+        ) -> ChatMessage:
+            del agent, summary_adapter, summary_model_id, storage, settings
+
+            self.compacted = True
+            self.compact_calls += 1
+            tail_user = next(
+                message
+                for message in messages
+                if message.role == "user" and message.content == "Weather?"
+            )
+            return ChatMessage.compaction_checkpoint(
+                summary="Compacted prior context.",
+                tail_boundary_id=tail_user.id,
+                compacted_token_count=42,
+            )
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Need weather.",
+                "reasoning_meta": {"encrypted_content": "opaque-current-turn"},
+                "usage": {"input_tokens": 11, "output_tokens": 7},
+                "tool_calls": [
+                    {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+            {"content": "Sunny", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"temp": 22, "city": arguments["city"]}),
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    compaction_service = SingleCheckpointCompactionService()
+
+    assistant = await ChatLoop(
+        runtime,
+        compaction_service=cast(Any, compaction_service),
+    ).send("coder", "Weather?", session_id="session-one")
+
+    continued_messages = adapter.requests[1]["messages"]
+    assert assistant.content == "Sunny"
+    assert compaction_service.compact_calls == 1
+    assert [message["role"] for message in continued_messages] == [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert continued_messages[1]["content"] == (
+        "<system-reminder>\nCompacted prior context.\n</system-reminder>"
+    )
+    assert continued_messages[3]["reasoning"] == "Need weather."
+    assert continued_messages[3]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
+    assert "usage" not in continued_messages[3]
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     tmp_path: Path,
 ) -> None:
@@ -3019,7 +3126,7 @@ Use this skill content.
 async def test_estimation_computes_from_request_message_contents(
     tmp_path: Path,
 ) -> None:
-    """Estimation derives input tokens from request messages and output from response content."""
+    """Estimation derives token counts from structured request and response messages."""
     agent = StubAgent(id="coder", model="openai/gpt-4.1", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -3028,9 +3135,8 @@ async def test_estimation_computes_from_request_message_contents(
 
     # Reconstruct expected estimation from the actual request messages
     request_messages = adapter.requests[0]["messages"]
-    input_text = "".join(msg.get("content", "") or "" for msg in request_messages)
-    expected_input, _ = estimate_tokens(input_text)
-    expected_output, _ = estimate_tokens("Hello world")
+    expected_input = sum(estimate_message_tokens(message)[0] for message in request_messages)
+    expected_output, _ = estimate_message_tokens({"role": "assistant", "content": "Hello world"})
 
     assert assistant.usage == {
         "input_tokens": expected_input,

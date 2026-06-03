@@ -16,7 +16,7 @@ from core.compaction import (
     SummarizationStrategy,
     find_tail_boundary,
 )
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_message_tokens, estimate_tokens
 
 JsonObject = dict[str, Any]
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
@@ -123,7 +123,7 @@ def test_find_tail_boundary_budget_reached_mid_history() -> None:
         _assistant("a3", "ffffffff"),
     ]
 
-    boundary = find_tail_boundary(messages, tail_tokens=5)
+    boundary = find_tail_boundary(messages, tail_tokens=10)
 
     assert boundary == "u2"
 
@@ -144,6 +144,30 @@ def test_find_tail_boundary_exact_boundary_keeps_complete_tool_cycle() -> None:
     tail_turn_tokens = _content_tokens("tail user") + _content_tokens("tail assistant")
 
     boundary = find_tail_boundary(messages, tail_tokens=tail_turn_tokens)
+
+    assert boundary == "u2"
+
+
+def test_find_tail_boundary_counts_tool_calls_in_current_tail_turn() -> None:
+    messages = [
+        _user("u1", "previous small turn"),
+        _assistant("a1", "previous small answer"),
+        _user("u2", "current turn"),
+        _assistant(
+            "a2",
+            None,
+            tool_calls=[
+                {
+                    "id": "call_2",
+                    "name": "write_file",
+                    "arguments": {"payload": "x" * 20_000},
+                }
+            ],
+        ),
+        _tool("t2", tool_call_id="call_2", name="write_file", content="ok"),
+    ]
+
+    boundary = find_tail_boundary(messages, tail_tokens=1_000)
 
     assert boundary == "u2"
 
@@ -207,7 +231,7 @@ async def test_summarization_strategy_compact_happy_path() -> None:
     )
 
     expected_compacted_tokens = sum(
-        _content_tokens(message.content)
+        estimate_message_tokens(message.to_dict())[0]
         for message in messages
         if message.id in {"u1", "a1", "t1", "a1f"}
     )
@@ -242,14 +266,38 @@ def test_compaction_service_should_auto_compact_thresholds() -> None:
 def test_compaction_service_estimate_messages_tokens() -> None:
     service = CompactionService(NoopStrategy())
 
-    estimated = service.estimate_messages_tokens(
+    plain_estimated = service.estimate_messages_tokens(
         [
             {"content": "abcd"},
             {"content": "abcde"},
         ]
     )
+    structured_estimated = service.estimate_messages_tokens(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "reasoning": "Need a large tool call.",
+                "tool_calls": [
+                    {
+                        "id": "call_large",
+                        "name": "write_file",
+                        "arguments": {"payload": "x" * 20_000},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "see attached"},
+                    {"type": "media", "base64": "y" * 1_000, "media_type": "image/png"},
+                ],
+            },
+        ]
+    )
 
-    assert estimated == 3
+    assert plain_estimated == 3
+    assert structured_estimated > 5_000
 
 
 def test_chat_message_compaction_checkpoint_round_trip() -> None:

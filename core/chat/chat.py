@@ -76,7 +76,7 @@ from core.tools.availability import effective_agent_allowed_tools
 from core.tools.skill import load_skill_content
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_message_tokens
 
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
@@ -1220,7 +1220,8 @@ class ChatLoop:
 
         session.append(checkpoint)
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
-        return self._build_request_messages(agent, session)
+        rebuilt_messages = self._build_request_messages(agent, session)
+        return _restore_active_tool_continuation(rebuilt_messages, messages)
 
     def _resolve_context_window(self, agent: Any) -> int | None:
         """Resolve context window for the active agent model from model registry."""
@@ -1930,6 +1931,46 @@ def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
     return data
 
 
+def _restore_active_tool_continuation(
+    rebuilt_messages: list[JsonObject],
+    current_messages: list[JsonObject],
+) -> list[JsonObject]:
+    active_assistant = _active_tool_continuation_assistant(current_messages)
+    if active_assistant is None:
+        return rebuilt_messages
+
+    active_assistant_id = active_assistant.get("id")
+    if not isinstance(active_assistant_id, str):
+        return rebuilt_messages
+
+    restored_messages: list[JsonObject] = []
+    restored = False
+    for message in rebuilt_messages:
+        if message.get("role") == "assistant" and message.get("id") == active_assistant_id:
+            restored_messages.append(dict(active_assistant))
+            restored = True
+            continue
+        restored_messages.append(message)
+    return restored_messages if restored else rebuilt_messages
+
+
+def _active_tool_continuation_assistant(messages: list[JsonObject]) -> JsonObject | None:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "assistant":
+            continue
+        if not message.get("tool_calls"):
+            return None
+        if _is_active_tool_continuation_suffix(messages[index + 1 :]):
+            return dict(message)
+        return None
+    return None
+
+
+def _is_active_tool_continuation_suffix(messages: list[JsonObject]) -> bool:
+    return bool(messages) and all(message.get("role") == "tool" for message in messages)
+
+
 def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | None:
     for message in reversed(messages):
         if message.role == "compaction_checkpoint":
@@ -2032,15 +2073,10 @@ def _apply_usage_estimation(
     approximate input and output token counts.  Marks the result with
     ``"estimated": True`` so the frontend can display a tilde prefix.
     """
-    input_chunks: list[str] = []
-    for request_message in request_messages:
-        content = request_message.get("content")
-        if isinstance(content, str):
-            input_chunks.append(content)
-    input_text = "".join(input_chunks)
-    estimated_input, _ = estimate_tokens(input_text)
-    output_text = message.content if isinstance(message.content, str) else ""
-    estimated_output, _ = estimate_tokens(output_text)
+    estimated_input = sum(
+        estimate_message_tokens(request_message)[0] for request_message in request_messages
+    )
+    estimated_output, _ = estimate_message_tokens(message.to_dict())
     usage: JsonObject = {
         "input_tokens": estimated_input,
         "output_tokens": estimated_output,

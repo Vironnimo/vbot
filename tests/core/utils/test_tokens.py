@@ -4,7 +4,7 @@ Verifies the 4-chars/token heuristic, including edge cases like empty
 strings, exact divisions, remainders, and multi-byte (CJK) characters.
 """
 
-from core.utils.tokens import estimate_tokens
+from core.utils.tokens import estimate_message_tokens, estimate_tokens
 
 # ----- Empty input -----
 
@@ -127,3 +127,48 @@ def test_estimate_tokens_emoji():
 
     # Assert
     assert count == 1
+
+
+def test_estimate_message_tokens_counts_structured_tool_call_payloads():
+    """Structured tool calls are counted by payload size, not by content=None."""
+    # Arrange
+    message = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_large",
+                "name": "write_file",
+                "arguments": {"payload": "x" * 8_000},
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+        "timestamp": "2026-01-01T00:00:00+00:00",
+    }
+
+    # Act
+    count, is_estimate = estimate_message_tokens(message)
+
+    # Assert
+    assert count > 2_000
+    assert is_estimate is True
+
+
+def test_estimate_message_tokens_ignores_storage_metadata():
+    """Storage fields should not affect provider-message estimates."""
+    # Arrange
+    base_message = {"role": "user", "content": "hello"}
+    with_storage_metadata = {
+        **base_message,
+        "id": "message-id-that-should-not-count",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "usage": {"input_tokens": 9_999},
+        "timing": {"duration_ms": 123},
+    }
+
+    # Act
+    base_count, _ = estimate_message_tokens(base_message)
+    metadata_count, _ = estimate_message_tokens(with_storage_metadata)
+
+    # Assert
+    assert metadata_count == base_count
