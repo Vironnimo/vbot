@@ -34,8 +34,9 @@ task-model bindings and target discovery; task-specific execution stays in
 domains such as `speech/`. Providers has a subfolder structure:
 `providers/` contains the adapter ABC, generic OpenAI-compatible and Anthropic
 adapters, OpenAI-compatible provider-specific subclasses for provider deviations,
-GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities, and
-error classes in addition to the registry.
+GitHub Copilot endpoint helpers and runtime policy, shared HTTP utilities,
+MiniMax sparse catalog/thinking handling, and error classes in addition to the
+registry.
 Automation now includes both `TriggerService` for queued programmatic run starts
 and `CronService` for persisted time-based scheduling rooted at `<data_dir>/cron/`.
 

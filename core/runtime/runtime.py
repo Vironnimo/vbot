@@ -26,6 +26,7 @@ from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -96,6 +97,7 @@ _ADAPTER_MAP: dict[
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
     "openrouter": OpenRouterAdapter,
+    "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "github_copilot": GitHubCopilotAdapter,

@@ -11,6 +11,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.github_copilot import GitHubCopilotAdapter
+from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
@@ -27,6 +28,7 @@ __all__ = [
     "AuthConfig",
     "ConnectionConfig",
     "GitHubCopilotAdapter",
+    "MiniMaxAdapter",
     "MistralAdapter",
     "OpenAICompatibleAdapter",
     "OpenCodeGoAdapter",

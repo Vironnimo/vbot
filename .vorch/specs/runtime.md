@@ -109,7 +109,8 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`.
 `get_adapter(provider_id, connection_id)` builds an async provider-token getter
 for the selected connection and instantiates the class selected by
 `ProviderConfig.adapter`. Current adapter keys include `openai_compatible`,
-`opencode_go`, `openrouter`, `mistral`, `github_copilot`, and `anthropic`.
+`opencode_go`, `openrouter`, `mistral`, `minimax`, `github_copilot`, and
+`anthropic`.
 `api_key` connections resolve the static credential through
 `provider_credentials` and receive `StaticTokenGetter`; OAuth connections with
 `OAuthConfig` receive `OAuthTokenGetter` using `runtime.token_store`. OAuth
