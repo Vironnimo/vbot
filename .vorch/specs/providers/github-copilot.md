@@ -21,7 +21,7 @@ GitHub Copilot provider with OAuth Device Flow, endpoint-aware runtime policy, a
 ## Endpoint Policy
 
 - `/chat/completions`: conservative fallback through `OpenAICompatibleAdapter` after Copilot policy filters kwargs.
-- `/responses`: OpenAI Responses-like helper that normalizes output items, tool calls, usage, reasoning metadata, and semantic SSE events.
+- `/responses`: OpenAI Responses-like helper that normalizes output items, tool calls, usage, reasoning metadata, readable reasoning summaries, and semantic SSE events.
 - `/v1/messages`: Anthropic Messages-like helper for Claude-style models, content blocks, tools, thinking/output config, and SSE normalization.
 - `ws:/responses` is ignored; websocket Responses frames are not implemented.
 

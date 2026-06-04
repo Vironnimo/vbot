@@ -911,6 +911,45 @@ def test_stream_emits_visible_reasoning_from_completed_response_output() -> None
     ]
 
 
+def test_stream_emits_visible_reasoning_from_reasoning_output_item() -> None:
+    reasoning_item = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+        "encrypted_content": "opaque",
+    }
+    lines = [
+        _sse("response.output_item.done", {"item": reasoning_item}),
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [reasoning_item],
+                }
+            },
+        ),
+    ]
+
+    assert list(iter_responses_sse_deltas(lines)) == [
+        {"type": "reasoning_delta", "text": "Need docs lookup."},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {"reasoning_items": [reasoning_item]},
+        },
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": "resp_1",
+                "reasoning_items": [reasoning_item],
+                "encrypted_content": ["opaque"],
+            },
+        },
+        {"type": "finish", "reason": "stop"},
+    ]
+
+
 def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status() -> None:
     lines = [
         _sse(
