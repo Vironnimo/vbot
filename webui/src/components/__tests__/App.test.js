@@ -29,6 +29,7 @@ vi.mock('$lib/api.js', () => ({
   RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
   RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
   RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
+  debugStatus: vi.fn().mockResolvedValue({ enabled: false }),
   rpc: (...args) => rpcMock(...args),
   listQueue: (...args) => listQueueMock(...args),
   listLogs: (...args) => listLogsMock(...args),

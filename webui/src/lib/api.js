@@ -836,6 +836,60 @@ export async function getProviderConnectionStatus(
   });
 }
 
+export function debugStatus(options = {}) {
+  return rpc('debug.status', {}, options);
+}
+
+export function debugTraceList(options = {}) {
+  return rpc('debug.trace_list', {}, options);
+}
+
+export function debugTraceGet(traceId, options = {}) {
+  if (!isNonEmptyString(traceId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Trace id must be a non-empty string',
+      {
+        method: 'debug.trace_get',
+      },
+    );
+  }
+
+  return rpc('debug.trace_get', { trace_id: traceId }, options);
+}
+
+export function debugTraceClear(options = {}) {
+  return rpc('debug.trace_clear', {}, options);
+}
+
+export function debugModelProbe(providerId, connectionId, options = {}) {
+  if (!isNonEmptyString(providerId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Provider id must be a non-empty string',
+      {
+        method: 'debug.model_probe',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(connectionId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Connection id must be a non-empty string',
+      {
+        method: 'debug.model_probe',
+      },
+    );
+  }
+
+  return rpc(
+    'debug.model_probe',
+    { provider_id: providerId, connection_id: connectionId },
+    options,
+  );
+}
+
 export function normalizeRpcError(error, options = {}) {
   const code = isNonEmptyString(error?.code)
     ? error.code
