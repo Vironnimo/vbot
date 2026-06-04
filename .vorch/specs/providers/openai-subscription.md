@@ -54,6 +54,11 @@ and the ChatGPT Codex backend.
 - The Codex backend rejects `max_output_tokens`; the adapter filters both
   `max_tokens` and `max_output_tokens` instead of forwarding output-token
   limits from provider defaults or caller kwargs.
+- Reasoning efforts supported by the current Codex model catalog include
+  `low`, `medium`, `high`, and `xhigh`; `max` maps to `xhigh`.
+- Visible reasoning is emitted from Responses reasoning summary deltas,
+  reasoning output-item summaries, and completed response output when the
+  backend supplies readable summary text.
 - Provider defaults are merged before caller kwargs; caller kwargs win.
 - Bundled extra headers are required:
   `OpenAI-Beta: responses=experimental` and `originator: vbot`.

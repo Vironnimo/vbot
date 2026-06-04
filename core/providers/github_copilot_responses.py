@@ -526,7 +526,15 @@ def _output_item_event_deltas(
     if not isinstance(item, Mapping):
         return []
     if item.get("type") == "reasoning":
-        return [{"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [dict(item)]}}]
+        reasoning_deltas: list[dict[str, Any]] = []
+        reasoning = _joined_or_none(_extract_reasoning_parts([item]))
+        reasoning_delta = _reasoning_backfill_delta(reasoning, state)
+        if reasoning_delta is not None:
+            reasoning_deltas.append({"type": "reasoning_delta", "text": reasoning_delta})
+        reasoning_deltas.append(
+            {"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [dict(item)]}}
+        )
+        return reasoning_deltas
     if item.get("type") != "function_call":
         return []
     tool_call_id = _function_call_id(item)

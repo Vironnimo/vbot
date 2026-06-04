@@ -114,7 +114,7 @@ async def test_send_posts_responses_payload_with_subscription_headers() -> None:
                 "parameters": {"type": "object"},
             }
         ],
-        "reasoning": {"effort": "high", "summary": "auto"},
+        "reasoning": {"effort": "xhigh", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "store": False,
@@ -127,6 +127,23 @@ async def test_send_posts_responses_payload_with_subscription_headers() -> None:
         "tool_calls": None,
         "usage": {"input_tokens": 2, "output_tokens": 3},
     }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_preserves_xhigh_reasoning_effort() -> None:
+    """GPT-5.5 advertises xhigh reasoning through the Codex models endpoint."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAISubscriptionAdapter(_config(), access_token)
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+    )
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["reasoning"] == {"effort": "xhigh", "summary": "auto"}
 
 
 @respx.mock
