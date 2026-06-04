@@ -30,6 +30,11 @@
       labelKey: 'navigation.logs',
       labelFallback: 'Logs',
     },
+    {
+      id: 'debug',
+      labelKey: 'navigation.debug',
+      labelFallback: 'Debug',
+    },
   ]);
 </script>
 
@@ -40,6 +45,7 @@
   import AgentsView from './components/AgentsView.svelte';
   import ChatView from './components/ChatView.svelte';
   import CronView from './components/CronView.svelte';
+  import DebugView from './components/DebugView.svelte';
   import LogsView from './components/LogsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
@@ -49,7 +55,7 @@
     connect,
     disconnect,
   } from '$lib/connectionState.js';
-  import { rpc } from '$lib/api.js';
+  import { rpc, debugStatus } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import {
@@ -61,6 +67,11 @@
   import './styles/app.css';
 
   const navigationItems = NAVIGATION_ITEMS;
+  const visibleNavigationItems = $derived(
+    debugEnabled
+      ? navigationItems
+      : navigationItems.filter((item) => item.id !== 'debug'),
+  );
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
@@ -84,6 +95,7 @@
   };
 
   let activeViewId = $state(navigationItems[0].id);
+  let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
   let agentsRefreshToken = $state(0);
@@ -282,6 +294,16 @@
       desktopCapabilities = { wakeword: false };
     }
 
+    debugStatus()
+      .then((result) => {
+        if (!cancelled) {
+          debugEnabled = result?.enabled ?? false;
+        }
+      })
+      .catch(() => {
+        // debug RPC unavailable — keep debug navigation hidden
+      });
+
     return () => {
       cancelled = true;
       disconnect(connectionState);
@@ -295,7 +317,7 @@
 </script>
 
 <AppShell
-  items={navigationItems}
+  items={visibleNavigationItems}
   {activeViewId}
   onSelectView={selectView}
   connectionStatus={connectionState.status}
@@ -336,6 +358,8 @@
     />
   {:else if activeViewId === 'logs'}
     <LogsView />
+  {:else if activeViewId === 'debug'}
+    <DebugView {debugEnabled} />
   {/if}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>

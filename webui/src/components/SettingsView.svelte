@@ -80,6 +80,11 @@
     summary_model: null,
   });
 
+  const DEBUG_SETTING_DEFAULTS = Object.freeze({
+    enabled: false,
+    trace_limit: 50,
+  });
+
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
@@ -115,6 +120,22 @@
           ? tailTokens
           : COMPACTION_SETTING_DEFAULTS.tail_tokens,
       summary_model: summaryModel.length > 0 ? summaryModel : null,
+    };
+  }
+
+  function getDebugSettings(rawSettings) {
+    const debug = rawSettings?.debug ?? {};
+    const traceLimit = Number(debug.trace_limit);
+
+    return {
+      enabled:
+        typeof debug.enabled === 'boolean'
+          ? debug.enabled
+          : DEBUG_SETTING_DEFAULTS.enabled,
+      trace_limit:
+        Number.isInteger(traceLimit) && traceLimit >= 1 && traceLimit <= 500
+          ? traceLimit
+          : DEBUG_SETTING_DEFAULTS.trace_limit,
     };
   }
 
@@ -244,6 +265,17 @@
         ),
     },
     {
+      id: 'debug',
+      labelKey: 'debug.settings',
+      labelFallback: 'Debug',
+      label: () => t('debug.settings', 'Debug'),
+      subtitle: () =>
+        t(
+          'debug.settingsSubtitle',
+          'Control debug tracing of provider requests and responses.',
+        ),
+    },
+    {
       id: 'specialized_models',
       labelKey: 'settings.specializedModels.title',
       labelFallback: 'Specialized Models',
@@ -313,6 +345,7 @@
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let recallSettings = $state(getRecallSettings(null));
   let webSearchSettings = $state(getWebSearchSettings(null));
+  let debugSettings = $state(getDebugSettings(null));
   let taskModelBindings = $state(normalizeTaskModelSettings(null));
   let taskModelTargetsByType = $state({});
   let taskModelSchemasByType = $state({});
@@ -347,6 +380,7 @@
   let compactionSettingsAutoSaveTimer = null;
   let recallSettingsAutoSaveTimer = null;
   let webSearchSettingsAutoSaveTimer = null;
+  let debugSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
@@ -482,6 +516,11 @@
       saving ||
       webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
   );
+  let debugSettingsSaveDisabled = $derived(
+    loading ||
+      saving ||
+      debugSettingsMatch(debugSettings, getDebugSettings(settings)),
+  );
   let taskModelSaveDisabled = $derived(
     loading ||
       saving ||
@@ -503,6 +542,7 @@
       clearCompactionSettingsAutoSaveTimer();
       clearRecallSettingsAutoSaveTimer();
       clearWebSearchSettingsAutoSaveTimer();
+      clearDebugSettingsAutoSaveTimer();
     };
   });
 
@@ -642,6 +682,25 @@
     };
   });
 
+  $effect(() => {
+    if (activePanelId !== 'debug') {
+      return;
+    }
+
+    if (debugSettingsSaveDisabled) {
+      return;
+    }
+
+    debugSettingsAutoSaveTimer = setTimeout(() => {
+      debugSettingsAutoSaveTimer = null;
+      void saveDebugSettings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearDebugSettingsAutoSaveTimer();
+    };
+  });
+
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
@@ -701,6 +760,7 @@
     compactionSettings = getCompactionSettings(nextSettings);
     recallSettings = getRecallSettings(nextSettings);
     webSearchSettings = getWebSearchSettings(nextSettings);
+    debugSettings = getDebugSettings(nextSettings);
     taskModelBindings = normalizeTaskModelSettings(nextSettings);
     newSkillDirectory = '';
     init(language);
@@ -902,6 +962,28 @@
     }
   }
 
+  async function saveDebugSettings() {
+    if (debugSettingsSaveDisabled) {
+      return;
+    }
+
+    saving = true;
+    saveError = '';
+
+    try {
+      const nextSettings = await rpc('settings.update', {
+        debug: getDebugSettings({ debug: debugSettings }),
+      });
+      commitSettings(nextSettings);
+      debugSettings = getDebugSettings(nextSettings);
+      showSettingsToast(t('debug.settings', 'Debug'), 'success');
+    } catch (error) {
+      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   async function ensureTaskModelPanelLoaded() {
     if (taskModelPanelLoaded || taskModelLoading) {
       return;
@@ -1026,6 +1108,13 @@
     if (webSearchSettingsAutoSaveTimer !== null) {
       clearTimeout(webSearchSettingsAutoSaveTimer);
       webSearchSettingsAutoSaveTimer = null;
+    }
+  }
+
+  function clearDebugSettingsAutoSaveTimer() {
+    if (debugSettingsAutoSaveTimer !== null) {
+      clearTimeout(debugSettingsAutoSaveTimer);
+      debugSettingsAutoSaveTimer = null;
     }
   }
 
@@ -1366,6 +1455,16 @@
     return (
       normalizedLeft.provider === normalizedRight.provider &&
       normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
+    );
+  }
+
+  function debugSettingsMatch(left, right) {
+    const normalizedLeft = getDebugSettings({ debug: left });
+    const normalizedRight = getDebugSettings({ debug: right });
+
+    return (
+      normalizedLeft.enabled === normalizedRight.enabled &&
+      normalizedLeft.trace_limit === normalizedRight.trace_limit
     );
   }
 
@@ -2643,6 +2742,117 @@
                 ? t('common.saving', 'Saving…')
                 : t('settings.webSearch.save', 'Save')}
             </button>
+          </div>
+        {:else if activePanelId === 'debug'}
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('debug.enabled', 'Enable debug mode')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'debug.enabledDescription',
+                  'Capture provider requests and responses for inspection.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--checkbox">
+              <label class="s-checkbox-wrap">
+                <input
+                  class="s-checkbox"
+                  type="checkbox"
+                  checked={debugSettings.enabled === true}
+                  aria-label={t('debug.enabled', 'Enable debug mode')}
+                  onchange={(event) => {
+                    debugSettings = {
+                      ...debugSettings,
+                      enabled: event.currentTarget.checked,
+                    };
+                    saveError = '';
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          <div class="s-row">
+            <div class="s-row-info">
+              <div class="s-row-label">
+                {t('debug.traceLimit', 'Trace limit')}
+              </div>
+              <div class="s-row-desc">
+                {t(
+                  'debug.traceLimitDescription',
+                  'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
+                )}
+              </div>
+            </div>
+            <div class="s-row-control s-row-control--number">
+              <input
+                id="settings-debug-trace-limit"
+                class="s-input"
+                type="number"
+                min="1"
+                max="500"
+                step="1"
+                value={debugSettings.trace_limit}
+                aria-label={t('debug.traceLimit', 'Trace limit')}
+                oninput={(event) => {
+                  const rawValue = event.currentTarget.value;
+                  if (rawValue === '') {
+                    debugSettings = {
+                      ...debugSettings,
+                      trace_limit: rawValue,
+                    };
+                    saveError = '';
+                    return;
+                  }
+                  const numberValue = Number(rawValue);
+                  if (
+                    Number.isInteger(numberValue) &&
+                    numberValue >= 1 &&
+                    numberValue <= 500
+                  ) {
+                    debugSettings = {
+                      ...debugSettings,
+                      trace_limit: numberValue,
+                    };
+                    saveError = '';
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          <div class="s-debug-warning">
+            <div class="s-debug-warning-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M8 2L1 14h14L8 2z" />
+                <path d="M8 7v2" />
+                <circle
+                  cx="8"
+                  cy="11.5"
+                  r="0.5"
+                  fill="currentColor"
+                  stroke="none"
+                />
+              </svg>
+            </div>
+            <p class="s-debug-warning-text">
+              {t(
+                'debug.localWarning',
+                'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
+              )}
+            </p>
           </div>
         {:else if activePanelId === 'specialized_models'}
           {#if taskModelLoading}
@@ -3969,6 +4179,31 @@
 
   .s-refresh-button {
     white-space: nowrap;
+  }
+
+  .s-debug-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 20px;
+    padding: 12px 14px;
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: var(--r-md);
+    background: rgba(245, 158, 11, 0.06);
+    color: var(--text-med);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .s-debug-warning-icon {
+    flex-shrink: 0;
+    margin-top: 1px;
+    color: var(--amber);
+  }
+
+  .s-debug-warning-text {
+    margin: 0;
+    min-width: 0;
   }
 
   .s-sticky-footer {

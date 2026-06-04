@@ -16,6 +16,7 @@ export const englishCatalog = Object.freeze({
   'navigation.systemPrompt': 'System Prompt',
   'navigation.settings': 'Settings',
   'navigation.logs': 'Logs',
+  'navigation.debug': 'Debug',
 
   'common.archive': 'Archive',
   'common.alreadySaved': 'Already saved',
@@ -616,6 +617,60 @@ export const englishCatalog = Object.freeze({
   'logs.stream.reconnecting': 'Reconnecting…',
   'logs.stream.error': 'Live update error',
   'logs.stream.idle': 'Idle',
+
+  'debug.eyebrow': 'Debug',
+  'debug.title': 'Debug',
+  'debug.subtitle': 'Provider wire traces and diagnostics',
+  'debug.status': 'Status',
+  'debug.statusCount': 'Traces: {count} / {limit}',
+  'debug.traceList': 'Traces',
+  'debug.traceDetail': 'Trace Detail',
+  'debug.modelProbe': 'Model Probe',
+
+  'debug.settings': 'Debug',
+  'debug.enabled': 'Enable debug mode',
+  'debug.traceLimit': 'Trace limit',
+  'debug.localWarning':
+    'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
+
+  'debug.clearing': 'Clearing\u2026',
+
+  'debug.request': 'Request',
+  'debug.requestMethod': 'Method',
+  'debug.requestUrl': 'URL',
+  'debug.requestHeaders': 'Headers',
+  'debug.requestBody': 'Body',
+  'debug.response': 'Response',
+  'debug.responseStatus': 'Status',
+  'debug.responseHeaders': 'Headers',
+  'debug.responseBody': 'Body',
+  'debug.streamEvents': 'Stream Events',
+  'debug.streamEventIndex': 'Event {n}',
+  'debug.streamRaw': 'Raw',
+  'debug.streamParsed': 'Parsed',
+  'debug.noStreamEvents': 'No stream events',
+  'debug.normalizedData': 'Normalized Data',
+
+  'debug.metadata': 'Metadata',
+
+  'debug.emptyState':
+    'No traces captured yet. Enable debug mode in Settings and send a message to start recording provider requests and responses.',
+
+  'debug.clearConfirm': 'Clear all traces? This cannot be undone.',
+
+  'debug.modelProbe.run': 'Probe',
+  'debug.modelProbe.provider': 'Provider',
+  'debug.modelProbe.connection': 'Connection',
+
+  'debug.modelProbe.modelCount': '{count} models',
+
+  'debug.modelProbe.rawResponse': 'Raw Response',
+  'debug.modelProbe.normalizedPreview': 'Normalized Preview',
+
+  'debug.modelProbe.selectProvider': 'Select a provider',
+  'debug.modelProbe.selectConnection': 'Select a connection',
+
+  'debug.emptyHeader': '(none)',
 
   'app.serverStatus': 'Local UI placeholder',
   'app.statusPlaceholder': 'Local UI placeholder',
