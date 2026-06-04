@@ -22,6 +22,7 @@ from uuid import uuid4
 import httpx
 
 from core.debug import DebugTraceStore
+from core.debug.redaction import redact_headers, redact_url
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
@@ -104,33 +105,22 @@ def _save_model_probe_trace(
                 "connection_id": connection_id,
                 "request": {
                     "method": "GET",
-                    "url": url,
-                    "headers": _redact_auth_headers(headers),
+                    "url": redact_url(url),
+                    "headers": redact_headers(headers),
                 },
                 "response": {
                     "status_code": status_code,
-                    "headers": response_headers,
+                    "headers": redact_headers(response_headers),
                     "body": raw_body,
                 },
                 "duration_ms": duration_ms,
                 "status_code": status_code,
                 "request_method": "GET",
-                "request_url": url,
+                "request_url": redact_url(url),
             },
         )
     except Exception:
         _logger.warning("Failed to persist model probe trace", exc_info=True)
-
-
-_SENSITIVE_HEADER_NAMES = frozenset({"authorization", "x-api-key"})
-
-
-def _redact_auth_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Replace values of known sensitive headers with a placeholder."""
-    return {
-        name: "[REDACTED]" if name.lower() in _SENSITIVE_HEADER_NAMES else value
-        for name, value in headers.items()
-    }
 
 
 def _build_model_preview(raw_body: str, status_code: int) -> JsonObject:

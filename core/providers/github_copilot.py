@@ -291,7 +291,6 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                         error_body,
                         0,
                     )
-                    self._debug_recorder.finish()
                 detail = _http_error_detail(response, error_body)
                 classify_http_status(response.status_code, detail=detail)
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
