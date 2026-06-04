@@ -64,12 +64,17 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "recall",
         "model_tasks",
         "web_search",
+        "debug",
     }
 )
 DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
 DEFAULT_WEB_SEARCH_SETTINGS = {
     "provider": DEFAULT_WEB_SEARCH_PROVIDER,
     "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
+}
+DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
+    "enabled": False,
+    "trace_limit": 50,
 }
 COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
     "auto": True,
@@ -91,6 +96,7 @@ PHASE_TWO_DIRECTORIES = (
     "attachments",
     "channels",
     "cron",
+    "debug",
     "oauth",
     "prompts",
     "recall",
@@ -296,6 +302,11 @@ class StorageManager:
                     settings,
                     settings_update["model_tasks"],
                 )
+            if "debug" in settings_update:
+                updated_sections["debug"] = self._apply_debug_settings(
+                    settings,
+                    settings_update["debug"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -415,6 +426,12 @@ class StorageManager:
         settings = self.load_settings()
         return self._normalize_recall_settings(settings.get("recall"))
 
+    def load_debug_settings(self) -> dict[str, Any]:
+        """Return normalized persisted debug settings."""
+
+        settings = self.load_settings()
+        return self._normalize_debug_settings(settings.get("debug"))
+
     def load_web_search_settings(self) -> dict[str, Any]:
         """Return normalized persisted web search provider settings."""
 
@@ -449,6 +466,34 @@ class StorageManager:
         normalized_recall = self._normalize_recall_settings(recall)
         settings["recall"] = normalized_recall
         return dict(normalized_recall)
+
+    def update_debug_settings(self, debug: Mapping[str, Any]) -> dict[str, Any]:
+        """Persist the supported debug settings subset and return it."""
+
+        return self.update_settings(lambda settings: self._apply_debug_settings(settings, debug))
+
+    def _apply_debug_settings(
+        self,
+        settings: dict[str, Any],
+        debug: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Merge debug settings into an in-memory settings mapping."""
+
+        if not isinstance(debug, Mapping):
+            raise StorageError("Debug settings must be a mapping")
+
+        unsupported_fields = sorted(set(debug) - {"enabled", "trace_limit"})
+        if unsupported_fields:
+            raise StorageError(f"Unsupported debug settings: {', '.join(unsupported_fields)}")
+
+        normalized_debug = self._normalize_debug_settings(
+            {
+                **self._normalize_debug_settings(settings.get("debug")),
+                **dict(debug),
+            }
+        )
+        settings["debug"] = normalized_debug
+        return dict(normalized_debug)
 
     def update_web_search_settings(self, web_search: Mapping[str, Any]) -> dict[str, Any]:
         """Persist the supported web search provider settings and return them."""
@@ -997,6 +1042,34 @@ class StorageManager:
         return {"backend": backend.strip()}
 
     @classmethod
+    def _normalize_debug_settings(cls, debug: Any) -> dict[str, Any]:
+        section = cls._coerce_debug_section(debug)
+        return {
+            "enabled": cls._normalize_debug_enabled(section.get("enabled")),
+            "trace_limit": cls._normalize_debug_trace_limit(section.get("trace_limit")),
+        }
+
+    @staticmethod
+    def _normalize_debug_enabled(value: Any) -> bool:
+        if value is None:
+            return cast("bool", DEBUG_SETTING_DEFAULTS["enabled"])
+        if not isinstance(value, bool):
+            raise StorageError("Debug setting enabled must be a boolean")
+        return value
+
+    @staticmethod
+    def _normalize_debug_trace_limit(value: Any) -> int:
+        if value is None:
+            return cast("int", DEBUG_SETTING_DEFAULTS["trace_limit"])
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise StorageError("Debug setting trace_limit must be an integer")
+        if value <= 0:
+            raise StorageError("Debug setting trace_limit must be positive")
+        if value > 500:
+            raise StorageError("Debug setting trace_limit must be at most 500")
+        return value
+
+    @classmethod
     def _normalize_web_search_settings(cls, web_search: Any) -> dict[str, Any]:
         section = cls._coerce_web_search_section(web_search)
         provider = section.get("provider", DEFAULT_WEB_SEARCH_SETTINGS["provider"])
@@ -1106,6 +1179,14 @@ class StorageManager:
         if not isinstance(recall, Mapping):
             raise StorageError("Expected settings.recall to be an object")
         return dict(recall)
+
+    @staticmethod
+    def _coerce_debug_section(debug: Any) -> dict[str, Any]:
+        if debug is None:
+            return {}
+        if not isinstance(debug, Mapping):
+            raise StorageError("Expected settings.debug to be an object")
+        return dict(debug)
 
     @staticmethod
     def _coerce_defaults_section(defaults: Any) -> dict[str, Any]:

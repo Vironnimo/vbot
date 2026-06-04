@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.debug.store import DebugTraceStore
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import SettingsValidationError, parse_settings_update, validate_settings_data
@@ -164,6 +165,7 @@ def _settings_response(state: Any) -> JsonObject:
     compaction = runtime.storage.load_compaction_settings()
     recall = runtime.storage.load_recall_settings()
     web_search = runtime.storage.load_web_search_settings()
+    debug = runtime.storage.load_debug_settings()
     model_tasks = runtime.storage.load_model_task_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
@@ -199,6 +201,11 @@ def _settings_response(state: Any) -> JsonObject:
             "available_providers": sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS),
             "searxng": dict(web_search["searxng"]),
         },
+        "debug": {
+            "enabled": debug["enabled"],
+            "trace_limit": debug["trace_limit"],
+            "trace_count": _trace_count(runtime),
+        },
         "model_tasks": model_tasks,
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)
@@ -208,6 +215,19 @@ def _settings_response(state: Any) -> JsonObject:
             "directories": skill_directory_loader(),
         }
     return response
+
+
+def _trace_count(runtime: Any) -> int:
+    """Return the number of stored debug traces, or 0 if the store is unavailable."""
+    try:
+        debug_settings = runtime.storage.load_debug_settings()
+        store = DebugTraceStore(
+            data_dir=runtime.storage.data_dir,
+            trace_limit=debug_settings.get("trace_limit", 50),
+        )
+        return len(store.get_traces())
+    except Exception:
+        return 0
 
 
 def _server_bind_response(state: Any) -> JsonObject:

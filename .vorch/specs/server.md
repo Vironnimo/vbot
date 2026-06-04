@@ -36,7 +36,9 @@ Clients call the vBot server contract; provider wire details stay behind
   `prompt.preview`, `settings.get_raw`, `settings.set_key`, `cron.create`, `cron.list`, `cron.update`,
   `cron.delete`, `cron.enable`, `cron.disable`, `task_model.settings`,
   `task_model.update`, `task_model.list_targets`, `task_model.options`,
-  `log.list`, and `log.read`.
+  `log.list`, `log.read`, `settings.get`, `settings.update`,
+  `debug.status`, `debug.trace_list`, `debug.trace_get`, `debug.trace_clear`, and
+  `debug.model_probe`.
 - `connection.list` returns all configured provider connections as `{ id, provider_id, type, label, usable }`, where `id` uses `<provider>:<connection-id>` and `usable` means the connection credential is present and non-empty.
 - `provider.set_key` accepts `{ provider_id, value, connection_id? }`, resolves the target API-key connection, writes the connection's configured `credential_key` to the data-dir `.env`, reloads runtime provider credentials, and returns `{ provider_id, connection_id, credential_key, configured }`. If `connection_id` is omitted, the provider must have exactly one API-key connection. OAuth connections are rejected; the secret value is never returned.
 - OAuth provider RPCs use the same public compositional `connection_id` format as
@@ -79,6 +81,18 @@ Clients call the vBot server contract; provider wire details stay behind
   each parsed entry includes `timestamp`, `level`, `logger_name`, `message`,
   and `continuation` for multiline tails. `cursor` is a short-lived handoff
   token for the follow-up log WebSocket subscription.
+- `debug.status` returns `{ enabled, trace_limit, trace_count, data_directory }`.
+  Always available regardless of `debug.enabled`.
+- `debug.trace_list` returns metadata entries from the trace index, newest first.
+  Gated on `debug.enabled`.
+- `debug.trace_get` accepts `{ trace_id }` and returns the full sanitized trace.
+  Gated on `debug.enabled`.
+- `debug.trace_clear` deletes all trace files and the index. Always allowed
+  (not gated on `debug.enabled`).
+- `debug.model_probe` accepts `{ provider_id, connection_id }`, fetches that
+  connection's `models_endpoint`, stores a `model_probe` trace, and returns
+  `{ status, raw_response, model_preview }`. Does not write model catalog
+  resources or reload the model registry. Gated on `debug.enabled`.
 - `prompt.list`, `prompt.update`, and `prompt.reset` use `core/prompts/` for
   editable fragment order, variable metadata, scope validation, and
   prompt-specific name validation. Each accepts optional

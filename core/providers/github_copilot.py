@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from core.debug.recorder import DebugContext
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
@@ -48,6 +52,20 @@ from core.utils.retry import retry_async
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
+
+    # ------------------------------------------------------------------
+    # Debug hooks
+    # ------------------------------------------------------------------
+
+    def set_debug_context(self, ctx: DebugContext) -> None:
+        """Store debug context and start a recorder request if active."""
+        self._debug_context = ctx
+        if self._debug_recorder is not None:
+            self._debug_recorder.start_request(ctx)
+
+    # ------------------------------------------------------------------
+    # Payload / request helpers
+    # ------------------------------------------------------------------
 
     def _build_payload(
         self,
@@ -188,19 +206,52 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         return request_kwargs
 
     async def _post_json(self, endpoint_path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        t0 = time.monotonic()
+
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            if self._debug_recorder is not None:
+                full_url = str(self._client.base_url).rstrip("/") + endpoint_path
+                self._debug_recorder.capture_request("POST", full_url, headers, payload)
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
             except httpx.TimeoutException as exc:
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
 
-            classify_http_status(response.status_code, detail=_http_error_detail(response))
-            return dict(response.json())
+            try:
+                classify_http_status(response.status_code, detail=_http_error_detail(response))
+                body = dict(response.json())
+                if self._debug_recorder is not None:
+                    duration_ms = int((time.monotonic() - t0) * 1000)
+                    self._debug_recorder.capture_response(
+                        response.status_code,
+                        dict(response.headers),
+                        body,
+                        duration_ms,
+                    )
+                return body
+            except Exception as exc:
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_error(exc)
+                    self._debug_recorder.capture_response(
+                        response.status_code,
+                        dict(response.headers),
+                        response.text,
+                        int((time.monotonic() - t0) * 1000),
+                    )
+                raise
 
-        return await retry_async(_do_request)
+        try:
+            return await retry_async(_do_request)
+        finally:
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
 
     async def _connect_stream(
         self,
@@ -210,6 +261,9 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         headers = await self._build_headers()
 
         async def _connect() -> httpx.Response:
+            if self._debug_recorder is not None:
+                full_url = str(self._client.base_url).rstrip("/") + endpoint_path
+                self._debug_recorder.capture_request("POST", full_url, headers, payload)
             request = self._client.build_request(
                 "POST",
                 endpoint_path,
@@ -219,19 +273,45 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             try:
                 response = await self._client.send(request, stream=True)
             except httpx.TimeoutException as exc:
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
 
             if response.status_code >= 400:
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_response(
+                        response.status_code,
+                        dict(response.headers),
+                        error_body,
+                        0,
+                    )
                 detail = _http_error_detail(response, error_body)
                 classify_http_status(response.status_code, detail=detail)
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
+
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_response(
+                    response.status_code,
+                    dict(response.headers),
+                    None,
+                    0,
+                )
+                # Let finish() compute the full wall-clock duration for streaming.
+                self._debug_recorder._trace_data.pop("duration_ms", None)
             return response
 
-        return await retry_async(_connect)
+        try:
+            return await retry_async(_connect)
+        except Exception:
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
+            raise
 
     async def _stream_responses(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_stream(RESPONSES_ENDPOINT, payload)
@@ -244,22 +324,36 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                     event_lines.append(line)
                     continue
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if self._debug_recorder is not None:
+                        self._debug_recorder.capture_stream_event("\n".join(event_lines), delta)
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
                 event_lines = []
             if event_lines:
                 for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if self._debug_recorder is not None:
+                        self._debug_recorder.capture_stream_event("\n".join(event_lines), delta)
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
             if not seen_finish_delta:
                 raise NetworkError("Stream ended without response completion event")
         except httpx.ReadError as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise wrap_network_error(exc) from exc
+        except Exception as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
+            raise
         finally:
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
             await response.aclose()
 
     async def _stream_messages(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
@@ -277,16 +371,28 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                         retryable=False,
                     )
                 for delta in normalize_copilot_messages_stream_event(parsed, state):
+                    if self._debug_recorder is not None:
+                        self._debug_recorder.capture_stream_event(data, delta)
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
             if not seen_finish_delta:
                 raise NetworkError("Stream ended without message stop reason")
         except httpx.ReadError as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise wrap_network_error(exc) from exc
+        except Exception as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
+            raise
         finally:
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
             await response.aclose()
 
     @classmethod

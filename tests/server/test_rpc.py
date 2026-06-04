@@ -515,6 +515,9 @@ class StubStorage:
             "searxng": {"base_url": base_url.strip()},
         }
 
+    def load_debug_settings(self) -> JsonObject:
+        return {"enabled": False, "trace_limit": 50}
+
     def load_model_task_settings(self) -> JsonObject:
         stored = self._settings.get("model_tasks")
         return dict(stored) if isinstance(stored, dict) else {}
@@ -1140,13 +1143,8 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             ],
             "custom_endpoints": {"supported": False, "items": []},
         },
-        "skills": {
-            "default_directory": str(tmp_path / "skills"),
-            "directories": [],
-        },
         "appearance": {"language": "en", "available_languages": ["en"]},
         "defaults": {},
-        "model_tasks": {},
         "subagents": {
             "max_subagent_depth": 4,
             "max_subagents_per_turn": 8,
@@ -1166,6 +1164,16 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "provider": "brave",
             "available_providers": ["brave", "searxng"],
             "searxng": {"base_url": "http://localhost:8888"},
+        },
+        "debug": {
+            "enabled": False,
+            "trace_limit": 50,
+            "trace_count": 0,
+        },
+        "model_tasks": {},
+        "skills": {
+            "default_directory": str(tmp_path / "skills"),
+            "directories": [],
         },
     }
     assert "sk-live-secret" not in str(response)
