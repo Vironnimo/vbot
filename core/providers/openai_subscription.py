@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from core.debug import DebugContext
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import classify_http_status, wrap_network_error
@@ -150,6 +153,12 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
+    def set_debug_context(self, ctx: DebugContext) -> None:
+        """Store debug context and start a new trace if a recorder is active."""
+        self._debug_context = ctx
+        if self._debug_recorder is not None:
+            self._debug_recorder.start_request(ctx)
+
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -249,7 +258,7 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         )
 
     async def _post_json(self, endpoint_path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        async def _do_request() -> dict[str, Any]:
+        async def _do_request() -> tuple[dict[str, str], httpx.Response, dict[str, Any]]:
             headers = await self._build_headers()
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
@@ -259,9 +268,28 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
                 raise wrap_network_error(exc) from exc
 
             classify_http_status(response.status_code, detail=_http_error_detail(response))
-            return dict(response.json())
+            return headers, response, dict(response.json())
 
-        return await retry_async(_do_request)
+        debug_recorder = self._debug_recorder
+        try:
+            headers, response, result = await retry_async(_do_request)
+        except Exception as exc:
+            if debug_recorder is not None:
+                debug_recorder.capture_error(exc)
+                debug_recorder.finish()
+            raise
+
+        if debug_recorder is not None:
+            debug_recorder.capture_request("POST", endpoint_path, headers, payload)
+            debug_recorder.capture_response(
+                response.status_code,
+                dict(response.headers),
+                result,
+                0,
+            )
+            debug_recorder.finish()
+
+        return result
 
     async def _connect_stream(
         self,
@@ -294,36 +322,58 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
                 raise ProviderError(f"Provider error: {response.status_code}", retryable=False)
             return response
 
-        return await retry_async(_connect)
+        try:
+            return await retry_async(_connect)
+        finally:
+            debug_recorder = self._debug_recorder
+            if debug_recorder is not None:
+                debug_recorder.capture_request("POST", endpoint_path, headers, payload)
 
     async def _stream_responses(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        response = await self._connect_stream(CODEX_RESPONSES_ENDPOINT, payload)
-        state = ResponsesStreamState()
-        event_lines: list[str] = []
-        seen_finish_delta = False
+        debug_recorder = self._debug_recorder
         try:
-            async for line in response.aiter_lines():
-                if line:
-                    event_lines.append(line)
-                    continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-                event_lines = []
-            if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
-                    if delta.get("type") == "finish":
-                        seen_finish_delta = True
-                    yield delta
-            if not seen_finish_delta:
-                raise NetworkError("Stream ended without response completion event")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            raise wrap_network_error(exc) from exc
+            response = await self._connect_stream(CODEX_RESPONSES_ENDPOINT, payload)
+            state = ResponsesStreamState()
+            event_lines: list[str] = []
+            seen_finish_delta = False
+            try:
+                async for line in response.aiter_lines():
+                    if line:
+                        event_lines.append(line)
+                        continue
+                    if debug_recorder is not None and event_lines:
+                        raw_frame = "\n".join(event_lines)
+                    for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                        if debug_recorder is not None and event_lines:
+                            debug_recorder.capture_stream_event(raw_frame, delta)
+                        if delta.get("type") == "finish":
+                            seen_finish_delta = True
+                        yield delta
+                    event_lines = []
+                if event_lines:
+                    if debug_recorder is not None:
+                        raw_frame = "\n".join(event_lines)
+                    for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                        if debug_recorder is not None:
+                            debug_recorder.capture_stream_event(raw_frame, delta)
+                        if delta.get("type") == "finish":
+                            seen_finish_delta = True
+                        yield delta
+                if not seen_finish_delta:
+                    raise NetworkError("Stream ended without response completion event")
+            except httpx.ReadError as exc:
+                raise NetworkError(f"Stream read failed: {exc}") from exc
+            except httpx.TimeoutException as exc:
+                raise wrap_network_error(exc) from exc
+            finally:
+                await response.aclose()
+        except Exception as exc:
+            if debug_recorder is not None:
+                debug_recorder.capture_error(exc)
+            raise
         finally:
-            await response.aclose()
+            if debug_recorder is not None:
+                debug_recorder.finish()
 
 
 @dataclass(frozen=True)

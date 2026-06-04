@@ -16,6 +16,7 @@ from core.automation import CronService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
+from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.extensions import ExtensionRegistry
 from core.image import ImageService
 from core.memory import MemoryService
@@ -914,6 +915,15 @@ class Runtime:
             connection.auth,
             model_lookup=self._model_lookup_for(provider_id),
         )
+
+        if self._storage is not None:
+            debug_settings = self._storage.load_debug_settings()
+            if debug_settings.get("enabled", False):
+                trace_limit = debug_settings.get("trace_limit", 50)
+                debug_store = DebugTraceStore(self._data_dir, trace_limit=trace_limit)
+                debug_recorder = ProviderDebugRecorder(store=debug_store)
+                adapter._debug_recorder = debug_recorder
+
         return cast(ProviderAdapter, adapter)
 
     def _model_lookup_for(self, provider_id: str) -> ModelLookup:

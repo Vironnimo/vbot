@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.debug import DebugContext, ProviderDebugRecorder
 
 from core.models.models import Model
 
@@ -38,11 +41,45 @@ class ProviderAdapter(ABC):
 
     ``reasoning_meta`` is internal to the adapter/chat boundary and must
     remain opaque to callers outside the chat core.
+
+    **Debug hooks (Phase 3):**
+
+    When debug mode is enabled, the runtime injects a
+    ``ProviderDebugRecorder`` via the ``_debug_recorder`` attribute
+    before the adapter is used.  The chat loop calls
+    ``set_debug_context()`` before each ``send()`` / ``stream()``
+    call, passing a ``DebugContext`` with run metadata.  Subclasses
+    override ``set_debug_context()`` to propagate the context to
+    their debug recorder.
     """
 
     def __init__(self, model_lookup: ModelLookup | None = None) -> None:
         """Store the optional provider-scoped model lookup contract."""
         self._model_lookup = model_lookup
+        self._debug_context: DebugContext | None = None
+        self._debug_recorder: ProviderDebugRecorder | None = None
+
+    # ------------------------------------------------------------------
+    # Debug hooks
+    # ------------------------------------------------------------------
+
+    def set_debug_context(self, ctx: DebugContext) -> None:
+        """Store the debug context for the upcoming provider request.
+
+        Called by the chat loop before each ``send()`` or ``stream()``
+        call so that provider adapters can attach run metadata to
+        wire traces.  The context is **never** part of ``**kwargs``
+        and must not leak into provider payloads.
+
+        Subclasses that support debug recording override this method
+        to propagate the context to ``_debug_recorder.start_request()``
+        in addition to storing it.
+
+        Args:
+            ctx: Immutable debug context with run / agent / session /
+                provider / model identifiers and iteration number.
+        """
+        self._debug_context = ctx
 
     @abstractmethod
     async def aclose(self) -> None:

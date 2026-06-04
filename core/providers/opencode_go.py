@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.debug import DebugContext
 
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic import AnthropicAdapter
@@ -73,6 +76,20 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await super().aclose()
         await self._anthropic.aclose()
 
+    def set_debug_context(self, ctx: DebugContext) -> None:
+        """Store debug context and propagate to the inner Anthropic adapter.
+
+        When a ``ProviderDebugRecorder`` is set on the outer adapter it is
+        propagated to ``self._anthropic`` so the inner adapter captures
+        request/response details through the same recorder.  The recorder
+        lifecycle is started here and finished in ``send()`` / ``stream()``.
+        """
+        self._debug_context = ctx
+        if self._debug_recorder is not None:
+            self._debug_recorder.start_request(ctx)
+            self._anthropic._debug_recorder = self._debug_recorder
+            self._anthropic._debug_context = ctx
+
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -81,14 +98,19 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
-        if _uses_anthropic_messages_path(model_id):
-            bounded_messages = _bound_assistant_reasoning_replay(messages)
-            return await self._anthropic.send(
-                bounded_messages,
-                model_id=model_id,
-                **request_kwargs,
-            )
-        return await super().send(messages, model_id=model_id, **request_kwargs)
+        recorder = self._debug_recorder
+        try:
+            if _uses_anthropic_messages_path(model_id):
+                bounded_messages = _bound_assistant_reasoning_replay(messages)
+                return await self._anthropic.send(
+                    bounded_messages,
+                    model_id=model_id,
+                    **request_kwargs,
+                )
+            return await super().send(messages, model_id=model_id, **request_kwargs)
+        finally:
+            if recorder is not None:
+                recorder.finish()
 
     def stream(
         self,
@@ -98,14 +120,21 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
+        recorder = self._debug_recorder
         if _uses_anthropic_messages_path(model_id):
             bounded_messages = _bound_assistant_reasoning_replay(messages)
-            return self._anthropic.stream(
-                bounded_messages,
-                model_id=model_id,
-                **request_kwargs,
+            return _finish_debug_stream(
+                self._anthropic.stream(
+                    bounded_messages,
+                    model_id=model_id,
+                    **request_kwargs,
+                ),
+                recorder,
             )
-        return super().stream(messages, model_id=model_id, **request_kwargs)
+        return _finish_debug_stream(
+            super().stream(messages, model_id=model_id, **request_kwargs),
+            recorder,
+        )
 
     def _build_payload(
         self,
@@ -238,6 +267,23 @@ def _is_synthetic_system_reminder_message(message: dict[str, Any]) -> bool:
         return False
 
     return bool(_SYSTEM_REMINDER_BLOCKS_PATTERN.fullmatch(content.strip()))
+
+
+async def _finish_debug_stream(
+    iterator: AsyncIterator[dict[str, Any]],
+    recorder: Any,
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield from *iterator* and call ``recorder.finish()`` on exit.
+
+    Ensures the debug trace is persisted even when the stream is
+    cancelled or the underlying connection drops mid-stream.
+    """
+    try:
+        async for item in iterator:
+            yield item
+    finally:
+        if recorder is not None:
+            recorder.finish()
 
 
 def _uses_anthropic_messages_path(model_id: str) -> bool:
