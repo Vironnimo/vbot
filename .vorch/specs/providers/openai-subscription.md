@@ -51,6 +51,9 @@ and the ChatGPT Codex backend.
   instruction when an Agent has no system prompt.
 - The Codex backend requires `store: false`; omission is rejected like an
   enabled store request.
+- The Codex backend rejects `max_output_tokens`; the adapter filters both
+  `max_tokens` and `max_output_tokens` instead of forwarding output-token
+  limits from provider defaults or caller kwargs.
 - Provider defaults are merged before caller kwargs; caller kwargs win.
 - Bundled extra headers are required:
   `OpenAI-Beta: responses=experimental` and `originator: vbot`.

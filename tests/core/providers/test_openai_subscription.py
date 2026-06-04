@@ -117,7 +117,6 @@ async def test_send_posts_responses_payload_with_subscription_headers() -> None:
         "reasoning": {"effort": "high", "summary": "auto"},
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
-        "max_output_tokens": 8192,
         "store": False,
     }
     assert adapter.normalize_response(response) == {
@@ -146,6 +145,29 @@ async def test_send_adds_default_instructions_without_system_message() -> None:
     payload = json.loads(route.calls.last.request.content)
     assert payload["instructions"] == OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
     assert payload["store"] is False
+    assert "max_output_tokens" not in payload
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_omits_unsupported_output_token_limits() -> None:
+    """The Codex backend rejects Responses output-token limit parameters."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAISubscriptionAdapter(_config(), access_token)
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.5",
+        max_tokens=2048,
+        max_output_tokens=1024,
+    )
+
+    payload = json.loads(route.calls.last.request.content)
+    assert "max_output_tokens" not in payload
 
 
 @respx.mock
