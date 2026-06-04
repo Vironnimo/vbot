@@ -118,6 +118,7 @@ async def test_send_posts_responses_payload_with_subscription_headers() -> None:
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "max_output_tokens": 8192,
+        "store": False,
     }
     assert adapter.normalize_response(response) == {
         "role": "assistant",
@@ -144,6 +145,7 @@ async def test_send_adds_default_instructions_without_system_message() -> None:
 
     payload = json.loads(route.calls.last.request.content)
     assert payload["instructions"] == OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
+    assert payload["store"] is False
 
 
 @respx.mock

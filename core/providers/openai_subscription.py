@@ -214,6 +214,7 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
             **kwargs,
         )
         self._ensure_required_instructions(payload)
+        payload["store"] = False
         return payload
 
     def _ensure_required_instructions(self, payload: dict[str, Any]) -> None:

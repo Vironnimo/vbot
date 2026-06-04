@@ -49,6 +49,8 @@ and the ChatGPT Codex backend.
 - The Codex backend requires an `instructions` field. The adapter uses the
   assembled vBot system prompt when present and falls back to a neutral default
   instruction when an Agent has no system prompt.
+- The Codex backend requires `store: false`; omission is rejected like an
+  enabled store request.
 - Provider defaults are merged before caller kwargs; caller kwargs win.
 - Bundled extra headers are required:
   `OpenAI-Beta: responses=experimental` and `originator: vbot`.
