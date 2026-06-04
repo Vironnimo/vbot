@@ -25,6 +25,7 @@ from core.utils.retry import retry_async
 
 CODEX_RESPONSES_ENDPOINT = "/codex/responses"
 RESPONSES_POLICY_ENDPOINT = "/responses"
+OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 OPENAI_SUBSCRIPTION_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_tokens", "top_p"})
 OPTIONAL_REQUEST_PARAMETER_NAMES = frozenset(
@@ -158,10 +159,9 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Send a non-streaming Responses request through the Codex backend."""
 
-        payload = build_responses_payload(
+        payload = self._build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
             **self._request_kwargs_with_defaults(kwargs),
         )
         return await self._post_json(CODEX_RESPONSES_ENDPOINT, payload)
@@ -175,10 +175,9 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a Responses request as normalized vBot deltas."""
 
-        payload = build_responses_payload(
+        payload = self._build_responses_payload(
             messages,
             model_id=model_id,
-            policy=self._responses_policy_for_model(model_id),
             stream=True,
             **self._request_kwargs_with_defaults(kwargs),
         )
@@ -198,6 +197,30 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
             request_kwargs.update(self._config.defaults)
         request_kwargs.update(kwargs)
         return request_kwargs
+
+    def _build_responses_payload(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        payload = build_responses_payload(
+            messages,
+            model_id=model_id,
+            policy=self._responses_policy_for_model(model_id),
+            stream=stream,
+            **kwargs,
+        )
+        self._ensure_required_instructions(payload)
+        return payload
+
+    def _ensure_required_instructions(self, payload: dict[str, Any]) -> None:
+        instructions = payload.get("instructions")
+        if isinstance(instructions, str) and instructions.strip():
+            return
+        payload["instructions"] = OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
 
     def _responses_policy_for_model(self, model_id: str) -> OpenAISubscriptionResponsesPolicy:
         model = self._model_lookup(model_id) if self._model_lookup is not None else None

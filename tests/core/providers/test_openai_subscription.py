@@ -10,7 +10,11 @@ import pytest
 import respx
 
 from core.providers.errors import ProviderAuthError
-from core.providers.openai_subscription import CODEX_RESPONSES_ENDPOINT, OpenAISubscriptionAdapter
+from core.providers.openai_subscription import (
+    CODEX_RESPONSES_ENDPOINT,
+    OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS,
+    OpenAISubscriptionAdapter,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 OPENAI_SUBSCRIPTION_URL = f"https://chatgpt.com/backend-api{CODEX_RESPONSES_ENDPOINT}"
@@ -123,6 +127,23 @@ async def test_send_posts_responses_payload_with_subscription_headers() -> None:
         "tool_calls": None,
         "usage": {"input_tokens": 2, "output_tokens": 3},
     }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_send_adds_default_instructions_without_system_message() -> None:
+    """The Codex backend requires instructions even for agents without a system prompt."""
+
+    access_token = _jwt_with_account("acct_openai")
+    adapter = OpenAISubscriptionAdapter(_config(), access_token)
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+    )
+
+    await adapter.send([{"role": "user", "content": "Hello"}], model_id="gpt-5.5")
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["instructions"] == OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS
 
 
 @respx.mock
