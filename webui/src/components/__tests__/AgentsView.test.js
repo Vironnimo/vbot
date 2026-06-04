@@ -1107,6 +1107,9 @@ describe('AgentsView', () => {
       false,
     );
     expect(simpleRoot.closest('.detail-group')).toBe(modelCard);
+    expect(
+      modelCard.classList.contains('agents-view__model-group--dropdown-open'),
+    ).toBe(false);
 
     openSimpleDropdown('agent-thinking-effort');
 
@@ -1116,6 +1119,9 @@ describe('AgentsView', () => {
       true,
     );
     expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+    expect(
+      modelCard.classList.contains('agents-view__model-group--dropdown-open'),
+    ).toBe(true);
   });
 
   it('lets the memory dropdown escape the system prompt card clipping', async () => {
