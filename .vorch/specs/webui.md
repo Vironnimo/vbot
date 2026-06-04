@@ -5,7 +5,7 @@ Svelte accessor that talks only to the vBot server through HTTP RPC, Server-Sent
 ## Overview
 
 `webui/` owns the browser interface. It does not import Python/core code and it
-does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Specialized Models, Providers, Voice (Desktop-only), Channels, and Appearance sub-panels, a functional System Prompt tab, and a functional Logs tab for read-only daily log viewing.
+does not talk to providers directly. The product presents an Agent-first chat surface, Agent management, a functional Settings view with General, Skills, Defaults, Sub-Agents, Compaction, Recall, Specialized Models, Providers, Debug, Voice (Desktop-only), Channels, and Appearance sub-panels, a functional System Prompt tab, a functional Logs tab for read-only daily log viewing, and a conditional Debug tab for provider wire trace inspection.
 
 ## Layout
 
@@ -14,10 +14,11 @@ does not talk to providers directly. The product presents an Agent-first chat su
 - The left navigation contains at least these entries:
   - `Chat`
   - `Agents`
-- `Cron`
+  - `Cron`
   - `System Prompt`
   - `Settings`
   - `Logs`
+  - `Debug` (only visible when `debug.enabled` is true)
 
 ## Interfaces
 
@@ -54,6 +55,9 @@ does not talk to providers directly. The product presents an Agent-first chat su
     for the daily logs catalog.
   - `readLogFile(file, options?)` calls `log.read` and returns
     `{ file, entries, cursor }` for one selected daily log file.
+  - `debugStatus()`, `debugTraceList()`, `debugTraceGet(traceId)`,
+    `debugTraceClear()`, and `debugModelProbe(providerId, connectionId)` wrap
+    the `debug.*` RPC methods.
   - `subscribeRunEvents(sseUrl, handlers, options?)` opens an `EventSource` for
     one Run timeline and returns `{ close, source }`. It subscribes to whole
     Run events, including `subagent_session_started`, plus streaming delta
