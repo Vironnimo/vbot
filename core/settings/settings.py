@@ -21,6 +21,7 @@ MAX_TEMPERATURE = 2.0
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
+        "debug",
         "skills",
         "subagents",
         "compaction",
@@ -65,6 +66,9 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
 
     if "compaction" in params:
         parsed_update["compaction"] = _parse_compaction_update(params["compaction"])
+
+    if "debug" in params:
+        parsed_update["debug"] = _parse_debug_update(params["debug"])
 
     if "defaults" in params:
         parsed_update["defaults"] = _parse_defaults_update(params["defaults"])
@@ -334,6 +338,33 @@ def _parse_compaction_update(compaction: Any) -> JsonObject:
         "tail_tokens": tail_tokens,
         "summary_model": summary_model,
     }
+
+
+def _parse_debug_update(debug: Any) -> JsonObject:
+    if not isinstance(debug, dict):
+        raise SettingsValidationError("params.debug must be an object")
+
+    unsupported_fields = sorted(set(debug) - {"enabled", "trace_limit"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported debug settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+
+    if "enabled" in debug:
+        enabled = debug["enabled"]
+        if not isinstance(enabled, bool):
+            raise SettingsValidationError("params.debug.enabled must be a boolean")
+        parsed["enabled"] = enabled
+
+    if "trace_limit" in debug:
+        trace_limit = _positive_integer(debug["trace_limit"], "params.debug.trace_limit")
+        if trace_limit > 500:
+            raise SettingsValidationError("params.debug.trace_limit must not exceed 500")
+        parsed["trace_limit"] = trace_limit
+
+    return parsed
 
 
 def _positive_integer(value: Any, label: str) -> int:
