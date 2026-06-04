@@ -64,6 +64,7 @@ RPC `invalid_request`.
 - `compaction` — requires `{ auto, threshold, tail_tokens, summary_model }`; `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | null`.
 - `recall` — `{ backend: "jsonl_scan" | "sqlite_fts" }`; updates the backend used by the `session_search` tool.
 - `web_search` — `{ provider: "brave" | "searxng", searxng?: { base_url: string } }`; updates the provider used by the `web_search` tool. `provider` is required in public updates; `searxng.base_url` defaults to `http://localhost:8888` when not persisted.
+- `debug` — `{ enabled?: boolean, trace_limit?: positive integer }`; both fields are optional in public updates. `enabled` defaults to `false`, `trace_limit` defaults to `50` and is capped at `500`. Updates merge with existing settings — partial updates preserve unspecified fields.
 - `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task
   types are owned by `core/model_tasks/`. `target` must be a string when
   present, `options` must be an object, and an empty target clears that task's
