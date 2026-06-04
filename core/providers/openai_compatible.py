@@ -10,10 +10,14 @@ provider-specific behavior can subclass this adapter.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from core.debug import DebugContext
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
@@ -91,6 +95,21 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             base_url=base_url or config.base_url,
             timeout=provider_chat_timeout(),
         )
+
+    # ------------------------------------------------------------------
+    # Debug hooks
+    # ------------------------------------------------------------------
+
+    def set_debug_context(self, ctx: DebugContext) -> None:
+        """Store debug context and start recording the upcoming request.
+
+        Called by the chat loop before each ``send()`` or ``stream()``
+        call.  The context is stored separately from provider payloads
+        so it never leaks into ``_build_payload()``.
+        """
+        self._debug_context = ctx
+        if self._debug_recorder is not None:
+            self._debug_recorder.start_request(ctx)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -275,6 +294,12 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
             payload = self._build_payload(messages, model_id, **kwargs)
+            if self._debug_recorder is not None:
+                base = str(self._client.base_url).rstrip("/")
+                self._debug_recorder.capture_request(
+                    "POST", f"{base}{CHAT_COMPLETIONS_ENDPOINT}", headers, payload
+                )
+            start_time = time.monotonic()
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,
@@ -285,15 +310,32 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
                 raise wrap_network_error(exc) from exc
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
             reason = response.text
             detail = (
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
             )
             classify_http_status(response.status_code, detail=detail)
-            return dict(response.json())
+            response_json = dict(response.json())
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_response(
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    body=response_json,
+                    duration_ms=elapsed_ms,
+                )
+            return response_json
 
-        return await retry_async(_do_request)
+        try:
+            return await retry_async(_do_request)
+        except Exception as e:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(e)
+            raise
+        finally:
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -337,6 +379,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         _merge_stream_usage_options(payload)
 
         async def _connect_stream() -> httpx.Response:
+            if self._debug_recorder is not None:
+                base = str(self._client.base_url).rstrip("/")
+                self._debug_recorder.capture_request(
+                    "POST", f"{base}{CHAT_COMPLETIONS_ENDPOINT}", headers, payload
+                )
             request = self._client.build_request(
                 "POST",
                 CHAT_COMPLETIONS_ENDPOINT,
@@ -367,14 +414,24 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
             return response
 
-        response = await retry_async(_connect_stream)
+        try:
+            response = await retry_async(_connect_stream)
+        except Exception as e:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(e)
+                self._debug_recorder.finish()
+            raise
+
         tool_call_ids_by_index: dict[int, str] = {}
         seen_done_marker = False
+        stream_start_time = time.monotonic()
 
         try:
             async for data in iter_sse_data(response):
                 if data.strip() == SSE_DONE_MARKER:
                     seen_done_marker = True
+                    if self._debug_recorder is not None:
+                        self._debug_recorder.capture_stream_event(data, None)
                     break
                 raw_chunk = parse_sse_json_data(
                     data,
@@ -385,6 +442,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                         "OpenAI-compatible provider sent non-object JSON in stream",
                         retryable=False,
                     )
+                if self._debug_recorder is not None:
+                    self._debug_recorder.capture_stream_event(data, raw_chunk)
                 for normalized_delta in self._normalize_stream_chunk(
                     raw_chunk,
                     tool_call_ids_by_index,
@@ -392,12 +451,30 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     yield normalized_delta
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
+            if self._debug_recorder is not None:
+                elapsed_ms = int((time.monotonic() - stream_start_time) * 1000)
+                self._debug_recorder.capture_response(
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    body=None,
+                    duration_ms=elapsed_ms,
+                )
         except httpx.ReadError as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(exc)
             raise wrap_network_error(exc) from exc
+        except Exception as e:
+            if self._debug_recorder is not None:
+                self._debug_recorder.capture_error(e)
+            raise
         finally:
             await response.aclose()
+            if self._debug_recorder is not None:
+                self._debug_recorder.finish()
 
     def _normalize_stream_chunk(
         self,

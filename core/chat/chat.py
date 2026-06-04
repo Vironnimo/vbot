@@ -37,6 +37,7 @@ from core.chat.streaming import (
     StreamingDeltaError,
     iter_with_chunk_timeout,
 )
+from core.debug import DebugContext
 from core.extensions import ExtensionRegistry, HookContext
 from core.providers.errors import (
     NetworkError,
@@ -856,6 +857,8 @@ class ChatLoop:
                     messages,
                     tools,
                     run,
+                    provider_id=provider_id,
+                    connection_id=connection_id,
                 )
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
@@ -890,6 +893,8 @@ class ChatLoop:
                                 messages,
                                 tools,
                                 run,
+                                provider_id=fb_provider_id,
+                                connection_id=fb_connection_id,
                             )
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
@@ -1046,8 +1051,11 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        provider_id: str,
+        connection_id: str,
     ) -> ChatMessage:
         tool_iteration_count = 0
+        iteration_number = 1
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
@@ -1077,6 +1085,19 @@ class ChatLoop:
                         messages_for_request = hook_result
                         break
 
+            if hasattr(adapter, "set_debug_context"):
+                adapter.set_debug_context(
+                    DebugContext(
+                        run_id=run.id,
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        provider_id=provider_id,
+                        connection_id=connection_id,
+                        model_id=model_id,
+                        streaming=self._streaming,
+                        iteration_number=iteration_number,
+                    )
+                )
             assistant_message = await self._send_assistant_request(
                 agent,
                 adapter,
@@ -1110,6 +1131,7 @@ class ChatLoop:
             if tool_iteration_count >= self._max_tool_iterations:
                 raise ToolIterationLimitError("maximum tool iterations exceeded")
             tool_iteration_count += 1
+            iteration_number += 1
 
             session.begin_defer_notes()
             try:
