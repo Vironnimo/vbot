@@ -46,6 +46,9 @@ and the ChatGPT Codex backend.
 - Requests use the shared Responses payload builder from
   `github_copilot_responses.py` and post to `/codex/responses` relative to the
   provider base URL.
+- The Codex backend requires an `instructions` field. The adapter uses the
+  assembled vBot system prompt when present and falls back to a neutral default
+  instruction when an Agent has no system prompt.
 - Provider defaults are merged before caller kwargs; caller kwargs win.
 - Bundled extra headers are required:
   `OpenAI-Beta: responses=experimental` and `originator: vbot`.
