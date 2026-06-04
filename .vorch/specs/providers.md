@@ -23,7 +23,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `ProviderRegistry.load(resources_dir) -> ProviderRegistry`
 - `ProviderRegistry.get(provider_id) -> ProviderConfig`
 - `ProviderRegistry.list_ids() -> list[str]`
-- `runtime.get_adapter(provider_id, connection_id) -> ProviderAdapter`
+- `runtime.get_adapter(provider_id, connection_id) -> ProviderAdapter`. When `debug.enabled` is true in settings, the returned adapter has `_debug_recorder` set to a `ProviderDebugRecorder` for wire trace capture.
 - `ProviderCredentialResolver.has_credentials(provider_id, connection_id=None) -> bool`
 - `ProviderCredentialResolver.get_credentials(provider_id, connection_id=None) -> str`
 - Server RPC `provider.set_key` writes API-key connection credentials into the

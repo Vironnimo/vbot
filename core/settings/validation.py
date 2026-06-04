@@ -31,6 +31,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "appearance",
         "attachment_max_size_bytes",
         "compaction",
+        "debug",
         "defaults",
         "extension_directories",
         "max_subagent_depth",
@@ -60,6 +61,8 @@ RECALL_BACKEND_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 WEB_SEARCH_FIELDS = frozenset({"provider", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
+DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
+MAX_TRACE_LIMIT = 500
 
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 AGENT_FIELDS = frozenset(
@@ -299,6 +302,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_recall(diagnostics, data.get("recall"))
     _validate_web_search(diagnostics, data.get("web_search"))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
+    _validate_debug(diagnostics, data.get("debug"))
     return diagnostics
 
 
@@ -734,6 +738,30 @@ def _validate_model_tasks(diagnostics: list[JsonDiagnostic], value: Any) -> None
         options = binding.get("options")
         if "options" in binding and not isinstance(options, Mapping):
             _error(diagnostics, _child_path(task_path, "options"), "must be an object")
+
+
+def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.debug", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.debug", value, DEBUG_FIELDS, "debug field")
+    if "enabled" in value and not isinstance(value["enabled"], bool):
+        _error(diagnostics, "$.debug.enabled", "must be a boolean")
+    if "trace_limit" in value:
+        trace_limit = value["trace_limit"]
+        if isinstance(trace_limit, bool) or not isinstance(trace_limit, int):
+            _error(diagnostics, "$.debug.trace_limit", "must be a positive integer (1-500)")
+        elif trace_limit <= 0:
+            _error(diagnostics, "$.debug.trace_limit", "must be at least 1")
+        elif trace_limit > MAX_TRACE_LIMIT:
+            _error(
+                diagnostics,
+                "$.debug.trace_limit",
+                f"must be at most {MAX_TRACE_LIMIT}",
+            )
 
 
 def _validate_agent_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:

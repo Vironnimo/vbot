@@ -8,7 +8,7 @@ Data-directory setup, settings persistence, and bundled prompt fragment access.
 
 ## Data Model
 
-Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `oauth`, `prompts`, `recall`, `skills`, `logs`, `speech`.
+Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `debug`, `oauth`, `prompts`, `recall`, `skills`, `logs`, `speech`.
 
 Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
 
@@ -33,6 +33,10 @@ as a read-only fallback credential source.
   `<data_dir>/recall/`.
 - `model_tasks` — specialized task-model bindings keyed by supported task type,
   with one `target` string and one JSON-object `options` mapping per task.
+- `debug` — `{ enabled: boolean, trace_limit: positive integer }`. Controls
+  provider wire trace capture, off by default. Trace files are stored under
+  `<data_dir>/debug/traces/` with retention capped by `trace_limit` (default 50,
+  max 500).
 
 ## Interfaces
 
