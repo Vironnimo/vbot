@@ -6,8 +6,7 @@ Searches persisted chat Sessions for agent-relevant history.
 
 - Tool name: `session_search`
 - Registration: `register_session_search_tool(registry, recall_backend)`
-- Bound service: `RecallBackend`; backend implementations must use the Sessions
-  API rather than constructing session file paths.
+- Bound service: `RecallBackend`; backend implementations must use the Sessions API rather than constructing session file paths.
 - Schema: optional `query`, `agent_id`, `session_id`, `around_message_id`, `since`, `until`, `roles`, `match`, `limit`, `context`, `bookends`, and `sort`; `additionalProperties: false`.
 - `query`: case-insensitive keywords or phrase. Omit or leave blank to list matching Session summaries instead of message matches.
 - `agent_id`: defaults to `ToolContext.agent_id`.
@@ -33,8 +32,6 @@ Searches persisted chat Sessions for agent-relevant history.
 ## Constraints & Gotchas
 
 - Skill-context notes are not searched even when `note` is requested; they are prompt context, not discoverable history.
-- The default implementation scans JSONL Sessions through
-  `JsonlSessionRecallBackend`; optional SQLite FTS is a derived index behind the
-  same `RecallBackend` contract and does not change this public tool shape.
+- The default implementation scans JSONL Sessions through `JsonlSessionRecallBackend`; optional SQLite FTS is a derived index behind the same `RecallBackend` contract and does not change this public tool shape.
 - No-match cases are success envelopes so agents can continue refining the query.
 - Invalid arguments and expected Session lookup/storage errors return failure envelopes.

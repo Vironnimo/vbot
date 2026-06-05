@@ -12,10 +12,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolDisplay`: per-invocation presentation metadata. It builds `{ summary, hidden_argument_keys }` for `tool_call_started` events without adding provider-visible parameters.
 - `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, plus emit/cancel/note/skill hooks.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
-- Tool timing is not part of the result envelope. Completed tool calls expose a
-  sibling `timing` object on `tool_call_result` Run events and on persisted
-  `role: "tool"` ChatMessages: `{ started_at, completed_at, duration_ms }`.
-  Durations are non-negative milliseconds measured with a monotonic clock.
+- Tool timing is not part of the result envelope. Completed tool calls expose a sibling `timing` object on `tool_call_result` Run events and on persisted `role: "tool"` ChatMessages: `{ started_at, completed_at, duration_ms }`. Durations are non-negative milliseconds measured with a monotonic clock.
 - `ToolCall`: one requested tool invocation with stable id, name, and arguments; execution index is assigned when scheduling a sibling batch.
 
 ## Interfaces
@@ -30,10 +27,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolRegistry.dispatch(context, arguments, allowed_tools=None) -> dict` executes a tool and validates the result envelope.
 - Result-envelope validation failures raise `InvalidToolResultError` (a `ValueError` subclass), distinct from plain `ValueError` argument failures. The chat loop maps the former to an `invalid_tool_result` failure envelope and the latter to `invalid_arguments`, without inspecting error message text.
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
-- `core.tools.availability.effective_agent_allowed_tools(...)` applies
-  Agent-level derived availability before runtime dispatch. The `memory` tool is
-  added when `memory_prompt_mode` is not `off` and removed when it is `off`,
-  independent of persisted `allowed_tools`.
+- `core.tools.availability.effective_agent_allowed_tools(...)` applies Agent-level derived availability before runtime dispatch. The `memory` tool is added when `memory_prompt_mode` is not `off` and removed when it is `off`, independent of persisted `allowed_tools`.
 
 ## Specific Specs
 
@@ -60,15 +54,13 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 ## Conventions
 
 - `allowed_tools=None` and `["*"]` mean all registered normal tools; `allowed_tools=[]` means no normal tools.
-- Agent `allowed_tools` is the configurable allowlist for normal tools except
-  `memory`; Memory mode owns that tool's effective availability.
+- Agent `allowed_tools` is the configurable allowlist for normal tools except `memory`; Memory mode owns that tool's effective availability.
 - Internal tools bypass normal `allowed_tools` filtering and must enforce their own domain rules.
 - Provider-visible definitions must not expose handlers, runtime context, internal flags, or display metadata.
 - Display labels are not tool parameters. Do not add generic arguments such as `description` only to affect UI chrome; use `ToolDisplay`.
 - Tool result failures should be returned as failure envelopes where possible instead of raising through the Run.
 - Same-turn sibling tool calls may execute concurrently, including multiple calls to the same tool.
-- Tool timing metadata must never be forwarded to provider adapters; provider
-  tool messages contain only the tool role, call correlation, name, and content.
+- Tool timing metadata must never be forwarded to provider adapters; provider tool messages contain only the tool role, call correlation, name, and content.
 
 ## Constraints & Gotchas
 

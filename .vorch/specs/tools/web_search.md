@@ -1,7 +1,6 @@
 # Web Search Tool
 
-Searches the public web through the configured first-party search provider and
-returns normalized results.
+Searches the public web through the configured first-party search provider and returns normalized results.
 
 ## Interfaces
 
@@ -13,13 +12,9 @@ returns normalized results.
 
 ## External Dependencies
 
-- Provider selection comes from `settings.json` key `web_search.provider`;
-  supported values are `brave` and `searxng`.
-- Brave Search API uses credential key `BRAVE_API_KEY`, resolved through runtime
-  env/data-dir credential lookup.
-- SearXNG uses `settings.web_search.searxng.base_url` and calls
-  `<base_url>/search` with `format=json`; the SearXNG instance must allow JSON
-  output in its own `search.formats` setting.
+- Provider selection comes from `settings.json` key `web_search.provider`; supported values are `brave` and `searxng`.
+- Brave Search API uses credential key `BRAVE_API_KEY`, resolved through runtime env/data-dir credential lookup.
+- SearXNG uses `settings.web_search.searxng.base_url` and calls `<base_url>/search` with `format=json`; the SearXNG instance must allow JSON output in its own `search.formats` setting.
 
 ## Constraints & Gotchas
 
@@ -27,6 +22,5 @@ returns normalized results.
 - Provider choice is not exposed as a tool argument; the Settings selection is the source of truth so agents cannot choose a different provider per call.
 - Date/freshness validation errors return `validation_error`.
 - Provider/network failures map to `provider_request_failed`.
-- SearXNG supports `time_range` values `day`, `month`, and `year`; unsupported
-  exact date filters and week freshness are ignored with warnings in the tool result.
+- SearXNG supports `time_range` values `day`, `month`, and `year`; unsupported exact date filters and week freshness are ignored with warnings in the tool result.
 - Result content is marked as untrusted web content.

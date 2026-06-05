@@ -1,16 +1,12 @@
 # Home Assistant Tools
 
-Four LLM-callable tools that wrap the Home Assistant REST API. Tools are only
-registered when `HASS_TOKEN` is configured; without a token they do not appear
-in agent allowlists.
+Four LLM-callable tools that wrap the Home Assistant REST API. Tools are only registered when `HASS_TOKEN` is configured; without a token they do not appear in agent allowlists.
 
 ## Interfaces
 
 - Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`
 - Registration: `register_homeassistant_tools(registry, credential_resolver)`
-- Conditional: tools are only registered when `HASS_TOKEN` is non-empty. No
-  token → no tools (unlike `web_search`, which always registers and returns
-  `missing_api_key` at call time).
+- Conditional: tools are only registered when `HASS_TOKEN` is non-empty. No token → no tools (unlike `web_search`, which always registers and returns `missing_api_key` at call time).
 
 ### `ha_list_entities`
 

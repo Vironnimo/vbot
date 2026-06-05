@@ -17,16 +17,9 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and catalog normal
 
 ## Catalog Normalization
 
-- Reads OpenRouter `/models` fields such as `architecture.input_modalities`,
-  `architecture.output_modalities`, `supported_parameters`, `context_length`,
-  and `top_provider.max_completion_tokens`.
-- If `top_provider.max_completion_tokens` is missing or `null`, normalized
-  `max_output_tokens` stays `null` instead of copying the provider request
-  default.
-- Persists input/output modalities, supported parameters, and derived task
-  types in normalized `Model.capabilities` so the server can filter for chat,
-  image generation, audio generation/TTS, video generation, and related tasks
-  without re-reading raw catalog files.
+- Reads OpenRouter `/models` fields such as `architecture.input_modalities`, `architecture.output_modalities`, `supported_parameters`, `context_length`, and `top_provider.max_completion_tokens`.
+- If `top_provider.max_completion_tokens` is missing or `null`, normalized `max_output_tokens` stays `null` instead of copying the provider request default.
+- Persists input/output modalities, supported parameters, and derived task types in normalized `Model.capabilities` so the server can filter for chat, image generation, audio generation/TTS, video generation, and related tasks without re-reading raw catalog files.
 - Capability facts discovered from the models endpoint should live in normalization/runtime logic, not model overrides.
 
 ## Constraints & Gotchas
