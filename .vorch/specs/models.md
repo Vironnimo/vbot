@@ -59,6 +59,8 @@ Speech/audio modality aliases are intentionally strict: `transcription` output c
 
 `core/models/discovery.py` owns fetch, normalization, override application, generated file writes, and registry invalidation. The registry remains the read path and does not call provider APIs.
 
+`refresh_models()` writes files and invalidates the class-level registry cache, but it does not mutate an already-held `ModelRegistry` instance. The server `model.refresh_db` RPC reloads `runtime._models = ModelRegistry.load(resources_dir)` after refresh; any new live-refresh entry point must also replace/reload the runtime registry or require a runtime restart.
+
 Discovery dispatches by `ProviderConfig.adapter` to `adapter_class.normalize_catalog_entry(raw, defaults)`. Provider-specific catalog schemas belong in provider adapters and provider specs, not in provider-ID branches inside discovery. Examples: OpenRouter-specific catalog behavior lives in `OpenRouterAdapter` and `.vorch/specs/providers/openrouter.md`; GitHub Copilot catalog metadata and runtime policy live in `GitHubCopilotAdapter` and `.vorch/specs/providers/github-copilot.md`.
 
 Discovery builds auth headers from the selected connection plus provider `extra_headers`, then calls optional adapter hooks such as `discovery_headers(provider_config, credential_value, headers)`, `discovery_params()`, and `supplementary_discovery_params()`. Use these hooks for catalog-only requirements such as OpenAI Subscription account headers/client version parameters or OpenRouter supplementary speech/image-generation fetches.
