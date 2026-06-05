@@ -1,28 +1,31 @@
 # OpenRouter Provider
 
-OpenAI-compatible provider with OpenRouter-specific reasoning and catalog normalization.
+OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality catalog normalization.
 
 ## Interfaces
 
 - Provider config: `resources/providers/openrouter.json`
 - Adapter selector: `openrouter`
 - Adapter class: `OpenRouterAdapter`
-- Runtime endpoint: OpenAI-compatible `/chat/completions`
+- Runtime endpoint: OpenAI-compatible `POST /chat/completions`
+- Catalog endpoint: `GET /models`
 
 ## Reasoning
 
-- Non-`none` vBot `thinking_effort` values map to OpenRouter-supported efforts from `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
+- Non-empty vBot `thinking_effort` and raw `reasoning_effort` map to OpenRouter efforts from `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
 - vBot `max` maps to `xhigh`.
-- Runtime sends `reasoning: { effort }` plus `include_reasoning: true` when reasoning is active.
+- Runtime sends `reasoning: {effort}` plus `include_reasoning: true` when reasoning is active.
+- If injected `model_lookup` says reasoning is unsupported, `reasoning`, `include_reasoning`, and generic `reasoning_effort` controls are stripped.
 
 ## Catalog Normalization
 
-- Reads OpenRouter `/models` fields such as `architecture.input_modalities`, `architecture.output_modalities`, `supported_parameters`, `context_length`, and `top_provider.max_completion_tokens`.
-- If `top_provider.max_completion_tokens` is missing or `null`, normalized `max_output_tokens` stays `null` instead of copying the provider request default.
-- Persists input/output modalities, supported parameters, and derived task types in normalized `Model.capabilities` so the server can filter for chat, image generation, audio generation/TTS, video generation, and related tasks without re-reading raw catalog files.
-- Capability facts discovered from the models endpoint should live in normalization/runtime logic, not model overrides.
+- Reads OpenRouter `/models` fields such as `architecture.input_modalities`, `architecture.output_modalities`, `architecture.modality`, `supported_parameters`, `context_length`, and `top_provider.max_completion_tokens`.
+- The default `/models` response omits some non-text-output models. `OpenRouterAdapter.supplementary_discovery_params()` adds discovery fetches for `output_modalities=transcription`, `speech`, and `image`; discovery merges and deduplicates those models by id.
+- If `top_provider.max_completion_tokens` is missing or `null`, normalized `max_output_tokens` stays `null` instead of copying request defaults.
+- Normalized capabilities preserve input/output modalities, supported parameters, derived task types, and small runtime metadata under `metadata.openrouter`.
 
 ## Constraints & Gotchas
 
-- Streaming usage is inherited from the generic OpenAI-compatible behavior.
-- OpenRouter supports many upstream providers; do not infer exact model behavior from canonical model family names without catalog or probe evidence.
+- Streaming usage behavior is inherited from the generic OpenAI-compatible adapter.
+- OpenRouter fronts many upstream providers; do not infer exact model behavior from canonical model family names without catalog facts or probe evidence.
+- Capability facts discovered from `/models` belong in normalization/runtime logic, not hand-edited model overrides.
