@@ -4,59 +4,88 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 
 ## Interfaces
 
-`core/runtime/interfaces.py` — `typing.Protocol` contracts for DI.
+`core/runtime/interfaces.py` — `typing.Protocol` DI contracts. Only `ConfigProtocol` is constructor-injected; the rest are structural typings used for DI/testing. `core/runtime/__init__.py` re-exports the protocol set plus the `Runtime` class — all protocols except `ProviderCredentialResolverProtocol`.
 
-- `ConfigProtocol` — `get(key: str, default: Any = None) -> Any`
-- `LoggerProtocol` — `debug(msg)`, `info(msg)`, `warning(msg)`, `error(msg)`
+- `ConfigProtocol` — `get(key: str, default: Any = None) -> Any` (the one injected dependency).
+- `LoggerProtocol` — `debug/info/warning/error(msg, *args)`; types the public `logger` attribute.
+- Registry/store protocols: `ProviderRegistryProtocol`, `ModelRegistryProtocol`, `ProviderCredentialResolverProtocol`, `StorageManagerProtocol`, `AgentStoreProtocol`, `ToolRegistryProtocol`, `SkillRegistryProtocol`, `ChatSessionManagerProtocol`.
 
 ## Runtime class
 
 `core/runtime/runtime.py` — constructor injection via `ConfigProtocol`.
 
-Runtime-owned logging is initialized through `LogManager` before normal bootstrap logging begins.
+`__init__` resolves the data dir (`DATA_DIR` / `VBOT_DATA_DIR` / `config.data_dir`) and builds `LogManager(level=config.get("LOG_LEVEL", "INFO"), data_dir=...)` before any bootstrap logging. The `vbot.core` logger itself is created later, in `start()`.
 
-```
-Runtime(config) → config.get("LOG_LEVEL", "INFO") → LogManager
-```
+### `start()`
 
-- `start()` — idempotent. Resolves the runtime data dir early, initializes `LogManager`, and creates the `vbot.core` logger before normal bootstrap logging. Then it loads provider/model registries, prepares data directories, reads `<data_dir>/.env` as a fallback credential snapshot without mutating `os.environ`, instantiates the OAuth `TokenStore`, instantiates the central provider credential resolver (process environment takes precedence over the data-dir fallback for environment credentials), copies prompt fragments, instantiates the runtime-owned `AttachmentStore` using `settings.json` `attachment_max_size_bytes`, instantiates `MemoryService`, wires services, starts the `ProcessManager` sweeper when startup happens inside a running asyncio loop, registers built-in tools including `memory`, registers `web_search` with a settings resolver so it reads the current `settings.web_search` provider at call time, creates the `RecallBackendRegistry`, selects the configured recall backend from `settings.recall.backend` with fallback to `jsonl_scan`, registers `session_search` against that backend, creates the `TaskModelService` for specialized task bindings, creates `SpeechService` for STT/TTS execution and artifacts, registers the `text_to_speech` tool, creates the shared `ChatRunManager`, creates the shared `CommandDispatcher` for built-in slash commands, creates resolver-wired non-streaming and streaming `ChatLoop` instances, wires `TriggerService` with the streaming loop for programmatic Run execution and the non-streaming loop for command helpers, wires and starts `ChannelService` when an event loop is active, registers the `channel_send` tool when at least one channel is active, wires and starts `CronService` when an event loop is active, registers the `cron` tool, creates the in-memory `SubAgentBatchTracker`, registers sub-agent tools, wires `AgentStore` with `defaults_provider=lambda: storage.load_defaults().get("agent", {})`, and ensures a usable default Agent exists. Before the final `Runtime started` line it also writes one info-level inventory summary with loaded tool and skill counts plus usable-provider and usable-connection counts derived from the current provider registry and credential state. The bootstrap Agent is ensured before `ChannelService` starts so a configured channel targeting `main` can come up during first-start recovery. Second call is no-op (debug log) and preserves service instances.
-- `stop()` — writes "Runtime stopped" at info level if logger exists. Stops the `ProcessManager` sweeper, stops `ChannelService`, stops `CronService`, resets started state, and clears service references including `MemoryService`. Safe to call before `start()`.
+Idempotent — a second call logs at debug and preserves the existing service instances. It runs these boot phases in order:
+
+1. Create the `vbot.core` logger, log `Runtime startup initiated`, and record `started_at` (UTC).
+2. Build `StorageManager`, `ensure_directories()`, load `settings.json`, and read the `attachment_max_size_bytes` / `speech_upload_max_size_bytes` size limits (positive-int validated, else default with a warning).
+3. Instantiate the runtime-owned `AttachmentStore` (`<data_dir>/attachments/`, sized by `attachment_max_size_bytes`); read `<data_dir>/.env` as a fallback credential snapshot **without** mutating `os.environ`; copy prompt fragments.
+4. Load provider + model registries; instantiate the OAuth `TokenStore` and the central `ProviderCredentialResolver` (process environment takes precedence over the data-dir fallback).
+5. Create `TaskModelService`, then `SpeechService` (STT/TTS + artifacts) and `ImageService` (image generation).
+6. Wire `AgentStore` with `defaults_provider=lambda: storage.load_defaults().get("agent", {})` so resolved Agent reads always use the latest persisted defaults without rewriting agent files.
+7. Create `ProcessManager`; start its sweeper only when startup happens inside a running asyncio loop.
+8. Create `ToolRegistry` + `MemoryService`, then register built-in tools: `read`, `edit`, `glob`, `grep`, `write`, `memory`, `web_fetch`, `web_search` (with a settings resolver so it reads the current `settings.web_search` provider at call time), Home Assistant tools (gated on `HASS_TOKEN`), `process`, `text_to_speech`, `image_generation`.
+9. Load the `SkillRegistry` (`<data_dir>/skills`, bundled `resources/skills`, configured `skill_directories`) and register the internal `skill` tool; load the `ExtensionRegistry` (`<data_dir>/extensions` + configured `extension_directories`).
+10. Create `ChatSessionManager`, then ensure the bootstrap Agent exists (this happens before channels start — see Gotchas).
+11. Create `RecallBackendRegistry`, select the backend from `settings.recall.backend` (fallback `jsonl_scan` on unknown name), and register `session_search` against it.
+12. Create `ChatRunManager` (also exposed as `runtime.chat_runs`), the `CommandDispatcher` for built-in slash commands, and resolver-wired non-streaming + streaming `ChatLoop` instances.
+13. Wire `TriggerService` (streaming loop for programmatic Runs, non-streaming loop for command helpers); wire + start `ChannelService` when an event loop is active and register `channel_send` while ≥1 channel is active; wire + start `CronService` when an event loop is active and register the `cron` tool; register `bash` (needs the process manager + trigger service).
+14. Create the `SubAgentCoordinator` (owns the in-memory batch tracking) and register sub-agent tools; register the `status` tool; build `SystemPromptManager`.
+15. Write one info-level inventory summary (tool + skill counts, usable/total provider + connection counts), set started, and log `Runtime started`.
+
+### Shutdown
+
+- `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / `ProcessManager` synchronously, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
+- `aclose()` — async variant of `stop()`: same sequence but `await`s the channel / cron / process-manager async cleanup. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
+
+### Service properties
+
+All service properties raise `RuntimeError` before `start()` and after `stop()`, **except `extensions`**, which returns `None` instead of raising. `chat_runs` is a plain attribute (not a property) that is `None` until `start()`.
+
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
-- `provider_credentials` — central provider credential resolver; also exposed through `has_provider_credentials(provider_id)` and `get_provider_credentials(provider_id)`.
+- `provider_credentials` — central provider credential resolver; also exposed through `has_provider_credentials(provider_id)` and `get_provider_credentials(provider_id)`. `resolve_environment_credential(key)` resolves a single environment credential with the same precedence (process env first, then data-dir `.env` fallback) — this is what `web_search` and the Home Assistant tools use.
 - `token_store` — OAuth token persistence service rooted at `<data_dir>/oauth/`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments.
 - `attachment_store` — runtime-owned `AttachmentStore` rooted at `<data_dir>/attachments/`.
-- `agents` — `AgentStore` for agent CRUD/workspaces. Runtime wires it to `settings.json` `defaults.agent` so resolved Agent reads always use the latest persisted defaults without rewriting agent files.
-- `tools` — runtime `ToolRegistry` with built-in tools registered at startup; includes normal tools (`bash`, `cron`, `edit`, `glob`, `grep`, `image_generation`, `memory`, `process`, `read`, `session_search`, `status`, `subagent`, `subagent_result`, `text_to_speech`, `web_fetch`, `web_search`, `write`) plus the internal `skill` tool. `channel_send` is registered dynamically while at least one channel is active.
-- `process_manager` — shared in-memory `ProcessManager` service used by `bash` and `process` tools. It owns process sessions, output buffers, TTL sweeping, and Run-scoped cancellation.
+- `speech_upload_max_size_bytes` — max accepted uploaded-audio size for transcription (`settings.json` `speech_upload_max_size_bytes`).
+- `agents` — `AgentStore` for agent CRUD/workspaces, wired to `settings.json` `defaults.agent`.
+- `tools` — runtime `ToolRegistry` with built-ins registered at startup: `bash`, `cron`, `edit`, `glob`, `grep`, `image_generation`, `memory`, `process`, `read`, `session_search`, `status`, `subagent`, `subagent_result`, `text_to_speech`, `web_fetch`, `web_search`, `write`, plus the internal `skill` tool. `channel_send` is registered dynamically while ≥1 channel is active; the Home Assistant tools (`ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`) only when `HASS_TOKEN` is configured.
+- `process_manager` — shared in-memory `ProcessManager` used by `bash` and `process` tools. Owns process sessions, output buffers, TTL sweeping, and Run-scoped cancellation.
 - `skills` — `SkillRegistry` loaded from `<data_dir>/skills`, bundled `resources/skills`, and configured extra `skill_directories`.
+- `extensions` — `ExtensionRegistry | None` loaded from `<data_dir>/extensions` and configured `extension_directories`. Unlike the other service accessors it does **not** raise before `start()` — it returns `None`.
 - `model_tasks` — `TaskModelService` for specialized task-model settings, credential-gated target discovery, and backend-owned option schemas.
 - `speech` — `SpeechService` for configured speech-to-text, text-to-speech, and speech artifact lookup.
+- `image` — `ImageService` for configured image generation and image artifact lookup.
 - `chat_sessions` — `ChatSessionManager` rooted at runtime data dir.
 - `recall_backend` — selected `RecallBackend` used by `session_search`.
-- `chat_run_manager` — shared `ChatRunManager` used by server chat flows and automation triggers. Runtime also exposes it as `runtime.chat_runs` for server compatibility.
+- `chat_run_manager` / `chat_runs` — shared `ChatRunManager` used by server chat flows and automation triggers.
 - `command_dispatcher` — shared `CommandDispatcher` for built-in slash commands, used by server RPC handlers and channel adapters before starting Runs.
-- `chat_loop` — resolver-wired non-streaming `ChatLoop` used by server non-SSE flows and command helpers.
-- `streaming_chat_loop` — resolver-wired streaming `ChatLoop` used by server SSE flows.
+- `chat_loop` / `streaming_chat_loop` — resolver-wired non-streaming / streaming `ChatLoop` for server non-SSE and SSE flows respectively.
 - `trigger_service` — `TriggerService` for programmatic Run starts and in-memory busy-Session queueing.
 - `channel_service` — `ChannelService` for persisted channel configs, adapter lifecycle, and outbound platform delivery rooted at `<data_dir>/channels/`.
 - `cron_service` — `CronService` for persisted cron and one-shot scheduled triggers rooted at `<data_dir>/cron/jobs.json`.
 - `system_prompts` — `core.prompts.SystemPromptManager` using runtime storage/tools/skills.
-- `reload_skills()` — reloads the skill registry from current settings, re-registers the internal `skill` tool handler, and updates `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
-- `reload_recall_backend()` — reloads the configured Recall backend from `settings.recall.backend` and re-registers `session_search` so Settings UI backend changes take effect without restarting the app.
-- `reload_channel_tool()` — unregisters `channel_send` and re-registers it when `channel_service.has_active_channels()` is true so runtime channel enable/disable changes keep tool visibility in sync.
-- `core/runtime/__init__.py` exports the runtime class and DI protocol types for callers.
 
-All service properties raise `RuntimeError` before `start()` and after `stop()`. `stop()` clears the token-store reference along with other runtime services.
+### Hot-reload methods
 
-`get_adapter(provider_id, connection_id)` builds an async provider-token getter for the selected connection and instantiates the class selected by `ProviderConfig.adapter`. Current adapter keys include `openai_compatible`, `opencode_go`, `openrouter`, `mistral`, `minimax`, `github_copilot`, and `anthropic`. `api_key` connections resolve the static credential through `provider_credentials` and receive `StaticTokenGetter`; OAuth connections with `OAuthConfig` receive `OAuthTokenGetter` using `runtime.token_store`. OAuth stubs that still have a credential key but no OAuth metadata remain static credential connections until configured otherwise. For all adapters, runtime also injects a provider-scoped, read-only `model_lookup(model_id) -> Model | None` backed by `ModelRegistry` so adapter runtime behavior can depend on normalized catalog facts without direct registry access or provider-specific runtime helper methods.
+- `reload_skills()` — reload the skill registry from current settings, re-register the internal `skill` tool, and update `SystemPromptManager` so prompt catalogs and provider tool visibility use the new registry without restarting the app.
+- `reload_recall_backend()` — reload the configured Recall backend from `settings.recall.backend` and re-register `session_search` so Settings UI backend changes take effect without restart.
+- `reload_channel_tool()` — unregister/re-register `channel_send` to match `channel_service.has_active_channels()` so runtime channel enable/disable stays in sync.
+- `reload_provider_credentials()` — reload the data-dir `.env` fallback snapshot and rebuild the `ProviderCredentialResolver` from it.
+
+### Adapter factory
+
+`get_adapter(provider_id, connection_id)` builds an async provider-token getter for the selected connection and instantiates the class selected by `ProviderConfig.adapter`. Adapter keys: `openai_compatible`, `openai_subscription`, `opencode_go`, `openrouter`, `mistral`, `minimax`, `github_copilot`, `anthropic`. `api_key` connections resolve the static credential through `provider_credentials` and receive `StaticTokenGetter`; OAuth connections with `OAuthConfig` receive `OAuthTokenGetter` using `runtime.token_store`. OAuth stubs that still have a credential key but no OAuth metadata stay static-credential connections until configured otherwise. Every adapter also gets a provider-scoped, read-only `model_lookup(model_id) -> Model | None` backed by `ModelRegistry`, and — when Debug Mode is enabled — a `ProviderDebugRecorder` built from debug settings, so wire capture is wired into the adapter's HTTP transport. `get_model(provider_id, model_id)` is a thin convenience over `ModelRegistry.get`.
 
 ## Constraints & Gotchas
 
 - On first start with an empty data directory, Runtime creates the bootstrap Agent `main` / `Main`. Agent creation also creates the first empty Session and persists it as `current_session_id`.
 - Existing data directories with at least one Agent are preserved; Runtime does not add another `main` Agent just because `main` is absent.
-- `ChannelService.start()` follows the same event-loop guard pattern as `CronService.start()`: when runtime startup happens without an active asyncio loop, the service is wired but listeners are not started.
+- The bootstrap Agent is ensured **before** `ChannelService` starts, so a configured channel targeting `main` can come up during first-start recovery.
+- `ChannelService.start()` and `CronService.start()` share the event-loop guard: when runtime startup happens without an active asyncio loop, the service is wired but its listeners are not started.
 - Channel startup failures are isolated to the channel service and recorded as failed channel health state; they must not fail `Runtime.start()`.
-- Runtime owns the canonical resolver-wired chat loops. Server code should use `runtime.chat_loop` / `runtime.streaming_chat_loop` when available instead of constructing fresh `ChatLoop` instances and bypassing attachment resolution.
-- Runtime also owns the canonical `CommandDispatcher`; accessors should reuse `runtime.command_dispatcher` instead of constructing ad-hoc command routers.
+- Runtime owns the canonical resolver-wired chat loops and the canonical `CommandDispatcher`. Server/accessor code should reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` instead of constructing fresh instances and bypassing attachment resolution.
