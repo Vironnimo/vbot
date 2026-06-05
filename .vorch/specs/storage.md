@@ -1,80 +1,48 @@
 # Storage
 
-Data-directory setup, settings persistence, and bundled prompt fragment access.
+Data-directory bootstrap, atomic settings and credential persistence, and raw prompt-fragment file access.
 
 ## Overview
 
-`core/storage/` owns data-directory creation and simple JSON/settings storage. It also mediates raw prompt fragment file access so prompt bodies live in files rather than hardcoded code strings. The default data directory is `~/.vbot` unless supplied directly or through config. Public Settings update payload validation lives in `core/settings/`; storage validates and normalizes persisted subsets after that public schema has been accepted. System Prompt assembly and editable prompt-fragment rules live in `core/prompts/`.
+`core/storage/` owns the process-local filesystem services for the runtime data root. It resolves the data directory from an explicit constructor value, config `data_dir`, `DATA_DIR` / `VBOT_DATA_DIR`, or the default `~/.vbot`, creates the shared bootstrap directory skeleton, and reads/writes `settings.json`, the data-dir `.env`, and prompt fragment files. It does not own the product-facing Settings schema (`core/settings/`), prompt assembly/edit rules (`core/prompts/`), or domain records such as Agents, Channels, Cron jobs, Attachments, Speech artifacts, and Image artifacts even when those records live under directories created by Storage. Runtime wires one `StorageManager` and passes its `data_dir` to the domain stores that own their own file formats.
 
 ## Data Model
 
-Storage creates these directories under `data_dir`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `debug`, `oauth`, `prompts`, `recall`, `skills`, `logs`, `speech`.
+`ensure_directories()` creates the shared bootstrap directories under `<data_dir>`: `.tmp`, `agents`, `archive`, `attachments`, `channels`, `cron`, `debug`, `oauth`, `prompts`, `recall`, `speech`, `skills`, and `logs`.
 
-Bundled prompt fragments live in `resources/prompts/`: `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and the internal compaction prompt `compaction.md`.
+`<data_dir>/settings.json` is a UTF-8 JSON object. Storage owns raw file I/O, validation-gated loading, normalized persistence helpers, and locked read-modify-write transactions; `.vorch/specs/settings.md` owns the raw key list and public `settings.update` section shapes.
 
-Agent-scoped editable prompt fragments live under `<data_dir>/agents/<agent-id>/prompts/`. Agent scopes may contain only the five normal editable system-prompt fragments: `system.md`, `runtime.md`, `tools.md`, `channels.md`, and `skills.md`. `compaction.md` is never Agent-scoped.
+`<data_dir>/.env` is a user-owned credential fallback file. Storage can read it as a snapshot or update one single-line credential key; process environment values remain higher precedence when callers request a merged environment snapshot.
 
-`<data_dir>/.env` stores user-owned secrets such as provider API keys and acts as a read-only fallback credential source.
+Bundled prompt fragments live in `resources/prompts/`. Default-scope user copies live in `<data_dir>/prompts/` and may include `system.md`, `runtime.md`, `tools.md`, `channels.md`, `skills.md`, and backend-only `compaction.md`. Agent-scoped prompt fragments live in `<data_dir>/agents/<agent-id>/prompts/` and may contain only the five normal editable fragments: `system.md`, `runtime.md`, `tools.md`, `channels.md`, and `skills.md`.
 
-`<data_dir>/settings.json` may include:
-
-- `appearance.language` — persisted WebUI language preference.
-- `skill_directories` — additional skill scan root paths configured from the Settings UI.
-- `max_subagent_depth`, `max_subagents_per_turn`, and `subagent_timeout_minutes` — integer limits for sub-agent tool execution.
-- `compaction` — automatic history-compaction settings `{ auto, threshold, tail_tokens, summary_model }`.
-- `attachment_max_size_bytes` — integer attachment upload limit for the runtime-owned `AttachmentStore`, default `20971520`.
-- `defaults.agent` — project-wide fallback Agent values `{ model?, fallback_model?, temperature?, thinking_effort? }`. Missing keys mean no global default for that field; `thinking_effort: ""` is a valid explicit "provider default" value.
-- `recall.backend` — raw Session recall backend selection, default `jsonl_scan`; `sqlite_fts` stores a disposable derived index under `<data_dir>/recall/`.
-- `model_tasks` — specialized task-model bindings keyed by supported task type, with one `target` string and one JSON-object `options` mapping per task.
-- `debug` — `{ enabled: boolean, trace_limit: positive integer }`. Controls provider wire trace capture, off by default. Trace files are stored under `<data_dir>/debug/traces/` with retention capped by `trace_limit` (default 50, max 500).
+Other domains may create additional data under the same root on demand. For example, `core/image/` owns `<data_dir>/images/`, `core/debug/` owns trace files under `<data_dir>/debug/`, and `core/automation/` owns extra Cron internals under `<data_dir>/cron/`. Do not add a directory to Storage's bootstrap list just because a domain can create it itself.
 
 ## Interfaces
 
-- `core/storage/__init__.py` exports `StorageManager`, `StorageError`, data-dir constants, and the storage config protocol.
-- `StorageManager(data_dir=None, config=None, resources_dir=None)`
-- `ensure_directories()` — creates the current data-directory structure.
-- `load_environment() -> dict[str, str]` — returns a read-only snapshot of credentials from `<data_dir>/.env` without mutating `os.environ`.
-- `load_data_dir_credentials() -> dict[str, str]` — reads `<data_dir>/.env` as a fallback credential source.
-- `set_data_dir_credential(key, value)` — validates and atomically writes or replaces one single-line credential in `<data_dir>/.env` through a temp file under `<data_dir>/.tmp/` plus `os.replace()`.
-- `build_environment_snapshot() -> dict[str, str]` — returns a merged process-env-over-data-dir credential snapshot without mutating process state.
-- `load_settings() -> dict` — returns `{}` when `settings.json` does not exist.
-- `save_settings(settings)` — atomically writes sorted, indented JSON.
-- `update_settings(mutator)` — runs one process-local locked read-modify-write transaction against `settings.json` and persists the mutated mapping with one atomic write.
-- `update_settings_sections(settings_update)` — persists one parsed public `settings.update` payload as a single settings transaction. Multi-section updates validate and merge in memory first; if any section fails, the existing file is left unchanged.
-- `load_appearance_settings() -> dict[str, str]` and `update_appearance_settings(appearance)` — read/write the supported Appearance settings subset.
-- `load_skill_directory_settings() -> list[str]` and `update_skill_directory_settings(directories)` — read/write normalized extra skill scan directories.
-- `load_subagent_settings() -> dict[str, int]` — reads supported sub-agent execution limits, defaulting to depth `4`, per-turn count `8`, and timeout `60` minutes.
-- `load_compaction_settings() -> dict[str, Any]` / `update_compaction_settings(compaction)` — read/write normalized compaction settings. `threshold` must be numeric in `(0, 1]`, `tail_tokens` must be a positive integer, and `summary_model` is `str | None`.
-- `load_defaults() -> dict[str, Any]` / `update_defaults(section, values) -> dict[str, Any]` — read/write validated `settings.json` defaults blocks. Currently only `section="agent"` is supported.
-- `load_recall_settings() -> dict[str, str]` / `update_recall_settings(recall)` — read/write normalized recall backend settings, defaulting to `{"backend": "jsonl_scan"}`.
-- `load_model_task_settings() -> dict[str, dict[str, Any]]` / `update_model_task_settings(model_tasks)` — read/write normalized sparse task-model bindings. Empty target strings remove that task binding.
-- `copy_prompt_fragments(overwrite=False) -> list[Path]` — copies bundled prompt fragments into `<data_dir>/prompts/`.
-- `read_prompt_fragment(fragment_name) -> str` — reads user copy first, then bundled resource fallback.
-- `copy_agent_prompt_fragments(agent_id, overwrite=False) -> list[Path]` — copies the current effective default-scope editable fragments into one Agent's prompt directory, preserving existing Agent files unless `overwrite` is true.
-- `agent_prompts_dir(agent_id) -> Path` — returns `<data_dir>/agents/<agent-id>/prompts/` after validating the Agent id.
-- `agent_prompt_fragment_exists(agent_id, fragment_name) -> bool` — reports whether one Agent-scoped fragment exists on disk.
-- `read_agent_prompt_fragment(agent_id, fragment_name) -> str` — reads an Agent-scoped fragment, returning `""` when the file is missing.
-- `write_agent_prompt_fragment(agent_id, fragment_name, content) -> Path` — writes one Agent-scoped fragment atomically.
-- `reset_agent_prompt_fragment(agent_id, fragment_name) -> Path` — copies the current effective default-scope content for that fragment into the Agent scope.
+- `core/storage/__init__.py` exports `StorageManager`, `StorageError`, `ConfigProtocol`, `DEFAULT_DATA_DIR`, `PHASE_TWO_DIRECTORIES`, prompt constants, and appearance/recall defaults used by callers and tests.
+- `StorageManager(data_dir=None, config=None, resources_dir=None)` resolves `data_dir`, stores the resources root, and owns a process-local re-entrant lock for settings transactions.
+- Data-root and credentials: `ensure_directories()`, `load_environment()`, `load_data_dir_credentials()`, `set_data_dir_credential(key, value)`, and `build_environment_snapshot()`.
+- Raw settings transactions: `load_settings()`, `save_settings(settings)`, `update_settings(mutator)`, and `update_settings_sections(settings_update)`. `load_settings()` returns `{}` for a missing file and raises `StorageError` for invalid JSON/schema diagnostics from `core/settings/validation.py`.
+- Normalized settings helpers cover Appearance, Skills directories, Sub-Agent limits, Compaction, Agent defaults, Recall, Web Search, Debug, and Model Task bindings. Keep shape details in `.vorch/specs/settings.md`; Storage's job is to normalize, merge, delete empty sections where applicable, and persist.
+- Prompt fragments: `copy_prompt_fragments()`, `read_prompt_fragment()`, `write_prompt_fragment()`, `reset_prompt_fragment()`, plus Agent-scope helpers `copy_agent_prompt_fragments()`, `agent_prompts_dir()`, `agent_prompt_fragment_exists()`, `read_agent_prompt_fragment()`, `write_agent_prompt_fragment()`, and `reset_agent_prompt_fragment()`.
 
 ## Conventions
 
-- Settings are UTF-8 JSON objects only.
-- Settings read-modify-write helpers, including single-section helpers and `update_settings_sections`, are serialized by a process-local re-entrant lock and perform one atomic replace per transaction.
-- `.env` parsing is conservative: `KEY=VALUE`, blank/comment lines ignored, matching single/double quotes stripped, no expansion or command substitution.
-- Do not log secret values from `.env`.
-- `.env` values must not be copied back into `os.environ`; callers receive snapshots instead.
-- Prompt fragment names are allowlisted; path traversal and absolute paths are rejected.
-- Prompt Agent IDs are validated before building Agent prompt paths. Prompt fragment names are allowlisted separately for default and Agent scopes; path traversal and absolute paths are rejected.
-- `compaction.md` is allowlisted for backend prompt loading but is not part of the normal system-prompt editor/viewer surface, and it is never copied into Agent prompt scopes.
-- User-edited prompt fragments are preserved unless `overwrite=True` is explicitly passed.
-- Skill directory settings are stored as a list of non-empty absolute paths or home-relative paths beginning with `~`. Path existence is not validated during settings write; invalid or missing scan roots are ignored by skill loading.
-- `attachment_max_size_bytes` is read as a plain integer from `settings.json`; invalid or missing values fall back to the runtime default.
-- `update_defaults("agent", ...)` validates only the supported four Agent-default fields, removes individual keys when a value is `null`, bounds `temperature` to `[0, 2]`, and allows `thinking_effort` to be either `null`, `""`, or one of the normal effort tokens.
-- `update_model_task_settings(...)` validates task keys through `core/model_tasks/`, persists only non-empty targets, preserves JSON-object options, and removes the top-level `model_tasks` key when no bindings remain.
+- Settings writes are UTF-8, sorted, indented JSON with a trailing newline.
+- Settings read-modify-write helpers are serialized only inside the current process. They are not cross-process locks.
+- Atomic Storage writes use temp files under `<data_dir>/.tmp/` plus `os.replace()`. Callers must ensure the data directory skeleton exists or use Storage methods that call `ensure_directories()`.
+- `.env` parsing is conservative: `KEY=VALUE`, blank/comment lines ignored, matching quotes stripped, no expansion or command substitution.
+- `.env` values must never be copied back into `os.environ` and must never be logged.
+- Prompt fragment names and Agent IDs are allowlisted before paths are constructed. Path traversal and absolute fragment paths are invalid storage data, not inputs to sanitize later.
+- `update_settings_sections()` expects a parsed public Settings update from `core/settings.parse_settings_update()`. If any section fails Storage-level normalization, the existing `settings.json` is left unchanged.
 
 ## Constraints & Gotchas
 
-- Atomic writes use temp files in `<data_dir>/.tmp/`; callers must ensure directories exist through `ensure_directories()` or methods that call it.
-- `ensure_directories()` is the owner of the `<data_dir>/attachments/` root used by `AttachmentStore`; attachment code should not invent a parallel storage root.
-- `ensure_directories()` also creates `<data_dir>/speech/`, but speech artifact metadata and binary writes are owned by `core/speech/`.
+- Directory creation does not imply data ownership. `AgentStore` owns `agents/<id>/agent.json` and workspaces, `ChannelService` owns `channels/<id>/channel.json`, `CronService` owns `cron/jobs.json`, `AttachmentStore` owns attachment blobs and sidecars, `SpeechService` owns speech artifacts, and `ImageService` owns image artifacts.
+- User-editable JSON is validated before runtime consumption through `core/settings/validation.py`: Storage gates `settings.json`, while Agent, Channel, and Cron domains use their own validated loaders from the same module.
+- `update_settings_sections()` validates and merges all accepted sections in memory, writes once, and returns the updated sections. Server RPC delegates run live reload hooks only after that write succeeds; today Skills and Recall reload live, Web Search is read by the tool at call time, and most other settings take effect on next startup.
+- `set_data_dir_credential()` validates shell-style environment keys, rejects empty or multiline values, preserves unrelated lines, removes duplicate occurrences of the updated key, and writes atomically. It is not a general `.env` editor.
+- Default prompt fragments fall back to bundled resources when no user copy exists. `copy_prompt_fragments()` preserves user edits unless `overwrite=True`; `reset_prompt_fragment()` intentionally overwrites the default-scope user copy with the bundled resource.
+- Agent prompt seeding and reset copy the current effective default-scope content, not necessarily the bundled resource. Missing Agent-scope fragments read as `""`; Agent prompt files are ignored by prompt assembly unless that Agent has `custom_system_prompt_enabled: true`.
+- `compaction.md` is readable through Storage for backend compaction, but it is not editable through the System Prompt UI and is never copied into Agent prompt scopes.
