@@ -9,9 +9,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 ## Data Model
 
 - `AuthConfig`: auth header name, value prefix, and credential key for API-key connections.
-- `OAuthConfig`: device-flow endpoints, scopes, optional token exchange URL,
-  and provider-specific device-flow metadata such as `device_flow`,
-  `verification_uri`, `redirect_uri`, and configured expiry.
+- `OAuthConfig`: device-flow endpoints, scopes, optional token exchange URL, and provider-specific device-flow metadata such as `device_flow`, `verification_uri`, `redirect_uri`, and configured expiry.
 - `ConnectionConfig`: provider-local connection id, type (`api_key` or `oauth`), display label, auth metadata, optional base URL override, optional OAuth metadata.
 - `ProviderConfig`: id, name, adapter selector, base URL, connections, defaults, extra headers, and optional `models_endpoint`.
 - `ProviderRegistry`: loads provider JSON configs, rejects duplicate ids, and returns configs by id.
@@ -26,9 +24,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - `runtime.get_adapter(provider_id, connection_id) -> ProviderAdapter`. When `debug.enabled` is true in settings, the returned adapter has `_debug_recorder` set to a `ProviderDebugRecorder` for wire trace capture.
 - `ProviderCredentialResolver.has_credentials(provider_id, connection_id=None) -> bool`
 - `ProviderCredentialResolver.get_credentials(provider_id, connection_id=None) -> str`
-- Server RPC `provider.set_key` writes API-key connection credentials into the
-    data-dir `.env` using the connection's configured `credential_key`, then
-    reloads runtime provider credential fallback state.
+- Server RPC `provider.set_key` writes API-key connection credentials into the data-dir `.env` using the connection's configured `credential_key`, then reloads runtime provider credential fallback state.
 - `ProviderAdapter.send(messages, *, model_id, **kwargs) -> dict`
 - `ProviderAdapter.stream(messages, *, model_id, **kwargs) -> AsyncIterator[dict]`
 - `ProviderAdapter.normalize_response(response) -> dict`
@@ -58,30 +54,17 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Provider JSON uses `connections`; old single-provider `auth` JSON is not supported.
 - Runtime adapter creation injects provider-scoped `model_lookup(model_id) -> Model | None` so adapters can use normalized catalog facts without file I/O.
 - Provider defaults are applied with lower priority than caller kwargs.
-- Provider chat HTTP clients keep connect, write, and pool timeouts bounded at
-  60 seconds but do not enforce an HTTP read timeout. Long non-streaming model
-  generations may legitimately take longer than one minute before returning a
-  complete response; streaming stalls are guarded by the chat streaming chunk
-  timeout instead.
-- Provider request defaults are runtime controls, not model facts. When catalog
-  discovery lacks a per-model output limit, normalized `max_output_tokens` stays
-  `null`; request shaping uses provider defaults such as `defaults.max_tokens`
-  separately. Bundled chat provider defaults use `max_tokens: 8192`.
+- Provider chat HTTP clients keep connect, write, and pool timeouts bounded at 60 seconds but do not enforce an HTTP read timeout. Long non-streaming model generations may legitimately take longer than one minute before returning a complete response; streaming stalls are guarded by the chat streaming chunk timeout instead.
+- Provider request defaults are runtime controls, not model facts. When catalog discovery lacks a per-model output limit, normalized `max_output_tokens` stays `null`; request shaping uses provider defaults such as `defaults.max_tokens` separately. Bundled chat provider defaults use `max_tokens: 8192`.
 - Streaming adapters yield normalized vBot deltas only, never raw provider chunks.
-- Catalog normalization should preserve discoverable model modalities,
-  supported request parameters, and other small runtime-relevant facts in the
-  sanitized `Model.capabilities`/`Model.metadata` shape. Sparse local or
-  OpenAI-compatible catalogs should remain usable rather than being interpreted
-  as authoritative negatives for every missing capability.
+- Catalog normalization should preserve discoverable model modalities, supported request parameters, and other small runtime-relevant facts in the sanitized `Model.capabilities`/`Model.metadata` shape. Sparse local or OpenAI-compatible catalogs should remain usable rather than being interpreted as authoritative negatives for every missing capability.
 - Token values and API keys must never be logged.
 
 ## Constraints & Gotchas
 
 - `runtime.get_adapter()` requires an explicit connection id; there is no runtime fallback to the first usable connection.
 - API-key credentials resolve at adapter creation from process env or data-dir `.env`; OAuth credentials come from `TokenStore` and may refresh during requests. Standard device flows poll token endpoints directly; provider-specific flows such as `openai_codex` can add custom polling/exchange semantics inside the auth flow engine.
-- API-key provider setup through CLI/RPC is credential-key based: callers name a
-    provider and optional connection, and vBot chooses the configured env key from
-    provider metadata. CLI output must not include credential values.
+- API-key provider setup through CLI/RPC is credential-key based: callers name a provider and optional connection, and vBot chooses the configured env key from provider metadata. CLI output must not include credential values.
 - Streaming retry only covers connection establishment. Once an SSE stream is open, mid-stream errors propagate.
 - Adapters that know streaming is unsupported for a request raise `ProviderStreamingUnsupportedError` (non-retryable `ProviderError`). The chat loop treats this as its only trigger to fall back to a non-streaming request; other streaming errors are not silently retried.
 - Provider catalogs under `resources/models/` are refreshable artifacts. Durable behavior belongs in adapter code or policy, not hand-edited generated model files.

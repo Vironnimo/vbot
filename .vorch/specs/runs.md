@@ -12,8 +12,7 @@ The chat loop creates and executes Runs. Server, channels, automation, tools, an
 
 - `RunStatus` — `running`, `completed`, `failed`, or `cancelled`.
 - `RunEvent` — replayable event with `sequence`, `run_id`, `agent_id`, `session_id`, `type`, `payload`, and UTC `timestamp`.
-- `Run` — active execution state with a bounded replay event window, subscribers,
-  cancellation callbacks, terminal status, final result, and final error.
+- `Run` — active execution state with a bounded replay event window, subscribers, cancellation callbacks, terminal status, final result, and final error.
 - `QueuedRunItem` — one queued request with display content, executor, `internal` visibility flag, start future, and created timestamp.
 - `ChatRunManager` — in-memory coordinator for active Runs, Run lookup/cancel, and per-session FIFO queues.
 - `RunError`, `ActiveRunError`, `RunNotFoundError`, `RunCancelledError` — expected domain errors for caller mapping.
@@ -26,23 +25,14 @@ Stable Run event constants live in `core.runs`:
 - persisted/visible output: `user_message_persisted`, `reasoning`, `tool_call_started`, `tool_call_result`, `subagent_session_started`, `assistant_output`, `error_message_persisted`, `model_fallback_activated`, `compaction_completed`
 - transient SSE-only deltas: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, `tool_call_stderr`
 
-Every emitted event increments the Run-local `sequence`, including transient
-delta events. Sequences are monotonic for the lifetime of the Run and are not
-reused when old events fall out of the retained replay window. Subscribers can
-replay retained events after a sequence number and then follow live events until
-a terminal event.
+Every emitted event increments the Run-local `sequence`, including transient delta events. Sequences are monotonic for the lifetime of the Run and are not reused when old events fall out of the retained replay window. Subscribers can replay retained events after a sequence number and then follow live events until a terminal event.
 
-`tool_call_started` payloads include both the raw call and display metadata:
-`{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`.
-The `display` object is produced by the tool registry and is safe for accessors
-to render without re-inferring tool semantics from raw arguments.
+`tool_call_started` payloads include both the raw call and display metadata: `{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`. The `display` object is produced by the tool registry and is safe for accessors to render without re-inferring tool semantics from raw arguments.
 
 ## Interfaces
 
 - `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes a visible event unless the Run is already terminal or cancellation is suppressing non-terminal output.
-- `Run.subscribe(after_sequence=0)` replays matching retained events and streams
-  future events until terminal state. Live subscriber queues are bounded; a
-  subscriber that falls behind the bound is evicted and its stream ends.
+- `Run.subscribe(after_sequence=0)` replays matching retained events and streams future events until terminal state. Live subscriber queues are bounded; a subscriber that falls behind the bound is evicted and its stream ends.
 - `Run.wait()` waits for terminal state, returns the result, re-raises failures, and raises `RunCancelledError` for cancelled Runs.
 - `Run.request_cancel()` marks cancellation requested, runs registered cancellation callbacks, and cancels the background executor task.
 - `Run.add_cancel_callback(callback)` registers cleanup work for active host/provider/tool work.
@@ -50,9 +40,7 @@ to render without re-inferring tool semantics from raw arguments.
 - `ChatRunManager.enqueue(...)` starts immediately when idle, otherwise stores a FIFO `QueuedRunItem`.
 - `ChatRunManager.list_queued(...)`, `remove_queued(...)`, and `update_queued(...)` are the public queue controls used by server RPCs.
 - `ChatRunManager.cancel(run_id)` and `cancel_by_session(agent_id, session_id)` request cancellation through the Run object.
-- `ChatRunManager.add_run_started_callback(callback)` registers a process-local
-  observer for every Run the manager starts, including queued and internal Runs;
-  the returned callable unregisters it.
+- `ChatRunManager.add_run_started_callback(callback)` registers a process-local observer for every Run the manager starts, including queued and internal Runs; the returned callable unregisters it.
 
 ## Cross-Domain Contracts
 
@@ -72,16 +60,5 @@ to render without re-inferring tool semantics from raw arguments.
 - `Run.emit()` returns `None` when suppression drops an event; callers must tolerate that.
 - Terminal events are the only events allowed after cancellation suppression starts.
 - All timestamps are UTC ISO 8601 strings with explicit offsets.
-- Terminal lifecycle events (`run_completed`, `run_failed`, and
-  `run_cancelled`) include `payload.timing` with `{ started_at, completed_at,
-  duration_ms }`. The duration is measured with a monotonic clock and stored as
-  non-negative milliseconds; timestamps are UTC ISO values for display and
-  persistence only. `run_completed` may also include token `usage`, but timing
-  must remain separate from usage.
-- Run timelines are process-local replay buffers, not durable history. The
-  manager retains only a bounded number of completed Runs, and each Run retains
-  only a bounded number of recent events. Live subscribers receive events as
-  they are emitted while they keep up; lagging subscribers are disconnected
-  instead of being allowed to accumulate unbounded memory. Late subscribers and
-  reconnects can replay only the retained window. Persisted Session history
-  remains the durable source for old conversation content.
+- Terminal lifecycle events (`run_completed`, `run_failed`, and `run_cancelled`) include `payload.timing` with `{ started_at, completed_at, duration_ms }`. The duration is measured with a monotonic clock and stored as non-negative milliseconds; timestamps are UTC ISO values for display and persistence only. `run_completed` may also include token `usage`, but timing must remain separate from usage.
+- Run timelines are process-local replay buffers, not durable history. The manager retains only a bounded number of completed Runs, and each Run retains only a bounded number of recent events. Live subscribers receive events as they are emitted while they keep up; lagging subscribers are disconnected instead of being allowed to accumulate unbounded memory. Late subscribers and reconnects can replay only the retained window. Persisted Session history remains the durable source for old conversation content.

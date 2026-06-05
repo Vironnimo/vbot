@@ -17,10 +17,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
   - `token_env_var: str`
   - `enabled: bool`
 - Channel config files live at `<data_dir>/channels/<channel-id>/channel.json`.
-- Channel config reads pass `channel.json` through
-  `core/settings/validation.py` before constructing `ChannelConfig`. Invalid
-  JSON shape or schema errors raise `ChannelConfigError` with file/path
-  diagnostics.
+- Channel config reads pass `channel.json` through `core/settings/validation.py` before constructing `ChannelConfig`. Invalid JSON shape or schema errors raise `ChannelConfigError` with file/path diagnostics.
 - Channel session metadata lives in `<data_dir>/agents/<agent-id>/sessions/<session-id>.meta.json` beside the JSONL transcript. Channel-owned fields are:
   - `source_channel_id`
   - `platform`
@@ -75,19 +72,14 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 
 - Closed architectural decisions D1-D8 from `stuff/channels.md` are binding for this domain.
 - Final assistant replies for inbound platform turns are automatic. Agents do not call `channel_send` for normal replies.
-- Recognized built-in slash commands are handled before normal `TriggerService`
-  queueing, but unknown slash text still follows the normal inbound chat path.
+- Recognized built-in slash commands are handled before normal `TriggerService` queueing, but unknown slash text still follows the normal inbound chat path.
 - `channel_send` is for proactive outbound only.
 - `channel_send` may send text only, files only, or both; at least one payload is required.
 - Missing or empty `allowed_chat_ids` means deny-all for DM-capable channels.
 - Session history remains the single source of truth. Channels add metadata and System Reminder notes; they do not fork chat history.
 - Runtime registers `channel_send` only when at least one channel is active and re-evaluates registration when channels are enabled or disabled.
 - `channel_send` reports success only after the adapter send call completes; delivery is not fire-and-forget.
-- Runtime startup degrades per channel: an enabled channel with invalid runtime
-  dependencies, such as an unknown `agent_id` or missing Telegram token, is
-  marked failed with a diagnostic reason and does not prevent the server from
-  starting. Public create/update/enable paths still reject unknown Agent IDs
-  before persisting or enabling a channel.
+- Runtime startup degrades per channel: an enabled channel with invalid runtime dependencies, such as an unknown `agent_id` or missing Telegram token, is marked failed with a diagnostic reason and does not prevent the server from starting. Public create/update/enable paths still reject unknown Agent IDs before persisting or enabling a channel.
 
 ## External Dependencies
 
@@ -99,13 +91,7 @@ Bidirectional messaging-platform integrations for vBot. Owns channel configurati
 - Only the final assistant text from a completed Run is forwarded to the platform. Tool results, reasoning, and intermediate events stay in the JSONL/SSE flow.
 - Sidecar metadata is owned by `ChatSessionManager`; channel code consumes it but does not define a separate storage path or format.
 - Adapter restart on failure should use bounded retry with backoff; a broken adapter must not silently disappear.
-- Failed channel diagnostics are runtime-local health state. Persisted
-  `channel.json` remains the source of truth for configuration, and vBot does
-  not automatically retarget a channel to a fallback Agent.
-- Telegram caught failure paths that must preserve user-facing generic replies
-  still log channel/session/action context with traceback detail so operators
-  can diagnose trigger, compact, retry, media ingest, and lifecycle failures.
-- WebUI session browsing and retroactive channel linking are implemented through
-  the session drawer and `session.link_channel`; keep the sidecar metadata
-  contract stable for those accessors.
+- Failed channel diagnostics are runtime-local health state. Persisted `channel.json` remains the source of truth for configuration, and vBot does not automatically retarget a channel to a fallback Agent.
+- Telegram caught failure paths that must preserve user-facing generic replies still log channel/session/action context with traceback detail so operators can diagnose trigger, compact, retry, media ingest, and lifecycle failures.
+- WebUI session browsing and retroactive channel linking are implemented through the session drawer and `session.link_channel`; keep the sidecar metadata contract stable for those accessors.
 - Text documents received from Telegram are embedded immediately as `TextBlock`s using stored `text_content`; only non-text documents become `FileBlock` references.

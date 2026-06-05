@@ -34,17 +34,9 @@ Direct OpenAI provider configuration and the generic OpenAI-compatible adapter b
 
 ## Catalog Normalization
 
-- Generic OpenAI-compatible `/models` entries may expose modality data through
-  `architecture.input_modalities`, `architecture.output_modalities`, or similar
-  OpenRouter-style fields. When present, normalize these into
-  `Model.capabilities.input_modalities`, `output_modalities`,
-  `supported_parameters`, and derived `task_types`.
-- Sparse OpenAI-compatible catalogs that provide only IDs remain usable as
-  text-in/text-out chat catalogs. Missing optional capability facts should not
-  make local providers disappear from Agent model selection.
-- Missing per-model output-token limits remain `max_output_tokens: null` in the
-  normalized catalog. The generic runtime fallback for requests without an
-  explicit limit is `8192` tokens.
+- Generic OpenAI-compatible `/models` entries may expose modality data through `architecture.input_modalities`, `architecture.output_modalities`, or similar OpenRouter-style fields. When present, normalize these into `Model.capabilities.input_modalities`, `output_modalities`, `supported_parameters`, and derived `task_types`.
+- Sparse OpenAI-compatible catalogs that provide only IDs remain usable as text-in/text-out chat catalogs. Missing optional capability facts should not make local providers disappear from Agent model selection.
+- Missing per-model output-token limits remain `max_output_tokens: null` in the normalized catalog. The generic runtime fallback for requests without an explicit limit is `8192` tokens.
 
 ## Error Classification
 

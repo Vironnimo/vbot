@@ -1,20 +1,12 @@
 # Model Tasks
 
-Central bindings from specialized task types to concrete provider or local
-targets. This domain chooses what model or engine should perform a task; task
-execution stays in task-specific domains such as `core/speech/`.
+Central bindings from specialized task types to concrete provider or local targets. This domain chooses what model or engine should perform a task; task execution stays in task-specific domains such as `core/speech/`.
 
 ## Overview
 
-`core/model_tasks/` owns normalized task-model settings, target ID parsing,
-target discovery, local target hooks, and backend-owned option schemas. It is
-the shared architecture for speech-to-text, text-to-speech, and future media
-tasks such as image generation, image editing, and video generation.
+`core/model_tasks/` owns normalized task-model settings, target ID parsing, target discovery, local target hooks, and backend-owned option schemas. It is the shared architecture for speech-to-text, text-to-speech, and future media tasks such as image generation, image editing, and video generation.
 
-The service is wired by Runtime after providers, models, credentials, and
-storage are available. It reads and writes `settings.json` through
-`StorageManager` and lists only provider-backed targets whose selected
-connection has usable credentials.
+The service is wired by Runtime after providers, models, credentials, and storage are available. It reads and writes `settings.json` through `StorageManager` and lists only provider-backed targets whose selected connection has usable credentials.
 
 ## Task Types
 
@@ -26,9 +18,7 @@ Initial supported task types are:
 - `image_edit`
 - `video_generation`
 
-These values match `Model.capabilities.task_types`. Provider catalogs remain the
-source for provider-backed target visibility; local targets use explicit local
-descriptors.
+These values match `Model.capabilities.task_types`. Provider catalogs remain the source for provider-backed target visibility; local targets use explicit local descriptors.
 
 ## Settings
 
@@ -57,9 +47,7 @@ descriptors.
 }
 ```
 
-Each binding has a non-empty `target` and an `options` object. Sparse public
-updates are allowed. Sending an empty target for a task clears that binding from
-storage.
+Each binding has a non-empty `target` and an `options` object. Sparse public updates are allowed. Sending an empty target for a task clears that binding from storage.
 
 ## Target IDs
 
@@ -69,8 +57,7 @@ Provider target IDs use:
 <provider-id>/<model-id-at-provider>::<connection-local-id>
 ```
 
-The connection suffix may also be passed with a provider prefix, but persisted
-public IDs use the local connection id, for example `::api-key`.
+The connection suffix may also be passed with a provider prefix, but persisted public IDs use the local connection id, for example `::api-key`.
 
 Local target IDs use:
 
@@ -129,9 +116,7 @@ Local IDs cannot contain `/` or `::`.
 }
 ```
 
-Supported option field types are small renderable primitives: `text`,
-`textarea`, `select`, `number`, and `boolean`. Future fields should remain
-backend-owned so accessors do not hardcode provider-specific option rules.
+Supported option field types are small renderable primitives: `text`, `textarea`, `select`, `number`, and `boolean`. Future fields should remain backend-owned so accessors do not hardcode provider-specific option rules.
 
 ## Interfaces
 
@@ -155,19 +140,12 @@ Server delegates expose:
 - `task_model.list_targets` with `{ task_type }` -> `{ targets }`
 - `task_model.options` with `{ task_type, target }` -> `{ schema }`
 
-Task-model errors are expected domain errors and map to stable request errors at
-the server boundary.
+Task-model errors are expected domain errors and map to stable request errors at the server boundary.
 
 ## Constraints & Gotchas
 
-- `core/model_tasks/` must not execute media tasks. Speech execution belongs in
-  `core/speech/`; future image/video execution should get their own domains.
-- Provider-backed discovery is credential-gated and strictly filtered by
-  `Model.capabilities.task_types`.
-- Generated provider catalogs may be stale. If a newly released OpenRouter
-  speech model is missing from the UI target list, refresh the model database
-  after configuring the OpenRouter API key.
-- Local target hooks are intentionally dependency-free. Do not add Whisper,
-  Piper, ffmpeg, or other engine dependencies without explicit approval.
-- Option schemas are conservative provider defaults, not a complete claim about
-  every model. Execution adapters still own final wire shaping.
+- `core/model_tasks/` must not execute media tasks. Speech execution belongs in `core/speech/`; future image/video execution should get their own domains.
+- Provider-backed discovery is credential-gated and strictly filtered by `Model.capabilities.task_types`.
+- Generated provider catalogs may be stale. If a newly released OpenRouter speech model is missing from the UI target list, refresh the model database after configuring the OpenRouter API key.
+- Local target hooks are intentionally dependency-free. Do not add Whisper, Piper, ffmpeg, or other engine dependencies without explicit approval.
+- Option schemas are conservative provider defaults, not a complete claim about every model. Execution adapters still own final wire shaping.

@@ -1,19 +1,12 @@
 # Image
 
-Provider-neutral image generation execution, backed by the central task-model
-bindings.
+Provider-neutral image generation execution, backed by the central task-model bindings.
 
 ## Overview
 
-`core/image/` generates images from text prompts. It resolves the configured
-`image_generation` binding through `TaskModelService`, merges stored options with
-backend schema defaults, parses the target, and then routes to a provider-backed
-HTTP client.
+`core/image/` generates images from text prompts. It resolves the configured `image_generation` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and then routes to a provider-backed HTTP client.
 
-The first implementation supports OpenRouter's `chat/completions` endpoint with
-`modalities: ["image", "text"]` and `image_config`. Local targets raise
-`ImageUnsupportedTargetError`. Non-OpenRouter providers raise
-`ProviderError(retryable=False)`.
+The first implementation supports OpenRouter's `chat/completions` endpoint with `modalities: ["image", "text"]` and `image_config`. Local targets raise `ImageUnsupportedTargetError`. Non-OpenRouter providers raise `ProviderError(retryable=False)`.
 
 ## Interfaces
 
@@ -22,8 +15,7 @@ The first implementation supports OpenRouter's `chat/completions` endpoint with
 - `ImageService.get_artifact(artifact_id) -> ImageArtifact`
 - `ProviderImageClient.generate(prompt, options) -> ImageGenerationResult`
 
-`ImageGenerationResult` contains raw image bytes, media type, model id, optional
-usage, and the raw response payload when available.
+`ImageGenerationResult` contains raw image bytes, media type, model id, optional usage, and the raw response payload when available.
 
 `ImageArtifact.to_dict()` returns:
 
@@ -55,14 +47,11 @@ OpenRouter sends JSON to `/chat/completions`:
 }
 ```
 
-Response images arrive as base64 data URLs in `choices[0].message.images[]`.
-Each entry is decoded from base64 and stored as raw bytes. The media type is
-detected from the data URL prefix (e.g. `data:image/png;base64,...`).
+Response images arrive as base64 data URLs in `choices[0].message.images[]`. Each entry is decoded from base64 and stored as raw bytes. The media type is detected from the data URL prefix (e.g. `data:image/png;base64,...`).
 
 ## Artifacts
 
-Image generation tool output is stored under `<data_dir>/images/` as one image
-file and one JSON metadata sidecar per generated image:
+Image generation tool output is stored under `<data_dir>/images/` as one image file and one JSON metadata sidecar per generated image:
 
 ```
 <data_dir>/images/
@@ -74,9 +63,7 @@ file and one JSON metadata sidecar per generated image:
 
 ## HTTP Serving
 
-`GET /api/images/artifacts/{artifact_id}` serves persisted image files as
-`FileResponse`. The endpoint validates the artifact id format (32-char hex),
-reads the metadata JSON, and verifies the image file exists.
+`GET /api/images/artifacts/{artifact_id}` serves persisted image files as `FileResponse`. The endpoint validates the artifact id format (32-char hex), reads the metadata JSON, and verifies the image file exists.
 
 ## Error Classes
 
@@ -88,16 +75,11 @@ reads the metadata JSON, and verifies the image file exists.
 
 All error classes inherit from `ImageError(VBotError)`.
 
-Provider-level errors (auth, rate limit, network) are raised from
-`ProviderImageClient` as `ProviderError` subclasses and are NOT caught by
-`ImageService` (they bubble up as unexpected).
+Provider-level errors (auth, rate limit, network) are raised from `ProviderImageClient` as `ProviderError` subclasses and are NOT caught by `ImageService` (they bubble up as unexpected).
 
 ## Extension Points
 
 To add a new image generation provider:
-1. Add an `elif self._provider.id == "..."` branch in
-   `ProviderImageClient.generate()`
-2. Implement a private `_generate_<provider>()` method that returns
-   `ImageGenerationResult`
-3. Add provider-specific option fields in `core/model_tasks/options.py`
-   `_image_generation_fields()`
+1. Add an `elif self._provider.id == "..."` branch in `ProviderImageClient.generate()`
+2. Implement a private `_generate_<provider>()` method that returns `ImageGenerationResult`
+3. Add provider-specific option fields in `core/model_tasks/options.py` `_image_generation_fields()`

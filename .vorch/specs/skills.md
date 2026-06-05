@@ -16,9 +16,7 @@ Skills are playbooks, not normal user-managed tools. The registry exposes prompt
 - YAML frontmatter is parsed with PyYAML. Validation is lenient: name/directory mismatch and names longer than 64 characters are warnings; missing required fields or invalid YAML make the skill non-loadable.
 - vBot-specific machine-checkable requirements live under `metadata.vbot.requirements`, not `compatibility`. Supported required/optional primitives are `env`, `binary`, and `skill`, composed with nested `all` and `any` groups. Provider requirements are intentionally not supported; model/provider-specific prerequisites should be expressed as concrete env vars or skill instructions.
 - Resource paths are not stored in `SkillMetadata`; `scripts/` and `references/` are scanned at activation time.
-- Bundled `resources/skills/` contains tiny loadable sample skills for normal
-  activation flows. Warning and broken skill diagnostics are covered by tests
-  with local fixtures rather than shipped as bundled resources.
+- Bundled `resources/skills/` contains tiny loadable sample skills for normal activation flows. Warning and broken skill diagnostics are covered by tests with local fixtures rather than shipped as bundled resources.
 - Activated skill content is wrapped in `<skill_content name="...">` and persisted as an internal chat note so it remains available across later turns in the same Session without appearing as a normal visible chat message.
 
 ## Prompt Catalog

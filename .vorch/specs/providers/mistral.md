@@ -22,12 +22,9 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 
 - Keeps only active chat models where `capabilities.completion_chat == true` and the model is not archived.
 - Maps vision from `capabilities.vision`, tools from `capabilities.function_calling`, and reasoning from `capabilities.reasoning`.
-- Persists normalized input/output modalities, supported parameters, and task
-  types using chat-oriented defaults for Mistral chat models.
+- Persists normalized input/output modalities, supported parameters, and task types using chat-oriented defaults for Mistral chat models.
 - `context_window` comes from `max_context_length`.
-- Per-model max output limits are not provided by `/models`, so normalized
-  `max_output_tokens` is `null`. Runtime requests still use provider defaults
-  such as `max_tokens: 8192`.
+- Per-model max output limits are not provided by `/models`, so normalized `max_output_tokens` is `null`. Runtime requests still use provider defaults such as `max_tokens: 8192`.
 
 ## Constraints & Gotchas
 

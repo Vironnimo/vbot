@@ -1,58 +1,22 @@
 # Settings
 
-Public settings schema parsing and central JSON validation for user-editable
-runtime configuration files.
+Public settings schema parsing and central JSON validation for user-editable runtime configuration files.
 
 ## Overview
 
-`core/settings/` owns the product-facing schema for Settings update payloads. It
-validates what public accessors may send through `settings.update` before the
-server applies those updates to storage and runtime side effects. It also owns a
-central raw-file validator in `core/settings/validation.py` for user-editable
-runtime JSON: `settings.json`, `agents/*/agent.json`,
-`channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and
-runtime read paths use the same validators so manual edit errors fail fast with
-consistent diagnostics.
-Raw `settings.json` also accepts `recall.backend` for backend selection, and
-the public `settings.update` RPC accepts the first-party recall backend names
-used by the Settings UI.
-Raw `settings.json` and the public `settings.update` RPC also accept
-`model_tasks`, a sparse mapping from supported specialized task types to
-configured targets and JSON-object options.
-Raw `settings.json` and the public `settings.update` RPC also accept
-`web_search`, an exact section for selecting the `web_search` provider and
-provider-owned options such as `searxng.base_url`.
-Raw `settings.json` accepts positive integer binary upload limits:
-`attachment_max_size_bytes` for stored attachments and
-`speech_upload_max_size_bytes` for speech transcription audio.
+`core/settings/` owns the product-facing schema for Settings update payloads. It validates what public accessors may send through `settings.update` before the server applies those updates to storage and runtime side effects. It also owns a central raw-file validator in `core/settings/validation.py` for user-editable runtime JSON: `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and runtime read paths use the same validators so manual edit errors fail fast with consistent diagnostics. Raw `settings.json` also accepts `recall.backend` for backend selection, and the public `settings.update` RPC accepts the first-party recall backend names used by the Settings UI. Raw `settings.json` and the public `settings.update` RPC also accept `model_tasks`, a sparse mapping from supported specialized task types to configured targets and JSON-object options. Raw `settings.json` and the public `settings.update` RPC also accept `web_search`, an exact section for selecting the `web_search` provider and provider-owned options such as `searxng.base_url`. Raw `settings.json` accepts positive integer binary upload limits: `attachment_max_size_bytes` for stored attachments and `speech_upload_max_size_bytes` for speech transcription audio.
 
-Storage still owns raw `settings.json` file I/O, process-local locked
-read-modify-write transactions, atomic writes, prompt fragments, and normalized
-persistence helpers. Server delegates own RPC error mapping and side effects
-such as reloading skills after skill directory changes.
-The raw `settings.set_key` RPC validates the merged raw `settings.json` mapping
-with `validate_settings_data()` before persisting; warnings such as unknown
-top-level keys are allowed, but schema errors for known sections are rejected as
-RPC `invalid_request`.
+Storage still owns raw `settings.json` file I/O, process-local locked read-modify-write transactions, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes. The raw `settings.set_key` RPC validates the merged raw `settings.json` mapping with `validate_settings_data()` before persisting; warnings such as unknown top-level keys are allowed, but schema errors for known sections are rejected as RPC `invalid_request`.
 
 ## Interfaces
 
-- `core/settings/__init__.py` exports `parse_settings_update`,
-	`SettingsValidationError`, central JSON validator report types, load helpers,
-	file validators, data validators, and shared Settings schema constants.
+- `core/settings/__init__.py` exports `parse_settings_update`, `SettingsValidationError`, central JSON validator report types, load helpers, file validators, data validators, and shared Settings schema constants.
 - `parse_settings_update(params) -> dict[str, Any]` validates the public `settings.update` request body and returns a normalized per-section update dict.
 - `SettingsValidationError` signals malformed public payloads. Server delegates map it to RPC `invalid_request`.
-- `validate_settings_file(path) -> SettingsValidationReport` validates one raw
-	`settings.json` file without writing or normalizing it. Missing files are OK
-	because storage defaults apply.
-- `validate_agent_file(path)`, `validate_channel_file(path)`, and
-	`validate_cron_jobs_file(path)` validate persisted Agent, Channel, and Cron
-	JSON files without loading runtime services.
-- `validate_data_dir_config(data_dir) -> tuple[JsonValidationReport, ...]`
-	validates the current user-editable config bundle for `vbot doctor config`.
-- `load_validated_settings_json`, `load_validated_agent_json`,
-	`load_validated_channel_json`, and `load_validated_cron_jobs_json` are the
-	read-time gates used by storage/runtime domains before consuming raw JSON.
+- `validate_settings_file(path) -> SettingsValidationReport` validates one raw `settings.json` file without writing or normalizing it. Missing files are OK because storage defaults apply.
+- `validate_agent_file(path)`, `validate_channel_file(path)`, and `validate_cron_jobs_file(path)` validate persisted Agent, Channel, and Cron JSON files without loading runtime services.
+- `validate_data_dir_config(data_dir) -> tuple[JsonValidationReport, ...]` validates the current user-editable config bundle for `vbot doctor config`.
+- `load_validated_settings_json`, `load_validated_agent_json`, `load_validated_channel_json`, and `load_validated_cron_jobs_json` are the read-time gates used by storage/runtime domains before consuming raw JSON.
 - Data validators return diagnostics with severity, JSON path, and message.
 
 ## Supported Update Sections
@@ -65,33 +29,18 @@ RPC `invalid_request`.
 - `recall` — `{ backend: "jsonl_scan" | "sqlite_fts" }`; updates the backend used by the `session_search` tool.
 - `web_search` — `{ provider: "brave" | "searxng", searxng?: { base_url: string } }`; updates the provider used by the `web_search` tool. `provider` is required in public updates; `searxng.base_url` defaults to `http://localhost:8888` when not persisted.
 - `debug` — `{ enabled?: boolean, trace_limit?: positive integer }`; both fields are optional in public updates. `enabled` defaults to `false`, `trace_limit` defaults to `50` and is capped at `500`. Updates merge with existing settings — partial updates preserve unspecified fields.
-- `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task
-  types are owned by `core/model_tasks/`. `target` must be a string when
-  present, `options` must be an object, and an empty target clears that task's
-  persisted binding.
+- `model_tasks` — `{ <task_type>: { target?, options? } }`; supported task types are owned by `core/model_tasks/`. `target` must be a string when present, `options` must be an object, and an empty target clears that task's persisted binding.
 
 ## Constraints & Gotchas
 
 - Public schema errors must remain transport-independent in `core/settings/`; do not raise server RPC errors from this module.
-- Raw JSON diagnostics must remain transport-independent and file-system local.
-  Formatting for agents belongs to CLI doctor commands.
-- Unknown top-level raw settings keys are warnings, not errors, because raw
-	settings may temporarily contain values not consumed by current runtime code.
-- `settings.recall` must be an object when present. `settings.recall.backend`
-  must be a non-empty lowercase snake_case string; runtime resolves it against
-  the `RecallBackendRegistry` and falls back to `jsonl_scan` for unknown names.
-- `settings.model_tasks` must be an object when present. Each task key must be
-  supported by `core/model_tasks/`; each persisted binding must be an object
-  with a non-empty `target` string and optional object `options`.
-- `settings.py` stays focused on public `settings.update` parsing. Raw file
-  validation belongs in `validation.py`.
-- `settings.update` accepts sparse Defaults and Model Task updates but full
-  Sub-Agent and Compaction sections. Recall updates are small exact-section
-  writes with only `backend`.
+- Raw JSON diagnostics must remain transport-independent and file-system local. Formatting for agents belongs to CLI doctor commands.
+- Unknown top-level raw settings keys are warnings, not errors, because raw settings may temporarily contain values not consumed by current runtime code.
+- `settings.recall` must be an object when present. `settings.recall.backend` must be a non-empty lowercase snake_case string; runtime resolves it against the `RecallBackendRegistry` and falls back to `jsonl_scan` for unknown names.
+- `settings.model_tasks` must be an object when present. Each task key must be supported by `core/model_tasks/`; each persisted binding must be an object with a non-empty `target` string and optional object `options`.
+- `settings.py` stays focused on public `settings.update` parsing. Raw file validation belongs in `validation.py`.
+- `settings.update` accepts sparse Defaults and Model Task updates but full Sub-Agent and Compaction sections. Recall updates are small exact-section writes with only `backend`.
 - Runtime side effects do not live here. For example, saving skill directories still happens in storage, and server delegates call `runtime.reload_skills()` after a successful update. Recall backend changes are applied by server delegates through `runtime.reload_recall_backend()`.
-- Accepted multi-section `settings.update` payloads are persisted by storage in
-  one locked settings transaction before server-side reload hooks run.
-- `settings.web_search` is loaded by the `web_search` tool at call time, so
-  changing the selected search provider does not require a runtime restart or
-  tool re-registration.
+- Accepted multi-section `settings.update` payloads are persisted by storage in one locked settings transaction before server-side reload hooks run.
+- `settings.web_search` is loaded by the `web_search` tool at call time, so changing the selected search provider does not require a runtime restart or tool re-registration.
 - Keep storage-level validation errors distinct from public schema errors so RPC error mapping remains stable.

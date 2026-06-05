@@ -30,16 +30,8 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 ## Current Storage Contract
 
 - Session files use `.jsonl` and are append-only during normal chat operation.
-- Session appends write one UTF-8 encoded line through an append-only file
-  descriptor and fsync before returning. If a crash leaves an invalid final line
-  without a trailing newline, `load()` treats that line as an incomplete write,
-  truncates it, logs a warning, and returns the preceding valid messages.
-  Complete invalid JSON/message lines remain hard errors.
-- Session history may include `role: "tool"` messages with optional `timing`
-  and `role: "run_summary"` annotations with `run_id`, terminal `status`, and
-  `timing`. Run summaries are append-only records that annotate the preceding
-  Assistant Run for reload/UI display; they are not provider-visible chat
-  messages.
+- Session appends write one UTF-8 encoded line through an append-only file descriptor and fsync before returning. If a crash leaves an invalid final line without a trailing newline, `load()` treats that line as an incomplete write, truncates it, logs a warning, and returns the preceding valid messages. Complete invalid JSON/message lines remain hard errors.
+- Session history may include `role: "tool"` messages with optional `timing` and `role: "run_summary"` annotations with `run_id`, terminal `status`, and `timing`. Run summaries are append-only records that annotate the preceding Assistant Run for reload/UI display; they are not provider-visible chat messages.
 - Metadata sidecars use `<session-id>.meta.json` beside the session file.
 - Session IDs must be 1-128 ASCII letters, digits, hyphen, or underscore and must not start with punctuation.
 - Public/server-facing session identifiers are UUID strings. Internal helpers may accept custom IDs, but must validate them before any path construction.
@@ -53,9 +45,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `core/agents/` may create and validate current sessions only through `ChatSessionManager`.
 - Channel adapters must use `ChatSessionManager.exists()` / `get_or_create()` / metadata methods instead of deriving `.jsonl` paths.
 - Server RPC delegates should expose session operations through the runtime service and keep storage details out of the public contract.
-- `core/recall/` may maintain derived search indexes, but JSONL remains
-  canonical. Recall indexes must be disposable and rebuildable from
-  `ChatSessionManager`.
+- `core/recall/` may maintain derived search indexes, but JSONL remains canonical. Recall indexes must be disposable and rebuildable from `ChatSessionManager`.
 
 ## SQLite Migration Notes
 
