@@ -9,11 +9,10 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 ## Data Model
 
 - `ToolCall` — assistant-requested tool invocation: `id`, `name`, `arguments`. Tool-call index is derived from the assistant message order for runtime lifecycle events.
-- `ChatMessage` — persisted canonical message with role-specific fields:
-  - common: `id`, `timestamp`, `role`
+- `ChatMessage` — persisted canonical message; every message carries `id`, `timestamp`, `role`, then role-specific fields:
   - `system`: `model`, `content`
   - `user`: `content` (`str` or `list[ContentBlock]`)
-  - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `tool_calls`
+  - `assistant`: `model`, nullable `content`, nullable `reasoning`, nullable `reasoning_meta`, nullable `usage`, nullable `tool_calls`
   - `tool`: `tool_call_id`, `name`, `content`, optional `timing`
   - `note`: `content`; kernel-internal background note persisted in the Session, not shown as a normal chat message
   - `compaction_checkpoint`: `content` (summary text), `tail_boundary_id`, optional `usage.compacted_token_count`; persisted summary anchor used to rebuild shorter future request history
@@ -29,12 +28,10 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 - `ChatMessage.to_dict()` / `ChatMessage.from_dict(data)` — canonical JSON-compatible conversion.
 - `error_kind_llm_visible(kind)` — returns whether a persisted error should be embedded into the next provider request.
 - Session persistence interfaces live in `.vorch/specs/sessions.md` and are exported from `core.sessions`.
-- Run lifecycle types (`Run`, `RunEvent`, `ChatRunManager`, queue items, and Run errors) live in `.vorch/specs/runs.md` and are exported from `core.runs`.
+- Run lifecycle types (`Run`, `RunEvent`, `ChatRunManager`, queue items, and Run errors) live in `.vorch/specs/runs.md` and are exported from `core.runs`. Chat depends on one invariant from that domain: at most one active Run per `(agent_id, session_id)`, other Sessions run in parallel, and busy-session follow-ups enqueue into an in-memory FIFO that drains automatically when the active Run clears.
 - `RunEvent` — provider-agnostic visible timeline event for one Run. Payloads must not expose opaque provider fields such as `reasoning_meta`.
 - `compaction_completed` is a visible Run event carrying `{ message }` after auto-compaction appends a `compaction_checkpoint` during a Run.
 - `model_fallback_activated` is a visible Run event with payload `{ from_model, to_model }` emitted when the chat loop switches from the agent's primary model to its configured fallback model within the current Run.
-- `core.runs.Run` — active execution state with replayable events, subscription, cancellation request flag, terminal status, and final result/error.
-- `core.runs.ChatRunManager` — starts Runs with one active Run per `(agent_id, session_id)`, stores recent Runs by ID, exposes lookup/cancel, supports `cancel_by_session(agent_id, session_id)` for pre-run command handling, allows parallel Runs in different Sessions, and owns the in-memory FIFO queue of pending `QueuedRunItem`s per Session with enqueue/list/remove/update plus automatic drain when the active Run finishes.
 - `CommandDispatcher` — shared pre-run slash-command router for pure-text messages. Recognized built-ins either return a handled result with optional reply text/data or a command action for accessor-level execution; unknown slash text falls through so normal chat behavior, including skill activation, stays intact. Current built-ins are `/compact`, `/help`, `/new`, `/retry`, `/status`, and `/stop`. `/status` reports the current Session and includes run activity (`running` or `idle`) plus active Run `created_at`/`updated_at` timestamps when present.
 - Streaming Run events: `assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, and `tool_call_stderr` are transient visible Run events used for SSE streaming only. They receive normal monotonically increasing Run sequence numbers, are not persisted to JSONL session files, and must not contain opaque `reasoning_meta`.
 - Tool lifecycle Run events: `tool_call_started` has payload `{ tool_call: { id, index, name, arguments }, display: { summary, hidden_argument_keys } }`; `tool_call_result` has payload `{ tool_call: { id, index, name }, result, timing }`, where `result` is the stable tool result envelope and `timing` is the completed tool-call timing object. Tool failures use `tool_call_result` with `result.ok = false`; there is no public `tool_call_failed` event.
@@ -43,27 +40,10 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
   - `send(agent_id, content, session_id=None, input_origin=None) -> ChatMessage` — loads the agent, validates model and connection, appends the user message, sends canonical history through the adapter, dispatches allowed tools, and returns the final assistant message.
   - `start_run(agent_id, content, session_id=..., internal=False, input_origin=None) -> Run` — server-facing entry point that requires an existing Session and starts the same execution model in the run manager. Internal runs persist `content` as a `role: "note"` system reminder rather than a visible `role: "user"` message.
   - `queue_run(agent_id, content, *, session_id, internal=False, input_origin=None) -> QueuedRunItem` — validates the same agent/provider/session prerequisites as `start_run(...)`, derives a display preview for the queued message, and delegates busy-session enqueue/start behavior to `ChatRunManager`.
+  - `retry_run(agent_id, session_id) -> Run` — starts a Run that retries the latest user turn without appending a new user message; valid only when the Session already contains at least one user message. Target of the `/retry` command action.
   - `build_queue_update(agent_id, session_id, content, input_origin=None) -> tuple[str, RunExecutor, str]` — validates the same prerequisites and returns replacement queue data for server-side queued-message edits without mutating queue state directly.
 - `core/chat/content_blocks.py` owns `TextBlock`, `MediaBlock`, `FileBlock`, plus dict round-trip helpers for persisted JSONL content lists.
 - `core/chat/block_resolver.py` owns last-mile attachment resolution from persisted content blocks to provider-ready dicts just before adapter calls.
-
-## Server Contract Alignment
-
-- Sessions remain the canonical persisted history. The current storage format is append-only JSONL owned by `core/sessions/`.
-- In the public/server contract, creating a new session is an explicit action; chat turns should target an already chosen session instead of implicitly switching away from the current one.
-- A Run is a single execution within a Session and is the unit targeted by `stream` and `cancel`.
-- At most one Run may be active per Session at a time.
-- Multiple Sessions may execute in parallel.
-- Busy-session follow-up work may be enqueued through `ChatRunManager`; queued items are in-memory FIFO per Session and start automatically when the active Run clears.
-- `send`, `stream`, and `cancel` should remain different access modes over the same underlying run execution model.
-- In streaming mode, provider adapters yield normalized deltas that the chat loop accumulates into the final canonical assistant message. The final message is persisted at the same turn boundary as non-streaming and remains authoritative over transient deltas.
-- Streaming-to-non-streaming fallback is opt-in and type-driven: the chat loop falls back to a non-streaming request only when an adapter raises `ProviderStreamingUnsupportedError` (a non-retryable `ProviderError`) before any visible delta has been emitted. Generic streaming `ProviderError`s and any error raised after the first visible delta propagate as a failed Run instead of silently retrying. Fallback is never decided by inspecting error message text.
-- Readable `reasoning`, tool calls/results, and assistant outputs are part of the visible run timeline; opaque `reasoning_meta` is not.
-- Tool calls from the same assistant turn execute concurrently. The next model request waits until every sibling tool call reaches a terminal result.
-- Tool result messages are persisted in the assistant's original tool-call order, even when lifecycle result events complete and stream in a different order.
-- Cancellation is best effort: once requested, late non-terminal output is not forwarded, new tool dispatch is blocked or suppressed, and the Run ends as `cancelled`.
-- Run cancellation also calls the runtime `ProcessManager.cancel_scope(run.id)` hook so active host processes started by tools in that Run are killed.
-- Built-in slash commands are intercepted before `ChatLoop.start_run()` only for pure-text messages. Attachment-bearing or multi-block messages bypass command dispatch and continue through the normal Run path.
 
 ## Conventions
 
@@ -85,6 +65,7 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 - `$skill-name` is always interpreted as a skill activation hint, never as a built-in command route. If it matches an allowed loadable and currently available skill, the chat loop injects that skill's persisted `<skill_content>` context before the original user message; if it does not match or has unmet required vBot requirements, the original message remains unchanged and an internal system reminder explains why activation did not happen.
 - Recognized built-in slash commands (`/compact`, `/help`, `/new`, `/retry`, `/status`, and `/stop`) are not part of that skill-activation path. They are handled earlier by the shared command dispatcher; unrecognized slash text still reaches the existing skill-trigger logic unchanged.
 - Command action results mean the dispatcher recognizes the command while the accessor executes behavior that needs runtime services: `/compact` compacts the current Session, `/new` creates/switches the current Session where the accessor can honor that, and `/retry` starts a retry Run for the latest user turn.
+- Built-in slash commands are intercepted before `ChatLoop.start_run()` only for pure-text messages. Attachment-bearing or multi-block messages bypass command dispatch and continue through the normal Run path.
 - Normal server history responses and the standard WebUI timeline must filter out notes; only debug-specific surfaces may expose them intentionally.
 - Consecutive notes in loaded history are grouped into one synthetic user message. Notes added while a Run is active are drained before each model request, including follow-up requests after tool results, but note embedding must still preserve immediate assistant-tool adjacency within a tool-call sequence.
 - If a Session later continues with a different provider, stale `reasoning_meta` from the old provider must never be sent to the new provider.
@@ -98,6 +79,11 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 - Surfaces that need the catalog model key rather than the pinned connection form, such as context-window lookup or display helpers, must strip the optional `::<connection-local-id>` suffix first.
 - Attachment resolution happens in the chat layer, not inside provider adapters. Current-turn `MediaBlock` image attachments become base64 provider-neutral media dicts; historical media become text placeholders; `FileBlock` becomes a text note with MIME type and local path; `TextBlock` stays embedded text.
 - Vision capability checks also happen in the chat layer. An image attachment sent to a non-vision model raises a clear `ChatError`; there is no silent fallback.
+- In streaming mode, provider adapters yield normalized deltas that the chat loop accumulates into the final canonical assistant message; the final message is persisted at the same turn boundary as non-streaming and remains authoritative over transient deltas.
+- Tool calls from the same assistant turn execute concurrently; the next model request waits until every sibling tool call reaches a terminal result.
+- Tool result messages are persisted in the assistant's original tool-call order, even when lifecycle result events complete and stream in a different order.
+- Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
+- Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.
 
 ## Token Usage
 
@@ -106,13 +92,13 @@ Canonical backend chat messages and chat-loop execution exposed through the serv
 - `_message_to_request_dict()` strips `usage`, `reasoning`, and `reasoning_meta` from assistant history before it is sent to provider APIs. Readable `reasoning` still round-trips for reasoning-aware adapters on the active tool-continuation path, but stale completed-turn reasoning must not be resent on later follow-up turns.
 - The live tool-continuation request for the current turn appends the assistant message via a helper that strips `usage` while preserving `reasoning`/`reasoning_meta`, so per-turn token accounting is never echoed back to the provider even mid-loop.
 - The `run_completed` event payload includes `usage` from the final assistant message when available. Terminal Run events include `timing`; terminal events for failed or cancelled runs do not include usage.
-- In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the response dict.
-- GitHub Copilot endpoint helpers must emit the same normalized streaming shapes as other adapters. Copilot `/responses` usage is normalized from completed response events or response payloads. Copilot `/v1/messages` follows the Anthropic-like message usage shape when available. Raw provider SSE events and opaque reasoning metadata stay inside adapters and must not be exposed as Run event payloads.
-- Tool calls are dispatched only through the runtime tool registry and agent allowlist. Normal tool execution failures, including disallowed or unknown tools, are appended as failed result envelopes so the assistant can recover.
-- Adapters returned by runtime are closed after each `ChatLoop.send()` turn when they expose `aclose()`.
+- In streaming mode, usage arrives as a `{"type": "usage", ...}` delta. OpenAI sends it only in the final streaming chunk (with `stream_options.include_usage`). Anthropic splits it across `message_start` (input_tokens) and `message_delta` (output_tokens). The `StreamingAccumulator` collects these deltas; `finalize_assistant_fields()` includes usage in the finalized assistant fields.
+- Provider wire specifics (e.g. GitHub Copilot's `/responses` and `/v1/messages` usage shapes) are normalized to the same canonical fields inside the adapters; raw provider SSE events and opaque reasoning metadata stay inside adapters and must never appear in Run event payloads. Per-provider details live in the provider specs.
 
 ## Constraints & Gotchas
 
 - Unknown future fields in session JSON may appear; avoid making chat depend on provider-specific metadata shape.
 - Model IDs in messages use user-facing `<provider>/<model-id>` form for traceability, while adapters receive the provider-specific `model_id` part.
 - The loop stores user, assistant, tool, and note messages in session files. The system prompt is assembled for each request rather than appended as normal chat history. If the assembled system prompt is empty or whitespace-only, the provider request omits the system message entirely.
+- Streaming-to-non-streaming fallback is opt-in and type-driven: the chat loop falls back to a non-streaming request only when an adapter raises `ProviderStreamingUnsupportedError` (a non-retryable `ProviderError`) before any visible delta has been emitted. Generic streaming `ProviderError`s and any error raised after the first visible delta propagate as a failed Run instead of silently retrying. Fallback is never decided by inspecting error message text.
+- Cancellation is best effort: once requested, late non-terminal output is not forwarded, new tool dispatch is blocked or suppressed, and the Run ends as `cancelled`. Run cancellation also calls the runtime `ProcessManager.cancel_scope(run.id)` hook so active host processes started by tools in that Run are killed.
