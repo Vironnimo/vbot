@@ -1,85 +1,49 @@
 # Image
 
-Provider-neutral image generation execution, backed by the central task-model bindings.
+Provider-neutral image generation execution and artifact storage for the configured `image_generation` task-model binding.
 
 ## Overview
 
-`core/image/` generates images from text prompts. It resolves the configured `image_generation` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and then routes to a provider-backed HTTP client.
-
-The first implementation supports OpenRouter's `chat/completions` endpoint with `modalities: ["image", "text"]` and `image_config`. Local targets raise `ImageUnsupportedTargetError`. Non-OpenRouter providers raise `ProviderError(retryable=False)`.
+`core/image/` owns text-prompt image generation after Settings has selected one concrete task-model target. It resolves the `image_generation` binding through `TaskModelService`, merges stored options over backend defaults, rejects local targets, and routes provider targets to `ProviderImageClient`. It does not own model discovery, model catalogs, settings validation, UI controls, or the `image_generation` tool schema; those live in `core/models/`, `core/model_tasks/`, `core/settings/`, `webui/`, and `core/tools/image.py`.
 
 ## Interfaces
 
-- `ImageService.generate(prompt) -> ImageGenerationResult`
-- `ImageService.generate_artifacts(prompt) -> tuple[ImageArtifact, ...]`
-- `ImageService.get_artifact(artifact_id) -> ImageArtifact`
-- `ProviderImageClient.generate(prompt, options) -> ImageGenerationResult`
+- `ImageService(model_tasks, runtime, data_dir)` — runtime-owned service; stores artifacts under `<data_dir>/images/`.
+- `await ImageService.generate(prompt: str) -> ImageGenerationResult` — trims and validates `prompt`, resolves the configured binding, executes the provider request, and returns normalized bytes without persisting them.
+- `await ImageService.generate_artifacts(prompt: str) -> tuple[ImageArtifact, ...]` — calls `generate()`, writes each returned image plus JSON metadata sidecar, and returns persisted artifact metadata.
+- `ImageService.get_artifact(artifact_id: str) -> ImageArtifact` — accepts only 32-character lowercase hex ids, reads the metadata sidecar, recomputes `file_path` from the stored filename, and verifies the blob exists.
+- `await ProviderImageClient.generate(prompt: str, *, options: dict) -> ImageGenerationResult` — provider-bound HTTP entrypoint; currently supports OpenRouter only.
 
-`ImageGenerationResult` contains raw image bytes, media type, model id, optional usage, and the raw response payload when available.
-
-`ImageArtifact.to_dict()` returns:
-
-```json
-{
-  "id": "a1b2c3d4...",
-  "kind": "image",
-  "filename": "a1b2c3d4....png",
-  "media_type": "image/png",
-  "size_bytes": 123456,
-  "url": "/api/images/artifacts/a1b2c3d4...",
-  "index": 0
-}
-```
+`ImageGenerationResult` contains `images: tuple[bytes, ...]`, one `media_type` for the result set, `model`, optional provider `usage`, and optional raw response payload. `ImageArtifact.to_dict()` returns `{ id, kind: "image", filename, media_type, size_bytes, url, index }`, where `url` is `/api/images/artifacts/<id>` and is not an attachment URL.
 
 ## Provider Wire Behavior
 
-OpenRouter sends JSON to `/chat/completions`:
+OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` from task-model options: `aspect_ratio` defaults to `1:1`, `image_size` defaults to `1K`.
 
-```json
-{
-  "model": "openai/dall-e-3",
-  "messages": [{"role": "user", "content": "<prompt>"}],
-  "modalities": ["image"],
-  "image_config": {
-    "aspect_ratio": "1:1",
-    "image_size": "1K"
-  }
-}
-```
-
-Response images arrive as base64 data URLs in `choices[0].message.images[]`. Each entry is decoded from base64 and stored as raw bytes. The media type is detected from the data URL prefix (e.g. `data:image/png;base64,...`).
+Response images are read from `choices[0].message.images[]`. Entries may be `{ image_url: { url } }`, `{ url }`, or a raw string URL; only Base64 data URLs matching `data:<media-type>;base64,<payload>` are decoded. Missing choices/messages/images or undecodable image payloads are `ProviderError(retryable=True)` at the client layer and become `ImageExecutionError` when surfaced through `ImageService.generate()`.
 
 ## Artifacts
 
-Image generation tool output is stored under `<data_dir>/images/` as one image file and one JSON metadata sidecar per generated image:
+Image artifacts are stored as one blob and one JSON sidecar per image:
 
-```
+```text
 <data_dir>/images/
-├── a1b2c3d4....png      ← raw image bytes
-├── a1b2c3d4....json      ← metadata: id, filename, media_type, size_bytes, index
-├── e5f6a7b8....jpg
-├── e5f6a7b8....json
+  a1b2c3d4....png
+  a1b2c3d4....json
 ```
+
+Artifact ids are `uuid4().hex`. The filename extension is inferred from the result media type (`png`, `jpg`, `webp`, `gif`, `bmp`, `svg`, fallback `png`), not from provider filenames. Sidecars store `id`, `filename`, `media_type`, `size_bytes`, and `index`; `file_path` is never trusted from metadata.
 
 ## HTTP Serving
 
-`GET /api/images/artifacts/{artifact_id}` serves persisted image files as `FileResponse`. The endpoint validates the artifact id format (32-char hex), reads the metadata JSON, and verifies the image file exists.
+`GET /api/images/artifacts/{artifact_id}` fetches the runtime `image` service and serves the artifact blob with `FileResponse(media_type=artifact.media_type, filename=artifact.filename)`. If the runtime has no image service, the endpoint returns 503. Expected image errors map to HTTP as: `ImageConfigurationError` -> 409, `ImageUnsupportedTargetError` -> 422, `ImageExecutionError` -> 502, other `ImageError` -> 400.
 
-## Error Classes
+## Constraints & Gotchas
 
-| Class | Situation | HTTP Status |
-|---|---|---|
-| `ImageConfigurationError` | No binding configured, empty prompt, invalid artifact id | 409 |
-| `ImageUnsupportedTargetError` | Local target in image generation binding | 422 |
-| `ImageExecutionError` | Provider request failure (unexpected) | 502 |
-
-All error classes inherit from `ImageError(VBotError)`.
-
-Provider-level errors (auth, rate limit, network) are raised from `ProviderImageClient` as `ProviderError` subclasses and are NOT caught by `ImageService` (they bubble up as unexpected).
-
-## Extension Points
-
-To add a new image generation provider:
-1. Add an `elif self._provider.id == "..."` branch in `ProviderImageClient.generate()`
-2. Implement a private `_generate_<provider>()` method that returns `ImageGenerationResult`
-3. Add provider-specific option fields in `core/model_tasks/options.py` `_image_generation_fields()`
+- Provider targets must use the task-model id shape `provider/model-id::connection-id`; nested model ids such as `openrouter/openai/gpt-image::api-key` are valid. Local targets parse successfully in `core/model_tasks/` but image execution rejects them with `ImageUnsupportedTargetError`.
+- A configured non-OpenRouter provider target reaches `ProviderImageClient.generate()`, raises `ProviderError(retryable=False)`, and is surfaced by `ImageService.generate()` as `ImageExecutionError`, not `ImageUnsupportedTargetError`.
+- `image_generation` targets are discovered from model capabilities where `output_modalities` includes `image`; do not hard-code image models in `core/image/`.
+- Provider/image options belong in `core/model_tasks/options.py`; the agent-facing `image_generation` tool intentionally accepts only `prompt`.
+- New provider execution belongs in `ProviderImageClient` and should keep returning normalized `ImageGenerationResult`; do not route image generation through chat adapters or attachment storage.
+- Debug trace capture is not wired through `ProviderImageClient`; it constructs a plain `httpx.AsyncClient` rather than `core.providers._http_shared.build_async_client()`.
+- `generate_artifacts()` writes blob then sidecar without a rollback transaction. Treat partially written artifacts as possible if the process dies mid-write; `get_artifact()` already fails closed when metadata or blob is missing/unreadable.
