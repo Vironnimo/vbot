@@ -91,8 +91,9 @@ Clients call the vBot server contract; provider wire details stay behind
   (not gated on `debug.enabled`).
 - `debug.model_probe` accepts `{ provider_id, connection_id }`, fetches that
   connection's `models_endpoint`, stores a `model_probe` trace, and returns
-  `{ status, raw_response, model_preview }`. Does not write model catalog
-  resources or reload the model registry. Gated on `debug.enabled`.
+  `{ trace_id, status_code, duration_ms, raw_response, model_preview }`, where
+  `model_preview` is `{ model_count, models: [{ id, name }] }`. Does not write
+  model catalog resources or reload the model registry. Gated on `debug.enabled`.
 - `prompt.list`, `prompt.update`, and `prompt.reset` use `core/prompts/` for
   editable fragment order, variable metadata, scope validation, and
   prompt-specific name validation. Each accepts optional

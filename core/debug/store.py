@@ -25,11 +25,12 @@ class _TraceIndexEntry:
     """Metadata-only trace entry stored in index.json."""
 
     trace_id: str
+    type: str
     timestamp: str
     provider_id: str
     model_id: str
-    request_method: str
-    request_url: str
+    method: str
+    url: str
     status_code: int | None
     duration_ms: int | None
 
@@ -77,10 +78,9 @@ class DebugTraceStore:
 
         Args:
             trace_id: Unique identifier for this trace.
-            trace_data: Full trace payload.  Metadata fields
-                (``timestamp``, ``provider_id``, ``model_id``,
-                ``request_method``, ``request_url``, ``status_code``,
-                ``duration_ms``) are extracted for the index entry.
+            trace_data: Full trace payload following the canonical shape in
+                ``.vorch/specs/debug.md``. Metadata is extracted from the
+                nested ``request`` / ``response`` objects for the index entry.
         """
         self._ensure_directories()
 
@@ -88,14 +88,17 @@ class DebugTraceStore:
         with open(trace_path, "w", encoding="utf-8") as file:
             json.dump(trace_data, file, ensure_ascii=False, indent=2)
 
+        request = trace_data.get("request") or {}
+        response = trace_data.get("response") or {}
         entry = _TraceIndexEntry(
             trace_id=trace_id,
+            type=trace_data.get("type", ""),
             timestamp=trace_data.get("timestamp", ""),
             provider_id=trace_data.get("provider_id", ""),
             model_id=trace_data.get("model_id", ""),
-            request_method=trace_data.get("request_method", ""),
-            request_url=trace_data.get("request_url", ""),
-            status_code=trace_data.get("status_code"),
+            method=request.get("method", ""),
+            url=request.get("url", ""),
+            status_code=response.get("status_code"),
             duration_ms=trace_data.get("duration_ms"),
         )
 
@@ -107,10 +110,9 @@ class DebugTraceStore:
     def get_traces(self) -> list[dict[str, Any]]:
         """Return trace metadata from the index, newest first.
 
-        Each entry contains only metadata fields: ``trace_id``,
-        ``timestamp``, ``provider_id``, ``model_id``,
-        ``request_method``, ``request_url``, ``status_code``,
-        and ``duration_ms``.
+        Each entry contains only metadata fields: ``trace_id``, ``type``,
+        ``timestamp``, ``provider_id``, ``model_id``, ``method``, ``url``,
+        ``status_code``, and ``duration_ms``.
 
         Returns:
             A list of index entries sorted by ``timestamp`` descending.

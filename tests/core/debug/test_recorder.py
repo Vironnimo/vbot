@@ -1,4 +1,8 @@
-"""Tests for ProviderDebugRecorder capture, serialization, and lifecycle."""
+"""Tests for ProviderDebugRecorder / _TraceCapture: shape, redaction, lifecycle.
+
+These drive the capture object directly (as the HTTP transport does) without a
+real network, asserting the canonical trace shape in ``.vorch/specs/debug.md``.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +17,6 @@ from core.debug.store import DebugTraceStore
 _REDACTED = "[REDACTED]"
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def store(tmp_path: Path) -> DebugTraceStore:
     return DebugTraceStore(tmp_path, trace_limit=50)
@@ -29,7 +28,6 @@ def recorder(store: DebugTraceStore) -> ProviderDebugRecorder:
 
 
 def _make_context(**overrides) -> DebugContext:
-    """Build a DebugContext with sensible defaults, overridable per-test."""
     defaults: dict = {
         "run_id": "run-1",
         "agent_id": "agent-1",
@@ -45,275 +43,170 @@ def _make_context(**overrides) -> DebugContext:
 
 
 def _latest_trace(store: DebugTraceStore) -> dict:
-    """Return the full trace dict of the most-recently saved trace."""
     traces = store.get_traces()
     assert traces, "expected at least one trace in store"
     return store.get_trace(traces[0]["trace_id"])
 
 
-# ---------------------------------------------------------------------------
-# Full request/response recording cycle
-# ---------------------------------------------------------------------------
-
-
 class TestFullCycle:
-    def test_records_start_to_finish_non_streaming(self, recorder, store):
-        """A non-streaming start→capture_request→capture_response→finish
-        cycle produces a complete trace with all metadata and payloads."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request(
+    def test_non_streaming_cycle_produces_complete_trace(self, recorder, store):
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
             method="POST",
             url="https://api.example.com/v1/chat",
             headers={"Content-Type": "application/json", "Authorization": "Bearer sk-123"},
-            body={"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]},
+            body=b'{"model":"gpt-4"}',
         )
-        recorder.capture_response(
-            status_code=200,
-            headers={"Content-Type": "application/json"},
-            body={"choices": [{"message": {"content": "hi"}}]},
-            duration_ms=120,
-        )
-        recorder.finish()
+        capture.record_response_head(200, {"Content-Type": "application/json"})
+        capture.feed_body(b'{"choices":[{"message":{"content":"hi"}}]}')
+        capture.finalize()
 
         trace = _latest_trace(store)
-
         assert trace["trace_id"]
+        assert trace["type"] == "provider_request"
         assert "timestamp" in trace
-        assert trace["run_id"] == "run-1"
-        assert trace["agent_id"] == "agent-1"
-        assert trace["session_id"] == "session-1"
         assert trace["provider_id"] == "openai"
-        assert trace["connection_id"] == "conn-1"
         assert trace["model_id"] == "gpt-4"
-        assert trace["streaming"] is False
-        assert trace["iteration_number"] == 1
+        assert trace["context"]["run_id"] == "run-1"
+        assert trace["context"]["connection_id"] == "conn-1"
+        assert trace["context"]["iteration_number"] == 1
+        assert trace["context"]["streaming"] is False
         assert trace["request"]["method"] == "POST"
+        assert trace["request"]["body"] == '{"model":"gpt-4"}'
         assert trace["response"]["status_code"] == 200
-        assert trace["duration_ms"] == 120
-        assert trace["normalized"] == {}
-        assert trace["request_method"] == "POST"
-        assert trace["request_url"].startswith("https://api.example.com")
-        assert trace["status_code"] == 200
-
-
-# ---------------------------------------------------------------------------
-# Redaction through the recorder
-# ---------------------------------------------------------------------------
+        assert trace["response"]["body"] == '{"choices":[{"message":{"content":"hi"}}]}'
+        assert isinstance(trace["duration_ms"], int)
 
 
 class TestRedaction:
-    def test_headers_are_redacted_in_stored_request(self, recorder, store):
-        """Authorization header is redacted in the persisted request."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request(
+    def test_request_auth_header_is_redacted(self, recorder, store):
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
             method="POST",
             url="https://api.example.com/v1/chat",
             headers={"Content-Type": "application/json", "Authorization": "Bearer sk-abc"},
-            body={"messages": [{"role": "user", "content": "hello"}]},
+            body=None,
         )
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
+        capture.record_response_head(200, {})
+        capture.finalize()
 
-        trace = _latest_trace(store)
-        assert trace["request"]["headers"]["Authorization"] == _REDACTED
-        assert trace["request"]["headers"]["Content-Type"] == "application/json"
+        headers = _latest_trace(store)["request"]["headers"]
+        assert headers["Authorization"] == _REDACTED
+        assert headers["Content-Type"] == "application/json"
 
     def test_url_query_params_are_redacted(self, recorder, store):
-        """URL query parameter values matching sensitive keys are redacted."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request(
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
             method="GET",
             url="https://api.example.com/v1/models?token=secret123&limit=10",
             headers={},
             body=None,
         )
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
+        capture.record_response_head(200, {})
+        capture.finalize()
 
-        trace = _latest_trace(store)
-        stored_url = trace["request"]["url"]
+        stored_url = _latest_trace(store)["request"]["url"]
         assert "secret123" not in stored_url
         assert "limit=10" in stored_url
-        # urlencode percent-encodes [ and ]; verify the redacted placeholder
-        # is present after decoding.
         assert _REDACTED in unquote(stored_url)
 
-    def test_json_body_sensitive_keys_are_redacted(self, recorder, store):
-        """JSON request body keys named 'api_key' are redacted."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request(
+    def test_response_headers_are_redacted(self, recorder, store):
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+        capture.record_response_head(200, {"X-Request-Id": "req-1", "X-Refresh-Token": "leak"})
+        capture.finalize()
+
+        headers = _latest_trace(store)["response"]["headers"]
+        assert headers["X-Refresh-Token"] == _REDACTED
+        assert headers["X-Request-Id"] == "req-1"
+
+    def test_request_body_is_stored_raw_not_redacted(self, recorder, store):
+        """Bodies are stored verbatim — prompt/payload content is never redacted."""
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
             method="POST",
             url="https://api.example.com/v1/chat",
             headers={},
-            body={"model": "gpt-4", "api_key": "sk-secret", "messages": []},
+            body=b'{"api_key":"sk-secret","model":"gpt-4"}',
         )
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
+        capture.record_response_head(200, {})
+        capture.finalize()
 
-        trace = _latest_trace(store)
-        body = trace["request"]["body"]
-        assert body["api_key"] == _REDACTED
-        assert body["model"] == "gpt-4"
-
-
-# ---------------------------------------------------------------------------
-# Streaming event capture
-# ---------------------------------------------------------------------------
+        assert _latest_trace(store)["request"]["body"] == (
+            '{"api_key":"sk-secret","model":"gpt-4"}'
+        )
 
 
 class TestStreaming:
-    def test_captures_stream_events_and_persists_on_finish(self, recorder, store):
-        """Each capture_stream_event() call appends to the event list;
-        finish() writes them into the trace."""
-        ctx = _make_context(streaming=True)
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-        recorder.capture_stream_event(
-            'data: {"choices":[{"delta":{"content":"hi"}}]}',
-            {"choices": [{"delta": {"content": "hi"}}]},
+    def test_streaming_body_split_into_raw_frames(self, recorder, store):
+        recorder.set_context(_make_context(streaming=True))
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
         )
-        recorder.capture_stream_event(
-            'data: {"choices":[{"delta":{"content":" there"}}]}',
-            {"choices": [{"delta": {"content": " there"}}]},
-        )
-        recorder.finish()
+        capture.record_response_head(200, {})
+        capture.feed_body(b'data: {"delta":"hi"}\n\n')
+        capture.feed_body(b"data: [DONE]\n\n")
+        capture.finalize()
 
         trace = _latest_trace(store)
-        assert "stream_events" in trace
-        events = trace["stream_events"]
-        assert len(events) == 2
-        assert events[0]["raw"] == 'data: {"choices":[{"delta":{"content":"hi"}}]}'
-        assert events[0]["parsed"] == {"choices": [{"delta": {"content": "hi"}}]}
-        assert events[1]["raw"] == 'data: {"choices":[{"delta":{"content":" there"}}]}'
-        assert events[1]["parsed"] == {"choices": [{"delta": {"content": " there"}}]}
+        assert trace["stream"]["events"] == ['data: {"delta":"hi"}', "data: [DONE]"]
+        assert trace["response"]["body"] is None
 
-    def test_stream_events_omitted_for_non_streaming_requests(self, recorder, store):
-        """When streaming is False and no events were captured,
-        the trace does not contain a stream_events key."""
-        ctx = _make_context(streaming=False)
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
+    def test_non_streaming_omits_stream_key(self, recorder, store):
+        recorder.set_context(_make_context(streaming=False))
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+        capture.record_response_head(200, {})
+        capture.feed_body(b'{"ok":true}')
+        capture.finalize()
 
-        trace = _latest_trace(store)
-        assert "stream_events" not in trace
-
-
-# ---------------------------------------------------------------------------
-# Error capture
-# ---------------------------------------------------------------------------
+        assert "stream" not in _latest_trace(store)
 
 
 class TestErrorCapture:
-    def test_captures_exception_type_message_and_traceback(self, recorder, store):
-        """capture_error() records type name, message, and a formatted traceback."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-        recorder.capture_error(ValueError("test error message"))
-        recorder.finish()
+    def test_records_error_type_and_message(self, recorder, store):
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+        capture.record_error(ValueError("test error message"))
+        capture.finalize()
 
-        trace = _latest_trace(store)
-        error = trace["error"]
+        error = _latest_trace(store)["error"]
         assert error["type"] == "ValueError"
         assert error["message"] == "test error message"
-        assert isinstance(error["traceback"], list)
-        assert len(error["traceback"]) > 0
 
 
-# ---------------------------------------------------------------------------
-# Duration recording
-# ---------------------------------------------------------------------------
-
-
-class TestDuration:
-    def test_explicit_duration_is_recorded(self, recorder, store):
-        """An explicit duration_ms passed to capture_response() is stored."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-        recorder.capture_response(200, {}, {}, 250)
-        recorder.finish()
-
-        trace = _latest_trace(store)
-        assert trace["duration_ms"] == 250
-
-    def test_wall_clock_duration_computed_when_not_explicit(self, recorder, store):
-        """When capture_response() is not called, finish() computes
-        duration from the wall-clock elapsed time."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-
-        recorder.finish()
-
-        trace = _latest_trace(store)
-        assert isinstance(trace["duration_ms"], int)
-        assert trace["duration_ms"] >= 0
-
-
-# ---------------------------------------------------------------------------
-# DebugContext fields
-# ---------------------------------------------------------------------------
-
-
-class TestDebugContextFields:
-    def test_all_context_fields_present_in_trace(self, recorder, store):
-        """Every field from DebugContext appears at the top level of the trace."""
-        ctx = DebugContext(
-            run_id="my-run",
-            agent_id="my-agent",
-            session_id="my-session",
-            provider_id="anthropic",
-            connection_id="conn-xyz",
-            model_id="claude-sonnet",
-            streaming=True,
-            iteration_number=5,
+class TestLifecycle:
+    def test_double_finalize_writes_once(self, recorder, store):
+        recorder.set_context(_make_context())
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
         )
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/messages", {}, {})
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
+        capture.record_response_head(200, {})
+        capture.finalize()
+        capture.finalize()
+
+        assert len(store.get_traces()) == 1
+
+    def test_no_capture_persists_nothing(self, recorder, store):
+        recorder.set_context(_make_context())
+        assert store.get_traces() == []
+
+    def test_capture_uses_context_at_begin_time(self, recorder, store):
+        """A trace reflects whichever context was active when capture began."""
+        recorder.set_context(_make_context(provider_id="anthropic", model_id="claude"))
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.anthropic.com/v1/messages", headers={}, body=None
+        )
+        # A later context change must not retroactively alter the in-flight trace.
+        recorder.set_context(_make_context(provider_id="openai", model_id="gpt-4"))
+        capture.record_response_head(200, {})
+        capture.finalize()
 
         trace = _latest_trace(store)
-        assert trace["run_id"] == "my-run"
-        assert trace["agent_id"] == "my-agent"
-        assert trace["session_id"] == "my-session"
         assert trace["provider_id"] == "anthropic"
-        assert trace["connection_id"] == "conn-xyz"
-        assert trace["model_id"] == "claude-sonnet"
-        assert trace["streaming"] is True
-        assert trace["iteration_number"] == 5
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle edge cases
-# ---------------------------------------------------------------------------
-
-
-class TestDoubleFinish:
-    def test_second_finish_is_safe_no_double_write(self, recorder, store):
-        """Calling finish() twice does not persist the trace twice."""
-        ctx = _make_context()
-        recorder.start_request(ctx)
-        recorder.capture_request("POST", "https://api.example.com/v1/chat", {}, {})
-        recorder.capture_response(200, {}, {}, 100)
-        recorder.finish()
-        recorder.finish()
-
-        traces = store.get_traces()
-        assert len(traces) == 1
-
-
-class TestFinishWithoutStart:
-    def test_finish_is_noop_when_start_request_not_called(self, recorder, store):
-        """finish() does nothing when start_request() was never called."""
-        recorder.finish()
-
-        traces = store.get_traces()
-        assert traces == []
+        assert trace["model_id"] == "claude"

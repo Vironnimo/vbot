@@ -908,23 +908,33 @@ class Runtime:
                 f"Unknown adapter type '{provider_config.adapter}' for provider '{provider_id}'"
             )
 
+        debug_recorder = self._build_debug_recorder()
+
         adapter = cast(Any, adapter_class)(
             provider_config,
             token_getter,
             connection.base_url,
             connection.auth,
             model_lookup=self._model_lookup_for(provider_id),
+            debug_recorder=debug_recorder,
         )
 
-        if self._storage is not None:
-            debug_settings = self._storage.load_debug_settings()
-            if debug_settings.get("enabled", False):
-                trace_limit = debug_settings.get("trace_limit", 50)
-                debug_store = DebugTraceStore(self._data_dir, trace_limit=trace_limit)
-                debug_recorder = ProviderDebugRecorder(store=debug_store)
-                adapter._debug_recorder = debug_recorder
-
         return cast(ProviderAdapter, adapter)
+
+    def _build_debug_recorder(self) -> ProviderDebugRecorder | None:
+        """Create a debug recorder when debug mode is enabled, else ``None``.
+
+        The recorder is passed into the adapter constructor so its HTTP
+        client is built with wire capture wired into the transport.
+        """
+        if self._storage is None:
+            return None
+        debug_settings = self._storage.load_debug_settings()
+        if not debug_settings.get("enabled", False):
+            return None
+        trace_limit = debug_settings.get("trace_limit", 50)
+        debug_store = DebugTraceStore(self._data_dir, trace_limit=trace_limit)
+        return ProviderDebugRecorder(store=debug_store)
 
     def _model_lookup_for(self, provider_id: str) -> ModelLookup:
         def _lookup(model_id: str) -> Model | None:

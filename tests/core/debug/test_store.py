@@ -23,12 +23,10 @@ def _make_trace_data(
     """Build a realistic trace payload used for store tests."""
     return {
         "trace_id": trace_id,
+        "type": "provider_request",
         "timestamp": timestamp,
         "provider_id": provider_id,
         "model_id": model_id,
-        "request_method": request_method,
-        "request_url": request_url,
-        "status_code": status_code,
         "duration_ms": duration_ms,
         "request": {
             "method": request_method,
@@ -73,11 +71,12 @@ class TestSaveTrace:
         assert len(index) == 1
         entry = index[0]
         assert entry["trace_id"] == trace_id
+        assert entry["type"] == "provider_request"
         assert entry["timestamp"] == "2025-06-01T12:00:00Z"
         assert entry["provider_id"] == "openai"
         assert entry["model_id"] == "gpt-4"
-        assert entry["request_method"] == "POST"
-        assert entry["request_url"] == "https://api.example.com/v1/chat"
+        assert entry["method"] == "POST"
+        assert entry["url"] == "https://api.example.com/v1/chat"
         assert entry["status_code"] == 200
         assert entry["duration_ms"] == 150
 
@@ -97,11 +96,12 @@ class TestSaveTrace:
         assert "run_id" not in entry
         assert set(entry.keys()) == {
             "trace_id",
+            "type",
             "timestamp",
             "provider_id",
             "model_id",
-            "request_method",
-            "request_url",
+            "method",
+            "url",
             "status_code",
             "duration_ms",
         }
