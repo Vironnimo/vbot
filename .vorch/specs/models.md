@@ -4,13 +4,13 @@
 
 ## Overview
 
-The model registry loads sanitized JSON catalogs from `resources/models/` and indexes them by `(provider_id, model_id)`. Dynamic discovery fetches provider model catalogs, lets the selected provider adapter normalize raw entries into vBot `Model` objects, applies optional human overrides, writes the generated catalog, and invalidates the registry cache. Runtime, server, CLI, and WebUI read only the sanitized catalog through the registry; provider APIs and raw discovery files stay outside the read path.
+The model registry loads sanitized JSON catalogs from `resources/models/` and indexes them by `(provider_id, model_id)`. Dynamic discovery fetches provider model catalogs, lets the selected provider adapter normalize raw entries into vBot `Model` objects, applies optional human overrides, writes the generated catalog, and invalidates the registry cache. Runtime and server code read model data through `ModelRegistry`; CLI and WebUI access model data through server RPC. Provider APIs and raw discovery files stay outside the normal runtime read path.
 
 ## Interfaces
 
 - Data classes live in `core/models/models.py`: `Model`, `Capabilities`, and `ReasoningCapabilities` are frozen. Keep the spec at the contract level; the exact field list belongs in the dataclasses.
 - `Model.model_id` is the exact string sent to the provider API. `context_window`, `max_output_tokens`, and `capabilities` are provider-specific facts, not canonical claims about an underlying model family.
-- `Model.metadata` is optional sanitized runtime data for provider adapters. It must stay small, immutable after load, and free of raw provider payloads, policy terms, credentials, and secrets.
+- `Model.metadata` is optional sanitized runtime data for provider adapters. It must stay small, immutable after load, and limited to provider runtime facts the adapter policy needs. Do not store raw provider payloads, provider policy text, credentials, or secrets there.
 - `ModelRegistry.load(resources_dir)` reads `resources/models/*.json`, skips `*.raw.json` and `*.overrides.json`, and caches by resolved `resources_dir`.
 - `ModelRegistry.get(provider_id, model_id)` raises `KeyError` when the exact provider/model pair is missing. `list_for_provider(provider_id)` returns models sorted by `model_id` and returns an empty list for unknown providers.
 - `ModelRegistry.invalidate(resources_dir)` clears the cached registry for that resource path after refresh.
@@ -41,7 +41,7 @@ Critical: `resources/models/<provider>.json` is a generated catalog for refresh-
 
 Lasting model-catalog fixes belong in adapter catalog normalization, adapter runtime policy, or a manual `resources/models/<provider>.overrides.json` only when the fact is durable, externally verified, and not discoverable from provider catalog APIs or probe requests. The app, runtime, and UI use only the sanitized `<provider>.json` files; raw files are for humans, and override files are applied during refresh but skipped by the registry.
 
-`ModelRegistry.load()` reads only `provider_id` and `models` from sanitized catalogs and ignores top-level metadata such as `source` or `fetched_at`. Generated catalogs may include optional per-model `metadata`; the registry freezes nested mappings/lists so loaded model data remains immutable. `max_output_tokens: null` means discovery did not expose a trustworthy per-model output limit; it is not the same thing as a runtime request default.
+`ModelRegistry.load()` reads only top-level `provider_id` and `models` from sanitized catalogs and ignores top-level metadata such as `source` or `fetched_at`. Generated catalogs may include optional per-model `metadata`; the registry freezes nested metadata mappings/lists so loaded model data remains immutable. `max_output_tokens: null` means discovery did not expose a trustworthy per-model output limit; it is not the same thing as a runtime request default.
 
 ## Capabilities & Tasks
 
@@ -61,7 +61,7 @@ Speech/audio modality aliases are intentionally strict: `transcription` output c
 
 Discovery dispatches by `ProviderConfig.adapter` to `adapter_class.normalize_catalog_entry(raw, defaults)`. Provider-specific catalog schemas belong in provider adapters and provider specs, not in provider-ID branches inside discovery. Examples: OpenRouter-specific catalog behavior lives in `OpenRouterAdapter` and `.vorch/specs/providers/openrouter.md`; GitHub Copilot catalog metadata and runtime policy live in `GitHubCopilotAdapter` and `.vorch/specs/providers/github-copilot.md`.
 
-Discovery builds auth headers from the selected connection plus provider `extra_headers`, then calls optional adapter hooks such as `discovery_headers(provider_config, credential_value, headers)`, `discovery_params()`, and `supplementary_discovery_params()`. Use these hooks for catalog-only requirements such as OpenAI Subscription account headers or OpenRouter supplementary STT/TTS fetches.
+Discovery builds auth headers from the selected connection plus provider `extra_headers`, then calls optional adapter hooks such as `discovery_headers(provider_config, credential_value, headers)`, `discovery_params()`, and `supplementary_discovery_params()`. Use these hooks for catalog-only requirements such as OpenAI Subscription account headers/client version parameters or OpenRouter supplementary speech/image-generation fetches.
 
 Supplementary discovery fetches append adapter-provided query parameters to the main models endpoint, merge new models by ID, and log warnings on supplementary failure without blocking the main catalog save. This keeps task-specific models discoverable when a provider's default `/models` response omits them.
 
