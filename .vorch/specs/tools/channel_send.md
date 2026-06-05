@@ -12,12 +12,14 @@ Sends proactive outbound messages through configured channels.
 ## Conventions
 
 - The tool is proactive outbound only; automatic final replies are handled by channel adapters subscribing to Runs.
-- When `platform_target` is omitted, it reads session metadata `last_reply_target.platform_target`.
+- `platform_target` resolution order: explicit argument → session metadata `last_reply_target.platform_target` (only when its `channel_id` matches the requested channel) → the channel config's sole `allowed_chat_ids` entry → otherwise `invalid_arguments`.
 - At least one of `message` or `file_paths` is required. When both are present, `message` acts as caption/accompanying text.
-- The tool is registered only while runtime has at least one active channel.
+- The tool is registered only while the runtime has at least one active channel, and is re-synced (registered/unregistered) when channel configs change — so it can appear or disappear mid-session.
+- Success returns `{ channel_id, platform_target }` with the resolved target.
 
 ## Constraints & Gotchas
 
-- `file_paths` are local paths; the tool reads files, sniffs MIME type, and builds channel `FileData` payloads.
+- The target channel must belong to the calling Agent; a channel owned by another Agent returns `invalid_arguments` (`ChannelConfigError`).
+- `file_paths` are local paths (relative paths resolve from the workspace); the tool reads files, sniffs MIME type, and builds channel `FileData` payloads.
 - Telegram-specific batching and media-group decisions stay inside the adapter layer.
 - Missing channel, missing target, config errors, and send failures return failure envelopes.
