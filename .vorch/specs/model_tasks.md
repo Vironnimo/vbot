@@ -1,151 +1,50 @@
-# Model Tasks
+# Task Model Bindings
 
-Central bindings from specialized task types to concrete provider or local targets. This domain chooses what model or engine should perform a task; task execution stays in task-specific domains such as `core/speech/`.
+Central bindings from specialized task types to concrete provider or local targets. This domain chooses what model or engine should perform a task; task execution stays in task-specific domains such as `core/speech/` and `core/image/`.
 
 ## Overview
 
-`core/model_tasks/` owns normalized task-model settings, target ID parsing, target discovery, local target hooks, and backend-owned option schemas. It is the shared architecture for speech-to-text, text-to-speech, and future media tasks such as image generation, image editing, and video generation.
+`core/model_tasks/` owns normalized task-model settings, task target ID parsing, credential-gated target discovery, local target descriptors, and backend-owned option schemas for the Settings UI. It is the shared binding layer behind specialized models such as speech-to-text, text-to-speech, image generation, and future video generation. It does not call provider media APIs, create artifacts, upload files, or decide provider wire payloads; execution services resolve a binding here and then route through their own domain.
 
-The service is wired by Runtime after providers, models, credentials, and storage are available. It reads and writes `settings.json` through `StorageManager` and lists only provider-backed targets whose selected connection has usable credentials.
+Runtime wires `TaskModelService` after providers, models, credentials, and storage are available. Provider-backed target visibility comes from `Model.capabilities.task_types` plus usable provider credentials. Local targets bypass provider catalogs and credentials, but must be registered explicitly with `LocalTaskTargetRegistry`.
 
-## Task Types
+## Data Model
 
-Initial supported task types are:
+Supported binding task types are defined by `SUPPORTED_TASK_TYPES` in `core/model_tasks/constants.py`: `speech_to_text`, `text_to_speech`, `image_generation`, and `video_generation`. `TASK_IMAGE_EDIT` exists as vocabulary, but is not currently accepted by settings validation or `TaskModelService`; do not expose it as configurable until it is added to `SUPPORTED_TASK_TYPES` and has an execution domain.
 
-- `speech_to_text`
-- `text_to_speech`
-- `image_generation`
-- `image_edit`
-- `video_generation`
+`settings.json` stores task-model bindings under `model_tasks`, keyed by supported task type. Each persisted binding has a non-empty `target` string and an `options` JSON object. Public settings updates are sparse: sending only `options` updates the existing target when one is already persisted, sending an empty `target` removes that task binding, and `StorageManager` removes the whole `model_tasks` section when no bindings remain.
 
-These values match `Model.capabilities.task_types`. Provider catalogs remain the source for provider-backed target visibility; local targets use explicit local descriptors.
+Provider target IDs use `<provider-id>/<model-id-at-provider>::<connection-local-id>`. The parser also accepts a provider-prefixed connection suffix such as `::openrouter:api-key`, but persisted public IDs use the local connection id form such as `::api-key`.
 
-## Settings
-
-`settings.json` may contain:
-
-```json
-{
-  "model_tasks": {
-    "speech_to_text": {
-      "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-      "options": {
-        "language": "auto",
-        "temperature": 0
-      }
-    },
-    "text_to_speech": {
-      "target": "openrouter/openai/gpt-4o-mini-tts-2025-12-15::api-key",
-      "options": {
-        "voice": "alloy",
-        "response_format": "mp3",
-        "speed": 1.0,
-        "instructions": ""
-      }
-    }
-  }
-}
-```
-
-Each binding has a non-empty `target` and an `options` object. Sparse public updates are allowed. Sending an empty target for a task clears that binding from storage.
-
-## Target IDs
-
-Provider target IDs use:
-
-```text
-<provider-id>/<model-id-at-provider>::<connection-local-id>
-```
-
-The connection suffix may also be passed with a provider prefix, but persisted public IDs use the local connection id, for example `::api-key`.
-
-Local target IDs use:
-
-```text
-local/<local-id>
-```
-
-Local IDs cannot contain `/` or `::`.
-
-## Public Shapes
-
-`TaskModelBinding.to_dict()` returns:
-
-```json
-{
-  "target": "openrouter/openai/gpt-4o-transcribe::api-key",
-  "options": {
-    "language": "auto"
-  }
-}
-```
-
-`TaskModelTarget.to_dict()` returns:
-
-```json
-{
-  "id": "openrouter/openai/gpt-4o-transcribe::api-key",
-  "kind": "provider",
-  "provider_id": "openrouter",
-  "model_id": "openai/gpt-4o-transcribe",
-  "connection_id": "openrouter:api-key",
-  "connection_label": "API key",
-  "label": "OpenRouter / GPT-4o Transcribe",
-  "task_types": ["speech_to_text"],
-  "usable": true,
-  "metadata": {}
-}
-```
-
-`TaskModelOptionSchema.to_dict()` returns:
-
-```json
-{
-  "task_type": "text_to_speech",
-  "target": "openrouter/openai/gpt-4o-mini-tts-2025-12-15::api-key",
-  "fields": [
-    {
-      "name": "voice",
-      "type": "select",
-      "label": "Voice",
-      "default": "alloy",
-      "required": true,
-      "options": [{ "value": "alloy", "label": "Alloy" }]
-    }
-  ]
-}
-```
-
-Supported option field types are small renderable primitives: `text`, `textarea`, `select`, `number`, and `boolean`. Future fields should remain backend-owned so accessors do not hardcode provider-specific option rules.
+Local target IDs use `local/<local-id>`. Local IDs cannot contain `/` or `::`; descriptor validation rejects any advertised task type outside `SUPPORTED_TASK_TYPES`.
 
 ## Interfaces
 
-- `validate_task_type(task_type) -> str`
-- `parse_task_model_target_id(target) -> TaskModelTargetRef`
-- `public_provider_target_id(provider_id, model_id, local_connection_id) -> str`
-- `TaskModelService.settings() -> dict`
-- `TaskModelService.update(model_tasks) -> dict`
-- `TaskModelService.binding_for(task_type) -> TaskModelBinding`
-- `TaskModelService.list_targets(task_type) -> list[TaskModelTarget]`
-- `TaskModelService.options(task_type, target) -> TaskModelOptionSchema`
-- `TaskModelService.options_with_defaults(binding) -> dict`
-- `LocalTaskTargetRegistry.register(descriptor)` registers future local engines.
+- `TaskModelService.settings()` returns normalized persisted bindings from `StorageManager.load_model_task_settings()`.
+- `TaskModelService.update(model_tasks)` persists sparse binding updates through `StorageManager.update_model_task_settings()` and returns the normalized full section.
+- `TaskModelService.binding_for(task_type)` returns a configured `TaskModelBinding` or raises `TaskModelError` when the task is unsupported or unconfigured.
+- `TaskModelService.list_targets(task_type)` returns provider and local `TaskModelTarget` descriptors for one supported task type, sorted by kind, label, and id.
+- `TaskModelService.options(task_type, target)` returns a `TaskModelOptionSchema` for the parsed target. Local targets currently return an empty schema.
+- `TaskModelService.options_with_defaults(binding)` merges backend schema defaults under stored binding options; execution domains call this before provider routing.
+- `parse_task_model_target_id(target)` parses provider and local public IDs into `TaskModelTargetRef`; nested provider model IDs such as `openrouter/openai/gpt-4o-transcribe::api-key` are valid.
+- `public_provider_target_id(provider_id, model_id, local_connection_id)` creates the settings-facing provider target id.
+- `LocalTaskTargetRegistry.register(descriptor)` registers or replaces a future local engine descriptor without touching provider catalogs.
 
-## RPC
+Server RPC delegates in `server/rpc/settings_methods.py` expose `task_model.settings`, `task_model.update`, `task_model.list_targets`, and `task_model.options`. Task-model domain errors are expected errors and map to stable `invalid_request` responses at the server boundary.
 
-Server delegates expose:
+## Conventions
 
-- `task_model.settings` -> `{ model_tasks }`
-- `task_model.update` with `{ model_tasks }` -> `{ model_tasks }`
-- `task_model.list_targets` with `{ task_type }` -> `{ targets }`
-- `task_model.options` with `{ task_type, target }` -> `{ schema }`
+Option schemas are backend-owned render hints, not a provider capability matrix. Accessors should render `text`, `textarea`, `select`, `number`, and `boolean` fields generically and must not hardcode provider-specific option rules.
 
-Task-model errors are expected domain errors and map to stable request errors at the server boundary.
+Execution domains own final option interpretation and wire shaping. `core/model_tasks/options.py` provides conservative defaults, while `core/speech/`, `core/image/`, and provider-specific clients decide which options are sent to which API.
+
+Add a new specialized workflow in this order: add/confirm the task type in `core/model_tasks/constants.py`, ensure provider model discovery produces matching `Model.capabilities.task_types`, add option fields in `core/model_tasks/options.py` only if the Settings UI needs them, then implement execution in the task domain. Do not add task execution code to `core/model_tasks/`.
 
 ## Constraints & Gotchas
 
-- `core/model_tasks/` must not execute media tasks. Speech execution belongs in `core/speech/`; future image/video execution should get their own domains.
-- Provider-backed discovery is credential-gated and strictly filtered by `Model.capabilities.task_types`.
-- Generated provider catalogs may be stale. If a newly released OpenRouter speech model is missing from the UI target list, refresh the model database after configuring the OpenRouter API key.
+- `core/model_tasks/` must not execute media tasks. Speech execution belongs in `core/speech/`; image generation belongs in `core/image/`; future video or image-edit execution should get their own domains.
+- Provider-backed discovery is credential-gated and strictly filtered by `Model.capabilities.task_types`. If a target is missing from Settings, first check provider credentials and the generated model catalog before changing UI code.
+- Generated provider catalogs may be stale. If a newly released OpenRouter speech or image model is missing from the target list, refresh the model database after configuring the provider API key; do not hand-edit `resources/models/<provider>.json` as a durable fix.
+- The Settings UI currently renders rows for `speech_to_text`, `text_to_speech`, and `image_generation` only. `video_generation` is accepted by backend validation and discovery, but has no complete UI/execution workflow yet.
 - Local target hooks are intentionally dependency-free. Do not add Whisper, Piper, ffmpeg, or other engine dependencies without explicit approval.
-- Option schemas are conservative provider defaults, not a complete claim about every model. Execution adapters still own final wire shaping.
+- `audio_generation` is a model capability task type in `core/models/`, but not a configurable task-model binding. Generic audio output must not be routed as `text_to_speech` unless the model also advertises `speech` output and receives the `text_to_speech` task type.
