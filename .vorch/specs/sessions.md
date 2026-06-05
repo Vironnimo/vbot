@@ -21,9 +21,8 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `ChatSession.drain_pending_notes()` — returns queued note messages and clears only the in-memory pending-note buffer.
 - `ChatSession.activate_skill_context(name, data)` — stores one activated skill's `<skill_content>` context once per Session, persists it as an internal skill-context note, and returns a stable tool result envelope.
 - `ChatSession.skill_context_messages()` — restores activated skill contexts as provider request messages.
-- `ChatSession.delete()` — deletes the current session file. Metadata sidecar deletion is not currently part of this method.
-- `ChatSessionManager(data_dir)` — resolves agent session roots and creates/gets/lists/deletes sessions.
-- `ChatSessionManager.exists(agent_id, session_id)` — returns whether a valid session exists without callers constructing storage paths.
+- `ChatSession.delete()` — deletes the session file and its metadata sidecar (both `missing_ok`).
+- `ChatSessionManager(data_dir)` — the path-free entry point for sessions: `create` / `get` / `get_or_create` / `exists` / `list` / `delete(agent_id, session_id)` resolve agent session roots so callers never construct `.jsonl` paths; all validate the session ID first.
 - `ChatSessionManager.get_metadata(agent_id, session_id)` / `set_metadata(...)` — read/write arbitrary JSON-object metadata through the current sidecar file using atomic replace.
 - `ChatSessionManager.list_with_metadata(agent_id)` — returns session summaries with `id`, `created_at`, `last_active_at`, plus sidecar fields.
 
@@ -46,6 +45,10 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - Channel adapters must use `ChatSessionManager.exists()` / `get_or_create()` / metadata methods instead of deriving `.jsonl` paths.
 - Server RPC delegates should expose session operations through the runtime service and keep storage details out of the public contract.
 - `core/recall/` may maintain derived search indexes, but JSONL remains canonical. Recall indexes must be disposable and rebuildable from `ChatSessionManager`.
+
+## Constraints & Gotchas
+
+- Skill contexts are not a separate store: they are persisted as ordinary `role: "note"` messages prefixed `[skill-context] ` and lazily rebuilt by scanning `load()` on first access (cached in-memory thereafter). Use the exported `is_skill_context_note()` predicate to recognize them — never treat these notes as normal user-visible or provider-injected notes.
 
 ## SQLite Migration Notes
 
