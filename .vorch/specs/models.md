@@ -35,6 +35,8 @@ The model system uses up to three sibling files under `resources/models/`; only 
 | `<provider>.raw.json` | `refresh_models()` | Nobody at runtime | Inspection/debugging copy of parsed provider response data |
 | `<provider>.overrides.json` | Human research | `refresh_models()` only | Narrow corrections for externally verified facts provider APIs do not expose |
 
+`<provider>.raw.json` preserves the parsed provider response data before `raw_filter`, adapter normalization, `model_filter`, or overrides are applied. Use raw files to debug missing catalog entries: if a model is present in raw output but absent from `<provider>.json`, the fix belongs in filtering, adapter normalization, or override validation, not in the registry read path.
+
 Critical: `resources/models/<provider>.json` is a generated catalog for refresh-backed providers. Every successful model refresh rewrites the whole `resources/models/<provider>.json` file from the current normalized discovery result plus optional overrides. Do not hand-edit that file for lasting fixes; the next refresh can delete, replace, reorder, or recompute any entry in it.
 
 `resources/models/<provider>.overrides.json` is never created by refresh. It is a manually maintained input file: if it exists, refresh reads it and applies those overrides while generating `<provider>.json`; if it does not exist, refresh simply uses normalized discovery output.
@@ -50,6 +52,8 @@ Capabilities are facts about one model through one provider. The same underlying
 `reasoning.supported` is a boolean only. It says whether the provider advertises some reasoning/thinking capability for that model; effort levels, budgets, endpoint choice, and request payload shape remain adapter responsibilities. A catalog entry saying reasoning is supported does not by itself authorize sending a specific control field such as OpenAI-style `reasoning_effort`.
 
 `input_modalities`, `output_modalities`, `supported_parameters`, and `task_types` preserve sanitized provider-catalog facts when available. `task_types` is a coarse filtering and routing projection used by accessors and task-model discovery; it is not provider request shaping. The authoritative task ordering and derivation logic live in `core/models/models.py`, and task-model bindings must stay aligned with `.vorch/specs/model_tasks.md`.
+
+Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, and `video_generation`. Do not invent `image_edit` catalog tasks until `core/models/` and `core/model_tasks/` both accept that workflow.
 
 Sparse catalogs remain usable. Missing modality data defaults to text-in/text-out, and local or OpenAI-compatible providers with conservative optional facts should not disappear from model selection merely because fields such as `tools` or large `context_window` are missing.
 
