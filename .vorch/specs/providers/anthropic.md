@@ -8,26 +8,26 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 - Adapter selector: `anthropic`
 - Adapter class: `AnthropicAdapter`
 - Runtime endpoint: `POST /messages`
-- Required headers: provider auth header, `anthropic-version: 2023-06-01`, plus configured extra headers.
+- Auth/header shape: usually `x-api-key` with no Bearer prefix, plus `anthropic-version: 2023-06-01` and configured extra headers.
 
 ## Wire Contract
 
-- System-role messages are extracted into top-level `system`.
-- Messages use Anthropic content blocks, not flat OpenAI content strings.
-- Consecutive canonical `tool` messages become one user message containing multiple `tool_result` blocks.
-- Canonical assistant tool calls become `tool_use` blocks.
-- Provider tool definitions become Anthropic `tools` entries with `input_schema`.
+- System-role messages are removed from the conversation array and merged into top-level `system`. Multiple string system messages are joined with blank lines; system content blocks are concatenated as blocks.
+- User content uses Anthropic content blocks. Consecutive canonical `tool` messages become one user message containing multiple `tool_result` blocks.
+- Canonical assistant tool calls become `tool_use` blocks. Provider tool definitions become Anthropic `tools` entries with `input_schema`.
+- Anthropic SSE uses framed `event:`/`data:` events; consume complete SSE data payloads rather than parsing it as OpenAI-style line JSON.
 
 ## Reasoning
 
-- `AnthropicAdapter` accepts injected `model_lookup` and strips thinking controls for known non-reasoning models.
-- Thinking controls may include `thinking.type`, `thinking.budget_tokens`, `output_config.effort`, and `thinking.display`.
-- Opaque thinking/redacted-thinking blocks are preserved under `reasoning_meta.content_blocks` for round-tripping.
+- `thinking_effort: none` sends `thinking: {type: disabled}`. Active Anthropic efforts send adaptive thinking, summarized display, and `output_config.effort` for efforts above `minimal`.
+- If injected `model_lookup` says reasoning is unsupported, Anthropic thinking/reasoning controls are stripped.
+- Opaque `thinking` and `redacted_thinking` blocks from provider responses are preserved under `reasoning_meta.content_blocks` and may be resent for the active tool-use continuation.
+- Plain readable `reasoning` text without opaque metadata is not converted into Anthropic thinking blocks.
 
 ## Response Normalization
 
 - `text` blocks concatenate into `content`.
-- `thinking` blocks concatenate into visible `reasoning` when readable.
+- Readable `thinking` blocks concatenate into visible `reasoning`; redacted thinking remains opaque metadata only.
 - `tool_use` blocks map to canonical `tool_calls`.
 - Streaming tracks content-block indexes and yields normalized vBot deltas only.
 
@@ -40,6 +40,6 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 
 ## Constraints & Gotchas
 
-- Auth usually uses `x-api-key` with no Bearer prefix.
-- Anthropic SSE uses both `event:` and `data:` lines; do not parse it as OpenAI-style `[DONE]` only.
 - Current-turn reasoning metadata may be resent for tool-use continuation, but stale completed-turn metadata must not be sent on later turns.
+- Preserve Anthropic signatures and redacted thinking bytes unchanged; vBot never interprets their contents.
+- Keep Anthropic protocol behavior in `AnthropicAdapter` or provider-specific wrappers such as `OpenCodeGoAdapter`; do not add Anthropic content-block rules to the generic OpenAI-compatible adapter.

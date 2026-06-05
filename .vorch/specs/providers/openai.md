@@ -1,6 +1,6 @@
 # OpenAI Provider
 
-Direct OpenAI provider configuration and the generic OpenAI-compatible adapter behavior used by fully compatible providers.
+Direct OpenAI Platform provider configuration plus the generic OpenAI-compatible `/chat/completions` adapter used by fully compatible providers.
 
 ## Interfaces
 
@@ -8,35 +8,30 @@ Direct OpenAI provider configuration and the generic OpenAI-compatible adapter b
 - Adapter selector: `openai_compatible`
 - Adapter class: `OpenAICompatibleAdapter`
 - Runtime endpoint: `POST /chat/completions`
-- Catalog endpoint: provider `/models` when configured.
+- Connections: `openai:oauth` uses the static `OPENAI_OAUTH_TOKEN` credential stub; `openai:api-key` uses `OPENAI_API_KEY`. Neither connection is the ChatGPT subscription Codex Device Flow; that lives in `openai-subscription`.
+- Catalog: direct OpenAI currently has no bundled `models_endpoint`; the checked-in catalog is a resource artifact unless the config gains refresh metadata.
 
 ## Wire Contract
 
 - Canonical system/user/assistant messages stay in the OpenAI-style `messages` array.
-- Canonical `tool` messages become OpenAI `role: tool` messages with `tool_call_id`.
-- Canonical assistant `tool_calls` become OpenAI `tools`/function-call structures.
+- Canonical `tool` messages become `role: tool` messages with `tool_call_id`.
+- Canonical assistant `tool_calls` become OpenAI function-call structures.
 - Provider tool definitions become `{"type":"function","function":{...}}` entries.
-- Streaming uses `stream: true` and SSE `data:` lines ending with `[DONE]`.
+- Streaming uses `stream: true`, SSE `data:` frames, `[DONE]`, and `stream_options.include_usage: true`; caller-provided `stream_options` are preserved except `include_usage` is forced true.
 
 ## Reasoning
 
-- vBot `thinking_effort` maps to nearest safe `reasoning_effort`: `minimal -> low`, `low/medium/high` stay exact, `xhigh/max -> high`.
-- Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms support.
-- If `model_lookup` says reasoning is unsupported, reasoning controls are stripped.
+- vBot `thinking_effort` and raw `reasoning_effort` map to the nearest safe OpenAI effort: `minimal -> low`, `low/medium/high` stay exact, `xhigh/max -> high`.
+- Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms reasoning support.
+- If injected `model_lookup` says reasoning is unsupported, reasoning request controls are stripped.
+- Opaque reasoning fields such as `encrypted_content` and `reasoning_details` stay in `reasoning_meta` for round-tripping.
 
-## Response Normalization
+## Response And Catalog Normalization
 
-- Text becomes `content` or `content_delta`.
-- Reasoning fields such as `reasoning_content`/`thinking` become visible `reasoning`/`reasoning_delta`.
-- Opaque reasoning fields such as `encrypted_content`/`reasoning_details` stay in `reasoning_meta` for round-tripping.
-- Tool-call argument JSON that is malformed normalizes to an empty argument object instead of leaking parser exceptions.
-- Usage chunks are requested with `stream_options: { include_usage: true }` during streaming.
-
-## Catalog Normalization
-
-- Generic OpenAI-compatible `/models` entries may expose modality data through `architecture.input_modalities`, `architecture.output_modalities`, or similar OpenRouter-style fields. When present, normalize these into `Model.capabilities.input_modalities`, `output_modalities`, `supported_parameters`, and derived `task_types`.
-- Sparse OpenAI-compatible catalogs that provide only IDs remain usable as text-in/text-out chat catalogs. Missing optional capability facts should not make local providers disappear from Agent model selection.
-- Missing per-model output-token limits remain `max_output_tokens: null` in the normalized catalog. The generic runtime fallback for requests without an explicit limit is `8192` tokens.
+- Text becomes `content` or `content_delta`; provider reasoning text fields such as `reasoning_content`/`thinking` become visible `reasoning`/`reasoning_delta`.
+- Malformed tool-call argument JSON is ignored for that tool call instead of becoming fake empty arguments; valid sibling tool calls are preserved.
+- Generic `/models` entries may expose modalities, supported parameters, context windows, and output limits through raw fields, `architecture`, or `top_provider`. Normalize discoverable facts into `Model.capabilities` and `Model.metadata`; do not treat sparse catalogs as negative evidence for every missing capability.
+- Missing per-model output-token limits remain `max_output_tokens: null`; request fallback limits come from provider defaults such as `max_tokens: 8192`.
 
 ## Error Classification
 
@@ -51,4 +46,4 @@ Direct OpenAI provider configuration and the generic OpenAI-compatible adapter b
 
 - Provider defaults are merged with `setdefault`; caller kwargs win.
 - Extra headers are merged after auth headers.
-- Subclass `OpenAICompatibleAdapter` only when runtime behavior, streaming, reasoning, or catalog normalization differs.
+- This spec describes the generic OpenAI-compatible chat adapter. Provider-specific Responses APIs, Anthropic-compatible endpoints, reasoning protocols, or catalog quirks belong in a subclass and its child spec.

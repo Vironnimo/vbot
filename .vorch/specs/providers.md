@@ -4,68 +4,56 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 ## Overview
 
-`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime wires adapters with connection-scoped credentials and provider-scoped model lookup. Concrete provider behavior lives in child specs under `.vorch/specs/providers/`. Direct OpenAI Platform access and ChatGPT subscription access are separate providers because they use different credentials, base URLs, account headers, and runtime endpoints.
+`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime creates adapters with one explicit connection, an async token getter, provider defaults, optional debug capture, and provider-scoped model lookup. Concrete wire behavior belongs in the provider child specs under `.vorch/specs/providers/`; keep the root spec focused on shared contracts and extension rules. Direct OpenAI Platform access and ChatGPT subscription access are separate providers because credentials, endpoints, account routing, and supported runtime APIs differ.
 
 ## Data Model
 
-- `AuthConfig`: auth header name, value prefix, and credential key for API-key connections.
-- `OAuthConfig`: device-flow endpoints, scopes, optional token exchange URL, and provider-specific device-flow metadata such as `device_flow`, `verification_uri`, `redirect_uri`, and configured expiry.
-- `ConnectionConfig`: provider-local connection id, type (`api_key` or `oauth`), display label, auth metadata, optional base URL override, optional OAuth metadata.
-- `ProviderConfig`: id, name, adapter selector, base URL, connections, defaults, extra headers, and optional `models_endpoint`.
-- `ProviderRegistry`: loads provider JSON configs, rejects duplicate ids, and returns configs by id.
-- `TokenStore`: persists OAuth tokens below `<data_dir>/oauth/` using `<provider_id>-<local_connection_id>.json`.
-- `TokenGetter`: async credential source used by adapters (`StaticTokenGetter` or `OAuthTokenGetter`).
+- Provider JSON owns `id`, `name`, adapter selector, base URL, `connections`, optional `defaults`, optional `extra_headers`, and optional `models_endpoint`.
+- Connection JSON is provider-local until exposed externally as `<provider_id>:<local_connection_id>`. Supported connection types are `api_key` and `oauth`; API-key connections require `auth.credential_key`, while OAuth Device Flow connections store their flow metadata under `oauth`.
+- `ProviderRegistry.load(resources_dir)` parses `resources/providers/*.json`, rejects duplicate provider ids/connection ids, validates connection types/OAuth device-flow names, and caches the registry by resolved resources path.
+- `TokenStore` persists OAuth tokens under `<data_dir>/oauth/<provider_id>-<local_connection_id>.json` after validating ids against path traversal. Expired tokens still count as usable when they have a refresh path (`refresh_token` or Copilot's stored `github_oauth_token`).
 
 ## Interfaces
 
-- `ProviderRegistry.load(resources_dir) -> ProviderRegistry`
-- `ProviderRegistry.get(provider_id) -> ProviderConfig`
-- `ProviderRegistry.list_ids() -> list[str]`
-- `runtime.get_adapter(provider_id, connection_id) -> ProviderAdapter`. When `debug.enabled` is true in settings, the returned adapter has `_debug_recorder` set to a `ProviderDebugRecorder` for wire trace capture.
-- `ProviderCredentialResolver.has_credentials(provider_id, connection_id=None) -> bool`
-- `ProviderCredentialResolver.get_credentials(provider_id, connection_id=None) -> str`
-- Server RPC `provider.set_key` writes API-key connection credentials into the data-dir `.env` using the connection's configured `credential_key`, then reloads runtime provider credential fallback state.
-- `ProviderAdapter.send(messages, *, model_id, **kwargs) -> dict`
-- `ProviderAdapter.stream(messages, *, model_id, **kwargs) -> AsyncIterator[dict]`
-- `ProviderAdapter.normalize_response(response) -> dict`
+- `runtime.get_adapter(provider_id, connection_id)` is the adapter factory. It requires a full compositional connection id, resolves the selected connection, injects `StaticTokenGetter` or `OAuthTokenGetter`, injects `model_lookup(model_id)`, and passes a `ProviderDebugRecorder` when debug mode is enabled.
+- `ProviderCredentialResolver` reads API-key credentials from process environment first, then the data-dir `.env` fallback. OAuth credentials come from `TokenStore`; OAuth connections without `oauth` metadata are treated as static-token stubs.
+- Server RPC `provider.set_key` only targets API-key connections. It writes the connection's configured `credential_key` to the data-dir `.env`, reloads runtime fallback credentials, and never returns the secret value.
+- Model discovery uses `models_endpoint`, the first usable connection, adapter `discovery_headers()`/`discovery_params()`/`supplementary_discovery_params()` hooks, and `normalize_catalog_entry()`. Discovery accepts top-level `data` or `models` lists and writes refreshable catalog artifacts.
+- `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the chat-facing contract. `stream()` yields normalized vBot deltas only; raw provider chunks and SSE event names stay inside adapters.
 
 ## Specific Specs
 
-- `providers/openai.md` - OpenAI provider and generic OpenAI-compatible adapter behavior
-- `providers/anthropic.md` - Anthropic Messages adapter
-- `providers/openrouter.md` - OpenRouter-specific runtime/catalog behavior
-- `providers/opencode-go.md` - OpenCode Go routing and reasoning replay behavior
-- `providers/mistral.md` - Mistral-specific reasoning and catalog normalization
-- `providers/minimax.md` - MiniMax OpenAI-compatible endpoint, sparse catalog normalization, and thinking controls
-- `providers/github-copilot.md` - GitHub Copilot OAuth, endpoint routing, policy, and catalog metadata
-- `providers/openai-subscription.md` - OpenAI Subscription Codex OAuth, account header, model discovery, and Responses routing
+- `providers/openai.md` - Direct OpenAI Platform provider and generic OpenAI-compatible adapter behavior.
+- `providers/anthropic.md` - Anthropic Messages adapter.
+- `providers/openrouter.md` - OpenRouter runtime, reasoning, and multi-modality catalog discovery.
+- `providers/opencode-go.md` - OpenCode Go routing and reasoning replay behavior.
+- `providers/mistral.md` - Mistral-specific reasoning and catalog normalization.
+- `providers/minimax.md` - MiniMax OpenAI-compatible endpoint, sparse catalog normalization, and thinking controls.
+- `providers/github-copilot.md` - GitHub Copilot OAuth, endpoint routing, policy, and catalog metadata.
+- `providers/openai-subscription.md` - OpenAI Subscription Codex OAuth, ChatGPT account header, model discovery, and Responses routing.
 
 ## Adding A Provider
 
-1. Add `resources/providers/<name>.json` with adapter selector, connections, and `models_endpoint` if refreshable.
-2. Inspect the real models endpoint response before designing catalog normalization.
-3. Send at least one probe inference request against the runtime endpoint you plan to support.
-4. Verify real behavior for reasoning controls, tools, streaming, output-token limits, and response shape.
-5. Put discoverable facts in adapter normalization/runtime logic. Use model overrides only for durable facts that provider APIs do not expose.
+1. Add `resources/providers/<name>.json` with an adapter selector, at least one connection, and `models_endpoint` only when the catalog is refreshable.
+2. Inspect the real models endpoint response before designing catalog normalization; preserve discoverable modalities, request parameters, limits, and small runtime-relevant metadata.
+3. Send at least one probe inference request against the runtime endpoint you plan to support, including streaming when the provider advertises it.
+4. Verify real behavior for reasoning controls, tools, structured output, streaming, output-token limits, and response shape.
+5. Put discoverable facts in adapter normalization/runtime policy. Use model overrides only for durable facts provider APIs do not expose.
 
 ## Conventions
 
-- Connection ids exposed outside provider config are compositional: `<provider_id>:<local_connection_id>`.
-- Provider JSON uses `connections`; old single-provider `auth` JSON is not supported.
-- Runtime adapter creation injects provider-scoped `model_lookup(model_id) -> Model | None` so adapters can use normalized catalog facts without file I/O.
-- Provider defaults are applied with lower priority than caller kwargs.
-- Provider chat HTTP clients keep connect, write, and pool timeouts bounded at 60 seconds but do not enforce an HTTP read timeout. Long non-streaming model generations may legitimately take longer than one minute before returning a complete response; streaming stalls are guarded by the chat streaming chunk timeout instead.
-- Provider request defaults are runtime controls, not model facts. When catalog discovery lacks a per-model output limit, normalized `max_output_tokens` stays `null`; request shaping uses provider defaults such as `defaults.max_tokens` separately. Bundled chat provider defaults use `max_tokens: 8192`.
-- Streaming adapters yield normalized vBot deltas only, never raw provider chunks.
-- Catalog normalization should preserve discoverable model modalities, supported request parameters, and other small runtime-relevant facts in the sanitized `Model.capabilities`/`Model.metadata` shape. Sparse local or OpenAI-compatible catalogs should remain usable rather than being interpreted as authoritative negatives for every missing capability.
-- Token values and API keys must never be logged.
+- Provider defaults are request defaults, not model facts. They are applied with lower priority than caller kwargs; unknown per-model output limits stay `max_output_tokens: null` in catalogs even when request defaults contain `max_tokens`.
+- Provider JSON uses `connections`; old single-provider `auth` JSON is invalid.
+- Provider chat HTTP clients use bounded connect/write/pool timeouts and no read timeout; long non-streaming generations may exceed one minute. Streaming stalls are guarded by the chat streaming chunk timeout.
+- Sparse OpenAI-compatible catalogs remain usable as text chat catalogs. Missing optional facts are unknown, not authoritative negatives, unless the provider-specific adapter says otherwise.
+- Subclass `OpenAICompatibleAdapter` only when runtime behavior, streaming, reasoning, catalog normalization, or request policy differs from the generic `/chat/completions` contract.
+- Token values, API keys, authorization codes, user codes, refresh tokens, and account ids must never be logged.
 
 ## Constraints & Gotchas
 
-- `runtime.get_adapter()` requires an explicit connection id; there is no runtime fallback to the first usable connection.
-- API-key credentials resolve at adapter creation from process env or data-dir `.env`; OAuth credentials come from `TokenStore` and may refresh during requests. Standard device flows poll token endpoints directly; provider-specific flows such as `openai_codex` can add custom polling/exchange semantics inside the auth flow engine.
-- API-key provider setup through CLI/RPC is credential-key based: callers name a provider and optional connection, and vBot chooses the configured env key from provider metadata. CLI output must not include credential values.
-- Streaming retry only covers connection establishment. Once an SSE stream is open, mid-stream errors propagate.
-- Adapters that know streaming is unsupported for a request raise `ProviderStreamingUnsupportedError` (non-retryable `ProviderError`). The chat loop treats this as its only trigger to fall back to a non-streaming request; other streaming errors are not silently retried.
-- Provider catalogs under `resources/models/` are refreshable artifacts. Durable behavior belongs in adapter code or policy, not hand-edited generated model files.
-- Network failures use `NetworkError` and are retryable but do not trigger model fallback.
+- Runtime adapter creation has no fallback to "first usable connection"; callers must pass the exact connection id. Provider-level credential checks may choose the first usable connection only for status/listing/discovery helper paths.
+- API-key credentials resolve when an adapter is created. OAuth tokens may refresh during requests through `OAuthTokenGetter`, so do not cache the raw OAuth access token outside the getter.
+- Streaming retry only covers connection establishment. Once an SSE stream is open, mid-stream read/provider errors propagate.
+- `ProviderStreamingUnsupportedError` is the only streaming error that triggers the chat loop's non-streaming fallback. Other streaming failures are not silently retried as non-streaming requests.
+- Provider catalogs under `resources/models/` are refreshable artifacts. Durable behavior belongs in adapter code, runtime policy, or externally verified overrides, not hand-edited generated model files.
+- `NetworkError` is retryable but not provider-specific and must not trigger model fallback.
