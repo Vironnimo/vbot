@@ -27,7 +27,7 @@ The model ID stored in a catalog is the ID sent on the wire. There is no lookup 
 
 ## Catalog Files
 
-Model discovery may write three sibling files under `resources/models/`:
+The model system uses up to three sibling files under `resources/models/`; only the generated catalog/raw files are written by refresh:
 
 | File | Written by | Read by | Purpose |
 |---|---|---|---|
@@ -37,7 +37,9 @@ Model discovery may write three sibling files under `resources/models/`:
 
 Critical: `resources/models/<provider>.json` is a generated catalog for refresh-backed providers. Every successful model refresh rewrites the whole `resources/models/<provider>.json` file from the current normalized discovery result plus optional overrides. Do not hand-edit that file for lasting fixes; the next refresh can delete, replace, reorder, or recompute any entry in it.
 
-Lasting model-catalog fixes belong in adapter catalog normalization, adapter runtime policy, or `resources/models/<provider>.overrides.json` only when the fact is durable, externally verified, and not discoverable from provider catalog APIs or probe requests. The app, runtime, and UI use only the sanitized `<provider>.json` files; raw files are for humans, and override files are applied during refresh but skipped by the registry.
+`resources/models/<provider>.overrides.json` is never created by refresh. It is a manually maintained input file: if it exists, refresh reads it and applies those overrides while generating `<provider>.json`; if it does not exist, refresh simply uses normalized discovery output.
+
+Lasting model-catalog fixes belong in adapter catalog normalization, adapter runtime policy, or a manual `resources/models/<provider>.overrides.json` only when the fact is durable, externally verified, and not discoverable from provider catalog APIs or probe requests. The app, runtime, and UI use only the sanitized `<provider>.json` files; raw files are for humans, and override files are applied during refresh but skipped by the registry.
 
 `ModelRegistry.load()` reads only `provider_id` and `models` from sanitized catalogs and ignores top-level metadata such as `source` or `fetched_at`. Generated catalogs may include optional per-model `metadata`; the registry freezes nested mappings/lists so loaded model data remains immutable. `max_output_tokens: null` means discovery did not expose a trustworthy per-model output limit; it is not the same thing as a runtime request default.
 
