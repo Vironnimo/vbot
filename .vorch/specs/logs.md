@@ -12,7 +12,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - Read snapshot result: `{ file: string, entries: ParsedLogEntry[], cursor: string }`
 - Parsed log entry:
   - `timestamp: string`
-  - `level: string` — lower-cased level such as `info`, `warn`, `error`
+  - `level: string` — lower-cased level such as `info`, `warn`, `error`; a line that doesn't match the header gets `level: "unknown"` with empty `timestamp`/`logger_name`
   - `logger_name: string`
   - `message: string`
   - `continuation: string` — multiline tail such as stack traces
@@ -31,7 +31,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `log.list` — returns the daily log catalog sorted newest-first
   - `log.read { file }` — returns parsed entries plus a handoff cursor for one selected file
 - Server transport
-  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for one selected file only and can replay the read→socket handoff gap
+  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for one selected file only and can replay the read→socket handoff gap. Invalid file name or unknown/mismatched cursor → close code `1008`.
 - WebUI
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
   - `webui/src/lib/logsView.js` owns client-side selection/filter/search/sort helpers
@@ -47,12 +47,11 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - `cursor` is an internal handoff token, not user-visible UI state.
 - The selected file remains user-controlled. Refreshing the catalog may add newer files, but it must not auto-switch the active selection.
 - The Logs toolbar uses the shared simple dropdown style for file, level, and order controls.
-- Routine `/ws/logs` websocket transport lifecycle messages are considered noise and should not appear in normal INFO logs; the same routine websocket lifecycle noise from the shared `/ws` socket should also stay out of normal logs. Websocket transport failures should still remain visible.
-- The backend log-view contract also filters that routine websocket noise at read/stream time, so older matching rows already present in a daily file do not reappear in `log.read` results or `/ws/logs` append/reset events.
+- Routine `/ws` and `/ws/logs` lifecycle noise (connection open/closed, accept) is filtered on two layers: at write time by the logging pipeline (`is_logs_websocket_lifecycle_record`, so it never lands in daily files going forward) and again at read/stream time in `parse_log_entries` (`_should_include_entry`, so pre-existing matching rows don't surface in `log.read` results or `/ws/logs` events). Genuine websocket transport failures must still stay visible.
 
 ## External Dependencies
 
-- `watchfiles` — watches the logs directory so `/ws/logs` can push file-backed live updates without polling.
+- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Live append/reset events are derived from re-read file snapshots, not from raw watcher payloads — this polling setup is deliberate for reliable Windows behavior.
 
 ## Constraints & Gotchas
 
@@ -60,3 +59,6 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - Initial load reads one full selected daily file into memory.
 - Windows watcher events may duplicate or coalesce changes; derive append/reset events from file snapshots rather than raw watcher event counts.
 - If a file is truncated, replaced, or otherwise diverges from the previous parsed prefix, emit a `reset` event so the UI replaces its entry list.
+- **Watcher lifecycle is per-file and ref-counted.** One watcher task per file, shared by all subscribers; it starts on the first subscriber and stops when the last one leaves. `aclose()` (called on server shutdown with a 1 s timeout) tears down every watcher. Snapshots are read and diffed under a single async lock.
+- **Cursor handoff is the no-gap guarantee.** `read_file` stores a one-shot handoff snapshot under a fresh UUID `cursor`, keyed per file (only the file's latest cursor is retained; total handoffs bounded to `MAX_READ_HANDOFFS = 32`, oldest pruned). `subscribe(cursor)` pops it and emits the missed append/reset diff *before* live events; `subscribe(cursor=None)` falls back to popping the file's latest stored cursor. A cursor is single-use; an unknown or file-mismatched cursor raises `ValueError`. This is what prevents losing lines appended between `log.read` and the socket connecting.
+- **One shared `LogViewer` instance.** It lives on `app.state.log_viewer` and is shared by `log.read` (RPC) and `/ws/logs`; the RPC helper lazily creates and caches it if missing. The cursor handoff only works because both paths hit the same instance — never instantiate a `LogViewer` per request or per connection.
