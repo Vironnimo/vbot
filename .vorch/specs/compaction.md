@@ -4,7 +4,7 @@ Context-window management and compaction checkpoint creation for chat Sessions.
 
 ## Overview
 
-`core/compaction/` owns the provider-agnostic compaction algorithm, settings type, and strategy/service interface. Compaction is a logical Session operation: it summarizes older closed history into a `compaction_checkpoint` message while preserving a verbatim recent tail. It never rewrites or deletes existing Session JSONL history.
+`core/compaction/` (`compaction.py`) owns the provider-agnostic compaction algorithm, settings type, and strategy/service interface. Compaction is a logical Session operation: it summarizes older closed history into a `compaction_checkpoint` message while preserving a verbatim recent tail. It never rewrites or deletes existing Session JSONL history.
 
 The chat loop decides when compaction is safe to run. The compaction domain decides how to choose the preserved tail boundary, render pre-tail history for summarization, call the supplied summary adapter, and validate the resulting checkpoint.
 
@@ -27,10 +27,10 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 
 ## Cross-Domain Contracts
 
-- `core/chat/` owns safe invocation points. Auto-compaction runs only after a final assistant response with no pending tool calls or after a complete tool-result cycle.
+- `core/chat/` owns the **auto-compaction** entry point. The chat loop (`_maybe_auto_compact` in `core/chat/chat.py`) runs it only after a final assistant response with no pending tool calls or after a complete tool-result cycle, and resolves its own summary adapter/model.
+- `core/automation/` owns the **manual `/compact`** entry point. The pure-text command is recognized by `core/chat/commands.py`; accessors dispatch it (server RPC `_handle_compact_command`, the Telegram channel) to `TriggerService.compact_session`, which performs the manual compaction and summary-model adapter resolution (`_resolve_summary_adapter_for_compact`). `server/` is RPC dispatch only — no compaction logic lives there.
 - `core/sessions/` owns persistence. Compaction appends checkpoint messages to the Session; it never mutates existing records.
-- `core/storage/` owns persisted settings and prompt-fragment access. `compaction.md` is allowlisted for backend loading but is not part of the normal system-prompt editor surface.
-- `server/` owns manual `/compact` command handling and summary-model adapter resolution for that path.
+- `core/storage/` owns persisted settings and prompt-fragment access. `compaction.md` is in `storage.PROMPT_FRAGMENT_NAMES` (backend load/write allowed) but is deliberately excluded from both `prompts.EDITABLE_PROMPT_FRAGMENT_NAMES` (the prompt-editor surface) and `storage.AGENT_PROMPT_FRAGMENT_NAMES` (never Agent-scoped).
 - WebUI renders `compaction_completed` Run events and persisted `compaction_checkpoint` history as timeline separators, not normal chat bubbles.
 
 ## Conventions
@@ -45,6 +45,7 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 ## Constraints & Gotchas
 
 - `CompactionService` intentionally accepts adapters, storage, settings, and agent objects from callers instead of reaching into runtime globals.
-- The domain depends on canonical `ChatMessage` and `ContentBlock` types from `core.chat`; chat depends on the compaction service only by injection. Avoid introducing a runtime import cycle.
+- The domain imports canonical `ChatMessage`/`ContentBlock` types from `core.chat` at module load; `core/chat/chat.py` imports `CompactionService` only under `TYPE_CHECKING` plus a lazy local import, and the service is injected. Keep it that way — a module-level `core.chat` ↔ `core.compaction` import in both directions would create a runtime cycle.
+- Manual `/compact` (`compact_session`) refuses while a Run is active for the session (returns "Cannot compact while a run is active for this session"); auto-compaction only runs at the chat loop's safe points. Neither path compacts mid-turn.
 - Existing completed-turn provider reasoning metadata must not be blindly carried into summaries or later provider requests.
 - Failed automatic compaction should not fail the active Run; the chat loop logs a warning and continues without compaction.
