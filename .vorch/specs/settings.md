@@ -4,7 +4,7 @@ Public settings schema parsing and central JSON validation for user-editable run
 
 ## Overview
 
-`core/settings/` owns the product-facing schema for Settings update payloads. It validates what public accessors may send through `settings.update` before the server applies those updates to storage and runtime side effects. It also owns a central raw-file validator in `core/settings/validation.py` for user-editable runtime JSON: `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and runtime read paths use the same validators so manual edit errors fail fast with consistent diagnostics. Raw `settings.json` also accepts `recall.backend` for backend selection, and the public `settings.update` RPC accepts the first-party recall backend names used by the Settings UI. Raw `settings.json` and the public `settings.update` RPC also accept `model_tasks`, a sparse mapping from supported specialized task types to configured targets and JSON-object options. Raw `settings.json` and the public `settings.update` RPC also accept `web_search`, an exact section for selecting the `web_search` provider and provider-owned options such as `searxng.base_url`. Raw `settings.json` accepts positive integer binary upload limits: `attachment_max_size_bytes` for stored attachments and `speech_upload_max_size_bytes` for speech transcription audio.
+`core/settings/` owns the product-facing schema for Settings update payloads. It validates what public accessors may send through `settings.update` before the server applies those updates to storage and runtime side effects. It also owns a central raw-file validator in `core/settings/validation.py` for user-editable runtime JSON: `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and `cron/jobs.json`. Local doctor checks and runtime read paths use the same validators so manual edit errors fail fast with consistent diagnostics. Raw `settings.json` keys and public `settings.update` sections overlap, but they are not the same API; keep that distinction explicit when adding settings.
 
 Storage still owns raw `settings.json` file I/O, process-local locked read-modify-write transactions, atomic writes, prompt fragments, and normalized persistence helpers. Server delegates own RPC error mapping and side effects such as reloading skills after skill directory changes. The raw `settings.set_key` RPC validates the merged raw `settings.json` mapping with `validate_settings_data()` before persisting; warnings such as unknown top-level keys are allowed, but schema errors for known sections are rejected as RPC `invalid_request`.
 
@@ -18,6 +18,12 @@ Storage still owns raw `settings.json` file I/O, process-local locked read-modif
 - `validate_data_dir_config(data_dir) -> tuple[JsonValidationReport, ...]` validates the current user-editable config bundle for `vbot doctor config`.
 - `load_validated_settings_json`, `load_validated_agent_json`, `load_validated_channel_json`, and `load_validated_cron_jobs_json` are the read-time gates used by storage/runtime domains before consuming raw JSON.
 - Data validators return diagnostics with severity, JSON path, and message.
+
+## Raw Settings Keys
+
+`core/settings/validation.py` is the source of truth for raw top-level keys accepted in `<data_dir>/settings.json`: port aliases (`PORT`, `SERVER_PORT`, `port`, `server_port`), `appearance`, `skill_directories`, `extension_directories`, upload limits (`attachment_max_size_bytes`, `speech_upload_max_size_bytes`), sub-agent limits (`max_subagent_depth`, `max_subagents_per_turn`, `subagent_timeout_minutes`), `compaction`, `defaults`, `recall`, `web_search`, `model_tasks`, and `debug`. Unknown top-level raw keys are warnings, not errors, but schema errors for known sections are fatal before runtime code consumes them.
+
+Raw-only settings are not public `settings.update` sections. `extension_directories` is loaded only during `Runtime.start()` as extra roots for Python extension discovery; there is no public Settings UI/RPC section that reloads extensions live. `attachment_max_size_bytes` is read at runtime startup for `AttachmentStore`, and `speech_upload_max_size_bytes` is read at runtime startup for the server speech upload gate. Port aliases are consumed by server startup, not by the settings update parser.
 
 ## Supported Update Sections
 
