@@ -101,22 +101,20 @@ def _save_model_probe_trace(
                 "trace_id": trace_id,
                 "type": "model_probe",
                 "timestamp": datetime.now(UTC).isoformat(),
+                "duration_ms": duration_ms,
                 "provider_id": provider_id,
-                "connection_id": connection_id,
+                "model_id": "",
                 "request": {
                     "method": "GET",
                     "url": redact_url(url),
                     "headers": redact_headers(headers),
+                    "body": None,
                 },
                 "response": {
                     "status_code": status_code,
                     "headers": redact_headers(response_headers),
                     "body": raw_body,
                 },
-                "duration_ms": duration_ms,
-                "status_code": status_code,
-                "request_method": "GET",
-                "request_url": redact_url(url),
             },
         )
     except Exception:
@@ -124,9 +122,9 @@ def _save_model_probe_trace(
 
 
 def _build_model_preview(raw_body: str, status_code: int) -> JsonObject:
-    """Extract a lightweight normalized model preview from a raw JSON response.
+    """Extract a lightweight model preview from a raw JSON response.
 
-    Returns a dict with ``model_count`` and a ``preview`` list of the
+    Returns a dict with ``model_count`` and a ``models`` list of the
     first 10 models (``id`` and ``name`` only).  On parse failure or
     non-200 status, returns an ``error`` key.
     """
@@ -139,7 +137,7 @@ def _build_model_preview(raw_body: str, status_code: int) -> JsonObject:
 
     models = _extract_model_list(payload)
     if not models:
-        return {"model_count": 0, "preview": []}
+        return {"model_count": 0, "models": []}
 
     preview: list[dict[str, str]] = []
     max_preview = 10
@@ -156,7 +154,7 @@ def _build_model_preview(raw_body: str, status_code: int) -> JsonObject:
         else:
             preview.append({"id": str(raw_model), "name": str(raw_model)})
 
-    return {"model_count": len(models), "preview": preview}
+    return {"model_count": len(models), "models": preview}
 
 
 def _extract_model_list(payload: Any) -> list[Any]:
@@ -338,14 +336,14 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
         connection_id,
     )
 
-    normalized = _build_model_preview(raw_body, status_code)
+    model_preview = _build_model_preview(raw_body, status_code)
 
     return {
-        "raw": raw_body,
+        "trace_id": trace_id,
         "status_code": status_code,
         "duration_ms": duration_ms,
-        "trace_id": trace_id,
-        "normalized": normalized,
+        "raw_response": raw_body,
+        "model_preview": model_preview,
     }
 
 

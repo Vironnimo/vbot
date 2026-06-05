@@ -576,17 +576,17 @@ class TestDebugModelProbe:
 
         assert response["ok"] is True, response
         result = response["result"]
-        assert result["raw"] == mock_raw_body
+        assert result["raw_response"] == mock_raw_body
         assert result["status_code"] == 200
         assert isinstance(result["duration_ms"], int)
         assert result["duration_ms"] >= 0
         assert result["trace_id"] is not None
         assert len(result["trace_id"]) > 0
 
-        # Normalized preview
-        normalized = result["normalized"]
-        assert normalized["model_count"] == 3
-        assert normalized["preview"] == [
+        # Model preview
+        model_preview = result["model_preview"]
+        assert model_preview["model_count"] == 3
+        assert model_preview["models"] == [
             {"id": "gpt-4", "name": "GPT-4"},
             {"id": "gpt-4-mini", "name": "GPT-4 Mini"},
             {"id": "claude-3-opus", "name": "Claude 3 Opus"},

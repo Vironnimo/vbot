@@ -126,12 +126,12 @@ export function applyModelProbeResult(state, result) {
   }
 
   const normalizedResult = {
-    raw: asText(result.raw),
+    raw: asText(result.raw_response),
     statusCode: resolveNonNegativeInteger(result.status_code, 0),
     durationMs: resolveNonNegativeInteger(result.duration_ms, 0),
     traceId: asText(result.trace_id),
-    normalized: isPlainObject(result.normalized)
-      ? normalizeProbePreview(result.normalized)
+    normalized: isPlainObject(result.model_preview)
+      ? normalizeProbePreview(result.model_preview)
       : { modelCount: 0, preview: [] },
   };
 
@@ -190,8 +190,8 @@ export function normalizeTraceEntry(trace) {
     timestamp: asText(trace?.timestamp),
     provider_id: asText(trace?.provider_id),
     model_id: asText(trace?.model_id),
-    request_method: asText(trace?.request_method),
-    request_url: asText(trace?.request_url),
+    method: asText(trace?.method),
+    url: asText(trace?.url),
     status_code: resolveNullableInteger(trace?.status_code),
     duration_ms: resolveNullableInteger(trace?.duration_ms),
     type: asOptionalText(trace?.type),
@@ -243,9 +243,7 @@ export function normalizeProbePreview(normalized) {
   }
 
   const modelCount = resolveNonNegativeInteger(normalized.model_count, 0);
-  const rawPreview = Array.isArray(normalized.preview)
-    ? normalized.preview
-    : [];
+  const rawPreview = Array.isArray(normalized.models) ? normalized.models : [];
 
   const preview = rawPreview
     .map((model) => {

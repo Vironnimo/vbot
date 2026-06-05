@@ -34,11 +34,6 @@
       labelKey: 'debug.streamEvents',
       labelFallback: 'Stream Events',
     },
-    {
-      id: 'normalized',
-      labelKey: 'debug.normalizedData',
-      labelFallback: 'Normalized Data',
-    },
   ]);
 
   const TRACE_LIMIT_MAX = 500;
@@ -311,6 +306,20 @@
     }
   }
 
+  function formatBody(body) {
+    if (body === null || body === undefined || body === '') {
+      return '—';
+    }
+    if (typeof body !== 'string') {
+      return formatJson(body);
+    }
+    try {
+      return JSON.stringify(JSON.parse(body), null, 2);
+    } catch {
+      return body;
+    }
+  }
+
   function formatHeaders(headers) {
     if (!headers || typeof headers !== 'object') {
       return '—';
@@ -330,22 +339,31 @@
     if (!trace) {
       return [];
     }
-    return [
+    const context = trace.context ?? {};
+    const fields = [
       metadataField('trace_id', trace.trace_id),
-      metadataField('run_id', trace.run_id),
-      metadataField('agent_id', trace.agent_id),
-      metadataField('session_id', trace.session_id),
+      metadataField('type', trace.type),
+      metadataField('run_id', context.run_id),
+      metadataField('agent_id', context.agent_id),
+      metadataField('session_id', context.session_id),
       metadataField('provider_id', trace.provider_id),
       metadataField('model_id', trace.model_id),
-      metadataField('iteration', trace.iteration),
-      metadataField('streaming', trace.streaming ? 'true' : 'false'),
+      metadataField('connection_id', context.connection_id),
+      metadataField('iteration', context.iteration_number),
+      metadataField('streaming', context.streaming ? 'true' : 'false'),
       metadataField('duration', formatDuration(trace.duration_ms)),
     ];
+    if (trace.error) {
+      fields.push(
+        metadataField('error', `${trace.error.type}: ${trace.error.message}`),
+      );
+    }
+    return fields;
   }
 
   function hasStreamEvents(trace) {
     return (
-      Array.isArray(trace?.stream_events) && trace.stream_events.length > 0
+      Array.isArray(trace?.stream?.events) && trace.stream.events.length > 0
     );
   }
 
@@ -533,7 +551,7 @@
                 {trace.model_id || '—'}
               </span>
               <span class="debug-trace__method">
-                {trace.request_method || '—'}
+                {trace.method || '—'}
               </span>
               <span
                 class={`debug-trace__status ${statusTone(trace.status_code)}`}
@@ -577,7 +595,7 @@
             </div>
           {:else}
             <div class="debug-view__detail-tabs" role="tablist">
-              {#each DETAIL_TABS as tab}
+              {#each DETAIL_TABS as tab (tab.id)}
                 <button
                   type="button"
                   class={`debug-view__tab ${detailTab === tab.id ? 'debug-view__tab--active' : ''}`}
@@ -593,7 +611,7 @@
             <div class="debug-view__detail-body" role="tabpanel">
               {#if detailTab === 'metadata'}
                 <div class="debug-view__metadata-grid">
-                  {#each metadataFields(viewState.selectedTrace) as field}
+                  {#each metadataFields(viewState.selectedTrace) as field (field.label)}
                     <span class="debug-view__metadata-label">{field.label}</span
                     >
                     <span class="debug-view__metadata-value"
@@ -607,29 +625,29 @@
                     {t('debug.requestMethod', 'Method')}
                   </h4>
                   <pre class="debug-view__code-block">{viewState.selectedTrace
-                      .request_method || '—'}</pre>
+                      .request?.method || '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.requestUrl', 'URL')}
                   </h4>
                   <pre class="debug-view__code-block">{viewState.selectedTrace
-                      .request_url || '—'}</pre>
+                      .request?.url || '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.requestHeaders', 'Headers')}
                   </h4>
                   <pre class="debug-view__code-block">{formatHeaders(
-                      viewState.selectedTrace.request_headers,
+                      viewState.selectedTrace.request?.headers,
                     )}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.requestBody', 'Body')}
                   </h4>
-                  <pre class="debug-view__code-block">{formatJson(
-                      viewState.selectedTrace.request_body,
+                  <pre class="debug-view__code-block">{formatBody(
+                      viewState.selectedTrace.request?.body,
                     )}</pre>
                 </div>
               {:else if detailTab === 'response'}
@@ -638,28 +656,28 @@
                     {t('debug.responseStatus', 'Status')}
                   </h4>
                   <pre class="debug-view__code-block">{viewState.selectedTrace
-                      .response_status ?? '—'}</pre>
+                      .response?.status_code ?? '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.responseHeaders', 'Headers')}
                   </h4>
                   <pre class="debug-view__code-block">{formatHeaders(
-                      viewState.selectedTrace.response_headers,
+                      viewState.selectedTrace.response?.headers,
                     )}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.responseBody', 'Body')}
                   </h4>
-                  <pre class="debug-view__code-block">{formatJson(
-                      viewState.selectedTrace.response_body,
+                  <pre class="debug-view__code-block">{formatBody(
+                      viewState.selectedTrace.response?.body,
                     )}</pre>
                 </div>
               {:else if detailTab === 'stream'}
                 {#if hasStreamEvents(viewState.selectedTrace)}
                   <div class="debug-view__stream-list">
-                    {#each viewState.selectedTrace.stream_events as event, index}
+                    {#each viewState.selectedTrace.stream.events as event, index (index)}
                       <details
                         class="debug-view__stream-event"
                         open={index === 0}
@@ -670,20 +688,10 @@
                           })}
                         </summary>
                         <div class="debug-view__stream-body">
-                          <h4 class="debug-view__detail-heading">
-                            {t('debug.streamRaw', 'Raw')}
-                          </h4>
-                          <pre
-                            class="debug-view__code-block">{typeof event?.raw ===
+                          <pre class="debug-view__code-block">{typeof event ===
                             'string'
-                              ? event.raw
-                              : formatJson(event?.raw)}</pre>
-                          <h4 class="debug-view__detail-heading">
-                            {t('debug.streamParsed', 'Parsed')}
-                          </h4>
-                          <pre class="debug-view__code-block">{formatJson(
-                              event?.parsed,
-                            )}</pre>
+                              ? event
+                              : formatJson(event)}</pre>
                         </div>
                       </details>
                     {/each}
@@ -698,12 +706,6 @@
                     </p>
                   </div>
                 {/if}
-              {:else if detailTab === 'normalized'}
-                <div class="debug-view__detail-section">
-                  <pre class="debug-view__code-block">{formatJson(
-                      viewState.selectedTrace.normalized_response,
-                    )}</pre>
-                </div>
               {/if}
             </div>
           {/if}

@@ -42,44 +42,48 @@ class ProviderAdapter(ABC):
     ``reasoning_meta`` is internal to the adapter/chat boundary and must
     remain opaque to callers outside the chat core.
 
-    **Debug hooks (Phase 3):**
+    **Debug hooks:**
 
-    When debug mode is enabled, the runtime injects a
-    ``ProviderDebugRecorder`` via the ``_debug_recorder`` attribute
-    before the adapter is used.  The chat loop calls
-    ``set_debug_context()`` before each ``send()`` / ``stream()``
-    call, passing a ``DebugContext`` with run metadata.  Subclasses
-    override ``set_debug_context()`` to propagate the context to
-    their debug recorder.
+    When debug mode is enabled, the runtime passes a
+    ``ProviderDebugRecorder`` into the adapter constructor; the adapter
+    builds its HTTP client through ``_http_shared.build_async_client``,
+    which wires all wire-capture into a single transport. Adapters carry
+    no capture logic of their own. The chat loop calls
+    ``set_debug_context()`` before each ``send()`` / ``stream()`` call;
+    the base implementation forwards the context to the recorder, which
+    the capture transport reads per request.
     """
 
-    def __init__(self, model_lookup: ModelLookup | None = None) -> None:
-        """Store the optional provider-scoped model lookup contract."""
+    # Class-level default so the optional debug hook resolves even on
+    # subclasses (and test doubles) that do not call ``super().__init__()``.
+    _debug_recorder: ProviderDebugRecorder | None = None
+
+    def __init__(
+        self,
+        model_lookup: ModelLookup | None = None,
+        debug_recorder: ProviderDebugRecorder | None = None,
+    ) -> None:
+        """Store the model lookup contract and optional debug recorder."""
         self._model_lookup = model_lookup
-        self._debug_context: DebugContext | None = None
-        self._debug_recorder: ProviderDebugRecorder | None = None
+        self._debug_recorder = debug_recorder
 
     # ------------------------------------------------------------------
     # Debug hooks
     # ------------------------------------------------------------------
 
     def set_debug_context(self, ctx: DebugContext) -> None:
-        """Store the debug context for the upcoming provider request.
+        """Forward the per-request debug context to the recorder.
 
         Called by the chat loop before each ``send()`` or ``stream()``
-        call so that provider adapters can attach run metadata to
-        wire traces.  The context is **never** part of ``**kwargs``
-        and must not leak into provider payloads.
-
-        Subclasses that support debug recording override this method
-        to propagate the context to ``_debug_recorder.start_request()``
-        in addition to storing it.
+        call. The context is **never** part of ``**kwargs`` and must not
+        leak into provider payloads. No-op when debug mode is off.
 
         Args:
             ctx: Immutable debug context with run / agent / session /
                 provider / model identifiers and iteration number.
         """
-        self._debug_context = ctx
+        if self._debug_recorder is not None:
+            self._debug_recorder.set_context(ctx)
 
     @abstractmethod
     async def aclose(self) -> None:

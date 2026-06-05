@@ -20,20 +20,19 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 if TYPE_CHECKING:
-    from core.debug import DebugContext
+    from core.debug import ProviderDebugRecorder
 
 from core.providers._http_shared import (
+    build_async_client,
     classify_http_status,
     iter_sse_data,
     parse_sse_json_data,
-    provider_chat_timeout,
     wrap_network_error,
 )
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -96,16 +95,17 @@ class AnthropicAdapter(ProviderAdapter):
         base_url: str | None = None,
         auth_config: AuthConfig | None = None,
         model_lookup: ModelLookup | None = None,
+        debug_recorder: ProviderDebugRecorder | None = None,
     ) -> None:
         self._config = config
         self._token_getter = (
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
         )
         self._auth_config = auth_config or config.connections[0].auth
-        super().__init__(model_lookup=model_lookup)
-        self._client = httpx.AsyncClient(
+        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
+        self._client = build_async_client(
             base_url=base_url or config.base_url,
-            timeout=provider_chat_timeout(),
+            debug_recorder=debug_recorder,
         )
 
     # ------------------------------------------------------------------
@@ -209,24 +209,6 @@ class AnthropicAdapter(ProviderAdapter):
         return model_reasoning_supported(self._model_lookup, model_id)
 
     # ------------------------------------------------------------------
-    # Debug hooks
-    # ------------------------------------------------------------------
-
-    def set_debug_context(self, ctx: DebugContext) -> None:
-        """Store the debug context and begin recording a new trace.
-
-        Called by the chat loop before each ``send()`` or ``stream()``
-        call.  Stores the context on the adapter and, if a debug
-        recorder is set, starts a new request trace.
-
-        The context is stored separately from provider payloads — it
-        NEVER leaks into ``_build_payload()`` or provider-bound data.
-        """
-        self._debug_context = ctx
-        if self._debug_recorder is not None:
-            self._debug_recorder.start_request(ctx)
-
-    # ------------------------------------------------------------------
     # Error detail helper (Anthropic-specific)
     # ------------------------------------------------------------------
 
@@ -294,21 +276,10 @@ class AnthropicAdapter(ProviderAdapter):
             ProviderTimeoutError: Timeout errors (retried, then raised).
             ProviderError: Other HTTP errors.
         """
-        recorder = self._debug_recorder
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
             payload = self._build_payload(messages, model_id, **kwargs)
-
-            if recorder is not None:
-                recorder.capture_request(
-                    "POST",
-                    f"{str(self._client.base_url).rstrip('/')}{MESSAGES_ENDPOINT}",
-                    headers,
-                    payload,
-                )
-
-            start = time.monotonic()
             try:
                 response = await self._client.post(
                     MESSAGES_ENDPOINT,
@@ -316,23 +287,9 @@ class AnthropicAdapter(ProviderAdapter):
                     headers=headers,
                 )
             except httpx.TimeoutException as exc:
-                if recorder is not None:
-                    recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
             except httpx.ConnectError as exc:
-                if recorder is not None:
-                    recorder.capture_error(exc)
                 raise wrap_network_error(exc) from exc
-
-            duration_ms = int((time.monotonic() - start) * 1000)
-
-            if recorder is not None:
-                recorder.capture_response(
-                    response.status_code,
-                    dict(response.headers),
-                    response.text,
-                    duration_ms,
-                )
 
             detail = self._build_error_detail(response.status_code, response.text)
             classify_http_status(
@@ -340,11 +297,7 @@ class AnthropicAdapter(ProviderAdapter):
             )
             return dict(response.json())
 
-        try:
-            return await retry_async(_do_request)
-        finally:
-            if recorder is not None:
-                recorder.finish()
+        return await retry_async(_do_request)
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -388,20 +341,9 @@ class AnthropicAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
-        recorder = self._debug_recorder
         headers = await self._build_headers()
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
-
-        if recorder is not None:
-            recorder.capture_request(
-                "POST",
-                f"{str(self._client.base_url).rstrip('/')}{MESSAGES_ENDPOINT}",
-                headers,
-                payload,
-            )
-
-        start = time.monotonic()
 
         async def _connect_stream() -> httpx.Response:
             request = self._client.build_request(
@@ -432,13 +374,7 @@ class AnthropicAdapter(ProviderAdapter):
 
             return response
 
-        try:
-            response = await retry_async(_connect_stream)
-        except Exception as exc:
-            if recorder is not None:
-                recorder.capture_error(exc)
-                recorder.finish()
-            raise
+        response = await retry_async(_connect_stream)
 
         content_blocks_by_index: dict[int, dict[str, Any]] = {}
         reasoning_meta_blocks: list[dict[str, Any]] = []
@@ -450,10 +386,6 @@ class AnthropicAdapter(ProviderAdapter):
                 if not data.strip():
                     continue
                 parsed = parse_sse_json_data(data, context="Anthropic provider")
-
-                if recorder is not None:
-                    recorder.capture_stream_event(data, parsed)
-
                 if not isinstance(parsed, dict):
                     continue
                 for normalized_delta in _normalize_anthropic_stream_event(
@@ -489,27 +421,10 @@ class AnthropicAdapter(ProviderAdapter):
             if not seen_message_stop:
                 raise NetworkError("Stream ended without message_stop event")
         except httpx.ReadError as exc:
-            if recorder is not None:
-                recorder.capture_error(exc)
             raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
-            if recorder is not None:
-                recorder.capture_error(exc)
             raise wrap_network_error(exc) from exc
-        except (NetworkError, ProviderError) as exc:
-            if recorder is not None:
-                recorder.capture_error(exc)
-            raise
         finally:
-            if recorder is not None:
-                duration_ms = int((time.monotonic() - start) * 1000)
-                recorder.capture_response(
-                    response.status_code,
-                    dict(response.headers),
-                    None,  # body captured as stream events
-                    duration_ms,
-                )
-                recorder.finish()
             await response.aclose()
 
 

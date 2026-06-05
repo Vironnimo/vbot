@@ -1,45 +1,42 @@
 """Provider debug recorder for vBot.
 
-Captures a single provider HTTP request/response cycle with full wire
-data, SSE streaming events, and error details.  All sensitive headers,
-URL query parameters, and JSON keys are redacted before the trace is
-persisted through ``DebugTraceStore``.
+A single :class:`ProviderDebugRecorder` is attached to a provider's
+debug-aware HTTP client. The capturing transport (see
+``core/providers/_http_shared.py``) calls :meth:`begin_capture` for every
+request that flows over the wire and feeds raw request/response data into
+the returned :class:`_TraceCapture`. The capture builds one canonical
+trace (see ``.vorch/specs/debug.md``), applies structured secret
+redaction, and persists it through :class:`DebugTraceStore`.
+
+Adapters contain no capture logic — they only set the per-request
+:class:`DebugContext` via :meth:`set_context` and build their client
+through the shared factory.
 """
 
 from __future__ import annotations
 
-import traceback
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from core.debug.redaction import redact_headers, redact_json_body, redact_url
+from core.debug.redaction import redact_headers, redact_url
 from core.debug.store import DebugTraceStore
 from core.utils.logging import get_logger
 
 _logger = get_logger("debug")
 
-
-# ---------------------------------------------------------------------------
-# Public types
-# ---------------------------------------------------------------------------
+_TRACE_TYPE_PROVIDER_REQUEST = "provider_request"
+_HTTP_ERROR_THRESHOLD = 400
 
 
-@dataclass
+@dataclass(frozen=True)
 class DebugContext:
-    """Immutable context passed from the chat loop before each provider request.
+    """Per-request context set by the chat loop before each provider call.
 
-    Attributes:
-        run_id: Identifier of the active run.
-        agent_id: Identifier of the agent the run belongs to.
-        session_id: Identifier of the session the run belongs to.
-        provider_id: Identifier of the provider being called.
-        connection_id: Identifier of the provider connection in use.
-        model_id: Identifier of the model being invoked.
-        streaming: Whether the request uses streaming (SSE) delivery.
-        iteration_number: Which agentic-loop iteration this request
-            corresponds to (1-based).
+    Stored separately from the provider payload — it must never enter
+    ``**kwargs`` or any provider-bound request body.
     """
 
     run_id: str
@@ -52,208 +49,183 @@ class DebugContext:
     iteration_number: int
 
 
-# ---------------------------------------------------------------------------
-# ProviderDebugRecorder
-# ---------------------------------------------------------------------------
-
-
 class ProviderDebugRecorder:
-    """Records a single provider request/response cycle for debugging.
+    """Holds the active :class:`DebugContext` and the trace store.
 
-    One recorder instance represents one provider call.  The expected
-    lifecycle::
-
-        recorder = ProviderDebugRecorder(store)
-        recorder.start_request(ctx)
-        recorder.capture_request(method, url, headers, body)
-        # ... then either:
-        recorder.capture_response(status, headers, body, duration_ms)
-        # ... or (streaming):
-        recorder.capture_stream_event(raw, parsed)   # called repeatedly
-        recorder.capture_error(err)                   # optional
-        recorder.finish()
-
-    Calling ``finish()`` writes the trace to the configured
-    ``DebugTraceStore`` and triggers retention pruning.  If
-    ``start_request()`` was never called, ``finish()`` is a no-op.
+    Owns no per-request mutable state: each request gets its own
+    :class:`_TraceCapture` so concurrent or retried requests never share
+    buffers.
 
     Args:
-        store: The ``DebugTraceStore`` instance used to persist traces.
+        store: Destination for finalized traces.
     """
 
     def __init__(self, store: DebugTraceStore) -> None:
         self._store = store
-        self._trace_id: str | None = None
-        self._start_time: datetime | None = None
         self._context: DebugContext | None = None
-        self._trace_data: dict[str, Any] = {}
-        self._stream_events: list[dict[str, Any]] = []
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def start_request(self, ctx: DebugContext) -> None:
-        """Begin recording a provider request.
-
-        Generates a unique ``trace_id``, records the start timestamp
-        (ISO 8601 UTC), and populates the trace metadata from *ctx*.
-
-        Args:
-            ctx: The debug context for this request.
-        """
-        self._trace_id = uuid4().hex
-        self._start_time = datetime.now(UTC)
+    def set_context(self, ctx: DebugContext) -> None:
+        """Set the context used for the next captured request(s)."""
         self._context = ctx
-        self._trace_data = {
-            "trace_id": self._trace_id,
-            "timestamp": self._start_time.isoformat(),
-            "run_id": ctx.run_id,
-            "agent_id": ctx.agent_id,
-            "session_id": ctx.session_id,
-            "provider_id": ctx.provider_id,
-            "connection_id": ctx.connection_id,
-            "model_id": ctx.model_id,
-            "streaming": ctx.streaming,
-            "iteration_number": ctx.iteration_number,
-        }
-        self._stream_events = []
-        _logger.info(
-            "Debug trace started: %s (provider=%s model=%s streaming=%s)",
-            self._trace_id,
-            ctx.provider_id,
-            ctx.model_id,
-            ctx.streaming,
-        )
 
-    def capture_request(self, method: str, url: str, headers: dict[str, str], body: Any) -> None:
-        """Capture the final provider request exactly after adapter
-        mapping and defaults have been applied.
-
-        Headers and URL are redacted before storage to remove secrets.
-        The *body* is redacted recursively for sensitive JSON keys.
-
-        Args:
-            method: HTTP method (e.g. ``"POST"``).
-            url: Full request URL.
-            headers: Request headers as a string-to-string mapping.
-            body: The request payload (typically a dict for JSON).
-        """
-        self._trace_data["request"] = {
-            "method": method,
-            "url": redact_url(url),
-            "headers": redact_headers(dict(headers) if headers else {}),
-            "body": redact_json_body(body),
-        }
-
-    def capture_response(
+    def begin_capture(
         self,
-        status_code: int,
+        *,
+        method: str,
+        url: str,
         headers: dict[str, str],
-        body: Any,
-        duration_ms: int,
+        body: bytes | None,
+    ) -> _TraceCapture:
+        """Start capturing one request/response cycle.
+
+        Called by the capturing transport immediately before the request
+        is handed to the underlying transport. Request headers and URL are
+        redacted here; the body is stored raw (prompts are never redacted).
+        """
+        return _TraceCapture(
+            store=self._store,
+            context=self._context,
+            method=method,
+            url=redact_url(url),
+            headers=redact_headers(headers),
+            request_body=_decode_body(body),
+        )
+
+
+class _TraceCapture:
+    """Accumulates one trace and persists it on :meth:`finalize`.
+
+    Body bytes (for both streaming and non-streaming responses) arrive
+    through :meth:`feed_body`. On finalize, streaming responses are split
+    into raw SSE frames under ``stream.events`` while non-streaming
+    responses keep their raw text under ``response.body``.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: DebugTraceStore,
+        context: DebugContext | None,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        request_body: str | None,
     ) -> None:
-        """Capture the provider response.
+        self._store = store
+        self._context = context
+        self._start = time.monotonic()
+        self._trace_id = uuid4().hex
+        self._request = {
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "body": request_body,
+        }
+        self._response: dict[str, Any] | None = None
+        self._error: dict[str, str] | None = None
+        self._body_chunks: list[bytes] = []
+        self._finalized = False
 
-        Stores status code, redacted headers, raw body (text or parsed
-        JSON), and the HTTP round-trip duration in milliseconds.
-
-        Args:
-            status_code: HTTP status code from the provider.
-            headers: Response headers as a string-to-string mapping.
-            body: Raw response body (text, bytes, or parsed JSON).
-            duration_ms: HTTP round-trip time in milliseconds.
-        """
-        self._trace_data["response"] = {
+    def record_response_head(self, status_code: int, headers: dict[str, str]) -> None:
+        """Record response status and (redacted) headers before the body."""
+        self._response = {
             "status_code": status_code,
-            "headers": redact_headers(dict(headers) if headers else {}),
-            "body": body,
-        }
-        self._trace_data["duration_ms"] = duration_ms
-
-    def capture_stream_event(self, raw: str, parsed: Any) -> None:
-        """Capture a single raw SSE event frame plus its parsed JSON.
-
-        For streaming mode only.  Each call appends an entry with both
-        the raw SSE data line and the parsed event object.
-
-        Args:
-            raw: The raw SSE data line received from the provider.
-            parsed: The parsed event JSON (``dict`` or ``None``).
-        """
-        self._stream_events.append(
-            {
-                "raw": raw,
-                "parsed": parsed,
-            }
-        )
-
-    def capture_error(self, error: Exception) -> None:
-        """Capture error details from a failed provider request.
-
-        Records the exception type name, message, and a formatted
-        traceback suitable for serialization.
-
-        Args:
-            error: The exception raised during the provider call.
-        """
-        self._trace_data["error"] = {
-            "type": type(error).__name__,
-            "message": str(error),
-            "traceback": traceback.format_exception_only(error),
+            "headers": redact_headers(headers),
+            "body": None,
         }
 
-    def finish(self) -> None:
-        """Finalize the trace, write it to ``DebugTraceStore``, and
-        trigger retention pruning.
+    def feed_body(self, chunk: bytes) -> None:
+        """Accumulate one raw response body chunk as it is read."""
+        self._body_chunks.append(chunk)
 
-        Computes wall-clock duration if not already provided by
-        ``capture_response()``, attaches any captured stream events, and
-        adds a ``normalized`` placeholder for adapter-derived analysis
-        data.  Safe to call even when ``start_request()`` was never
-        called (no-op).
+    def record_error(self, error: BaseException) -> None:
+        """Record a transport-level failure (connect/timeout/etc.)."""
+        self._error = {"type": type(error).__name__, "message": str(error)}
+
+    def finalize(self) -> None:
+        """Build the canonical trace and persist it. Runs at most once.
+
+        Best-effort: any failure is logged and swallowed so the provider
+        call is never affected.
         """
-        if self._trace_id is None:
+        if self._finalized:
             return
-
-        # Compute wall-clock duration if capture_response didn't set it.
-        if "duration_ms" not in self._trace_data and self._start_time is not None:
-            elapsed = datetime.now(UTC) - self._start_time
-            self._trace_data["duration_ms"] = int(elapsed.total_seconds() * 1000)
-
-        # Attach stream events (may be empty for non-streaming requests).
-        if self._stream_events:
-            self._trace_data["stream_events"] = self._stream_events
-
-        # Placeholder for adapter-derived analysis data.
-        self._trace_data.setdefault("normalized", {})
-
-        # Lift fields the store index needs to the top level.
-        request = self._trace_data.get("request", {})
-        self._trace_data.setdefault("request_method", request.get("method", ""))
-        self._trace_data.setdefault("request_url", request.get("url", ""))
-        self._trace_data.setdefault(
-            "status_code",
-            (self._trace_data.get("response") or {}).get("status_code"),
-        )
-        self._trace_data.setdefault("duration_ms", None)
-
-        _logger.info(
-            "Debug trace finished: %s (status=%s duration_ms=%s events=%s)",
-            self._trace_id,
-            self._trace_data.get("status_code"),
-            self._trace_data.get("duration_ms"),
-            len(self._stream_events),
-        )
+        self._finalized = True
 
         try:
-            self._store.save_trace(self._trace_id, self._trace_data)
+            trace = self._build_trace()
+            self._store.save_trace(trace["trace_id"], trace)
         except Exception:
-            _logger.error(
-                "Failed to persist debug trace %s",
-                self._trace_id,
-                exc_info=True,
-            )
+            _logger.warning("Failed to persist debug trace", exc_info=True)
 
-        # Prevent double-finish.
-        self._trace_id = None
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _build_trace(self) -> dict[str, Any]:
+        duration_ms = int((time.monotonic() - self._start) * 1000)
+        body_text = _decode_body(b"".join(self._body_chunks)) if self._body_chunks else None
+
+        trace: dict[str, Any] = {
+            "trace_id": self._trace_id,
+            "type": _TRACE_TYPE_PROVIDER_REQUEST,
+            "timestamp": datetime.now(UTC).isoformat(),
+            "duration_ms": duration_ms,
+            "context": self._context_dict(),
+            "provider_id": self._context.provider_id if self._context else "",
+            "model_id": self._context.model_id if self._context else "",
+            "request": self._request,
+            "response": self._response,
+        }
+
+        # A streaming success body is a sequence of SSE frames; anything else
+        # (non-streaming, or an error response on a streaming request) keeps
+        # its raw body under response.body.
+        if self._is_streaming_body():
+            trace["stream"] = {"events": _split_sse_frames(body_text)}
+        elif self._response is not None:
+            self._response["body"] = body_text
+
+        if self._error is not None:
+            trace["error"] = self._error
+
+        return trace
+
+    def _is_streaming_body(self) -> bool:
+        if self._context is None or not self._context.streaming:
+            return False
+        if self._response is None:
+            return False
+        status_code = self._response.get("status_code")
+        return isinstance(status_code, int) and status_code < _HTTP_ERROR_THRESHOLD
+
+    def _context_dict(self) -> dict[str, Any] | None:
+        if self._context is None:
+            return None
+        return {
+            "run_id": self._context.run_id,
+            "agent_id": self._context.agent_id,
+            "session_id": self._context.session_id,
+            "connection_id": self._context.connection_id,
+            "iteration_number": self._context.iteration_number,
+            "streaming": self._context.streaming,
+        }
+
+
+def _decode_body(body: bytes | None) -> str | None:
+    """Decode raw wire bytes to text, replacing undecodable bytes."""
+    if not body:
+        return None
+    return body.decode("utf-8", errors="replace")
+
+
+def _split_sse_frames(body_text: str | None) -> list[str]:
+    """Split a raw SSE response body into individual event frames.
+
+    Events are separated by a blank line. Frames are kept raw (including
+    ``data:`` / ``event:`` prefixes); no JSON parsing is performed.
+    """
+    if not body_text:
+        return []
+    normalized = body_text.replace("\r\n", "\n")
+    return [frame for frame in normalized.split("\n\n") if frame.strip()]
