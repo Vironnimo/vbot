@@ -1,119 +1,52 @@
 # CLI
 
-Local command-line accessor for server lifecycle and RPC-backed management areas. It owns user-visible server lifecycle commands and their targeting/status contract, but it does not own server business logic.
+Local command-line accessor for server lifecycle and RPC-backed management areas. It owns user-visible command parsing, target resolution, lifecycle process control, and deterministic agent-facing output; it does not own server business logic.
 
 ## Overview
 
-`cli/` is the local process-management and management-command entrypoint used by both human users and agents. It owns `server start`, `server stop`, `server restart`, `server status`, and RPC-backed management commands for agents, channels, providers, models, skills, tools, prompts, logs, and config. The CLI is non-interactive and automation-safe: it never opens the browser and instead prints the resolved server URL and status information. It manages local vBot server reachability around the existing `server/main.py` foreground entrypoint, and every CLI command outside the `server` lifecycle area calls the running server's RPC contract rather than reading or mutating files directly. Shared RPC transport, envelope parsing, timeout handling, and RPC error message formatting live in `cli/rpc_client.py`; management modules own only command parameter translation and deterministic output formatting.
+`cli/` is the local process-management and management-command entrypoint used by human users and agents. It owns `server start`, `server stop`, `server restart`, `server status`, local `doctor` validation, and RPC-backed management commands for agents, channels, providers, models, skills, tools, prompts, logs, and config. The CLI is non-interactive and automation-safe: it never opens the browser, prints explicit status/output, and exits non-zero for failed management operations except for the documented `server status` non-vBot conflict case. Every command outside server lifecycle and doctor calls the running server's RPC contract rather than reading or mutating runtime files directly.
 
 ## Interfaces
 
-- `python cli/main.py server start [--host] [--port] [--data-dir]`
-  - resolves the target instance configuration
-  - starts the server if no vBot server is already reachable at the target
-  - succeeds only when `GET /health` responds successfully
-- `python cli/main.py server stop [--host] [--port] [--data-dir]`
-  - targets an already-running local vBot server at the resolved address
-  - attempts graceful shutdown, then force-stop after a bounded timeout if needed
-- `python cli/main.py server restart [--host] [--port] [--data-dir]`
-  - stops the target local vBot server if present
-  - re-resolves host/port/data-dir from current args, env, and settings before restart
-- `python cli/main.py server status [--host] [--port] [--data-dir]`
-  - reports at least: running/not running, resolved URL, WebUI available/unavailable, and resolved `data_dir`
-- `python cli/main.py agent list`
-  - calls `agent.list` over server RPC and prints deterministic agent rows
-- `python cli/main.py agent show --id`
-  - calls `agent.get` over server RPC and prints one agent with mutable fields, allowlists, workspace, current session, and context window
-- `python cli/main.py agent create --id --name [--model] [--fallback-model] [--temperature] [--thinking-effort] [--allowed-tools ...] [--allowed-skills ...]`
-  - calls `agent.create` over server RPC and creates a persisted agent config
-- `python cli/main.py agent update --id [--name] [--model] [--fallback-model] [--temperature] [--clear-temperature] [--thinking-effort] [--clear-thinking-effort] [--allowed-tools ...] [--allowed-skills ...] [--current-session-id]`
-  - calls `agent.update` over server RPC; clear flags send JSON `null` for inherited defaults, while `--thinking-effort none` sends the literal `"none"` effort
-  - rejects empty updates before RPC and prints the valid update flags
-- `python cli/main.py agent delete --id`
-  - calls `agent.delete` over server RPC and relies on server-side last-agent, busy-agent, and reference checks
-- `python cli/main.py channel add --id --platform telegram --agent --token-env [--dm-scope] [--allow ...]`
-  - calls `channel.create` over server RPC and creates a persisted channel config
-- `python cli/main.py channel list`
-  - calls `channel.list` over server RPC and prints deterministic output
-- `python cli/main.py channel remove --id`
-  - calls `channel.delete` over server RPC
-- `python cli/main.py channel update --id [--platform telegram] [--agent] [--token-env] [--dm-scope] [--allow ...] [--enabled true|false]`
-  - calls `channel.update` over server RPC; omitted fields remain unchanged, and `--allow` replaces the full allowed chat-id list
-  - rejects empty updates before RPC and prints the valid update flags
-- `python cli/main.py channel enable --id`
-  - calls `channel.enable` over server RPC
-- `python cli/main.py channel disable --id`
-  - calls `channel.disable` over server RPC
-- `python cli/main.py channel status --id`
-  - calls `channel.status` over server RPC and prints enabled, running, and failed state plus the failure reason when one exists
-- `python cli/main.py provider list`
-  - calls `connection.list` over server RPC and prints configured connections
-- `python cli/main.py provider status --provider <id> [--connection <provider:connection-id>]`
-  - calls `connection.list` over server RPC and prints only the matching provider or connection rows
-- `python cli/main.py provider set-key --provider <id> [--connection <provider:connection-id>] --value <api-key> [--refresh-models]`
-  - calls `provider.set_key` over server RPC, writes the API-key connection's configured credential key to the data-dir `.env`, reloads runtime provider credentials, and never echoes the API key in output
-  - when `--refresh-models` is present, also calls `model.refresh_db` for the same provider and reports refresh outcome after the set-key line
-- `python cli/main.py model list`
-  - calls `model.list` over server RPC and prints available models
-- `python cli/main.py model refresh [--provider <id>]`
-  - calls `model.refresh_db` over server RPC and refreshes provider model catalogs
-- `python cli/main.py skill list`
-  - calls `skill.list` over server RPC and prints valid, unavailable, optional-missing, and invalid skill diagnostics
-- `python cli/main.py tool list`
-  - calls `tool.list` over server RPC and prints registered public tools
-- `python cli/main.py prompt list`
-  - calls `prompt.list` over server RPC and prints editable prompt fragments with modified state and variable placeholders
-- `python cli/main.py prompt update --name <fragment> (--content <text>|--file <path>)`
-  - reads direct content or one local source file, then calls `prompt.update` over server RPC
-- `python cli/main.py prompt reset --name <fragment>`
-  - calls `prompt.reset` over server RPC
-- `python cli/main.py prompt preview --agent <agent-id>`
-  - calls `prompt.preview` over server RPC and prints token metadata plus rendered System Prompt text
-- `python cli/main.py log list`
-  - calls `log.list` over server RPC and prints available daily log files and the default newest file
-- `python cli/main.py log read --file <daily-log-name>`
-  - calls `log.read` over server RPC and prints parsed log entries plus the returned cursor
-- `python cli/main.py config`
-  - calls `settings.get_raw` over server RPC and prints raw `settings.json`
-- `python cli/main.py config get <key>`
-  - calls `settings.get_raw` over server RPC and prints one raw top-level settings key
-  - when the key is missing, prints available top-level keys and a `did you mean` suggestion when a close match exists
-- `python cli/main.py config set <key> <value>`
-  - coerces the CLI value to JSON-native data, then calls `settings.set_key` over server RPC
-- `python cli/main.py doctor settings [--data-dir <path>]`
-  - runs locally without requiring a reachable server
-  - validates the target data-dir `settings.json` with the central JSON validator
-  - reports `ok` for missing files because defaults will be used
-  - reports diagnostics as `severity`, JSON path, and message for agent callers
-- `python cli/main.py doctor config [--data-dir <path>]`
-  - runs locally without requiring a reachable server
-  - validates the target data-dir user-editable JSON config bundle: `settings.json`, `agents/*/agent.json`, `channels/*/channel.json`, and `cron/jobs.json` when present
-  - prints explicit file counts, error/warning counts, and per-file diagnostics for agent callers
+- `cli/main.py` owns the `argparse` tree, shared target arguments, dispatch functions, exit-code mapping, and central output printers. When the exact flag spelling matters, read `python cli/main.py <area> <command> --help` and the parser constants in this file.
+- `cli/server_management.py` owns `ServerInstance`, target resolution, `/health` and WebUI probes, background server startup, local process lookup, stop/kill behavior, and status classification.
+- `cli/rpc_client.py` posts `{ method, params }` to `/api/rpc`, normalizes success/error envelopes into `RpcPayload`, preserves server RPC error code/message text when present, and reports malformed transport responses as command failures.
+- `cli/*_management.py` modules for `agent`, `channel`, `provider`, `model`, `skill`, `tool`, `prompt`, `log`, and `config` translate parsed args into RPC params, reject local no-op mutations when useful, validate only CLI-local input shape, and format deterministic plain-text output.
+- `server start [--host] [--port] [--data-dir]` resolves the target instance, starts `python -m server.main` in the background when no vBot server is already reachable there, and succeeds only after the exact vBot `/health` contract responds.
+- `server stop [--host] [--port] [--data-dir]` targets a local vBot server at the resolved address, refuses non-vBot listeners, terminates the matched process, and force-kills after the bounded timeout when graceful termination does not finish.
+- `server restart [--host] [--port] [--data-dir]` stops the first resolved target if present, then re-resolves host/port/data-dir from current args, env, and settings before starting. If stop fails, restart does not start.
+- `server status [--host] [--port] [--data-dir]` reports running/not running, resolved URL, WebUI available/unavailable, resolved data dir, and log path. A non-vBot listener at the target prints a conflict note but still exits 0 for `status` so automation can inspect the state.
+- `agent list|show|create|update|delete` maps to `agent.list`, `agent.get`, `agent.create`, `agent.update`, and `agent.delete`. Agent create/update accepts only public mutable RPC fields such as name/model/fallback model/temperature/thinking effort/tool and skill allowlists/current session; workspace mutation remains server-rejected.
+- `agent update` rejects empty updates before RPC and prints the valid update flags. Clear flags send JSON `null` for inherited defaults, while literal domain values such as `--thinking-effort none` send the string value and must stay distinct from clearing the field.
+- `channel add|list|remove|update|enable|disable|status` maps to `channel.create`, `channel.list`, `channel.delete`, `channel.update`, `channel.enable`, `channel.disable`, and `channel.status`. `--allow` replaces the full allowed chat-id list, omitted update fields remain unchanged, and `channel status` prints enabled/running/failed plus failure reason when one exists.
+- `provider list` calls `connection.list` and prints configured connections. `provider status --provider <id> [--connection <provider:connection-id>]` filters that same RPC result and should print available candidates plus a close-match suggestion when the target is missing.
+- `provider set-key --provider <id> [--connection <provider:connection-id>] --value <api-key> [--refresh-models]` calls `provider.set_key`, which writes the resolved API-key credential to the data-dir `.env`, reloads runtime provider credentials, rejects OAuth connections, and never returns or prints the secret. `--refresh-models` chains `model.refresh_db` for the same provider only after the credential update succeeds.
+- `model list` calls `model.list` and prints available models. `model refresh [--provider <id>]` calls `model.refresh_db` and refreshes provider model catalogs through the server/runtime path.
+- `skill list` calls `skill.list` and prints valid skills plus unavailable, optional-missing, and invalid skill diagnostics. `tool list` calls `tool.list` and prints registered public tools.
+- `prompt list|update|reset|preview` maps to `prompt.list`, `prompt.update`, `prompt.reset`, and `prompt.preview`. `prompt update --name <fragment> (--content <text>|--file <path>)` may read one local source file, but storage writes still happen only through `prompt.update`; preview prints token metadata plus the rendered System Prompt text.
+- `log list|read` maps to `log.list` and `log.read`. The CLI must not read `<data_dir>/logs/` directly; `log read --file <daily-log-name>` prints parsed entries plus the returned cursor.
+- `config`, `config get <key>`, and `config set <key> <value>` call `settings.get_raw` or `settings.set_key` over RPC. `config set` coerces the CLI value to JSON-native data with `json.loads()` before falling back to a plain string; missing keys print available top-level keys and a close-match suggestion when possible.
+- `doctor settings [--data-dir]` and `doctor config [--data-dir]` run locally without a reachable server. They validate `settings.json` or the full user-editable JSON config bundle through `core/settings/validation.py`, report missing files as OK when defaults apply, and format diagnostics as severity, JSON path, and message for agent callers.
 
 ## Conventions
 
-- `server start` is data-dir-scoped for instance selection.
-- The CLI is primarily agent-operated. Every command and subcommand must have useful `--help` text, including purpose and important arguments. Success and failure output must be explicit; silent success or silent failure is invalid. Central output printers must emit a fallback success/error line if a command result unexpectedly contains an empty message.
-- Successful mutating commands must name the target and the action performed. Read commands must print enough structured state for an agent to decide the next command without guessing.
-- Failures must include the server RPC error code/message when available and an actionable hint when the CLI has enough local candidates to produce one. For bounded identifiers such as providers, connections, settings keys, agents, channels, prompt fragments, and log files, prefer `did you mean` suggestions over bare not-found output.
-- Every CLI command except `server start`, `server stop`, `server restart`, `server status`, and local `doctor` commands requires a reachable vBot server because the CLI is an accessor and those areas are RPC-backed, not local file mutations. `doctor config` is the local preflight for manually edited runtime JSON before server/RPC paths consume it.
-- Port resolution follows `--port` > `VBOT_SERVER_PORT` > `settings.json` > `8420`.
-- Ambient `PORT` and `SERVER_PORT` process environment variables are ignored for port resolution; only `VBOT_SERVER_PORT` can override `settings.json` from the environment.
-- A target counts as vBot only when `/health` matches the vBot health contract. The current health contract is HTTP `200` with JSON `{ "status": "ok" }`.
-- If a vBot server is already running at the target address/port, `start` reports that cleanly instead of launching another instance.
-- If a non-vBot process occupies the target address/port, `start`, `stop`, and `restart` fail with a clear conflict error and must not terminate that process.
-- `status` reports "not running" for vBot in that conflict case and adds a note that another service is using the target address/port.
-- Logs for the managed instance belong under `<data_dir>/logs/`.
-- The CLI never opens a browser.
-- Process termination is allowed only after `/health` confirms the target is a vBot server, and local process lookup must match the resolved host/address and port rather than port alone.
+- Shared `--host`, `--port`, and `--data-dir` target options apply to server lifecycle and RPC-backed management commands. Doctor commands accept only `--data-dir` because they are local file validators.
+- Port resolution follows `--port` > `VBOT_SERVER_PORT` > validated `settings.json` port keys > `8420`, using the same resolver as `server/main.py`. Ambient `PORT` and `SERVER_PORT` process environment variables are ignored; those names matter only when present as settings keys inside `settings.json`.
+- Health/WebUI probes use direct local requests with proxy environment disabled. A target counts as vBot only when `/health` returns HTTP 200 and JSON exactly equal to `{ "status": "ok" }`.
+- Built WebUI assets are optional. Missing `webui/dist` may make `/` unavailable while `/health` is healthy; lifecycle output reports `webui: unavailable` instead of treating startup as failed.
+- CLI output is agent-facing. Success and failure output must be explicit enough for an agent to choose the next command without guessing; silent success and silent failure are invalid. Central printers emit fallback success/error lines if a command result unexpectedly has an empty message.
+- Successful mutating commands name the target and action performed. Read commands print enough structured state for follow-up decisions. RPC failures and malformed envelopes surface as non-zero exits with clear messages.
+- Failures include server RPC error code/message when available. For bounded identifiers such as providers, connections, settings keys, agents, channels, prompt fragments, and log files, prefer available-candidate output and `did you mean` suggestions when the CLI has enough local/RPC-returned candidates.
+- CLI-managed lifecycle logs belong under `<data_dir>/logs/` through the managed `LogManager`. Background server startup must not bypass that logger or rely on raw child stdout/stderr.
+- Tests mirror the module split under `tests/cli/`. When changing parser shape, command behavior, output text, target resolution, or lifecycle behavior, update the focused CLI tests.
 
 ## Constraints & Gotchas
 
-- Built WebUI assets are optional at runtime. If `webui/dist` is missing, the API server may still be healthy; CLI output must report WebUI unavailable rather than treating startup as failed.
-- On Windows, graceful shutdown may fall back to abrupt termination after the timeout. In-flight Runs may be interrupted.
-- The CLI does not require separate stale PID or launch-metadata recovery rules; live reachability and `/health` detection are the authority.
-- CLI-managed background server startup must not bypass the managed application logger.
-- Provider, channel, tool, prompt, and log command output is deterministic and automation-safe. RPC failures and malformed envelopes surface as non-zero exits with clear messages.
-- Provider `set-key` accepts a direct API-key value because agents are expected to configure local vBot instances through the CLI. It must send the value only to `provider.set_key` and must not echo the value in success or error output.
-- Agent command output is deterministic and automation-safe. Agent create/update accepts only public mutable RPC fields; workspace mutation remains server-rejected.
-- Prompt updates may read a local source file, but storage writes still happen only through `prompt.update`; log commands must not read `<data_dir>/logs/` directly.
+- The CLI is an accessor, not a second control plane. Do not add management commands that write `settings.json`, Agent configs, Channel configs, prompt fragments, logs, model catalogs, or other runtime files directly; route them through server RPC unless the command is explicitly local lifecycle/doctor behavior.
+- If a vBot server is already running at the target address/port, `start` reports `already running` and does not spawn another instance. If a reachable non-vBot process occupies the target, `start`, `stop`, and `restart` fail with a conflict and must not terminate that process.
+- `server status` reports `running: no` plus a conflict note for non-vBot port occupants, and this specific status conflict maps to exit code 0. The same conflict is a failure for `start`, `stop`, and `restart`.
+- Process termination is allowed only after `/health` confirms the target is vBot. Local process lookup must match the resolved host/address and port, not port alone; wildcard listeners are matched only when they can receive the requested target traffic.
+- Stop is best effort: terminate first, kill after the bounded timeout, and report `forced: true` when the kill fallback was needed. On Windows this can still interrupt in-flight Runs abruptly.
+- Live reachability and `/health` classification are the authority. The CLI intentionally has no stale PID or launch-metadata recovery path.
+- Startup waits for health readiness and cleans up the just-spawned child if readiness times out, the child exits early, or a non-vBot responder appears during startup.
+- `provider set-key` accepts a direct API-key value because agents are expected to configure local vBot instances through the CLI. It must send the value only to `provider.set_key` and must never include the secret in success, error, log, or refresh output.
