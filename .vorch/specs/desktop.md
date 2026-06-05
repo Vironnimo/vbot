@@ -54,7 +54,7 @@ Nested under the `wakeword` key in `desktop/settings.json`:
 
 ### Python↔JS bridge
 
-The Desktop exposes a `DesktopBridge` instance as pywebview's `js_api`. The WebUI detects Desktop mode via the `?accessor=desktop` query parameter and calls bridge methods through `window.pywebview.api.<method>()`. All methods return plain Python objects that pywebview serializes to JSON. Because pywebview injects `window.pywebview.api` asynchronously, the WebUI waits for the `pywebviewready` DOM event before deciding Desktop capabilities are unavailable.
+The Desktop exposes a `DesktopBridge` instance as pywebview's `js_api`. The WebUI detects Desktop mode via the `?accessor=desktop` query parameter and calls bridge methods through `window.pywebview.api.<method>()`. All methods return plain Python objects that pywebview serializes to JSON. Because pywebview injects `window.pywebview.api` asynchronously, the WebUI waits up to ~5s for the `pywebviewready` DOM event before deciding Desktop capabilities are unavailable; on timeout it falls back to browser mode (`getDesktopCapabilities()` → `{ wakeword: false }`).
 
 Bridge methods:
 
@@ -85,10 +85,8 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` �
 - If `target_agent_id` is not configured, the worker enters `error` without recording or transcribing audio.
 - `"active"` session behavior resolves the Agent's persisted `current_session_id` via `agent.get`; if unavailable, it falls back to the most recently active session from `session.list`, then creates a session.
 - Transcripts are submitted with `chat.stream` and `input_origin: "speech_transcription"` so the Desktop worker returns to listening after the server accepts the Run instead of blocking until the Run completes, while the model still receives hidden context that the visible user text came from speech-to-text.
-- After a successful voice turn, the worker resets the microphone stream before listening again. Isolated microphone read errors are recovered by reopening the stream; repeated read failures still transition to `error`.
-- The worker is one-shot per wake phrase: after a detection it publishes `listening`, waits briefly, and requires a below-threshold wakeword score before another detection can start recording.
-- If transcription succeeds but returns empty text, the worker treats the recording as a no-op and returns to `listening` without sending a chat message.
-- If one transcription request fails, the worker logs the HTTP/status details and returns to `listening`; one bad utterance must not stop future wakeword detection.
+- Isolated microphone read errors during detection are recovered by reopening the stream; three consecutive failures transition to `error`.
+- An empty transcript or a failed transcription request is logged, sends no chat message, and returns the worker to `listening`; one bad utterance must not stop future wakeword detection.
 
 ## External Dependencies
 
@@ -104,5 +102,6 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` �
 - Desktop currently assumes a source-run shell, so settings live beside `desktop/main.py` rather than in a later packaging-specific app directory.
 - pywebview is imported lazily so backend tests and non-desktop development workflows do not require the optional GUI package.
 - openWakeWord and sounddevice are optional imports — the Desktop launches with the mock worker when either is missing. webrtcvad is optional only for post-wake silence detection; when it is missing, the worker uses fixed-duration recording after the wakeword.
+- `microphone` accepts a sounddevice device index, but device enumeration is not wired into the UI: `list_microphones()` exists in `desktop/wakeword/worker.py` (exported from `desktop.wakeword`) yet no bridge method exposes it and the WebUI never calls it. Building an in-app mic picker means adding a bridge method first.
 - The real wakeword worker runs in a daemon thread. If startup, repeated microphone failures, missing target Agent, session resolution, or send fails, the bridge state transitions to `error` and remains there until the user changes config or toggles the worker.
 - Bridge methods must return quickly and not block — they hold a threading.Lock for config access only during reads/writes to the local settings file.
