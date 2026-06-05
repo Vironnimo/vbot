@@ -20,17 +20,19 @@ Local target IDs use `local/<local-id>`. Local IDs cannot contain `/` or `::`; d
 
 ## Interfaces
 
+- `validate_task_type(task_type) -> str` returns a supported task type or raises `TaskModelValidationError` with the current allowed vocabulary.
 - `TaskModelService.settings()` returns normalized persisted bindings from `StorageManager.load_model_task_settings()`.
 - `TaskModelService.update(model_tasks)` persists sparse binding updates through `StorageManager.update_model_task_settings()` and returns the normalized full section.
 - `TaskModelService.binding_for(task_type)` returns a configured `TaskModelBinding` or raises `TaskModelError` when the task is unsupported or unconfigured.
 - `TaskModelService.list_targets(task_type)` returns provider and local `TaskModelTarget` descriptors for one supported task type, sorted by kind, label, and id.
+- `TaskModelTarget.to_dict()` returns public descriptors with `id`, `kind`, provider/model/connection fields, `label`, `task_types`, `usable`, and `metadata`; accessors should not infer provider connection ids by reparsing labels.
 - `TaskModelService.options(task_type, target)` returns a `TaskModelOptionSchema` for the parsed target. Local targets currently return an empty schema.
 - `TaskModelService.options_with_defaults(binding)` merges backend schema defaults under stored binding options; execution domains call this before provider routing.
 - `parse_task_model_target_id(target)` parses provider and local public IDs into `TaskModelTargetRef`; nested provider model IDs such as `openrouter/openai/gpt-4o-transcribe::api-key` are valid.
 - `public_provider_target_id(provider_id, model_id, local_connection_id)` creates the settings-facing provider target id.
 - `LocalTaskTargetRegistry.register(descriptor)` registers or replaces a future local engine descriptor without touching provider catalogs.
 
-Server RPC delegates in `server/rpc/settings_methods.py` expose `task_model.settings`, `task_model.update`, `task_model.list_targets`, and `task_model.options`. Task-model domain errors are expected errors and map to stable `invalid_request` responses at the server boundary.
+Server RPC delegates in `server/rpc/settings_methods.py` expose `task_model.settings`, `task_model.update`, `task_model.list_targets`, and `task_model.options`, returning `{ model_tasks }`, `{ targets }`, and `{ schema }` wrappers. Task-model domain errors are expected errors and map to stable `invalid_request` responses at the server boundary.
 
 ## Conventions
 
