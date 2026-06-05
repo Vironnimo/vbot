@@ -11,7 +11,8 @@ Session recall read model for tools that search or browse persisted chat Session
 - `RecallRequest` carries normalized tool arguments: `agent_id`, optional `session_id`, optional `around_message_id`, optional `query`, time bounds, roles, match mode, limit, context size, bookend size, and sort.
 - `RecallBackend` is a `Protocol` with `browse(request)`, `search(request)`, and `scroll(request)`, each returning the existing JSON-compatible `session_search` result payload.
 - `RecallBackendContext` supplies `data_dir`, `ChatSessionManager`, and an optional logger.
-- `RecallBackendRegistry` registers factories by lowercase snake_case name and creates backends from a context. Duplicate registrations are expected config errors.
+- `RecallBackendRegistry` registers factories by lowercase snake_case name and creates backends from a context. `register()` raises `ValueError` on a duplicate name and on a name that is not lowercase snake_case.
+- `register_session_search_tool()` and `session_search_handler()` also accept a bare `ChatSessionManager` and auto-wrap it in `JsonlSessionRecallBackend`, so callers and tests without a configured backend still work.
 
 Built-in backend names:
 
@@ -21,8 +22,9 @@ Built-in backend names:
 Backend selection:
 
 - Raw config uses `settings.json` `recall.backend`.
-- `settings.get` exposes `{ backend, available_backends }` for the Settings Recall panel.
+- `settings.get` exposes `{ backend, available_backends }` for the Settings Recall panel; `available_backends` is `sorted(FIRST_PARTY_RECALL_BACKENDS)`, assembled in `server/rpc/settings_methods.py` (source of truth for the panel list).
 - `settings.update({ recall: { backend } })` accepts first-party backend names and calls `Runtime.reload_recall_backend()` so `session_search` uses the new backend without an app restart.
+- If the persisted `recall.backend` name is unknown to the registry, `Runtime._create_recall_backend` logs a warning and falls back to `DEFAULT_RECALL_BACKEND` (`jsonl_scan`) instead of crashing.
 
 ## JSONL Backend
 
@@ -43,7 +45,8 @@ Rules:
 - Index freshness is checked lazily per candidate Session by JSONL file mtime and size.
 - Missing or stale Sessions are reindexed by loading canonical messages through `ChatSessionManager`, deleting prior rows, inserting searchable text, and updating `indexed_sessions` in one transaction.
 - Browse and anchored scroll use the JSONL behavior; SQLite is used only for query candidate lookup.
-- Result windows/bookends are always hydrated from canonical JSONL after FTS candidate lookup.
+- An empty or punctuation-only query produces no FTS expression and falls back to JSONL scan for that call.
+- SQLite is only a candidate filter: every FTS hit is re-validated during JSONL hydration through `message_matches_request` + `text_matches_query`, so role/time/skill-note filtering and final matching never trust the index alone. Result windows/bookends are always hydrated from canonical JSONL after FTS candidate lookup.
 - If the index file is missing, it is rebuilt lazily. If SQLite operations fail, the backend deletes the index and retries once, then falls back to JSONL scan for that call.
 
 ## Cross-Domain Rules
