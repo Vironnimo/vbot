@@ -1,23 +1,21 @@
 # Speech
 
-Provider-neutral speech-to-text and text-to-speech execution, backed by the central task-model bindings.
+Provider-neutral speech-to-text and text-to-speech execution for configured task-model bindings.
 
 ## Overview
 
-`core/speech/` executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and then routes to either a provider-backed HTTP client or a local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB.
+`core/speech/` executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
 
-The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently returns an expected unsupported-provider error until the provider runtime contract is implemented.
+This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently fails through provider execution error handling until a provider runtime contract exists.
 
 ## Interfaces
 
-- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult`
-- `SpeechService.synthesize(text) -> SpeechSynthesisResult`
-- `SpeechService.synthesize_artifact(text) -> SpeechArtifact`
-- `SpeechService.get_artifact(artifact_id) -> SpeechArtifact`
-- `ProviderSpeechClient.transcribe(...)`
-- `ProviderSpeechClient.synthesize(...)`
-- `LocalSpeechExecutor.transcribe(...)`
-- `LocalSpeechExecutor.synthesize(...)`
+- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` — validates non-empty bytes, resolves the `speech_to_text` binding, then calls the selected local executor or provider speech client.
+- `SpeechService.synthesize(text) -> SpeechSynthesisResult` — trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
+- `SpeechService.synthesize_artifact(text) -> SpeechArtifact` — calls `synthesize()` and persists one runtime artifact under `<data_dir>/speech/`.
+- `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` — accepts only 32-character lowercase hex IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
+- `ProviderSpeechClient.transcribe(...)` / `ProviderSpeechClient.synthesize(...)` — small speech-specific HTTP clients built from runtime provider config, connection auth, credentials, and the target model ID.
+- `LocalSpeechExecutor.transcribe(...)` / `LocalSpeechExecutor.synthesize(...)` — optional extension hooks; the default executor raises `LocalSpeechError` for every target.
 
 `SpeechTranscriptionResult` contains normalized `text`, optional `language`, optional `segments`, optional `usage`, and the raw response payload when available.
 
@@ -38,7 +36,9 @@ The first implementation supports OpenAI-compatible audio endpoints and OpenRout
 
 ## Provider Wire Behavior
 
-OpenRouter STT sends JSON to `/audio/transcriptions`:
+Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient.from_runtime()` reads provider config, connection auth, credentials, and base URL from runtime state, then `core/speech/providers.py` builds speech-specific `httpx` requests with the shared provider error classifier and retry helper.
+
+OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
 
 ```json
 {
@@ -52,28 +52,36 @@ OpenRouter STT sends JSON to `/audio/transcriptions`:
 
 `language: "auto"` is omitted from the provider request. Numeric `temperature` is forwarded. Provider-specific `provider` options are preserved for OpenRouter when present.
 
-OpenAI-compatible STT sends multipart form data to `/audio/transcriptions` with `file`, `model`, and normalized optional fields such as `language`, `prompt`, `response_format`, and `temperature`.
+Executable non-OpenRouter STT targets are treated as OpenAI-compatible audio endpoints and send multipart form data to `/audio/transcriptions` with `file`, `model`, and normalized optional fields such as `language`, `prompt`, `response_format`, and `temperature`.
 
-TTS sends JSON to `/audio/speech` and returns raw audio bytes. OpenRouter receives OpenAI speaking instructions nested under `provider.options.openai.instructions`; other OpenAI-compatible providers receive `instructions` at the top level.
+Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. `voice`, `response_format`, and numeric `speed` stay top-level for all providers. OpenRouter receives only OpenAI speaking instructions nested under `provider.options.openai.instructions`; other OpenAI-compatible providers receive `instructions` at the top level. If the provider omits `content-type`, `SpeechSynthesisResult.media_type` is derived from `response_format`.
+
+## Server & Tool Contracts
+
+- `POST /api/speech/transcribe` accepts multipart file upload, enforces the runtime upload limit before reading into `SpeechService`, and returns `SpeechTranscriptionResult.to_dict()`.
+- `POST /api/speech/synthesize` accepts JSON `{ "text": "..." }`, rejects malformed JSON or blank text before calling `SpeechService`, and returns raw audio bytes with the synthesized media type.
+- `GET /api/speech/artifacts/{artifact_id}` streams a persisted speech artifact through `FileResponse`.
+- The built-in `text_to_speech` tool accepts only `text`; it returns a tool artifact payload from `SpeechArtifact.to_dict()` and intentionally exposes no model, provider, voice, format, or speed arguments.
 
 ## Artifacts
 
-TTS tool output is stored under `<data_dir>/speech/` as one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are hex UUID strings and are served by `GET /api/speech/artifacts/{artifact_id}`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
+TTS tool output is stored under `<data_dir>/speech/` as one audio file and one sidecar JSON metadata file per artifact. Artifact IDs are UUID4 hex strings, filenames are `<artifact_id>.<extension>`, and sidecars contain `id`, `filename`, `media_type`, and `size_bytes`. Speech artifacts are not normal attachments and are not persisted as chat messages by default.
 
 ## Errors
 
-Expected speech errors inherit from `SpeechError`:
+Callers of `SpeechService` should see expected speech errors as `SpeechError` subclasses:
 
 - `SpeechConfigurationError` for missing bindings, empty input, invalid artifact ids, and missing artifacts.
-- `SpeechUnsupportedTargetError` for configured local or provider targets with no execution adapter.
+- `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
 - `SpeechExecutionError` for provider/network/runtime request failures.
 
-Provider request failures are logged through `vbot.speech` without credentials. Transient network and HTTP errors use the shared provider retry helpers.
+Provider request failures raised inside `ProviderSpeechClient` are `ProviderError`/network errors; `SpeechService` wraps them as `SpeechExecutionError` and logs through `vbot.speech` without credentials. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. Transient network and retryable HTTP errors use the shared provider retry helper.
 
 ## Constraints & Gotchas
 
 - Speech uses file-based requests only. Realtime voice sessions and partial STT streaming are out of scope for this domain version.
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
-- Do not expose model, provider, voice, or format arguments through the agent TTS tool. Those choices are central settings controlled by the user.
+- The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.
+- Artifact persistence writes the audio file before the JSON sidecar and currently has no rollback/atomic replace wrapper; interrupted writes can leave orphaned audio blobs.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.
