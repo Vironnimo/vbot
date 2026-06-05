@@ -13,10 +13,10 @@ Manages persisted time-based automation jobs through `CronService`.
 
 - `create` and `update` validate schedule fields through `CronService`.
 - Cron expressions are validated with `croniter`.
-- Active jobs in `list` responses include `next_fire_at`.
+- `next_fire_at` is computed only for active `cron` jobs; it is `null` for `once`, paused, or completed jobs.
 
 ## Constraints & Gotchas
 
-- Unknown action-specific arguments return failure envelopes.
+- Unknown action-specific arguments return failure envelopes (the allowed argument set is per-action).
 - Timezone names must be valid IANA zones where required.
-- Once jobs may become `completed`; normal WebUI lists hide completed jobs.
+- The `list` action returns all jobs, including `completed` once-jobs — unlike the WebUI, which hides completed jobs from its normal list.

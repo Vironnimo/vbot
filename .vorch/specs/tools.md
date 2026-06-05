@@ -10,14 +10,14 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 - `Tool`: `name`, `description`, `parameters`, `handler`, `internal`, and `display`.
 - `ToolDisplay`: per-invocation presentation metadata. It builds `{ summary, hidden_argument_keys }` for `tool_call_started` events without adding provider-visible parameters.
-- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, plus emit/cancel/note/skill hooks.
+- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, `allowed_skills`, plus emit/cancel/note/skill hooks.
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - Tool timing is not part of the result envelope. Completed tool calls expose a sibling `timing` object on `tool_call_result` Run events and on persisted `role: "tool"` ChatMessages: `{ started_at, completed_at, duration_ms }`. Durations are non-negative milliseconds measured with a monotonic clock.
 - `ToolCall`: one requested tool invocation with stable id, name, and arguments; execution index is assigned when scheduling a sibling batch.
 
 ## Interfaces
 
-- `ToolRegistry.register(name, description, parameters, handler, internal=False, display=None) -> Tool`
+- `ToolRegistry.register(name, description, parameters, handler, *, internal=False, display=None) -> Tool` (`internal`/`display` are keyword-only)
 - `ToolRegistry.get(name) -> Tool`
 - `ToolRegistry.display_for_call(name, arguments) -> dict` returns `{ summary, hidden_argument_keys }` for one invocation.
 - `ToolRegistry.unregister(name) -> None`
