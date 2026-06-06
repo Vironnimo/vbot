@@ -327,6 +327,78 @@ describe('i18n t()', () => {
     expect(t('logs.stream.error')).toBe('Live update error');
   });
 
+  it('contains Debug i18n copy with a meaningful empty heading and matching interpolation tokens', () => {
+    const requiredKeys = [
+      'debug.eyebrow',
+      'debug.title',
+      'debug.subtitle',
+      'debug.statusCount',
+      'debug.traceLimit',
+      'debug.localWarning',
+      'debug.emptyHeader',
+      'debug.emptyState',
+      'debug.clearConfirm',
+      'debug.traceList',
+      'debug.metadata',
+      'debug.request',
+      'debug.requestMethod',
+      'debug.requestUrl',
+      'debug.requestHeaders',
+      'debug.requestBody',
+      'debug.response',
+      'debug.responseStatus',
+      'debug.responseHeaders',
+      'debug.responseBody',
+      'debug.streamEvents',
+      'debug.streamEventIndex',
+      'debug.noStreamEvents',
+      'debug.modelProbe',
+      'debug.modelProbe.provider',
+      'debug.modelProbe.connection',
+      'debug.modelProbe.selectProvider',
+      'debug.modelProbe.selectConnection',
+      'debug.modelProbe.run',
+      'debug.modelProbe.rawResponse',
+      'debug.modelProbe.normalizedPreview',
+      'debug.modelProbe.modelCount',
+      'debug.expandRow',
+      'debug.collapseRow',
+    ];
+
+    expectCatalogKeys(requiredKeys);
+
+    // The empty heading must be meaningful copy, never the bogus "(none)" placeholder.
+    expect(t('debug.emptyHeader')).not.toBe('(none)');
+    expect(t('debug.emptyHeader').trim().length).toBeGreaterThan(0);
+    expect(t('debug.emptyHeader')).toBe('No traces captured yet');
+
+    // Interpolation tokens must match the component's {index} usage.
+    expect(t('debug.streamEventIndex', undefined, { index: 3 })).toBe(
+      'Event 3',
+    );
+    expect(t('debug.streamEventIndex')).not.toContain('{n}');
+    expect(t('debug.streamEventIndex')).toContain('{index}');
+
+    expect(t('debug.statusCount', undefined, { count: 4, limit: 50 })).toBe(
+      'Traces: 4 / 50',
+    );
+    expect(t('debug.modelProbe.modelCount', undefined, { count: 12 })).toBe(
+      '12 models',
+    );
+
+    expect(t('debug.emptyState')).toContain('debug');
+    expect(t('debug.emptyState').length).toBeGreaterThan(20);
+
+    // Trace row expand/collapse aria labels must be non-empty catalog copy so
+    // screen readers and tooltips don't fall back to the component hardcoded
+    // default strings.
+    expect(t('debug.expandRow').trim().length).toBeGreaterThan(0);
+    expect(t('debug.collapseRow').trim().length).toBeGreaterThan(0);
+    expect(t('debug.expandRow')).toBe('Expand row');
+    expect(t('debug.collapseRow')).toBe('Collapse row');
+    expect(t('debug.expandRow')).not.toBe(t('debug.collapseRow'));
+  });
+
   it('does not expose Components showcase labels in the live catalog', () => {
     expect(englishCatalog['components.title']).toBeUndefined();
     expect(englishCatalog['components.toast.errorMessage']).toBeUndefined();

@@ -256,6 +256,14 @@
     selectView('settings');
   };
 
+  const handleDebugEnabledChange = (enabled) => {
+    const isEnabled = enabled === true;
+    debugEnabled = isEnabled;
+    if (!isEnabled && activeViewId === 'debug') {
+      selectView('settings');
+    }
+  };
+
   onMount(() => {
     let cancelled = false;
 
@@ -355,11 +363,12 @@
       {desktopCapabilities}
       targetPanelId={settingsPanelTarget}
       targetPanelRequestId={settingsPanelTargetRequestId}
+      onDebugEnabledChange={handleDebugEnabledChange}
     />
   {:else if activeViewId === 'logs'}
     <LogsView />
   {:else if activeViewId === 'debug'}
-    <DebugView {debugEnabled} />
+    <DebugView />
   {/if}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
