@@ -1,10 +1,9 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done; Wave 2 SettingsView in progress) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction. CSS, Channels,
-Sub-Agents, Recall, Web Search, Skills, Appearance, Debug, General, Defaults, Compaction,
-Specialized Models done. **Extract the next panel** (see "CONTINUE HERE": Providers — the
-last and most coupled), then stop and update this handoff.
+**Status:** in progress (Wave 1 done; Wave 2 SettingsView done) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → split timeline projection out of `chatState.js` into
+`webui/src/lib/chatTimeline.js`, preserving the existing `chatState.js` public surface and
+test behavior.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -198,18 +197,15 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   - Deferred (optional, not needed for threshold): the ~200-line `_handle_subagent`
     spawn handler could be decomposed internally later.
 
-### Wave 2 — frontend, biggest LOC wins  ◀── START HERE
+### Wave 2 — frontend, biggest LOC wins
 
 > Prereq: read `.vorch/specs/webui.md`. Frontend gate is
 > `python scripts/quality-frontend.py <path>`. Tests live in
 > `webui/src/components/__tests__/` and `webui/src/lib/__tests__/`. No TypeScript.
 
-- [ ] **`SettingsView.svelte` (4475 → 986, IN PROGRESS)** — one child component per
+- [x] **`SettingsView.svelte` (4475 → 395, DONE)** — one child component per
   panel under `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin
-  nav/panel container (target each panel 150–350 lines). **Do one panel per session**
-  (see WORKFLOW box at the top). Box stays unchecked until the container is thin — only
-  **Providers** is still inline; once it is extracted, `SettingsView.svelte` is just the
-  nav + panel-switch container and this box can be checked.
+  nav/panel container. **Do one panel per session** (see WORKFLOW box at the top).
 
   **Done (2026-06-06, full gate green each step · vitest 525/525 · build PASS):**
   - **CSS lifted to global** `webui/src/styles/settings.css` (802), imported via
@@ -294,6 +290,25 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     result. Spec `webui.md` unchanged — pure internal refactor, no behavior/contract/boundary
     change (matches every prior panel-extraction commit). **No test edits.**
 
+  **Done (2026-06-06, final panel; full gate green · vitest 525/525 · build PASS;
+  `SettingsView.svelte` 986 → 395):**
+  - **Providers** → `SettingsProvidersPanel.svelte` (632). Owns provider rendering,
+    credential/OAuth status, device-flow dialog and copy control, connect/disconnect
+    delegation, provider-auth event handling, model database refresh state/messages, and
+    refreshed model-count projection. The child stays mounted while Settings is loaded and
+    toggles its markup with `visible`, preserving in-progress OAuth state across panel
+    switches.
+  - **Header-button handoff:** the child publishes a callback-based header action while the
+    Providers panel is visible and refresh-eligible; the parent keeps the existing button
+    location in `s-panel-header` and invokes the child-owned refresh function. The exported
+    parent `handleProviderAuthCompleted` method remains intact and forwards to the child,
+    while the `providerAuthEvent` prop is handled directly by the child.
+  - **Parent cleanup:** removed all provider/OAuth/refresh helpers and state plus provider
+    rendering. `SettingsView.svelte` now owns only settings loading, navigation, the shared
+    error banner, child wiring, and the existing Voice panel handoff. Spec `webui.md`
+    unchanged — pure internal refactor with no behavior, transport, or public-component
+    contract change. **No test edits.**
+
   **Validated extraction recipe — shared-settings panels (FOLLOW EXACTLY; executed for
   subagents/recall/web_search, zero test edits, 525/525):**
   - **Props `{ settings, onCommit, onToast, onError }`.** Parent wires them in the
@@ -346,13 +361,9 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   **Remaining panels — one per session (ordered queue; simplest first, providers last):**
   1. ~~**Compaction**~~ — DONE (see Done block above).
   2. ~~**Specialized Models**~~ — DONE (see Done block above).
-  3. **Providers** ◀── CONTINUE HERE. **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
-     `disconnectProvider`, the exported `handleProviderAuthCompleted`, `model.refresh_db`
-     + the **header refresh button** (currently rendered in the parent's `s-panel-header`,
-     gated on `activePanelId === 'providers'`), the device-flow OAuth dialog, and all the
-     `oauth*`/`provider*` helpers. Plan the header-button handoff before cutting.
+  3. ~~**Providers**~~ — DONE (see Done block above).
 
-- [ ] **`chatState.js` (1927)** — two concerns: session/run state mutation **+**
+- [ ] **`chatState.js` (1927)** ◀── START HERE — two concerns: session/run state mutation **+**
   timeline projection (`buildVisibleTimelineItems`, `liveTimelineItems`,
   `historyTimelineItems` & helpers, ~line 473→end). Move the projection half →
   `webui/src/lib/chatTimeline.js`; `chatState.js` keeps session/run state. Clean seam,
