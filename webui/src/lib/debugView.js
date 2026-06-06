@@ -361,16 +361,6 @@ export function formatHeadersForDisplay(headers) {
     .join('\n');
 }
 
-export function streamEventText(event) {
-  if (event === null || event === undefined) {
-    return '';
-  }
-  if (typeof event === 'string') {
-    return event;
-  }
-  return safeStringify(event);
-}
-
 function formatHeaderValue(value) {
   if (value === null || value === undefined) {
     return '';

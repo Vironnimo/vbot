@@ -29,18 +29,12 @@
     formatHeadersForDisplay,
     hasParseableBody,
     rawBodyText,
-    streamEventText,
   } from '../lib/debugView.js';
 
   const DETAIL_TABS = Object.freeze([
     { id: 'metadata', labelKey: 'debug.metadata', labelFallback: 'Metadata' },
     { id: 'request', labelKey: 'debug.request', labelFallback: 'Request' },
     { id: 'response', labelKey: 'debug.response', labelFallback: 'Response' },
-    {
-      id: 'stream',
-      labelKey: 'debug.streamEvents',
-      labelFallback: 'Stream Events',
-    },
   ]);
 
   const TRACE_LIMIT_MAX = 500;
@@ -366,10 +360,6 @@
     );
   }
 
-  function streamEventTextValue(event) {
-    return streamEventText(event);
-  }
-
   function metadataField(label, value) {
     return { label, value: value ?? '—' };
   }
@@ -398,12 +388,6 @@
       );
     }
     return fields;
-  }
-
-  function hasStreamEvents(trace) {
-    return (
-      Array.isArray(trace?.stream?.events) && trace.stream.events.length > 0
-    );
   }
 
   function errorMessageText(error, fallback) {
@@ -445,7 +429,7 @@
       <p class="debug-view__subtitle">
         {t(
           'debug.subtitle',
-          'Inspect captured provider requests and responses, stream events, and probe model endpoints.',
+          'Inspect captured provider requests and responses, and probe model endpoints.',
         )}
       </p>
     </div>
@@ -823,38 +807,6 @@
                       ? responseBodyFormatted() || '—'
                       : responseBodyText() || '—'}</pre>
                 </div>
-              {:else if detailTab === 'stream'}
-                {#if hasStreamEvents(viewState.selectedTrace)}
-                  <div class="debug-view__stream-list">
-                    {#each viewState.selectedTrace.stream.events as event, index (index)}
-                      <details
-                        class="debug-view__stream-event"
-                        open={index === 0}
-                      >
-                        <summary class="debug-view__stream-summary">
-                          {t('debug.streamEventIndex', 'Event {index}', {
-                            index: index + 1,
-                          })}
-                        </summary>
-                        <div class="debug-view__stream-body">
-                          <pre
-                            class="debug-view__code-block debug-view__code-block--raw">{streamEventTextValue(
-                              event,
-                            ) || '—'}</pre>
-                        </div>
-                      </details>
-                    {/each}
-                  </div>
-                {:else}
-                  <div class="debug-view__state debug-view__state--detail">
-                    <p class="debug-view__state-subtitle">
-                      {t(
-                        'debug.noStreamEvents',
-                        'No stream events for this trace.',
-                      )}
-                    </p>
-                  </div>
-                {/if}
               {/if}
             </div>
           {/if}
@@ -1576,35 +1528,6 @@
     white-space: pre-wrap;
     word-break: break-word;
     overflow-wrap: anywhere;
-  }
-
-  /* Stream Events */
-  .debug-view__stream-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .debug-view__stream-event {
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface-2);
-  }
-
-  .debug-view__stream-summary {
-    padding: 8px 12px;
-    color: var(--text-med);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    cursor: pointer;
-  }
-
-  .debug-view__stream-summary:hover {
-    color: var(--text-hi);
-  }
-
-  .debug-view__stream-body {
-    padding: 0 12px 12px;
   }
 
   /* Model Endpoint Probe */

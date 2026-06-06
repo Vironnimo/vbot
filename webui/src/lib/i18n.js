@@ -620,7 +620,8 @@ export const englishCatalog = Object.freeze({
 
   'debug.eyebrow': 'Debug',
   'debug.title': 'Debug',
-  'debug.subtitle': 'Provider wire traces and diagnostics',
+  'debug.subtitle':
+    'Inspect captured provider requests and responses, and probe model endpoints.',
   'debug.status': 'Status',
   'debug.statusCount': 'Traces: {count} / {limit}',
   'debug.traceList': 'Traces',
@@ -633,7 +634,7 @@ export const englishCatalog = Object.freeze({
   'debug.localWarning':
     'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
 
-  'debug.clearing': 'Clearing\u2026',
+  'debug.clearing': 'Clearing…',
 
   'debug.request': 'Request',
   'debug.requestMethod': 'Method',
@@ -644,11 +645,8 @@ export const englishCatalog = Object.freeze({
   'debug.responseStatus': 'Status',
   'debug.responseHeaders': 'Headers',
   'debug.responseBody': 'Body',
-  'debug.streamEvents': 'Stream Events',
-  'debug.streamEventIndex': 'Event {index}',
   'debug.streamRaw': 'Raw',
   'debug.streamParsed': 'Parsed',
-  'debug.noStreamEvents': 'No stream events',
   'debug.normalizedData': 'Normalized Data',
 
   'debug.metadata': 'Metadata',
