@@ -4,7 +4,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 
 ## Overview
 
-`core/subagents/` owns the runtime behavior behind the public `subagent` and `subagent_result` tools. The tool module is only the registration/schema boundary; `SubAgentCoordinator` performs spawn/result orchestration and owns the in-memory `SubAgentBatchTracker` for one Runtime instance.
+`core/subagents/` owns the runtime behavior behind the public `subagent` and `subagent_result` tools. The tool module is only the registration/schema boundary; `SubAgentCoordinator` (in `subagents.py`) performs spawn/result orchestration and owns the in-memory `SubAgentBatchTracker` (in `tracker.py`) for one Runtime instance. Batch-tracking state machine logic belongs in `tracker.py`, spawn/result orchestration in `subagents.py`; callers import from the `core.subagents` package.
 
 ## Data Model
 
