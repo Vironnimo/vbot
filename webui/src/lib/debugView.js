@@ -1,3 +1,8 @@
+export const DEBUG_BODY_PLACEHOLDER = '—';
+export const DEBUG_ID_TRUNCATE_LENGTH = 28;
+export const DEBUG_TAB_RAW = 'raw';
+export const DEBUG_TAB_FORMATTED = 'formatted';
+
 export function createDebugViewState() {
   return {
     traces: [],
@@ -16,6 +21,7 @@ export function createDebugViewState() {
 export function applyTraceList(state, result) {
   const rawTraces = Array.isArray(result?.traces) ? result.traces : [];
   state.traces = normalizeTraceEntries(rawTraces);
+  state.selectedTrace = retainSelectedTrace(state);
   state.loading = false;
   state.error = '';
   return state.traces;
@@ -280,6 +286,136 @@ function resolveSelectedProbeProvider(state) {
     : [];
 
   return providers.find((p) => p.id === providerId) ?? null;
+}
+
+export function retainSelectedTrace(state) {
+  const traces = Array.isArray(state?.traces) ? state.traces : [];
+  const currentSelection = state?.selectedTrace;
+  const selectedId = asOptionalText(currentSelection?.trace_id);
+  if (selectedId === null) {
+    return null;
+  }
+  return traces.find((trace) => trace.trace_id === selectedId) ?? null;
+}
+
+export function isJsonParseableText(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return false;
+  }
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function rawBodyText(body) {
+  if (body === null || body === undefined) {
+    return '';
+  }
+  if (typeof body === 'string') {
+    return body;
+  }
+  if (typeof body === 'object') {
+    return safeStringify(body);
+  }
+  return String(body);
+}
+
+export function formattedBodyText(body) {
+  if (body === null || body === undefined || body === '') {
+    return '';
+  }
+  if (typeof body === 'string') {
+    if (!isJsonParseableText(body)) {
+      return body;
+    }
+    try {
+      return JSON.stringify(JSON.parse(body), null, 2);
+    } catch {
+      return body;
+    }
+  }
+  if (typeof body === 'object') {
+    return safeStringify(body);
+  }
+  return String(body);
+}
+
+export function hasParseableBody(body) {
+  if (typeof body !== 'string' || body.length === 0) {
+    return false;
+  }
+  return isJsonParseableText(body);
+}
+
+export function formatHeadersForDisplay(headers) {
+  if (!isPlainObject(headers)) {
+    return '';
+  }
+  const entries = Object.entries(headers);
+  if (entries.length === 0) {
+    return '';
+  }
+  return entries
+    .map(([name, value]) => `${name}: ${formatHeaderValue(value)}`)
+    .join('\n');
+}
+
+export function streamEventText(event) {
+  if (event === null || event === undefined) {
+    return '';
+  }
+  if (typeof event === 'string') {
+    return event;
+  }
+  return safeStringify(event);
+}
+
+export function truncatedId(value, maxLength = DEBUG_ID_TRUNCATE_LENGTH) {
+  const text = asText(value);
+  if (text.length === 0) {
+    return { text: '', full: '', truncated: false };
+  }
+  if (text.length <= maxLength) {
+    return { text, full: text, truncated: false };
+  }
+  const safeMax = Math.max(1, Math.floor(maxLength));
+  const truncated = `${text.slice(0, safeMax - 1)}…`;
+  return { text: truncated, full: text, truncated: true };
+}
+
+export function isRawBodyTab(tab) {
+  return tab === DEBUG_TAB_RAW || tab == null;
+}
+
+export function isFormattedBodyTab(tab) {
+  return tab === DEBUG_TAB_FORMATTED;
+}
+
+function formatHeaderValue(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => formatHeaderValue(item)).join(', ');
+  }
+  if (typeof value === 'object') {
+    return safeStringify(value);
+  }
+  return String(value);
+}
+
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return '';
+  }
 }
 
 function asText(value) {

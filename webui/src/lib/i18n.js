@@ -671,6 +671,8 @@ export const englishCatalog = Object.freeze({
   'debug.modelProbe.selectConnection': 'Select a connection',
 
   'debug.emptyHeader': 'No traces captured yet',
+  'debug.expandRow': 'Expand row',
+  'debug.collapseRow': 'Collapse row',
 
   'app.serverStatus': 'Local UI placeholder',
   'app.statusPlaceholder': 'Local UI placeholder',

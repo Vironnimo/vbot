@@ -23,6 +23,13 @@
     applyModelProbeResult,
     modelProbeCanProbe,
     modelProbeConnectionOptions,
+    DEBUG_TAB_FORMATTED,
+    DEBUG_TAB_RAW,
+    formattedBodyText,
+    formatHeadersForDisplay,
+    hasParseableBody,
+    rawBodyText,
+    streamEventText,
   } from '../lib/debugView.js';
 
   const DETAIL_TABS = Object.freeze([
@@ -47,6 +54,10 @@
   let traceLimitDirty = $state(false);
   let loadingDetail = $state(false);
   let detailError = $state('');
+  let detailRequestToken = 0;
+  let requestBodyView = $state(DEBUG_TAB_RAW);
+  let responseBodyView = $state(DEBUG_TAB_RAW);
+  let expandedTraceIds = $state({});
 
   let modelProbeConnectionOpts = $derived(
     modelProbeConnectionOptions(viewState),
@@ -54,6 +65,12 @@
   let canProbe = $derived(modelProbeCanProbe(viewState));
   let hasTraces = $derived(viewState.traces.length > 0);
   let hasSelection = $derived(viewState.selectedTrace !== null);
+  let isRequestBodyFormatted = $derived(
+    requestBodyView === DEBUG_TAB_FORMATTED,
+  );
+  let isResponseBodyFormatted = $derived(
+    responseBodyView === DEBUG_TAB_FORMATTED,
+  );
 
   onMount(() => {
     loadAll();
@@ -154,18 +171,44 @@
 
     loadingDetail = true;
     detailTab = 'metadata';
+    requestBodyView = DEBUG_TAB_RAW;
+    responseBodyView = DEBUG_TAB_RAW;
+    detailRequestToken += 1;
+    const requestToken = detailRequestToken;
 
     try {
       const result = await debugTraceGet(traceId);
+      if (requestToken !== detailRequestToken) {
+        return;
+      }
       applyTraceDetail(viewState, result);
     } catch (error) {
+      if (requestToken !== detailRequestToken) {
+        return;
+      }
       detailError = errorMessageText(
         error,
         t('errors.generic', 'Something went wrong. Try again.'),
       );
     } finally {
-      loadingDetail = false;
+      if (requestToken === detailRequestToken) {
+        loadingDetail = false;
+      }
     }
+  }
+
+  function isTraceExpanded(traceId) {
+    return Boolean(traceId && expandedTraceIds[traceId]);
+  }
+
+  function toggleTraceExpanded(traceId) {
+    if (!traceId) {
+      return;
+    }
+    expandedTraceIds = {
+      ...expandedTraceIds,
+      [traceId]: !expandedTraceIds[traceId],
+    };
   }
 
   async function handleClearTraces() {
@@ -295,40 +338,36 @@
     }
   }
 
-  function formatJson(value) {
-    if (value === null || value === undefined) {
-      return '—';
-    }
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
+  function requestBodyText() {
+    return rawBodyText(viewState.selectedTrace?.request?.body);
   }
 
-  function formatBody(body) {
-    if (body === null || body === undefined || body === '') {
-      return '—';
-    }
-    if (typeof body !== 'string') {
-      return formatJson(body);
-    }
-    try {
-      return JSON.stringify(JSON.parse(body), null, 2);
-    } catch {
-      return body;
-    }
+  function responseBodyText() {
+    return rawBodyText(viewState.selectedTrace?.response?.body);
   }
 
-  function formatHeaders(headers) {
-    if (!headers || typeof headers !== 'object') {
-      return '—';
-    }
-    const entries = Object.entries(headers);
-    if (entries.length === 0) {
-      return '—';
-    }
-    return entries.map(([k, v]) => `${k}: ${v}`).join('\n');
+  function requestBodyFormatted() {
+    return formattedBodyText(viewState.selectedTrace?.request?.body);
+  }
+
+  function responseBodyFormatted() {
+    return formattedBodyText(viewState.selectedTrace?.response?.body);
+  }
+
+  function requestHeadersText() {
+    return formatHeadersForDisplay(
+      viewState.selectedTrace?.request?.headers ?? null,
+    );
+  }
+
+  function responseHeadersText() {
+    return formatHeadersForDisplay(
+      viewState.selectedTrace?.response?.headers ?? null,
+    );
+  }
+
+  function streamEventTextValue(event) {
+    return streamEventText(event);
   }
 
   function metadataField(label, value) {
@@ -375,6 +414,22 @@
       return error.trim();
     }
     return fallback;
+  }
+
+  function traceProviderLabel(trace) {
+    return trace?.provider_id || '—';
+  }
+
+  function traceModelLabel(trace) {
+    return trace?.model_id || '—';
+  }
+
+  function traceProviderFull(trace) {
+    return trace?.provider_id ?? '';
+  }
+
+  function traceModelFull(trace) {
+    return trace?.model_id ?? '';
   }
 </script>
 
@@ -535,35 +590,63 @@
           aria-label={t('debug.traceList', 'Traces')}
         >
           {#each viewState.traces as trace (trace.trace_id)}
-            <button
-              type="button"
-              class={`debug-trace ${viewState.selectedTrace?.trace_id === trace.trace_id ? 'debug-trace--selected' : ''}`}
+            <div
               role="listitem"
-              onclick={() => handleTraceSelect(trace.trace_id)}
+              class={`debug-trace ${viewState.selectedTrace?.trace_id === trace.trace_id ? 'debug-trace--selected' : ''} ${isTraceExpanded(trace.trace_id) ? 'debug-trace--expanded' : ''}`}
+              data-trace-id={trace.trace_id}
             >
-              <span class="debug-trace__timestamp">
-                {formatTimestamp(trace.timestamp)}
-              </span>
-              <span class="debug-trace__provider">
-                {trace.provider_id || '—'}
-              </span>
-              <span class="debug-trace__model">
-                {trace.model_id || '—'}
-              </span>
-              <span class="debug-trace__method">
-                {trace.method || '—'}
-              </span>
-              <span
-                class={`debug-trace__status ${statusTone(trace.status_code)}`}
+              <button
+                type="button"
+                class="debug-trace__row"
+                aria-label={`${t('debug.traceList', 'Traces')}: ${traceProviderLabel(trace)} ${traceModelLabel(trace)}`}
+                aria-pressed={viewState.selectedTrace?.trace_id ===
+                  trace.trace_id}
+                onclick={() => handleTraceSelect(trace.trace_id)}
               >
-                {trace.status_code !== null && trace.status_code !== undefined
-                  ? trace.status_code
-                  : '—'}
-              </span>
-              <span class="debug-trace__duration">
-                {formatDuration(trace.duration_ms)}
-              </span>
-            </button>
+                <span class="debug-trace__timestamp">
+                  {formatTimestamp(trace.timestamp)}
+                </span>
+                <span
+                  class="debug-trace__provider"
+                  title={traceProviderFull(trace)}
+                >
+                  {traceProviderLabel(trace)}
+                </span>
+                <span class="debug-trace__model" title={traceModelFull(trace)}>
+                  {traceModelLabel(trace)}
+                </span>
+                <span class="debug-trace__method">
+                  {trace.method || '—'}
+                </span>
+                <span
+                  class={`debug-trace__status ${statusTone(trace.status_code)}`}
+                >
+                  {trace.status_code !== null && trace.status_code !== undefined
+                    ? trace.status_code
+                    : '—'}
+                </span>
+                <span class="debug-trace__duration">
+                  {formatDuration(trace.duration_ms)}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="debug-trace__expand"
+                aria-expanded={isTraceExpanded(trace.trace_id)}
+                aria-label={isTraceExpanded(trace.trace_id)
+                  ? t('debug.collapseRow', 'Collapse row')
+                  : t('debug.expandRow', 'Expand row')}
+                title={isTraceExpanded(trace.trace_id)
+                  ? t('debug.collapseRow', 'Collapse row')
+                  : t('debug.expandRow', 'Expand row')}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  toggleTraceExpanded(trace.trace_id);
+                }}
+              >
+                {isTraceExpanded(trace.trace_id) ? '−' : '+'}
+              </button>
+            </div>
           {/each}
         </div>
       </div>
@@ -631,24 +714,58 @@
                   <h4 class="debug-view__detail-heading">
                     {t('debug.requestUrl', 'URL')}
                   </h4>
-                  <pre class="debug-view__code-block">{viewState.selectedTrace
-                      .request?.url || '—'}</pre>
+                  <pre
+                    class="debug-view__code-block"
+                    title={viewState.selectedTrace.request?.url ||
+                      ''}>{viewState.selectedTrace.request?.url || '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
                   <h4 class="debug-view__detail-heading">
                     {t('debug.requestHeaders', 'Headers')}
                   </h4>
-                  <pre class="debug-view__code-block">{formatHeaders(
-                      viewState.selectedTrace.request?.headers,
-                    )}</pre>
+                  <pre
+                    class="debug-view__code-block"
+                    title={requestHeadersText()}>{requestHeadersText() ||
+                      '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
-                  <h4 class="debug-view__detail-heading">
-                    {t('debug.requestBody', 'Body')}
-                  </h4>
-                  <pre class="debug-view__code-block">{formatBody(
-                      viewState.selectedTrace.request?.body,
-                    )}</pre>
+                  <div class="debug-view__detail-heading-row">
+                    <h4 class="debug-view__detail-heading">
+                      {t('debug.requestBody', 'Body')}
+                    </h4>
+                    {#if hasParseableBody(viewState.selectedTrace.request?.body)}
+                      <div
+                        class="debug-view__body-tabs"
+                        role="tablist"
+                        aria-label={t('debug.requestBody', 'Body')}
+                      >
+                        <button
+                          type="button"
+                          role="tab"
+                          class={`debug-view__body-tab ${!isRequestBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
+                          aria-selected={!isRequestBodyFormatted}
+                          onclick={() => (requestBodyView = DEBUG_TAB_RAW)}
+                        >
+                          {t('debug.streamRaw', 'Raw')}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          class={`debug-view__body-tab ${isRequestBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
+                          aria-selected={isRequestBodyFormatted}
+                          onclick={() =>
+                            (requestBodyView = DEBUG_TAB_FORMATTED)}
+                        >
+                          {t('debug.streamParsed', 'Parsed')}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                  <pre
+                    class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}
+                    title={requestBodyText()}>{isRequestBodyFormatted
+                      ? requestBodyFormatted() || '—'
+                      : requestBodyText() || '—'}</pre>
                 </div>
               {:else if detailTab === 'response'}
                 <div class="debug-view__detail-section">
@@ -662,17 +779,49 @@
                   <h4 class="debug-view__detail-heading">
                     {t('debug.responseHeaders', 'Headers')}
                   </h4>
-                  <pre class="debug-view__code-block">{formatHeaders(
-                      viewState.selectedTrace.response?.headers,
-                    )}</pre>
+                  <pre
+                    class="debug-view__code-block"
+                    title={responseHeadersText()}>{responseHeadersText() ||
+                      '—'}</pre>
                 </div>
                 <div class="debug-view__detail-section">
-                  <h4 class="debug-view__detail-heading">
-                    {t('debug.responseBody', 'Body')}
-                  </h4>
-                  <pre class="debug-view__code-block">{formatBody(
-                      viewState.selectedTrace.response?.body,
-                    )}</pre>
+                  <div class="debug-view__detail-heading-row">
+                    <h4 class="debug-view__detail-heading">
+                      {t('debug.responseBody', 'Body')}
+                    </h4>
+                    {#if hasParseableBody(viewState.selectedTrace.response?.body)}
+                      <div
+                        class="debug-view__body-tabs"
+                        role="tablist"
+                        aria-label={t('debug.responseBody', 'Body')}
+                      >
+                        <button
+                          type="button"
+                          role="tab"
+                          class={`debug-view__body-tab ${!isResponseBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
+                          aria-selected={!isResponseBodyFormatted}
+                          onclick={() => (responseBodyView = DEBUG_TAB_RAW)}
+                        >
+                          {t('debug.streamRaw', 'Raw')}
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          class={`debug-view__body-tab ${isResponseBodyFormatted ? 'debug-view__body-tab--active' : ''}`}
+                          aria-selected={isResponseBodyFormatted}
+                          onclick={() =>
+                            (responseBodyView = DEBUG_TAB_FORMATTED)}
+                        >
+                          {t('debug.streamParsed', 'Parsed')}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                  <pre
+                    class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}
+                    title={responseBodyText()}>{isResponseBodyFormatted
+                      ? responseBodyFormatted() || '—'
+                      : responseBodyText() || '—'}</pre>
                 </div>
               {:else if detailTab === 'stream'}
                 {#if hasStreamEvents(viewState.selectedTrace)}
@@ -688,10 +837,11 @@
                           })}
                         </summary>
                         <div class="debug-view__stream-body">
-                          <pre class="debug-view__code-block">{typeof event ===
-                            'string'
-                              ? event
-                              : formatJson(event)}</pre>
+                          <pre
+                            class="debug-view__code-block debug-view__code-block--raw"
+                            title={streamEventTextValue(
+                              event,
+                            )}>{streamEventTextValue(event) || '—'}</pre>
                         </div>
                       </details>
                     {/each}
@@ -787,8 +937,10 @@
           <h4 class="debug-view__detail-heading">
             {t('debug.modelProbe.rawResponse', 'Raw Response')}
           </h4>
-          <pre class="debug-view__code-block">{viewState.modelProbeResult.raw ||
-              '—'}</pre>
+          <pre
+            class="debug-view__code-block debug-view__code-block--raw"
+            title={viewState.modelProbeResult.raw || ''}>{viewState
+              .modelProbeResult.raw || '—'}</pre>
         </div>
 
         <div class="debug-view__probe-result-section">
@@ -807,9 +959,10 @@
               })}
             </p>
           {:else}
-            <pre class="debug-view__code-block">{formatJson(
+            <pre
+              class="debug-view__code-block debug-view__code-block--formatted">{rawBodyText(
                 viewState.modelProbeResult.normalized,
-              )}</pre>
+              ) || '—'}</pre>
           {/if}
         </div>
       </div>
@@ -1097,15 +1250,11 @@
 
   /* Trace Row */
   .debug-trace {
-    display: grid;
-    grid-template-columns:
-      minmax(120px, auto) minmax(90px, 1fr) minmax(100px, 1fr)
-      minmax(54px, auto) minmax(46px, auto) minmax(52px, auto);
-    align-items: center;
-    gap: 6px;
+    display: flex;
+    box-sizing: border-box;
+    align-items: stretch;
     min-width: 0;
     width: 100%;
-    padding: 7px 10px;
     border: 1px solid var(--border);
     border-left-width: 3px;
     border-left-color: var(--border-2);
@@ -1114,19 +1263,102 @@
     color: inherit;
     font-family: var(--font-mono);
     font-size: 11px;
-    text-align: left;
-    cursor: pointer;
   }
 
   .debug-trace:hover {
     border-color: var(--border-2);
-    background: var(--surface-2);
   }
 
   .debug-trace--selected {
     border-left-color: var(--accent);
     border-color: rgba(232, 135, 10, 0.28);
     background: var(--accent-pale);
+  }
+
+  .debug-trace__row {
+    display: grid;
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.4;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .debug-trace__row:hover {
+    background: var(--surface-2);
+  }
+
+  .debug-trace--selected .debug-trace__row:hover {
+    background: rgba(232, 135, 10, 0.16);
+  }
+
+  .debug-trace__row:focus-visible {
+    outline: 2px solid rgba(232, 135, 10, 0.4);
+    outline-offset: -2px;
+  }
+
+  .debug-trace__expand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 26px;
+    align-self: stretch;
+    border: none;
+    border-left: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-lo);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .debug-trace__expand:hover,
+  .debug-trace__expand:focus-visible {
+    color: var(--accent);
+    background: rgba(232, 135, 10, 0.06);
+  }
+
+  .debug-trace--selected .debug-trace__expand {
+    border-left-color: rgba(232, 135, 10, 0.28);
+  }
+
+  .debug-trace__row .debug-trace__columns {
+    display: contents;
+  }
+
+  .debug-trace--expanded .debug-trace__row {
+    grid-template-columns:
+      minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr)
+      minmax(0, auto) minmax(0, auto) minmax(0, auto);
+  }
+
+  .debug-trace__row {
+    grid-template-columns:
+      minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr)
+      minmax(0, auto) minmax(0, auto) minmax(0, auto);
+  }
+
+  .debug-trace--expanded .debug-trace__timestamp,
+  .debug-trace--expanded .debug-trace__provider,
+  .debug-trace--expanded .debug-trace__model,
+  .debug-trace--expanded .debug-trace__method,
+  .debug-trace--expanded .debug-trace__duration {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-all;
   }
 
   .debug-trace__timestamp,
@@ -1252,6 +1484,57 @@
     text-transform: uppercase;
   }
 
+  .debug-view__detail-heading-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .debug-view__detail-heading-row .debug-view__detail-heading {
+    margin: 0;
+  }
+
+  .debug-view__body-tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+  }
+
+  .debug-view__body-tab {
+    padding: 3px 8px;
+    border: none;
+    border-radius: 2px;
+    color: var(--text-med);
+    background: transparent;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .debug-view__body-tab:hover {
+    color: var(--text-hi);
+  }
+
+  .debug-view__body-tab--active {
+    color: var(--accent);
+    background: rgba(232, 135, 10, 0.14);
+  }
+
+  .debug-view__body-tab:focus-visible {
+    outline: 2px solid rgba(232, 135, 10, 0.4);
+    outline-offset: 1px;
+  }
+
   /* Metadata Grid */
   .debug-view__metadata-grid {
     display: grid;
@@ -1276,6 +1559,8 @@
 
   /* Code Block */
   .debug-view__code-block {
+    box-sizing: border-box;
+    max-width: 100%;
     margin: 0;
     padding: 10px 12px;
     border: 1px solid var(--border);
@@ -1286,10 +1571,22 @@
     font-size: 11.5px;
     line-height: 1.55;
     overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-all;
     max-height: 400px;
     overflow-y: auto;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .debug-view__code-block--raw {
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .debug-view__code-block--formatted {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   /* Stream Events */
@@ -1464,23 +1761,28 @@
       width: 100%;
     }
 
-    .debug-trace {
-      grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+    .debug-trace__row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, auto);
       gap: 4px;
+    }
+
+    .debug-trace__timestamp {
+      grid-column: 1;
+      grid-row: 1;
     }
 
     .debug-trace__provider,
     .debug-trace__model,
     .debug-trace__method {
-      grid-column: 2;
+      grid-column: 1;
       grid-row: auto;
       white-space: normal;
     }
 
     .debug-trace__status,
     .debug-trace__duration {
-      grid-column: auto;
-      grid-row: auto;
+      grid-column: 2;
+      grid-row: 1;
     }
   }
 </style>

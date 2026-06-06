@@ -361,6 +361,8 @@ describe('i18n t()', () => {
       'debug.modelProbe.rawResponse',
       'debug.modelProbe.normalizedPreview',
       'debug.modelProbe.modelCount',
+      'debug.expandRow',
+      'debug.collapseRow',
     ];
 
     expectCatalogKeys(requiredKeys);
@@ -386,6 +388,15 @@ describe('i18n t()', () => {
 
     expect(t('debug.emptyState')).toContain('debug');
     expect(t('debug.emptyState').length).toBeGreaterThan(20);
+
+    // Trace row expand/collapse aria labels must be non-empty catalog copy so
+    // screen readers and tooltips don't fall back to the component hardcoded
+    // default strings.
+    expect(t('debug.expandRow').trim().length).toBeGreaterThan(0);
+    expect(t('debug.collapseRow').trim().length).toBeGreaterThan(0);
+    expect(t('debug.expandRow')).toBe('Expand row');
+    expect(t('debug.collapseRow')).toBe('Collapse row');
+    expect(t('debug.expandRow')).not.toBe(t('debug.collapseRow'));
   });
 
   it('does not expose Components showcase labels in the live catalog', () => {
