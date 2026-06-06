@@ -1,11 +1,19 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done; Wave 2 SettingsView started) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction (CSS + Channels
-done; see "CONTINUE HERE"). Extract the remaining panels into `settings/` children.
+**Status:** in progress (Wave 1 done; Wave 2 SettingsView in progress) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction. CSS, Channels,
+Sub-Agents, Recall, Web Search done. **Extract exactly the next ONE panel** (see "CONTINUE
+HERE": Skills), then stop and update this handoff.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
+
+> **⚠ WORKFLOW — ONE PANEL PER SESSION (user decision 2026-06-06).** Do **not** extract
+> all remaining SettingsView panels in one go. Each session: extract **exactly one** panel
+> from the "Remaining panels — one per session" queue below, get the full frontend gate
+> green (`python scripts/quality-frontend.py` → vitest 525/525 · build PASS), update this
+> handoff (check the panel off, advance "CONTINUE HERE" to the next one, record line
+> counts), commit, and stop. The user starts the next session for the next panel.
 
 ---
 
@@ -195,79 +203,112 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
 > `python scripts/quality-frontend.py <path>`. Tests live in
 > `webui/src/components/__tests__/` and `webui/src/lib/__tests__/`. No TypeScript.
 
-- [ ] **`SettingsView.svelte` (4475 → 3063, IN PROGRESS)** ◀── CONTINUE HERE. The
-  file is a stack of **independent panels**, each with its own load/save/handler
-  triple: Language/Appearance, General, Skill-Dirs, Agent-Defaults, Subagent,
-  Compaction, Recall, WebSearch, Debug, TaskModel (specialized_models),
-  Providers/Connections, Channels. Plan: one child component per panel under
-  `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin nav/panel
-  container (target each panel 150–350 lines).
+- [ ] **`SettingsView.svelte` (4475 → 2574, IN PROGRESS)** — one child component per
+  panel under `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin
+  nav/panel container (target each panel 150–350 lines). **Do one panel per session**
+  (see WORKFLOW box at the top). Box stays unchecked until the container is thin.
 
-  **Done so far (2026-06-06, gate green ruff n/a · vitest 525/525 · build PASS):**
-  - **CSS lifted to global** `webui/src/styles/settings.css` (802 lines), imported
-    via `@import './settings.css';` in `webui/src/styles/app.css`. This was the
-    enabling step: the shared `.s-*` layout primitives were scoped to
-    `SettingsView.svelte`, so a Svelte child component could not use them. They are
-    now global (settings-specific names, no bleed). `SettingsView.svelte` no longer
-    has a `<style>` block; **new panel children need NO `<style>`** — they reuse the
-    global `.s-*` classes (this also fixed the pre-existing voice-panel styling gap).
-  - **Channels panel extracted** → `webui/src/components/settings/SettingsChannelsPanel.svelte`
-    (558). It is the cleanest seam: fully self-contained (loads its own data via
-    `agent.list`/`channel.*` on `onMount`, like the existing `WakewordVoiceSettings`),
-    touches none of the shared `settings`/`saving`/`commitSettings` flow. Zero props.
-    `SettingsView` just renders `<SettingsChannelsPanel />` in the `{:else if
-    activePanelId === 'channels'}` branch; the nav entry stays in `SettingsView`.
+  **Done (2026-06-06, full gate green each step · vitest 525/525 · build PASS):**
+  - **CSS lifted to global** `webui/src/styles/settings.css` (802), imported via
+    `@import './settings.css';` in `app.css`. The shared `.s-*` layout primitives were
+    scoped to `SettingsView.svelte`; they are now global (settings-specific names, no
+    bleed). `SettingsView.svelte` has no `<style>` block; **panel children need NO
+    `<style>`** — they reuse the global `.s-*` classes.
+  - **Channels** → `SettingsChannelsPanel.svelte` (558). Self-contained, loads its own
+    data on `onMount` (`agent.list`/`channel.*`), zero props. Cleanest seam.
+  - **Sub-Agents** → `SettingsSubAgentsPanel.svelte` (219). First shared-settings panel;
+    validated the contract below incl. all the auto-save behavioral tests.
+  - **Recall** → `SettingsRecallPanel.svelte` (156). Dropdown, re-seeds after save.
+  - **Web Search** → `SettingsWebSearchPanel.svelte` (203). Dropdown + conditional
+    SearXNG URL, re-seeds after save.
 
-  **Validated extraction recipe (follow for the rest):**
-  - Child imports `rpc` from `$lib/api.js` (the test mocks that exact module — keep
-    importing from there so mocks apply), `t` from `$lib/i18n.js`, helpers from
-    `$lib/settingsView.js`. No `<style>` (global classes).
-  - `SettingsView.test.js` mounts the **real** `SettingsView` and asserts on DOM
-    (class/text/aria) + `rpc` call names — so preserve markup classes, ids,
-    aria-labels, and the rpc calls verbatim and the tests stay green with **zero test
-    edits** (currently 525/525). `settingsView.test.js` tests pure fns — **do not
-    remove/rename existing `settingsView.js` exports**, only add.
-  - Panels that load lazily on select (`onMount` in the child) match the established
-    voice-panel pattern; the old parent caching (`channelsLoaded` guard) drops out.
+  **Validated extraction recipe — shared-settings panels (FOLLOW EXACTLY; executed for
+  subagents/recall/web_search, zero test edits, 525/525):**
+  - **Props `{ settings, onCommit, onToast, onError }`.** Parent wires them in the
+    `{:else if activePanelId === 'x'}` branch:
+    ```svelte
+    <SettingsXxxPanel {settings} onCommit={commitSettings} {onToast}
+      onError={(message) => (saveError = message)} />
+    ```
+    The `saveError` banner is **shared**, rendered in the parent header above every
+    panel — the child drives it via `onError('')` on every field change + at save start,
+    `onError(msg)` on save failure.
+  - **Seed form state once with `untrack`** to avoid the `state_referenced_locally`
+    compiler warning: `import { onDestroy, untrack } from 'svelte';` then
+    `let form = $state(untrack(() => normalizeXxx(settings)));`. ⚠ Do **not** try to
+    silence the warning with a `// svelte-ignore state_referenced_locally` comment —
+    eslint's `svelte/no-unused-svelte-ignore` then fails the gate (the warning is
+    runtime-only, eslint can't see it). `untrack` is the clean fix.
+  - **Child-local `saving`** (`let saving = $state(false)`); drop the parent
+    `loading`/`saving` — the child only mounts when its panel is active, so those are
+    unobservable (behavior-equivalent). `saveDisabled = $derived(saving || xxxMatch(form,
+    normalizeXxx(settings)))`.
+  - **Auto-save `$effect` without** the `activePanelId !== 'x'` guard (child only exists
+    while active): `$effect(() => { if (saveDisabled) return; autoSaveTimer =
+    setTimeout(() => { autoSaveTimer = null; void saveXxx(); }, 800); return () =>
+    clearAutoSaveTimer(); });` plus `onDestroy(() => clearAutoSaveTimer());`. Keep
+    `AUTO_SAVE_DEBOUNCE_MS = 800` local to the child.
+  - **`saveXxx`** does `rpc('settings.update', buildXxxPayload(form))` → `onCommit(next)`
+    → success toast. **Re-seed after save** (`form = getXxx(next)`) for the panels that
+    did so inline: agentDefaults, recall, web_search, debug. (subagents does NOT re-seed.)
+  - **Toasts go through `onToast({ title, variant })` directly** (not the old
+    `showSettingsToast`). Manual save: `handleManualXxxSave()` returns early if `saving`;
+    if `saveDisabled` it fires `onToast({ title: t('common.alreadySaved','Already
+    saved'), variant: 'success' })`; else `clearAutoSaveTimer(); void saveXxx();`.
+  - **Imports:** `rpc` from `$lib/api.js` (test mocks that exact module — keep it), `t`
+    from `$lib/i18n.js`, helpers from `$lib/settingsView.js`, shared UI components from
+    `../` (e.g. `import Dropdown from '../Dropdown.svelte';`). No `<style>`.
+  - **Parent cleanup per panel** (~10 small edits): remove the panel's `$state`, its
+    `…SaveDisabled` `$derived`, its auto-save `$effect`, the onMount cleanup
+    `clear…AutoSaveTimer()` line, the `applySettings` re-seed line, and the `saveXxx` /
+    `clear…AutoSaveTimer` / `handleManualXxxSave` / `handleXxxChange` / `xxxMatch` fns,
+    plus any now-orphan `…AutoSaveTimer` var and now-unused `settingsView.js` imports.
+    The parent groups code **by kind, not by panel**, so the pieces are scattered — grep
+    the panel's identifiers and remove each. After removal, grep for leftovers and run
+    eslint (catches unused imports/vars).
+  - **Test guard:** `SettingsView.test.js` mounts the **real** `SettingsView` and asserts
+    on DOM (class/text/aria) + `rpc` call names → preserve markup classes, ids,
+    aria-labels, and the rpc calls verbatim. `settingsView.test.js` tests pure fns — do
+    not remove/rename existing `settingsView.js` exports, only add.
 
-  **Remaining panels** (still inline in `SettingsView`): defaults, skills, subagents,
-  compaction, recall, web_search, debug, specialized_models, providers, general,
-  appearance. Unlike Channels these read the **shared loaded `settings` object**, so
-  they need the shared-settings contract below. Note the parent groups code **by kind,
-  not by panel** — each panel's pieces are scattered across the script (all `$state`
-  together near L330, all `$derived` `…SaveDisabled` near L450, all auto-save `$effect`
-  blocks near L560, the `saveXxx`/`clearXxxTimer`/`handleManualXxxSave`/`handleXxxChange`/
-  `xxxMatch` fns spread through L800–L1500, plus a line in `applySettings`). So each
-  extraction is ~10 small edits in the parent + one new child. Use a Python splice
-  script with `assert`-guarded anchors (as with Channels) rather than hand-editing.
-
-  **Validated shared-settings child contract** (worked out, not yet executed):
-  props `{ settings, onCommit, onToast, onError }` where the parent wires
-  `onCommit={commitSettings}` (updates parent `settings`), `{onToast}` (parent's prop),
-  `onError={(msg) => (saveError = msg)}` (the `saveError` banner is **shared**, rendered
-  in the parent header above every panel — the child must keep using it, calling
-  `onError('')` on field change + at save start, `onError(msg)` on save failure, exactly
-  as the inline `saveXxx`/`handleXxxChange` do today). The child owns: form `$state`
-  seeded `normalizeXxx(settings)`, a **child-local** `saving` flag (drop the parent
-  `loading`/`saving` from `saveDisabled` — the child only mounts when its panel is
-  active, so those are unobservable here; behavior-equivalent), `saveDisabled =
-  saving || xxxMatch(form, normalizeXxx(settings))`, and the auto-save `$effect`
-  **without** the `activePanelId !== 'x'` guard (the child only exists while active):
-  `$effect(() => { if (saveDisabled) return; timer = setTimeout(save, 800); return () =>
-  clearTimer(); })`, plus `onDestroy(clearTimer)`. `saveXxx` does
-  `rpc('settings.update', buildXxxPayload(form))` → `onCommit(next)` → success toast;
-  panels that re-seed after save (agentDefaults/recall/web_search/debug) keep that line.
-  `debug` also needs an `onDebugEnabledChange` prop. `defaults`/`compaction` additionally
-  need the model picker (`availableModels`/`availableConnections`, loaded lazily in the
-  parent today via `ensureModelCatalogsLoaded` — either load in the child on mount or
-  pass the catalogs down). `providers` is the most coupled (props `providerAuthEvent`/
-  `connectProvider`/`disconnectProvider` + exported `handleProviderAuthCompleted` +
-  `model.refresh_db` + the header refresh button) — do it last. `specialized_models`
-  uses `taskModelSettings.js`, lazy-loads targets/schemas on mount, and has **no test
-  coverage** — extract it carefully (build/eslint only safety net). Spec
-  `.vorch/specs/webui.md` already says "SettingsView… own Settings panel state"; per §4
-  step 5 no inventory is needed, the split is internal. Box stays unchecked until the
-  container is thin.
+  **Remaining panels — one per session (ordered queue; simplest first, providers last):**
+  1. **Skills** ◀── CONTINUE HERE. List of skill dirs + add/remove + manual & auto-save.
+     Uses `getSkillDirectories`, `createSkillDirectoriesUpdatePayload`, `directoriesMatch`,
+     `getDefaultSkillDirectoryValue` (read-only default dir row reads `settings`), plus
+     `newSkillDirectory`/`addSkillDirectory`/`removeSkillDirectory`/`handleSkillDirectoryKeydown`.
+     Does NOT re-seed after save.
+  2. **Appearance** — language `<select>` + manual & auto-save. ⚠ calls `init(language)`
+     from `$lib/i18n.js` on save (re-applies i18n); uses `buildLanguageOptions`,
+     `getPersistedLanguageId`, `isLanguageSaveDisabled`, `createLanguageUpdatePayload`.
+     The select is `bind:value` on a local `selectedLanguageId`; keep `handleLanguageChange`.
+  3. **Debug** — checkbox + trace-limit number; **auto-save only, no Save button** (no
+     sticky footer). Needs an extra **`onDebugEnabledChange`** prop (parent passes its
+     own `onDebugEnabledChange` prop through); call it with the new enabled flag after a
+     successful save. Re-seeds after save. `getDebugSettings`/`DEBUG_SETTING_DEFAULTS`
+     live inline in `SettingsView` today — move them into the child (or a helper).
+  4. **General** — **read-only**, no save/state: two `s-value-box` rows (`serverHostValue`
+     via `formatServerHost`, `dataDirectoryValue` via `getDataDirectoryValue`). Trivial;
+     pass `{ settings }` only (+ `t`). Removes those two `$derived` from the parent.
+  5. **Defaults** — model + fallback-model `SearchableDropdown` + temperature + thinking
+     effort. Needs the **model picker** (`availableModels`/`availableConnections`); load
+     them in the child on mount (`model.list` + `connection.list`, as `ensureModelCatalogsLoaded`
+     does) so `waitForModelCatalogs()` in the test still sees both calls. Re-seeds after
+     save. Uses `modelSelection.js` + `buildModelSelectOptions`. Keep ids
+     `settings-defaults-model` / `-fallback-model` / `-temperature` / `-thinking-effort`.
+  6. **Compaction** — auto checkbox + threshold + tail_tokens + summary-model picker.
+     Same model-picker need as Defaults (id `settings-compaction-summary-model`).
+     `normalizeCompactionSettings`/`buildCompactionSettingsPayload`/`getCompactionSettings`
+     exist in `settingsView.js` (the inline fallbacks in `SettingsView` shadow them — use
+     the lib ones in the child).
+  7. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
+     lazy-loads targets/schemas on mount, **no test coverage** (build/eslint only). Many
+     own state vars (`taskModel*`) + `updateTaskModelSettings`/`listTaskModelTargets`/
+     `getTaskModelOptions` from `$lib/api.js`. Extract carefully.
+  8. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
+     `disconnectProvider`, the exported `handleProviderAuthCompleted`, `model.refresh_db`
+     + the **header refresh button** (currently rendered in the parent's `s-panel-header`,
+     gated on `activePanelId === 'providers'`), the device-flow OAuth dialog, and all the
+     `oauth*`/`provider*` helpers. Plan the header-button handoff before cutting.
 
 - [ ] **`chatState.js` (1927)** — two concerns: session/run state mutation **+**
   timeline projection (`buildVisibleTimelineItems`, `liveTimelineItems`,

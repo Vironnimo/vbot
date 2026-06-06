@@ -5,6 +5,9 @@
   import SearchableDropdown from './SearchableDropdown.svelte';
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
+  import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
+  import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
+  import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -35,18 +38,12 @@
     createLanguageUpdatePayload,
     createSkillDirectoriesUpdatePayload,
     buildAgentDefaultsPayload,
-    buildSubAgentSettingsPayload,
-    buildRecallBackendOptions,
-    buildRecallSettingsPayload,
-    buildWebSearchProviderOptions,
-    buildWebSearchSettingsPayload,
     describeProvider,
     formatServerHost,
     getDataDirectoryValue,
     getDefaultSkillDirectoryValue,
     getSkillDirectories,
     normalizeAgentDefaultsSettings,
-    normalizeSubAgentSettings,
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
@@ -56,8 +53,6 @@
     isOAuthDeviceFlowConnection,
     isOAuthConnection,
     isLanguageSaveDisabled,
-    getRecallSettings,
-    getWebSearchSettings,
   } from '$lib/settingsView.js';
 
   const COMPACTION_SETTING_DEFAULTS = Object.freeze({
@@ -329,10 +324,7 @@
   let selectedLanguageId = $state('en');
   let skillDirectories = $state([]);
   let agentDefaults = $state(normalizeAgentDefaultsFormValues(null));
-  let subAgentSettings = $state(normalizeSubAgentSettings(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
-  let recallSettings = $state(getRecallSettings(null));
-  let webSearchSettings = $state(getWebSearchSettings(null));
   let debugSettings = $state(getDebugSettings(null));
   let taskModelBindings = $state(normalizeTaskModelSettings(null));
   let taskModelTargetsByType = $state({});
@@ -354,10 +346,7 @@
   let copiedDeviceFlowConnectionId = $state('');
   let languageAutoSaveTimer = null;
   let skillDirectoriesAutoSaveTimer = null;
-  let subAgentSettingsAutoSaveTimer = null;
   let compactionSettingsAutoSaveTimer = null;
-  let recallSettingsAutoSaveTimer = null;
-  let webSearchSettingsAutoSaveTimer = null;
   let debugSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
 
@@ -408,12 +397,6 @@
       compactionSummaryModelOptions,
     ),
   );
-  let recallBackendOptions = $derived(
-    buildRecallBackendOptions(recallSettings, t),
-  );
-  let webSearchProviderOptions = $derived(
-    buildWebSearchProviderOptions(webSearchSettings, t),
-  );
   let thinkingEffortOptions = $derived([
     {
       value: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
@@ -448,14 +431,6 @@
   let agentDefaultsSaveDisabled = $derived(
     loading || saving || agentDefaultsMatch(agentDefaults, settings),
   );
-  let subAgentSettingsSaveDisabled = $derived(
-    loading ||
-      saving ||
-      subAgentSettingsMatch(
-        subAgentSettings,
-        normalizeSubAgentSettings(settings),
-      ),
-  );
   let compactionSettingsSaveDisabled = $derived(
     loading ||
       saving ||
@@ -463,16 +438,6 @@
         compactionSettings,
         getCompactionSettings(settings),
       ),
-  );
-  let recallSettingsSaveDisabled = $derived(
-    loading ||
-      saving ||
-      recallSettingsMatch(recallSettings, getRecallSettings(settings)),
-  );
-  let webSearchSettingsSaveDisabled = $derived(
-    loading ||
-      saving ||
-      webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
   );
   let debugSettingsSaveDisabled = $derived(
     loading ||
@@ -496,10 +461,7 @@
     return () => {
       clearLanguageAutoSaveTimer();
       clearSkillDirectoriesAutoSaveTimer();
-      clearSubAgentSettingsAutoSaveTimer();
       clearCompactionSettingsAutoSaveTimer();
-      clearRecallSettingsAutoSaveTimer();
-      clearWebSearchSettingsAutoSaveTimer();
       clearDebugSettingsAutoSaveTimer();
     };
   });
@@ -565,25 +527,6 @@
   });
 
   $effect(() => {
-    if (activePanelId !== 'subagents') {
-      return;
-    }
-
-    if (subAgentSettingsSaveDisabled) {
-      return;
-    }
-
-    subAgentSettingsAutoSaveTimer = setTimeout(() => {
-      subAgentSettingsAutoSaveTimer = null;
-      void saveSubAgentSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearSubAgentSettingsAutoSaveTimer();
-    };
-  });
-
-  $effect(() => {
     if (activePanelId !== 'compaction') {
       return;
     }
@@ -599,44 +542,6 @@
 
     return () => {
       clearCompactionSettingsAutoSaveTimer();
-    };
-  });
-
-  $effect(() => {
-    if (activePanelId !== 'recall') {
-      return;
-    }
-
-    if (recallSettingsSaveDisabled) {
-      return;
-    }
-
-    recallSettingsAutoSaveTimer = setTimeout(() => {
-      recallSettingsAutoSaveTimer = null;
-      void saveRecallSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearRecallSettingsAutoSaveTimer();
-    };
-  });
-
-  $effect(() => {
-    if (activePanelId !== 'web_search') {
-      return;
-    }
-
-    if (webSearchSettingsSaveDisabled) {
-      return;
-    }
-
-    webSearchSettingsAutoSaveTimer = setTimeout(() => {
-      webSearchSettingsAutoSaveTimer = null;
-      void saveWebSearchSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearWebSearchSettingsAutoSaveTimer();
     };
   });
 
@@ -710,10 +615,7 @@
     selectedLanguageId = language;
     skillDirectories = getSkillDirectories(nextSettings);
     agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
-    subAgentSettings = normalizeSubAgentSettings(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
-    recallSettings = getRecallSettings(nextSettings);
-    webSearchSettings = getWebSearchSettings(nextSettings);
     debugSettings = getDebugSettings(nextSettings);
     taskModelBindings = normalizeTaskModelSettings(nextSettings);
     newSkillDirectory = '';
@@ -814,31 +716,6 @@
     }
   }
 
-  async function saveSubAgentSettings() {
-    if (subAgentSettingsSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildSubAgentSettingsPayload(subAgentSettings),
-      );
-      commitSettings(nextSettings);
-      showSettingsToast(
-        t('settings.subagents.saveSuccess', 'Sub-agent settings updated.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
   async function saveCompactionSettings() {
     if (compactionSettingsSaveDisabled) {
       return;
@@ -855,58 +732,6 @@
       commitSettings(nextSettings);
       showSettingsToast(
         t('settings.compaction.saved', 'Compaction settings saved.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function saveRecallSettings() {
-    if (recallSettingsSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildRecallSettingsPayload(recallSettings),
-      );
-      commitSettings(nextSettings);
-      recallSettings = getRecallSettings(nextSettings);
-      showSettingsToast(
-        t('settings.recall.saveSuccess', 'Recall backend updated.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function saveWebSearchSettings() {
-    if (webSearchSettingsSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildWebSearchSettingsPayload(webSearchSettings),
-      );
-      commitSettings(nextSettings);
-      webSearchSettings = getWebSearchSettings(nextSettings);
-      showSettingsToast(
-        t('settings.webSearch.saveSuccess', 'Web search settings updated.'),
         'success',
       );
     } catch (error) {
@@ -1039,31 +864,10 @@
     }
   }
 
-  function clearSubAgentSettingsAutoSaveTimer() {
-    if (subAgentSettingsAutoSaveTimer !== null) {
-      clearTimeout(subAgentSettingsAutoSaveTimer);
-      subAgentSettingsAutoSaveTimer = null;
-    }
-  }
-
   function clearCompactionSettingsAutoSaveTimer() {
     if (compactionSettingsAutoSaveTimer !== null) {
       clearTimeout(compactionSettingsAutoSaveTimer);
       compactionSettingsAutoSaveTimer = null;
-    }
-  }
-
-  function clearRecallSettingsAutoSaveTimer() {
-    if (recallSettingsAutoSaveTimer !== null) {
-      clearTimeout(recallSettingsAutoSaveTimer);
-      recallSettingsAutoSaveTimer = null;
-    }
-  }
-
-  function clearWebSearchSettingsAutoSaveTimer() {
-    if (webSearchSettingsAutoSaveTimer !== null) {
-      clearTimeout(webSearchSettingsAutoSaveTimer);
-      webSearchSettingsAutoSaveTimer = null;
     }
   }
 
@@ -1119,20 +923,6 @@
     void saveAgentDefaults();
   }
 
-  function handleManualSubAgentSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (subAgentSettingsSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearSubAgentSettingsAutoSaveTimer();
-    void saveSubAgentSettings();
-  }
-
   function handleManualCompactionSettingsSave() {
     if (saving) {
       return;
@@ -1145,34 +935,6 @@
 
     clearCompactionSettingsAutoSaveTimer();
     void saveCompactionSettings();
-  }
-
-  function handleManualRecallSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (recallSettingsSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearRecallSettingsAutoSaveTimer();
-    void saveRecallSettings();
-  }
-
-  function handleManualWebSearchSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (webSearchSettingsSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearWebSearchSettingsAutoSaveTimer();
-    void saveWebSearchSettings();
   }
 
   function handleManualTaskModelSave() {
@@ -1221,14 +983,6 @@
     addSkillDirectory();
   }
 
-  function handleSubAgentSettingChange(key, event) {
-    subAgentSettings = {
-      ...subAgentSettings,
-      [key]: event.currentTarget.value,
-    };
-    saveError = '';
-  }
-
   function handleAgentDefaultsChange(key, value) {
     agentDefaults = {
       ...agentDefaults,
@@ -1241,33 +995,6 @@
     compactionSettings = {
       ...compactionSettings,
       [key]: value,
-    };
-    saveError = '';
-  }
-
-  function handleRecallBackendChange(backend) {
-    recallSettings = {
-      ...recallSettings,
-      backend,
-    };
-    saveError = '';
-  }
-
-  function handleWebSearchProviderChange(provider) {
-    webSearchSettings = {
-      ...webSearchSettings,
-      provider,
-    };
-    saveError = '';
-  }
-
-  function handleWebSearchSearxngBaseUrlChange(event) {
-    webSearchSettings = {
-      ...webSearchSettings,
-      searxng: {
-        ...(webSearchSettings.searxng ?? {}),
-        base_url: event.currentTarget.value,
-      },
     };
     saveError = '';
   }
@@ -1367,20 +1094,6 @@
     });
   }
 
-  function subAgentSettingsMatch(left, right) {
-    const normalizedLeft = normalizeSubAgentSettings({ subagents: left });
-    const normalizedRight = normalizeSubAgentSettings({ subagents: right });
-
-    return (
-      normalizedLeft.max_subagent_depth ===
-        normalizedRight.max_subagent_depth &&
-      normalizedLeft.max_subagents_per_turn ===
-        normalizedRight.max_subagents_per_turn &&
-      normalizedLeft.subagent_timeout_minutes ===
-        normalizedRight.subagent_timeout_minutes
-    );
-  }
-
   function compactionSettingsMatch(left, right) {
     const normalizedLeft = normalizeCompactionSettings({
       compaction: left,
@@ -1394,23 +1107,6 @@
       normalizedLeft.threshold === normalizedRight.threshold &&
       normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
       normalizedLeft.summary_model === normalizedRight.summary_model
-    );
-  }
-
-  function recallSettingsMatch(left, right) {
-    return (
-      getRecallSettings({ recall: left }).backend ===
-      getRecallSettings({ recall: right }).backend
-    );
-  }
-
-  function webSearchSettingsMatch(left, right) {
-    const normalizedLeft = getWebSearchSettings({ web_search: left });
-    const normalizedRight = getWebSearchSettings({ web_search: right });
-
-    return (
-      normalizedLeft.provider === normalizedRight.provider &&
-      normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
     );
   }
 
@@ -2122,107 +1818,12 @@
             </div>
           </div>
         {:else if activePanelId === 'subagents'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.subagents.maxDepth', 'Max sub-agent depth')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.subagents.maxDepthDescription',
-                  'Maximum nesting level allowed when sub-agents spawn their own sub-agents.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                class="s-input"
-                type="number"
-                min="1"
-                step="1"
-                value={subAgentSettings.max_subagent_depth}
-                aria-label={t(
-                  'settings.subagents.maxDepth',
-                  'Max sub-agent depth',
-                )}
-                oninput={(event) =>
-                  handleSubAgentSettingChange('max_subagent_depth', event)}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.subagents.maxPerTurn', 'Max sub-agents per turn')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.subagents.maxPerTurnDescription',
-                  'Maximum number of sub-agent sessions one parent run may spawn.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                class="s-input"
-                type="number"
-                min="1"
-                step="1"
-                value={subAgentSettings.max_subagents_per_turn}
-                aria-label={t(
-                  'settings.subagents.maxPerTurn',
-                  'Max sub-agents per turn',
-                )}
-                oninput={(event) =>
-                  handleSubAgentSettingChange('max_subagents_per_turn', event)}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.subagents.timeoutMinutes', 'Timeout minutes')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.subagents.timeoutMinutesDescription',
-                  'Maximum wait time for blocking sub-agent calls before they fail.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                class="s-input"
-                type="number"
-                min="1"
-                step="1"
-                value={subAgentSettings.subagent_timeout_minutes}
-                aria-label={t(
-                  'settings.subagents.timeoutMinutes',
-                  'Timeout minutes',
-                )}
-                oninput={(event) =>
-                  handleSubAgentSettingChange(
-                    'subagent_timeout_minutes',
-                    event,
-                  )}
-              />
-            </div>
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualSubAgentSettingsSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </button>
-          </div>
+          <SettingsSubAgentsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'compaction'}
           <div class="s-row">
             <div class="s-row-info">
@@ -2364,109 +1965,19 @@
             </button>
           </div>
         {:else if activePanelId === 'recall'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.recall.backend', 'Recall backend')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.recall.backendDescription',
-                  'Backend used by session_search for stored Session recall.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--recall">
-              <Dropdown
-                id="settings-recall-backend"
-                value={recallSettings.backend}
-                options={recallBackendOptions}
-                ariaLabel={t('settings.recall.backend', 'Recall backend')}
-                triggerClass="settings-view__dropdown"
-                listClass="settings-view__thinking-list"
-                onValueChange={handleRecallBackendChange}
-              />
-            </div>
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualRecallSettingsSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('settings.recall.save', 'Save')}
-            </button>
-          </div>
+          <SettingsRecallPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'web_search'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.webSearch.provider', 'Search provider')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.webSearch.providerDescription',
-                  'Provider used whenever an agent calls web_search.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--web-search">
-              <Dropdown
-                id="settings-web-search-provider"
-                value={webSearchSettings.provider}
-                options={webSearchProviderOptions}
-                ariaLabel={t('settings.webSearch.provider', 'Search provider')}
-                triggerClass="settings-view__dropdown"
-                listClass="settings-view__thinking-list"
-                onValueChange={handleWebSearchProviderChange}
-              />
-            </div>
-          </div>
-
-          {#if webSearchSettings.provider === 'searxng'}
-            <div class="s-row">
-              <div class="s-row-info">
-                <div class="s-row-label">
-                  {t('settings.webSearch.searxngBaseUrl', 'SearXNG base URL')}
-                </div>
-                <div class="s-row-desc">
-                  {t(
-                    'settings.webSearch.searxngBaseUrlDescription',
-                    'Base URL of the local or remote SearXNG instance.',
-                  )}
-                </div>
-              </div>
-              <div class="s-row-control s-row-control--web-search-url">
-                <input
-                  id="settings-web-search-searxng-base-url"
-                  class="s-input"
-                  type="url"
-                  value={webSearchSettings.searxng.base_url}
-                  placeholder="http://localhost:8888"
-                  aria-label={t(
-                    'settings.webSearch.searxngBaseUrl',
-                    'SearXNG base URL',
-                  )}
-                  oninput={handleWebSearchSearxngBaseUrlChange}
-                />
-              </div>
-            </div>
-          {/if}
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualWebSearchSettingsSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('settings.webSearch.save', 'Save')}
-            </button>
-          </div>
+          <SettingsWebSearchPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'debug'}
           <div class="s-row">
             <div class="s-row-info">
