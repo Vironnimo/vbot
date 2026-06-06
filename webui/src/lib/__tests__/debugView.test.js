@@ -23,7 +23,6 @@ import {
   selectModelProbeConnection,
   selectModelProbeProvider,
   selectTrace,
-  streamEventText,
 } from '../debugView.js';
 
 describe('debugView helpers', () => {
@@ -325,25 +324,6 @@ describe('debugView helpers', () => {
     it('renders object header values as JSON', () => {
       const result = formatHeadersForDisplay({ 'x-meta': { a: 1 } });
       expect(result).toBe('x-meta: {\n  "a": 1\n}');
-    });
-  });
-
-  describe('streamEventText', () => {
-    it('returns string events as-is', () => {
-      expect(streamEventText('event: foo\ndata: bar\n\n')).toBe(
-        'event: foo\ndata: bar\n\n',
-      );
-    });
-
-    it('returns an empty string for null and undefined', () => {
-      expect(streamEventText(null)).toBe('');
-      expect(streamEventText(undefined)).toBe('');
-    });
-
-    it('renders object events as JSON', () => {
-      expect(streamEventText({ event: 'foo', data: 'bar' })).toBe(
-        '{\n  "event": "foo",\n  "data": "bar"\n}',
-      );
     });
   });
 

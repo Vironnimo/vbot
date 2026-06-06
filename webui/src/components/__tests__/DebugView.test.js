@@ -332,20 +332,30 @@ describe('DebugView', () => {
     );
   });
 
-  it('renders raw stream event text in a scrollable, selectable code block', async () => {
+  it('shows the aggregate streaming response body under the Response tab and exposes no Stream Events tab', async () => {
     const trace = traceListEntry({
       trace_id: 'trace-stream',
       provider_id: 'openai',
       model_id: 'gpt-5.2',
     });
+    const aggregateStreamBody =
+      'event: message\ndata: {"delta":"hi"}\n\n' +
+      'event: message\ndata: {"delta":" there"}\n\n' +
+      'data: [DONE]\n\n';
+
     debugTraceListMock.mockResolvedValue({ traces: [trace] });
     debugTraceGetMock.mockResolvedValue({
       trace: fullTraceFixture(trace, {
-        stream: {
-          events: [
-            'event: message\ndata: {"delta":"hi"}\n\n',
-            'event: message\ndata: {"delta":" there"}\n\n',
-          ],
+        request: {
+          method: 'POST',
+          url: 'https://api.openai.com/v1/responses',
+          headers: { 'content-type': 'application/json' },
+          body: '{"stream":true}',
+        },
+        response: {
+          status_code: 200,
+          headers: { 'content-type': 'text/event-stream' },
+          body: aggregateStreamBody,
         },
       }),
     });
@@ -357,23 +367,24 @@ describe('DebugView', () => {
 
     clickTraceRow('trace-stream');
     flushSync();
-    await switchToDetailTabWhenReady('Stream Events');
+    await switchToDetailTabWhenReady('Response');
     flushSync();
-    await waitForStreamEventText('event: message');
 
-    const eventBlocks = Array.from(
-      document.querySelectorAll('.debug-view__stream-body pre'),
-    );
-    expect(eventBlocks.length).toBeGreaterThanOrEqual(2);
+    const tabLabels = Array.from(
+      document.querySelectorAll('.debug-view__tab'),
+    ).map((tab) => tab.textContent?.trim() ?? '');
+    expect(tabLabels).toEqual(['Metadata', 'Request', 'Response']);
+    expect(tabLabels).not.toContain('Stream Events');
+
+    await waitForBodyText('data: [DONE]');
+
+    const responseBlock = getBodyBlock();
     expect(
-      eventBlocks[0]?.classList.contains('debug-view__code-block--raw'),
+      responseBlock?.classList.contains('debug-view__code-block--raw'),
     ).toBe(true);
-    expect(eventBlocks[0]?.textContent).toBe(
-      'event: message\ndata: {"delta":"hi"}\n\n',
-    );
-    expect(eventBlocks[1]?.textContent).toBe(
-      'event: message\ndata: {"delta":" there"}\n\n',
-    );
+    expect(responseBlock?.textContent).toBe(aggregateStreamBody);
+    expect(responseBlock?.textContent).toContain('"delta":"hi"');
+    expect(responseBlock?.textContent).toContain('"delta":" there"');
   });
 
   it('keeps the selected list entry when refreshTraces returns a list still containing the id', async () => {
@@ -640,20 +651,6 @@ async function waitForBodyText(text, attempts = 60) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error(`Timed out waiting for body text: ${text}`);
-}
-
-async function waitForStreamEventText(text, attempts = 60) {
-  for (let i = 0; i < attempts; i += 1) {
-    flushSync();
-    const blocks = Array.from(
-      document.querySelectorAll('.debug-view__stream-body pre'),
-    );
-    if (blocks.some((block) => (block.textContent ?? '').includes(text))) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  throw new Error(`Timed out waiting for stream event text: ${text}`);
 }
 
 async function waitForCondition(check, attempts = 60) {
