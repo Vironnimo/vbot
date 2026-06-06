@@ -28,7 +28,6 @@ from core.utils.logging import get_logger
 _logger = get_logger("debug")
 
 _TRACE_TYPE_PROVIDER_REQUEST = "provider_request"
-_HTTP_ERROR_THRESHOLD = 400
 
 
 @dataclass(frozen=True)
@@ -96,9 +95,11 @@ class _TraceCapture:
     """Accumulates one trace and persists it on :meth:`finalize`.
 
     Body bytes (for both streaming and non-streaming responses) arrive
-    through :meth:`feed_body`. On finalize, streaming responses are split
-    into raw SSE frames under ``stream.events`` while non-streaming
-    responses keep their raw text under ``response.body``.
+    through :meth:`feed_body`. On finalize, the complete raw aggregate
+    body — every byte of a streamed SSE response, the raw JSON of a
+    non-streaming response, or the raw text of an error response — is
+    stored under ``response.body``. No per-frame split is produced; the
+    canonical trace is one request and one response.
     """
 
     def __init__(
@@ -178,26 +179,16 @@ class _TraceCapture:
             "response": self._response,
         }
 
-        # A streaming success body is a sequence of SSE frames; anything else
-        # (non-streaming, or an error response on a streaming request) keeps
-        # its raw body under response.body.
-        if self._is_streaming_body():
-            trace["stream"] = {"events": _split_sse_frames(body_text)}
-        elif self._response is not None:
+        # The complete raw aggregate body — including every byte of an SSE
+        # stream — lives in response.body. We never split it into per-frame
+        # metadata; the canonical trace is one request and one response.
+        if self._response is not None:
             self._response["body"] = body_text
 
         if self._error is not None:
             trace["error"] = self._error
 
         return trace
-
-    def _is_streaming_body(self) -> bool:
-        if self._context is None or not self._context.streaming:
-            return False
-        if self._response is None:
-            return False
-        status_code = self._response.get("status_code")
-        return isinstance(status_code, int) and status_code < _HTTP_ERROR_THRESHOLD
 
     def _context_dict(self) -> dict[str, Any] | None:
         if self._context is None:
@@ -217,15 +208,3 @@ def _decode_body(body: bytes | None) -> str | None:
     if not body:
         return None
     return body.decode("utf-8", errors="replace")
-
-
-def _split_sse_frames(body_text: str | None) -> list[str]:
-    """Split a raw SSE response body into individual event frames.
-
-    Events are separated by a blank line. Frames are kept raw (including
-    ``data:`` / ``event:`` prefixes); no JSON parsing is performed.
-    """
-    if not body_text:
-        return []
-    normalized = body_text.replace("\r\n", "\n")
-    return [frame for frame in normalized.split("\n\n") if frame.strip()]
