@@ -1,9 +1,10 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done; Wave 2 SettingsView + chatState done) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** continue Wave 2 → decompose `ChatTimeline.svelte`, starting with the
-presentation-helper boundary described under "Planned UI decomposition" below. Preserve
-the rendered DOM/test contract and keep scrolling/pagination behavior in the parent.
+**Status:** in progress (Wave 1 done; Wave 2 through AgentsView done) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → decompose `DebugView.svelte`, starting with
+`DebugTraceDetail` and `DebugModelProbe` as described under "Planned UI decomposition"
+below. Preserve the rendered DOM/test contract and keep trace catalog loading,
+selection, limit/clear controls, and top-level states in the parent.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -372,9 +373,40 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   `chatState.test.js` green (69/69). Full frontend gate green (vitest 525/525,
   build PASS). WebUI spec updated with the new ownership/import boundary.
 
-- [ ] **`ChatTimeline.svelte` (2523)** ◀── START HERE
-- [ ] **`AgentsView.svelte` (2025)**
-- [ ] **`DebugView.svelte` (1700)**
+- [x] **`ChatTimeline.svelte` (2523 → 358, DONE 2026-06-06)** — extracted the
+  presentation boundary into `webui/src/lib/chatTimelinePresentation.js` (955) and
+  `chatToolDetails.js` (285), with focused coverage in
+  `lib/__tests__/chatTimelinePresentation.test.js` (3 tests). Assistant-Run rendering
+  moved to `components/chat/ChatAssistantRun.svelte` (293); normal
+  message/event/streaming rendering moved to `ChatTimelineEntry.svelte` (390).
+  `ChatTimeline.svelte` retains timeline projection consumption/iteration, date
+  separators, reasoning disclosure state, submitted-turn scrolling and spacer sizing,
+  bottom-follow behavior, and older-history pagination. Existing component import path,
+  props, DOM classes, IDs, aria contract, callback behavior, and all 76 component tests
+  remain intact. Timeline-specific CSS moved to
+  `webui/src/styles/chat-timeline.css` (405), imported by `styles/app.css`. Full
+  frontend gate green (vitest 528/528, build PASS). WebUI spec unchanged because this
+  was a pure internal refactor with no product/transport contract change. Commit:
+  `3f2de2f`.
+
+- [x] **`AgentsView.svelte` (2025 → 193, DONE 2026-06-06)** — split stable visual and
+  state ownership boundaries into `components/agents/AgentListPane.svelte` (66),
+  `AgentEditor.svelte` (1018), and `AgentCreateModal.svelte` (312). The parent retains
+  catalog/Agent loading, selected-Agent state, shared-selection synchronization, and
+  app callback projection. `AgentEditor` owns edit form state, 800 ms autosave, sparse
+  update payload flow, delete, model selectors, prompt/memory controls, and tool/skill
+  access rendering. It is keyed by selected Agent so switching Agents cancels local
+  timers and prevents an in-flight save from updating the newly selected editor.
+  `AgentCreateModal` owns its isolated create state, validation, model selection, submit,
+  Escape/overlay close behavior, and save error. Existing `agentForm.js` and
+  `modelSelection.js` remain the pure business helpers. Existing component import path,
+  props, DOM classes, IDs, aria contract, RPC names, and all 28 component tests remain
+  intact. View CSS moved to `webui/src/styles/agents.css` (532), imported by
+  `styles/app.css`. Full frontend gate green (vitest 528/528, build PASS). WebUI spec
+  unchanged because this was a pure internal refactor with no product/transport
+  contract change. Commit: `fe0ae92`.
+
+- [ ] **`DebugView.svelte` (1700)** ◀── START HERE
 - [ ] **`ChatView.svelte` (1594)**
 - [ ] **`api.js` (1227)**
 - [ ] **`ChatComposer.svelte` (1075)**
@@ -384,7 +416,8 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
 Use this as the starting plan, then re-check dependents and tests before each cut.
 Preserve the current parent component/API import surfaces throughout.
 
-1. **`ChatTimeline.svelte` (2523; 76 component tests).**
+1. ~~**`ChatTimeline.svelte` (2523; 76 component tests).**~~ — DONE; see the
+   completed Wave 2 entry above.
    - First extract the large pure presentation cluster (message/content-block helpers,
      tool labels/details/results, Sub-Agent status/links, duration/date formatting) into
      one deep `chatTimelinePresentation.js` helper module with focused unit tests.
@@ -398,7 +431,8 @@ Preserve the current parent component/API import surfaces throughout.
      `styles/chat-timeline.css`, or move each child's rules with its markup. Prefer one
      stylesheet over duplicating selectors across children.
 
-2. **`AgentsView.svelte` (2025; 28 component tests).**
+2. ~~**`AgentsView.svelte` (2025; 28 component tests).**~~ — DONE; see the completed
+   Wave 2 entry above.
    - Split the stable visual regions into `AgentListPane`, `AgentEditor`, and
      `AgentCreateModal`. Keep list loading/selection and shared-Agent callbacks in the
      parent.
