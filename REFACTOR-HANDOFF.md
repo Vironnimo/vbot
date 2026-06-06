@@ -1,10 +1,9 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done; Wave 2 through AgentsView done) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** continue Wave 2 → decompose `DebugView.svelte`, starting with
-`DebugTraceDetail` and `DebugModelProbe` as described under "Planned UI decomposition"
-below. Preserve the rendered DOM/test contract and keep trace catalog loading,
-selection, limit/clear controls, and top-level states in the parent.
+**Status:** in progress (Wave 1 done; Wave 2 through ChatView done) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → decompose `api.js` as described under "Planned UI
+decomposition" below. Keep `api.js` as the compatibility facade and preserve every
+existing export.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -406,9 +405,29 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   unchanged because this was a pure internal refactor with no product/transport
   contract change. Commit: `fe0ae92`.
 
-- [ ] **`DebugView.svelte` (1700)** ◀── START HERE
-- [ ] **`ChatView.svelte` (1594)**
-- [ ] **`api.js` (1227)**
+- [x] **`DebugView.svelte` (1700 → 620, DONE 2026-06-06)** — extracted the trace
+  list into `components/debug/DebugTraceList.svelte` (393), metadata/request/response
+  tabs and body formatting into `DebugTraceDetail.svelte` (466), and provider/
+  connection selection plus probe result rendering into `DebugModelProbe.svelte`
+  (340). The parent retains trace/status/settings loading, trace selection and
+  stale-detail request protection, limit/clear controls, and top-level loading/error/
+  empty states. Styles moved with each extracted component; existing classes, IDs,
+  aria contract, API calls, and all 10 component tests remain unchanged. No test
+  edits. Focused gate green (227/227); full frontend gate green (vitest 528/528,
+  build PASS).
+
+- [x] **`ChatView.svelte` (1594 → 886, DONE 2026-06-06)** — moved Run subscription
+  ownership, retained-event merge, 33 ms delta batching, terminal-event handling,
+  SSE reconnect, app WebSocket event conversion/deduplication, Sub-Agent status
+  projection, and cleanup into the factory-injected `lib/chatRunStream.js` (416).
+  Extracted the stable Agent/header rendering, usage badge, wakeword indicator, and
+  header controls into `components/chat/ChatHeader.svelte` (396). `ChatView` retains
+  Agent/Session selection, history and queue RPC orchestration, command handling,
+  send/cancel/retry actions, and child wiring. The exported `retryLastTurn` method,
+  DOM classes, RPC/SSE calls, and all 29 component tests remain unchanged. No test
+  edits. Focused and full frontend gates green (vitest 528/528, build PASS).
+
+- [ ] **`api.js` (1227)** ◀── START HERE
 - [ ] **`ChatComposer.svelte` (1075)**
 
 ### Planned UI decomposition (surveyed 2026-06-06)
@@ -443,7 +462,8 @@ Preserve the current parent component/API import surfaces throughout.
    - Lift or redistribute scoped CSS before moving markup; preserve DOM classes and RPC
      calls because the existing tests mount the real view.
 
-3. **`DebugView.svelte` (1700; 10 component tests).**
+3. ~~**`DebugView.svelte` (1700; 10 component tests).**~~ — DONE; see the completed
+   Wave 2 entry above.
    - Extract `DebugTraceDetail` (metadata/request/response tabs and body formatting) and
      `DebugModelProbe` (provider/connection selection and probe result rendering).
    - Keep trace catalog loading, trace selection, limit/clear controls, and top-level
@@ -452,7 +472,8 @@ Preserve the current parent component/API import surfaces throughout.
    - Most of the file is CSS (starts around line 924), so move rules with the extracted
      components or lift one debug-specific stylesheet before markup moves.
 
-4. **`ChatView.svelte` (1594; 29 component tests).**
+4. ~~**`ChatView.svelte` (1594; 29 component tests).**~~ — DONE; see the completed
+   Wave 2 entry above.
    - Extract the stateful Run-stream collaborator first: subscription ownership, SSE
      reconnect, delayed delta batching, retained-event merge, server-event conversion,
      and cleanup belong in a constructor/factory-injected `chatRunStream.js`.

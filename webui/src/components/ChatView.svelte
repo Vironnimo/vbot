@@ -10,16 +10,13 @@
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
+  import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
-    TERMINAL_RUN_EVENTS,
     addServerQueuedMessage,
-    appendCompactionCheckpoint,
-    appendRunEvent,
     canCreateNewSession,
     createChatState,
     currentSessionState,
     ensureSessionState,
-    highestContiguousRunEventSequence,
     isRunActive,
     loadHistory,
     markSessionError,
@@ -32,6 +29,7 @@
     syncQueueFromServer,
     updateQueuedMessageContent,
   } from '../lib/chatState.js';
+  import ChatHeader from './chat/ChatHeader.svelte';
   import ChatComposer from './ChatComposer.svelte';
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
@@ -68,33 +66,10 @@
   let submittedTurnScrollRunId = $state('');
   let subAgentRunStatuses = $state({});
   let handledSubAgentNavigationKey = '';
-  const activeSubscriptions = {};
-  const pendingReconnects = {};
-  const pendingRunEventQueues = {};
-  const pendingRunEventFlushes = {};
   const ACTION_INFO_TIMEOUT_MS = 4000;
-  const SSE_RECONNECT_DELAY_MS = 500;
-  const MAX_SSE_RECONNECT_ATTEMPTS = 3;
-  const RUN_EVENT_FLUSH_DELAY_MS = 33;
-  const RUN_EVENT_ASSISTANT_OUTPUT_DELTA = 'assistant_output_delta';
-  const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
-  const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
-  const DELAYED_RUN_EVENT_TYPES = new Set([
-    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
-    RUN_EVENT_REASONING_DELTA,
-    RUN_EVENT_TOOL_CALL_DELTA,
-  ]);
-  const RUN_SERVER_EVENT_TYPES = new Set([
-    'run_started',
-    'run_output',
-    'run_completed',
-    'run_cancelled',
-    'run_failed',
-  ]);
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
   let actionInfoTimeoutId = null;
-  const handledRunServerEventKeys = Object.create(null);
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
@@ -106,95 +81,6 @@
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
-
-  const usageTotalTokens = (usage) => {
-    const inputTokens = Number.isFinite(usage?.input_tokens)
-      ? usage.input_tokens
-      : 0;
-    const outputTokens = Number.isFinite(usage?.output_tokens)
-      ? usage.output_tokens
-      : 0;
-    return inputTokens + outputTokens;
-  };
-
-  let tokenBadgeText = $derived.by(() => {
-    const usage = activeSessionState?.usage;
-    const contextWindow = activeAgent?.context_window;
-    const numberFormat = new Intl.NumberFormat();
-
-    if (usage) {
-      const tokensFormatted = numberFormat.format(usageTotalTokens(usage));
-      const estimated = usage.estimated === true;
-
-      if (contextWindow != null) {
-        const contextFormatted = numberFormat.format(contextWindow);
-        return estimated
-          ? t('chat.tokenBadgeEstimated', '~{tokens} / {context} tok', {
-              tokens: tokensFormatted,
-              context: contextFormatted,
-            })
-          : t('chat.tokenBadge', '{tokens} / {context} tok', {
-              tokens: tokensFormatted,
-              context: contextFormatted,
-            });
-      }
-      return estimated
-        ? t('chat.tokenBadgeEstimatedNoContext', '~{tokens} tok', {
-            tokens: tokensFormatted,
-          })
-        : t('chat.tokenBadgeNoContext', '{tokens} tok', {
-            tokens: tokensFormatted,
-          });
-    }
-    if (contextWindow != null) {
-      return t('chat.tokenBadgeNoUsage', '— / {context} tok', {
-        context: numberFormat.format(contextWindow),
-      });
-    }
-    return '';
-  });
-
-  let micDotClass = $derived(computeMicDotClass(wakewordStatus));
-  let micTooltip = $derived(computeMicTooltip(wakewordStatus));
-  let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
-
-  function computeMicDotClass(status) {
-    if (!status?.enabled) return 'mic-dot--off';
-    switch (status.state) {
-      case 'listening':
-      case 'wakeword_detected':
-        return 'mic-dot--listening';
-      case 'recording':
-        return 'mic-dot--recording';
-      case 'transcribing':
-      case 'sending':
-        return 'mic-dot--processing';
-      case 'error':
-        return 'mic-dot--error';
-      default:
-        return 'mic-dot--off';
-    }
-  }
-
-  function computeMicTooltip(status) {
-    if (!status?.enabled)
-      return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    switch (status.state) {
-      case 'listening':
-        return t('voice.mic.tooltip.listening', 'Listening for wakeword');
-      case 'wakeword_detected':
-        return t('voice.mic.tooltip.detected', 'Wakeword detected');
-      case 'recording':
-        return t('voice.mic.tooltip.recording', 'Recording voice command');
-      case 'transcribing':
-      case 'sending':
-        return t('voice.mic.tooltip.processing', 'Processing voice command');
-      case 'error':
-        return t('voice.mic.tooltip.error', 'Voice error');
-      default:
-        return t('voice.mic.tooltip.off', 'Wakeword disabled');
-    }
-  }
 
   function getActiveAgent() {
     if (viewingSessionAgentId) {
@@ -270,21 +156,13 @@
   });
 
   $effect(() => {
-    const events = normalizedRunServerEvents(runServerEvent, runServerEvents);
-    for (const event of events) {
-      const eventKey = runServerEventKey(event);
-      if (!eventKey || handledRunServerEventKeys[eventKey]) {
-        continue;
-      }
-      handledRunServerEventKeys[eventKey] = true;
-      handleRunServerEvent(event);
-    }
+    runStream.handleServerEvents(runServerEvent, runServerEvents);
   });
 
   onMount(() => {
     loadAgents({ preferredAgentId: sharedSelectedAgentId });
     loadCommands();
-    return () => closeSubscriptions();
+    return () => runStream.closeSubscriptions();
   });
 
   onDestroy(() => {
@@ -292,8 +170,6 @@
       clearTimeout(actionInfoTimeoutId);
       actionInfoTimeoutId = null;
     }
-    clearPendingReconnects();
-    clearPendingRunEventFlushes();
   });
 
   const setActionInfo = (message) => {
@@ -418,7 +294,7 @@
     loadingHistory = true;
     historyError = '';
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
-    closeSubscriptionsExcept(sessionState.key);
+    runStream.closeSubscriptionsExcept(sessionState.key);
     try {
       const history = await rpc('chat.history', {
         agent_id: agentId,
@@ -428,7 +304,7 @@
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
       });
-      attachRunStream(sessionState, history.active_run);
+      runStream.attachRunStream(sessionState, history.active_run);
       await syncSessionQueue(sessionState);
     } catch (error) {
       historyError = error.message;
@@ -627,361 +503,15 @@
       startRun(sessionState, run);
       submittedTurnScrollRunId = run.run_id ?? '';
       submittedTurnScrollKey += 1;
-      subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
       return true;
     } catch (error) {
       actionError = `${t('chat.sendError', 'Message could not be sent.')} ${error.message}`;
       markSessionError(sessionState, error);
       return false;
     }
-  };
-
-  const subscribeToRun = (sessionState, sseUrl, options = {}) => {
-    if (!sseUrl) {
-      return;
-    }
-    if (sessionState.currentRun) {
-      sessionState.currentRun.sseUrl = sseUrl;
-    }
-    const existingSubscription = activeSubscriptions[sessionState.key];
-    existingSubscription?.close();
-    clearPendingReconnect(sessionState.key);
-    const afterSequence =
-      options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
-    const retryAttempt = options.retryAttempt ?? 0;
-    const subscription = subscribeRunEvents(
-      sseUrl,
-      {
-        onEvent: ({ data }) => {
-          queueRunEvent(sessionState, data);
-        },
-        onError: (error) => {
-          recoverRunStream(sessionState, sseUrl, retryAttempt, error);
-        },
-      },
-      {
-        afterSequence,
-      },
-    );
-    activeSubscriptions[sessionState.key] = subscription;
-  };
-
-  const attachRunStream = (sessionState, run, options = {}) => {
-    if (!sessionState || !run?.run_id) {
-      return false;
-    }
-
-    const sseUrl =
-      typeof run.sse_url === 'string' && run.sse_url
-        ? run.sse_url
-        : sseUrlForRun(run.run_id);
-    const currentRun = sessionState.currentRun;
-    const alreadySubscribed =
-      Boolean(activeSubscriptions[sessionState.key]) &&
-      currentRun?.runId === run.run_id &&
-      currentRun?.sseUrl === sseUrl;
-
-    if (currentRun?.runId !== run.run_id) {
-      startRun(sessionState, { ...run, sse_url: sseUrl });
-    } else {
-      currentRun.status = run.status ?? currentRun.status;
-      currentRun.sseUrl = sseUrl;
-    }
-    mergeRetainedRunEvents(sessionState, run.events, { fromServerEvent: true });
-
-    if (!alreadySubscribed) {
-      subscribeToRun(sessionState, sseUrl, {
-        afterSequence:
-          options.afterSequence ??
-          highestContiguousRunEventSequence(sessionState),
-      });
-    }
-
-    return true;
-  };
-
-  const mergeRetainedRunEvents = (sessionState, events, options = {}) => {
-    if (!Array.isArray(events) || events.length === 0) {
-      return;
-    }
-    for (const eventData of events) {
-      const event = appendRunEvent(sessionState, eventData);
-      handleAppendedRunEvent(sessionState, event, options);
-    }
-  };
-
-  const queueRunEvent = (sessionState, eventData) => {
-    const sessionKey = sessionState.key;
-    pendingRunEventQueues[sessionKey] ??= [];
-    pendingRunEventQueues[sessionKey].push(eventData);
-    if (!DELAYED_RUN_EVENT_TYPES.has(eventData?.type)) {
-      flushPendingRunEvents(sessionKey);
-      return;
-    }
-    scheduleRunEventFlush(sessionKey);
-  };
-
-  const scheduleRunEventFlush = (sessionKey) => {
-    if (pendingRunEventFlushes[sessionKey] !== undefined) {
-      return;
-    }
-    pendingRunEventFlushes[sessionKey] = setTimeout(() => {
-      delete pendingRunEventFlushes[sessionKey];
-      flushPendingRunEvents(sessionKey);
-    }, RUN_EVENT_FLUSH_DELAY_MS);
-  };
-
-  const flushPendingRunEvents = (sessionKey) => {
-    const pendingEvents = pendingRunEventQueues[sessionKey];
-    if (!Array.isArray(pendingEvents) || pendingEvents.length === 0) {
-      delete pendingRunEventQueues[sessionKey];
-      clearPendingRunEventFlush(sessionKey);
-      return null;
-    }
-
-    delete pendingRunEventQueues[sessionKey];
-    clearPendingRunEventFlush(sessionKey);
-
-    const sessionState = chatState.sessions[sessionKey];
-    if (!sessionState) {
-      return null;
-    }
-
-    let terminalEvent = null;
-    for (const eventData of pendingEvents) {
-      const event = appendRunEvent(sessionState, eventData);
-      handleAppendedRunEvent(sessionState, event);
-      if (event && TERMINAL_RUN_EVENTS.has(event.type)) {
-        terminalEvent = event;
-      }
-    }
-    return terminalEvent;
-  };
-
-  const handleAppendedRunEvent = (sessionState, event, options = {}) => {
-    if (!event) {
-      return;
-    }
-    trackSubAgentRunStatus(event);
-    if (event.type === 'compaction_completed' && event.payload?.message) {
-      appendCompactionCheckpoint(sessionState, event.payload.message);
-    }
-    if (TERMINAL_RUN_EVENTS.has(event.type)) {
-      clearPendingReconnect(sessionState.key);
-      if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
-        closeRunSubscription(sessionState.key);
-      }
-      if (event.type !== 'run_failed') {
-        actionError = '';
-      }
-      void syncSessionQueue(sessionState);
-    }
-  };
-
-  const trackSubAgentRunStatus = (event) => {
-    const status = statusFromRunEvent(event);
-    if (!status) {
-      return;
-    }
-
-    const updates = {};
-    if (event.run_id) {
-      updates[`run:${event.run_id}`] = status;
-    }
-    if (event.agent_id && event.session_id) {
-      updates[`session:${event.agent_id}::${event.session_id}`] = status;
-    }
-    if (Object.keys(updates).length > 0) {
-      subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
-    }
-  };
-
-  const statusFromRunEvent = (event) => {
-    if (event.type === 'run_started') {
-      return 'running';
-    }
-    if (event.type === 'run_completed') {
-      return 'completed';
-    }
-    if (event.type === 'run_failed') {
-      return 'failed';
-    }
-    if (event.type === 'run_cancelled') {
-      return 'cancelled';
-    }
-    return '';
-  };
-
-  const recoverRunStream = (sessionState, sseUrl, retryAttempt, error) => {
-    const sessionKey = sessionState.key;
-    flushPendingRunEvents(sessionKey);
-    const currentRun = sessionState.currentRun;
-    if (!currentRun || currentRun.status !== 'running') {
-      return;
-    }
-
-    if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
-      actionError = t(
-        'errors.streamReconnecting',
-        'The live stream closed. Reconnecting...',
-      );
-      if (pendingReconnects[sessionKey] !== undefined) {
-        return;
-      }
-      closeRunSubscription(sessionKey);
-      pendingReconnects[sessionKey] = setTimeout(() => {
-        delete pendingReconnects[sessionKey];
-        if (sessionState.currentRun?.runId !== currentRun.runId) {
-          return;
-        }
-        subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
-          afterSequence: highestContiguousRunEventSequence(sessionState),
-          retryAttempt: retryAttempt + 1,
-        });
-      }, SSE_RECONNECT_DELAY_MS);
-      return;
-    }
-
-    actionError = `${t('errors.streamClosed', 'The live stream closed before the run finished. Waiting for server status.')} ${error?.message ?? ''}`;
-    closeRunSubscription(sessionState.key);
-  };
-
-  const handleRunServerEvent = (serverEvent) => {
-    const event = runEventFromServerEvent(serverEvent);
-    if (!event?.agent_id || !event?.session_id) {
-      return;
-    }
-
-    const sessionState = ensureSessionState(
-      chatState,
-      event.agent_id,
-      event.session_id,
-    );
-    flushPendingRunEvents(sessionState.key);
-    const appended = appendRunEvent(sessionState, event);
-    handleAppendedRunEvent(sessionState, appended, { fromServerEvent: true });
-    if (
-      event.type === 'run_started' &&
-      isDisplayedSession(event.agent_id, event.session_id)
-    ) {
-      attachRunStream(
-        sessionState,
-        {
-          run_id: event.run_id,
-          status: 'running',
-          sse_url: sseUrlForRun(event.run_id),
-          events: [],
-        },
-        { afterSequence: highestContiguousRunEventSequence(sessionState) },
-      );
-    }
-  };
-
-  const normalizedRunServerEvents = (singleEvent, events) => {
-    const normalizedEvents = Array.isArray(events)
-      ? events.filter(Boolean)
-      : [];
-    if (singleEvent) {
-      normalizedEvents.push(singleEvent);
-    }
-    return normalizedEvents;
-  };
-
-  const runEventFromServerEvent = (serverEvent) => {
-    const payload = serverEvent?.payload ?? {};
-    const runEventType = payload.run_event_type;
-    if (!RUN_SERVER_EVENT_TYPES.has(serverEvent?.type) || !runEventType) {
-      return null;
-    }
-
-    const runPayload = { ...(payload.output ?? {}) };
-    if (payload.status) {
-      runPayload.status = payload.status;
-    }
-    if (payload.usage) {
-      runPayload.usage = payload.usage;
-    }
-
-    return {
-      type: runEventType,
-      run_id: payload.run_id,
-      agent_id: payload.agent_id,
-      session_id: payload.session_id,
-      sequence: payload.run_event_sequence,
-      timestamp: payload.run_event_timestamp,
-      payload: runPayload,
-    };
-  };
-
-  const runServerEventKey = (serverEvent) => {
-    const payload = serverEvent?.payload;
-    if (
-      !payload?.run_id ||
-      (payload.run_event_sequence !== 0 && !payload.run_event_sequence)
-    ) {
-      return '';
-    }
-    return `${payload.run_id}:${payload.run_event_sequence}:${serverEvent.type}`;
-  };
-
-  const closeRunSubscription = (sessionKey) => {
-    activeSubscriptions[sessionKey]?.close();
-    delete activeSubscriptions[sessionKey];
-  };
-
-  const closeSubscriptionsExcept = (sessionKey) => {
-    for (const key of Object.keys(activeSubscriptions)) {
-      if (key === sessionKey) {
-        continue;
-      }
-      closeRunSubscription(key);
-      clearPendingReconnect(key);
-    }
-  };
-
-  const sseUrlForRun = (runId) =>
-    `/api/runs/${encodeURIComponent(String(runId))}/events`;
-
-  const clearPendingReconnect = (sessionKey) => {
-    const timeoutId = pendingReconnects[sessionKey];
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-      delete pendingReconnects[sessionKey];
-    }
-  };
-
-  const clearPendingReconnects = () => {
-    for (const key of Object.keys(pendingReconnects)) {
-      clearPendingReconnect(key);
-    }
-  };
-
-  const clearPendingRunEventFlush = (sessionKey) => {
-    const timeoutId = pendingRunEventFlushes[sessionKey];
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-      delete pendingRunEventFlushes[sessionKey];
-    }
-  };
-
-  const clearPendingRunEventFlushes = () => {
-    for (const key of Object.keys(pendingRunEventFlushes)) {
-      clearPendingRunEventFlush(key);
-    }
-    for (const key of Object.keys(pendingRunEventQueues)) {
-      delete pendingRunEventQueues[key];
-    }
-  };
-
-  const closeSubscriptions = () => {
-    for (const subscription of Object.values(activeSubscriptions)) {
-      subscription.close();
-    }
-    for (const key of Object.keys(activeSubscriptions)) {
-      delete activeSubscriptions[key];
-    }
-    clearPendingReconnects();
-    clearPendingRunEventFlushes();
   };
 
   const handleCancelRun = async () => {
@@ -1014,7 +544,9 @@
         session_id: sessionState.sessionId,
       });
       startRun(sessionState, run);
-      subscribeToRun(sessionState, run.sse_url, { afterSequence: 0 });
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
     } catch (error) {
       actionError = `${t('chat.retryError', 'Retry failed.')} ${error.message}`;
     }
@@ -1060,93 +592,42 @@
       actionError = `${t('queue.editError', 'Queued message could not be edited.')} ${error.message}`;
     }
   };
+
+  const runStream = createChatRunStream({
+    chatState,
+    subscribeRunEvents,
+    syncSessionQueue,
+    isDisplayedSession,
+    setActionError: (message) => {
+      actionError = message;
+    },
+    updateSubAgentRunStatuses: (updates) => {
+      subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
+    },
+  });
 </script>
 
 <section class="view view-chat active chat-view" aria-labelledby="chat-title">
-  <header class="chat-header">
-    <h2 id="chat-title" class="chat-title">{t('chat.title', 'Chat')}</h2>
-    <div class="agent-tabs" aria-label={t('chat.selectAgent', 'Select agent')}>
-      {#if chatState.agents.length > 0}
-        {#each chatState.agents as agent (agent.id)}
-          <button
-            type="button"
-            class:active={agent.id === chatState.selectedAgentId}
-            class="agent-tab"
-            disabled={chatState.loadingAgents}
-            onclick={() => handleSelectAgent(agent.id)}
-          >
-            <span class="tab-indicator"></span>
-            <span>{agent.name}</span>
-          </button>
-        {/each}
-      {:else}
-        <span class="agent-tab agent-tab--empty">
-          <span class="tab-indicator"></span>
-          {t('chat.noAgents', 'No agents are available yet.')}
-        </span>
-      {/if}
-    </div>
-    <div class="header-right">
-      {#if micVisible}
-        <button
-          type="button"
-          class="mic-indicator"
-          title={micTooltip}
-          aria-label={micTooltip}
-          onclick={() => onNavigateToVoiceSettings()}
-        >
-          <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
-        </button>
-      {/if}
-      {#if tokenBadgeText}
-        <span class="token-badge">{tokenBadgeText}</span>
-      {/if}
-      <button
-        type="button"
-        class:chat-sessions-toggle--active={showSessionDrawer}
-        class="btn-outline chat-sessions-toggle"
-        onclick={() => {
-          showSessionDrawer = !showSessionDrawer;
-        }}
-        disabled={!activeAgent}
-      >
-        {showSessionDrawer
-          ? t('sessions.hide', 'Hide sessions')
-          : t('sessions.title', 'Sessions')}
-      </button>
-      {#if activeSessionState && isRunActive(activeSessionState)}
-        <button
-          type="button"
-          class="btn-outline btn-dang"
-          disabled={cancellingRun}
-          onclick={handleCancelRun}
-        >
-          {cancellingRun
-            ? t('cancel.cancelling', 'Cancelling run…')
-            : t('chat.cancelRun', 'Cancel run')}
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="btn-new"
-        disabled={!activeAgent || newSessionBlocked || creatingSession}
-        title={newSessionBlocked
-          ? t(
-              'chat.newSessionBlocked',
-              'A new session can be started after the current run finishes.',
-            )
-          : undefined}
-        onclick={handleNewSession}
-      >
-        <svg viewBox="0 0 14 14" aria-hidden="true">
-          <path d="M7 1v12M1 7h12" />
-        </svg>
-        {creatingSession
-          ? t('common.loading', 'Loading…')
-          : t('chat.newSession', 'New Session')}
-      </button>
-    </div>
-  </header>
+  <ChatHeader
+    agents={chatState.agents}
+    selectedAgentId={chatState.selectedAgentId}
+    loadingAgents={chatState.loadingAgents}
+    {activeAgent}
+    {activeSessionState}
+    {showSessionDrawer}
+    {cancellingRun}
+    {creatingSession}
+    {newSessionBlocked}
+    {wakewordStatus}
+    {desktopCapabilities}
+    onSelectAgent={handleSelectAgent}
+    onToggleSessionDrawer={() => {
+      showSessionDrawer = !showSessionDrawer;
+    }}
+    onCancelRun={handleCancelRun}
+    onNewSession={handleNewSession}
+    {onNavigateToVoiceSettings}
+  />
 
   {#if chatState.loadingAgents}
     <div class="empty-state chat-view__state">
@@ -1278,161 +759,6 @@
     background: var(--bg);
   }
 
-  .chat-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 50px;
-    flex-shrink: 0;
-    padding: 0 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .chat-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: 0;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-
-  .agent-tabs {
-    display: flex;
-    min-width: 0;
-    height: 100%;
-    flex: 1;
-    align-items: stretch;
-    gap: 2px;
-    overflow-x: auto;
-  }
-
-  .agent-tab {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 7px;
-    padding: 0 14px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    color: var(--text-lo);
-    background: transparent;
-    font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 500;
-    white-space: nowrap;
-    transition:
-      border-color 150ms ease,
-      color 150ms ease;
-  }
-
-  .agent-tab:hover,
-  .agent-tab:focus-visible {
-    color: var(--text-med);
-    outline: none;
-  }
-
-  .agent-tab.active {
-    border-bottom-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .agent-tab--empty {
-    cursor: default;
-  }
-
-  .tab-indicator {
-    width: 5px;
-    height: 5px;
-  }
-
-  .header-right {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .token-badge {
-    padding: 3px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-lo);
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 11px;
-  }
-
-  .mic-indicator {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
-    cursor: pointer;
-    transition: background 0.15s;
-    flex-shrink: 0;
-  }
-  .mic-indicator:hover {
-    background: var(--surface-2);
-  }
-  .mic-dot {
-    display: block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .mic-dot--off {
-    background: var(--text-lo, #5e4c38);
-  }
-  .mic-dot--listening {
-    background: var(--green, #4ade80);
-    animation: mic-pulse 1.6s ease-in-out infinite;
-  }
-  .mic-dot--recording {
-    background: var(--amber, #f59e0b);
-  }
-  .mic-dot--processing {
-    background: var(--accent, #e8870a);
-    animation: mic-spin 1s linear infinite;
-  }
-  .mic-dot--error {
-    background: var(--red, #fc8181);
-  }
-
-  @keyframes mic-pulse {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.35;
-    }
-  }
-  @keyframes mic-spin {
-    0% {
-      opacity: 1;
-    }
-    25% {
-      opacity: 0.5;
-    }
-    50% {
-      opacity: 0.2;
-    }
-    75% {
-      opacity: 0.5;
-    }
-    100% {
-      opacity: 1;
-    }
-  }
-
   .chat-view__surface {
     display: flex;
     min-height: 0;
@@ -1447,12 +773,6 @@
     min-height: 0;
     flex: 1;
     overflow: hidden;
-  }
-
-  .chat-sessions-toggle--active {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: rgba(232, 135, 10, 0.08);
   }
 
   .chat-view__timeline-shell {
@@ -1545,35 +865,7 @@
     flex-shrink: 0;
   }
 
-  .btn-new svg {
-    width: 12px;
-    height: 12px;
-  }
-
   @media (max-width: 760px) {
-    .chat-header {
-      height: auto;
-      flex-wrap: wrap;
-      padding: 10px 14px;
-    }
-
-    .agent-tabs {
-      order: 2;
-      width: 100%;
-      height: 38px;
-      flex-basis: 100%;
-    }
-
-    .header-right {
-      margin-left: auto;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .token-badge {
-      display: none;
-    }
-
     .chat-view__notice-stack {
       padding: 10px 14px;
     }
