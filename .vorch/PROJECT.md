@@ -21,7 +21,7 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, speech, image, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 600 lines per file. `model_tasks/` owns specialized task-model bindings and target discovery; task-specific execution stays in domains such as `speech/`. Provider and automation internals live in their specs (`providers.md`, `automation.md`).
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, speech, image, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` owns specialized task-model bindings and target discovery; task-specific execution stays in domains such as `speech/`. Provider and automation internals live in their specs (`providers.md`, `automation.md`).
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push) + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth (single-user-local).
 
