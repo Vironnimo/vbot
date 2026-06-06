@@ -2,8 +2,9 @@
 
 **Status:** in progress (Wave 1 done; Wave 2 SettingsView in progress) · **Owner:** Julian · **Started:** 2026-06-06
 **Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction. CSS, Channels,
-Sub-Agents, Recall, Web Search, Skills, Appearance, Debug, General, Defaults done. **Extract
-the next panel** (see "CONTINUE HERE": Compaction), then stop and update this handoff.
+Sub-Agents, Recall, Web Search, Skills, Appearance, Debug, General, Defaults, Compaction,
+Specialized Models done. **Extract the next panel** (see "CONTINUE HERE": Providers — the
+last and most coupled), then stop and update this handoff.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -203,10 +204,12 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
 > `python scripts/quality-frontend.py <path>`. Tests live in
 > `webui/src/components/__tests__/` and `webui/src/lib/__tests__/`. No TypeScript.
 
-- [ ] **`SettingsView.svelte` (4475 → 2240, IN PROGRESS)** — one child component per
+- [ ] **`SettingsView.svelte` (4475 → 986, IN PROGRESS)** — one child component per
   panel under `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin
   nav/panel container (target each panel 150–350 lines). **Do one panel per session**
-  (see WORKFLOW box at the top). Box stays unchecked until the container is thin.
+  (see WORKFLOW box at the top). Box stays unchecked until the container is thin — only
+  **Providers** is still inline; once it is extracted, `SettingsView.svelte` is just the
+  nav + panel-switch container and this box can be checked.
 
   **Done (2026-06-06, full gate green each step · vitest 525/525 · build PASS):**
   - **CSS lifted to global** `webui/src/styles/settings.css` (802), imported via
@@ -256,6 +259,40 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     `ensureModelCatalogsLoaded`) for **Compaction**, and `panelUsesModelPicker` is now
     `compaction`-only. Parent `Dropdown` import removed (only Compaction's `SearchableDropdown`
     remains).
+
+  **Done (2026-06-06, two panels in one session — user override of the one-panel rule,
+  "mach die naechsten 2 panels"; full gate green at the end · vitest 525/525 · build PASS;
+  `SettingsView.svelte` 1731 → 986, now under the 1000-line threshold):**
+  - **Compaction** → `SettingsCompactionPanel.svelte` (315). Shared-settings recipe
+    (auto-save `$effect` + manual Save) **plus its own model picker**: loads `model.list` +
+    `connection.list` in `onMount` (like Defaults) instead of the parent's lazy
+    `ensureModelCatalogsLoaded`. Props `{ settings, onCommit, onToast, onError }`. Uses the
+    **lib** `normalizeCompactionSettings`/`buildCompactionSettingsPayload`/
+    `getCompactionSettings` from `settingsView.js` (the parent's inline `…Fallback` shadows
+    were deleted). `compactionSettingsMatch` + `selectModelOptions` moved into the child.
+    **Does NOT re-seed after save** (matches the old parent behavior). Summary-model
+    `SearchableDropdown` keeps id `settings-compaction-summary-model`. Test
+    `uses the model picker for compaction summary model` + `waitForModelCatalogs` pass
+    unchanged.
+  - **Specialized Models** → `SettingsSpecializedModelsPanel.svelte` (367). **Manual save
+    only** (no auto-save). Loads targets/schemas in `onMount` (the old
+    `ensureTaskModelPanelLoaded` body, minus the now-pointless `taskModelPanelLoaded` cache —
+    a fresh child mounts per activation). Has its **own panel-local `taskModelError`**
+    rendered inside the panel (separate from the shared `saveError` header banner, which it
+    clears via `onError('')` on save). Imports `listTaskModelTargets`/`getTaskModelOptions`/
+    `updateTaskModelSettings` from `$lib/api.js` and the `taskModelSettings.js` helpers — all
+    moved off the parent. **No SettingsView test coverage** (build/eslint/vitest-other only),
+    so behavior parity was the bar. Re-seeds bindings after save (unchanged).
+  - **Parent cleanup:** removed `SearchableDropdown` + the whole `modelSelection.js` import,
+    `settingsViewHelpers` namespace import + the three compaction `…Fallback` fns/aliases,
+    the `taskModelSettings.js` import, `COMPACTION_SETTING_DEFAULTS`/`AUTO_SAVE_DEBOUNCE_MS`,
+    `saving` + all compaction/task-model `$state`/`$derived`, the compaction auto-save
+    `$effect`, `panelUsesModelPicker`/`ensureModelCatalogsLoaded`/`showAlreadySavedToast`,
+    and ~18 compaction/task-model fns. `selectPanel` is now just
+    `activePanelId = panelId; saveError = '';`. `refreshModelDatabase` keeps its
+    `rpc('model.list')` call (the Providers refresh test asserts it) but no longer stores the
+    result. Spec `webui.md` unchanged — pure internal refactor, no behavior/contract/boundary
+    change (matches every prior panel-extraction commit). **No test edits.**
 
   **Validated extraction recipe — shared-settings panels (FOLLOW EXACTLY; executed for
   subagents/recall/web_search, zero test edits, 525/525):**
@@ -307,16 +344,9 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     not remove/rename existing `settingsView.js` exports, only add.
 
   **Remaining panels — one per session (ordered queue; simplest first, providers last):**
-  1. **Compaction** ◀── CONTINUE HERE. auto checkbox + threshold + tail_tokens + summary-model picker.
-     Same model-picker need as Defaults (id `settings-compaction-summary-model`).
-     `normalizeCompactionSettings`/`buildCompactionSettingsPayload`/`getCompactionSettings`
-     exist in `settingsView.js` (the inline fallbacks in `SettingsView` shadow them — use
-     the lib ones in the child).
-  2. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
-     lazy-loads targets/schemas on mount, **no test coverage** (build/eslint only). Many
-     own state vars (`taskModel*`) + `updateTaskModelSettings`/`listTaskModelTargets`/
-     `getTaskModelOptions` from `$lib/api.js`. Extract carefully.
-  3. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
+  1. ~~**Compaction**~~ — DONE (see Done block above).
+  2. ~~**Specialized Models**~~ — DONE (see Done block above).
+  3. **Providers** ◀── CONTINUE HERE. **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
      `disconnectProvider`, the exported `handleProviderAuthCompleted`, `model.refresh_db`
      + the **header refresh button** (currently rendered in the parent's `s-panel-header`,
      gated on `activePanelId === 'providers'`), the device-flow OAuth dialog, and all the
