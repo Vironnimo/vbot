@@ -1,7 +1,8 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** Wave 2 → `webui/src/components/SettingsView.svelte` (see "START HERE").
+**Status:** in progress (Wave 1 done; Wave 2 SettingsView started) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction (CSS + Channels
+done; see "CONTINUE HERE"). Extract the remaining panels into `settings/` children.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -194,20 +195,53 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
 > `python scripts/quality-frontend.py <path>`. Tests live in
 > `webui/src/components/__tests__/` and `webui/src/lib/__tests__/`. No TypeScript.
 
-- [ ] **`SettingsView.svelte` (4475)** — START HERE. The file is a stack of
-  **independent panels**, each with its own load/save/handler triple: Language,
-  Skill-Dirs, Agent-Defaults, Subagent, Compaction, Recall, WebSearch, Debug,
-  TaskModel, Providers/Connections, Channels. Plan:
-  - One child component per panel (`SettingsLanguagePanel.svelte`, …) under
-    `webui/src/components/` (or a `settings/` subfolder).
-  - Move each panel's logic into `webui/src/lib/settingsView.js` (already 764 lines) or
-    a per-panel lib module; keep pure helpers testable.
-  - `SettingsView.svelte` becomes a thin tab/panel container. Target each panel 150–350
-    lines.
-  - Existing tests: `SettingsView.test.js` (1421) + `settingsView.test.js` (807) —
-    keep green; prefer not to change them (check what they import/select first, §5).
-  - Spec: `.vorch/specs/webui.md` — per §4 step 5, likely only a small "Settings view is
-    composed of per-panel components" note if anything; do NOT inventory the panels.
+- [ ] **`SettingsView.svelte` (4475 → 3063, IN PROGRESS)** ◀── CONTINUE HERE. The
+  file is a stack of **independent panels**, each with its own load/save/handler
+  triple: Language/Appearance, General, Skill-Dirs, Agent-Defaults, Subagent,
+  Compaction, Recall, WebSearch, Debug, TaskModel (specialized_models),
+  Providers/Connections, Channels. Plan: one child component per panel under
+  `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin nav/panel
+  container (target each panel 150–350 lines).
+
+  **Done so far (2026-06-06, gate green ruff n/a · vitest 525/525 · build PASS):**
+  - **CSS lifted to global** `webui/src/styles/settings.css` (802 lines), imported
+    via `@import './settings.css';` in `webui/src/styles/app.css`. This was the
+    enabling step: the shared `.s-*` layout primitives were scoped to
+    `SettingsView.svelte`, so a Svelte child component could not use them. They are
+    now global (settings-specific names, no bleed). `SettingsView.svelte` no longer
+    has a `<style>` block; **new panel children need NO `<style>`** — they reuse the
+    global `.s-*` classes (this also fixed the pre-existing voice-panel styling gap).
+  - **Channels panel extracted** → `webui/src/components/settings/SettingsChannelsPanel.svelte`
+    (558). It is the cleanest seam: fully self-contained (loads its own data via
+    `agent.list`/`channel.*` on `onMount`, like the existing `WakewordVoiceSettings`),
+    touches none of the shared `settings`/`saving`/`commitSettings` flow. Zero props.
+    `SettingsView` just renders `<SettingsChannelsPanel />` in the `{:else if
+    activePanelId === 'channels'}` branch; the nav entry stays in `SettingsView`.
+
+  **Validated extraction recipe (follow for the rest):**
+  - Child imports `rpc` from `$lib/api.js` (the test mocks that exact module — keep
+    importing from there so mocks apply), `t` from `$lib/i18n.js`, helpers from
+    `$lib/settingsView.js`. No `<style>` (global classes).
+  - `SettingsView.test.js` mounts the **real** `SettingsView` and asserts on DOM
+    (class/text/aria) + `rpc` call names — so preserve markup classes, ids,
+    aria-labels, and the rpc calls verbatim and the tests stay green with **zero test
+    edits** (currently 525/525). `settingsView.test.js` tests pure fns — **do not
+    remove/rename existing `settingsView.js` exports**, only add.
+  - Panels that load lazily on select (`onMount` in the child) match the established
+    voice-panel pattern; the old parent caching (`channelsLoaded` guard) drops out.
+
+  **Remaining panels** (still inline in `SettingsView`, share the `settings`/`saving`/
+  `commitSettings`/auto-save-`$effect`/`saveXxx` pattern — see `applySettings` and the
+  per-panel `$effect` blocks): defaults, skills, subagents, compaction, recall,
+  web_search, debug, specialized_models, providers, general, appearance. These DO read
+  the shared loaded `settings` object, so each child should take `settings` (or its
+  slice) + an `onCommit(nextSettings)` callback + `onToast`, own its form state +
+  auto-save `$effect` + `saveXxx`. `providers` is the most coupled (uses
+  `providerAuthEvent`/`connectProvider`/`disconnectProvider` props + exported
+  `handleProviderAuthCompleted` + `model.refresh_db`). `specialized_models` uses
+  `taskModelSettings.js`. Spec: `.vorch/specs/webui.md` already says "SettingsView…
+  own Settings panel state" — per §4 step 5, no inventory needed; the per-panel split
+  is internal. Box stays unchecked until the container is thin.
 
 - [ ] **`chatState.js` (1927)** — two concerns: session/run state mutation **+**
   timeline projection (`buildVisibleTimelineItems`, `liveTimelineItems`,
