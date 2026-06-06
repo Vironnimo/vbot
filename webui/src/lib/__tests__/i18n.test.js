@@ -349,9 +349,8 @@ describe('i18n t()', () => {
       'debug.responseStatus',
       'debug.responseHeaders',
       'debug.responseBody',
-      'debug.streamEvents',
-      'debug.streamEventIndex',
-      'debug.noStreamEvents',
+      'debug.streamRaw',
+      'debug.streamParsed',
       'debug.modelProbe',
       'debug.modelProbe.provider',
       'debug.modelProbe.connection',
@@ -367,17 +366,24 @@ describe('i18n t()', () => {
 
     expectCatalogKeys(requiredKeys);
 
+    // The removed stream-event copy must not return to the catalog.
+    expect(englishCatalog['debug.streamEvents']).toBeUndefined();
+    expect(englishCatalog['debug.streamEventIndex']).toBeUndefined();
+    expect(englishCatalog['debug.noStreamEvents']).toBeUndefined();
+    expect(t('debug.streamEvents')).toBe('debug.streamEvents');
+    expect(t('debug.streamEventIndex')).toBe('debug.streamEventIndex');
+    expect(t('debug.noStreamEvents')).toBe('debug.noStreamEvents');
+
     // The empty heading must be meaningful copy, never the bogus "(none)" placeholder.
     expect(t('debug.emptyHeader')).not.toBe('(none)');
     expect(t('debug.emptyHeader').trim().length).toBeGreaterThan(0);
     expect(t('debug.emptyHeader')).toBe('No traces captured yet');
 
-    // Interpolation tokens must match the component's {index} usage.
-    expect(t('debug.streamEventIndex', undefined, { index: 3 })).toBe(
-      'Event 3',
-    );
-    expect(t('debug.streamEventIndex')).not.toContain('{n}');
-    expect(t('debug.streamEventIndex')).toContain('{index}');
+    // The Debug subtitle must describe request/response inspection and must
+    // not instruct users to inspect individual stream events.
+    expect(t('debug.subtitle')).toMatch(/request/i);
+    expect(t('debug.subtitle')).toMatch(/response/i);
+    expect(t('debug.subtitle').toLowerCase()).not.toContain('stream event');
 
     expect(t('debug.statusCount', undefined, { count: 4, limit: 50 })).toBe(
       'Traces: 4 / 50',

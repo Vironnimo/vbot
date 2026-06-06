@@ -1,12 +1,12 @@
 # Debug
 
-Captures raw provider HTTP traffic (request, response, streaming frames) for local inspection, and probes provider model endpoints. Off by default.
+Captures complete raw provider HTTP requests and responses for local inspection, and probes provider model endpoints. Off by default.
 
 ## Overview
 
 `core/debug/` owns trace storage, structured secret redaction, and the recorder that captures provider wire traffic exactly as it goes over the socket. Debug Mode is enabled through `settings.json` (`debug.enabled: true`).
 
-Capture happens in **one place**: a debug-aware `httpx.AsyncClient` built by the shared provider HTTP factory. When a recorder is attached, every request and response that flows through that client is captured — raw method, URL, headers, and body, plus raw streaming frames — regardless of which provider adapter issued it. Adapters do **not** contain capture logic; they only opt in by building their client through the factory and forwarding the active recorder.
+Capture happens in **one place**: a debug-aware `httpx.AsyncClient` built by the shared provider HTTP factory. When a recorder is attached, every request and response that flows through that client is captured — raw method, URL, headers, and complete body — regardless of whether the provider call is streaming or non-streaming and regardless of which provider adapter issued it. Adapters do **not** contain capture logic; they only opt in by building their client through the factory and forwarding the active recorder.
 
 Traces are local-only JSON files under `<data_dir>/debug/traces/`, with a metadata-only `index.json` for listing without reading full bodies. Retention is capped by `debug.trace_limit`; oldest traces are pruned after each write.
 
@@ -43,14 +43,13 @@ One canonical shape, shared verbatim by backend writers and the WebUI. Field nam
 
   "request":  { "method": "POST", "url": "...", "headers": {}, "body": "..." },
   "response": { "status_code": 200,   "headers": {}, "body": "..." },
-  "stream":   { "events": ["<raw SSE frame>", "..."] },  // streaming only
   "error":    { "type": "string", "message": "string" }  // present only on failure
 }
 ```
 
 - `request.body` / `response.body` are the **raw** wire payloads as text. No parsing, no re-serialization, no `normalized` view.
-- `stream.events` holds raw SSE frames in arrival order, written only for a **streaming success** (status < 400) — in that case `response.body` is `null` and the frame list is the body. A streaming request that returns an error status keeps the raw error text under `response.body` and writes no `stream`.
-- `model_probe` traces omit `context` and `stream`; `model_id` is the empty string.
+- For streaming provider calls, `response.body` is the complete aggregate raw streaming HTTP body exactly as captured from the transport, including SSE framing text such as `data:` lines and frame separators. Debug traces do **not** split successful streaming responses into per-event records.
+- `model_probe` traces omit `context`; `model_id` is the empty string.
 
 ### Index entry (`<data_dir>/debug/index.json`)
 
@@ -89,7 +88,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 
 ### Provider HTTP capture (`core/providers/_http_shared.py`)
 
-- `build_async_client(*, base_url, timeout=None, debug_recorder=None) -> httpx.AsyncClient` — the single client factory. There is no per-client `headers` argument; headers are passed per request. With `debug_recorder`, the returned client's transport is wrapped (`_DebugCaptureTransport`) so it captures request + response, teeing the byte stream for SSE, and feeds the recorder. With no recorder, returns a plain client with zero capture overhead.
+- `build_async_client(*, base_url, timeout=None, debug_recorder=None) -> httpx.AsyncClient` — the single client factory. There is no per-client `headers` argument; headers are passed per request. With `debug_recorder`, the returned client's transport is wrapped (`_DebugCaptureTransport`) so it captures request + response, teeing the byte stream for streaming responses into the aggregate `response.body`, and feeds the recorder. With no recorder, returns a plain client with zero capture overhead.
 
 ### Adapter contract (`core/providers/adapter.py`)
 
@@ -112,13 +111,14 @@ See `.vorch/specs/server.md` for the envelope. All gated on `debug.enabled` exce
 - Capture is best-effort and must never affect provider results: a failure in redaction, persistence, or the capture transport is logged `warn` and swallowed so the provider call still returns.
 - Debug context is stored separately from provider payloads. It must never enter `**kwargs`, `_build_payload()`, or any provider-bound request body.
 - Trace data never crosses the chat/SSE/WebSocket boundary. It is reachable only through `debug.*` RPCs.
+- The WebUI Debug detail view is request/response-first: primary trace detail tabs are Metadata, Request, and Response. It must not present individual stream events as the response.
 - All `debug.*` user-visible UI strings go through i18n.
 
 ## Constraints & Gotchas
 
 - The trace shape in **Data Model** is a hard contract. The previous version drifted (backend wrote nested `request`/`response`; the WebUI read flat `request_body`/`response_status`/`normalized_response`), so the detail view showed empty panes. Backend writers and the WebUI must use these exact field names.
 - Capture lives only in `build_async_client` / its transport. Do not reintroduce `if self._debug_recorder is not None:` capture blocks inside adapter `send()` / `stream()` bodies — that scatter was the source of the original bloat.
-- Streaming bodies are captured by teeing the response byte stream. The tee must not buffer the whole stream before yielding to the adapter, or it changes streaming latency/back-pressure.
+- Streaming bodies are captured by teeing the response byte stream. The tee must not buffer the whole stream before yielding to the adapter, or it changes streaming latency/back-pressure. Aggregation into `response.body` happens from bytes already tee-captured by the recorder and must not move into adapter `stream()` implementations.
 - Trace files are not size-truncated; a single trace is bounded only by the provider response size. `trace_limit` caps file count, not bytes.
 - `debug.model_probe` is diagnostic only and never mutates the model catalog.
 - Providers that route across multiple endpoints (e.g. GitHub Copilot) get capture for free as long as every endpoint call goes through a client built by `build_async_client`. A provider that constructs a raw `httpx.AsyncClient` directly will silently not be traced — the one sanctioned exception is `debug.model_probe`, which uses a raw client on purpose and writes its own trace via `_save_model_probe_trace` with the same `redact_headers` / `redact_url`.
