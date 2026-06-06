@@ -1,0 +1,293 @@
+<script>
+  import { t } from '$lib/i18n.js';
+  import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
+  import {
+    avatarForItem,
+    compactToolValue,
+    formatTime,
+    isStartingBlockingSubAgent,
+    isSubAgentTool,
+    isTextToSpeechTool,
+    runMetaParts,
+    speechArtifactFromTool,
+    subAgentAgentId,
+    subAgentDotStatus,
+    subAgentNavigationTarget,
+    subAgentPreview,
+    timestampForItem,
+    toolArgumentSummary,
+    toolArguments,
+    toolNameForRunTool,
+    toolStatus,
+    toolStatusLabel,
+    visibleRunChildren,
+  } from '$lib/chatTimelinePresentation.js';
+
+  let {
+    item,
+    agentName = '',
+    subAgentStatuses = {},
+    isReasoningOpen = () => false,
+    onReasoningOpenChange = () => {},
+    onNavigateToSubAgent = () => {},
+    onRetry = () => {},
+    showRetry = false,
+  } = $props();
+
+  function handleSubAgentNavigate(event, tool) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const target = subAgentNavigationTarget(tool);
+    if (target) {
+      onNavigateToSubAgent(target);
+    }
+  }
+</script>
+
+{#snippet toolDetailSection(
+  label,
+  value,
+  isError = false,
+  preferPayload = false,
+  toolName = '',
+  tool = null,
+)}
+  <div class="teb-row">
+    <span class="teb-label">{label}</span>
+    <span class:error={isError} class="teb-code"
+      >{compactToolValue(value, { preferPayload, toolName, tool })}</span
+    >
+  </div>
+{/snippet}
+
+{#snippet reasoningSummary(isStreaming = false, isOpen = false)}
+  <summary class="reasoning-header">
+    <svg class="reasoning-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 2a4 4 0 0 0-4 4c0 1.5.8 2.8 2 3.5V11h4V9.5A4 4 0 0 0 12 6a4 4 0 0 0-4-4z"
+      />
+      <path d="M6 13h4" />
+    </svg>
+    <span>{t('chat.event.thinking', 'Thinking').toUpperCase()}</span>
+    {#if isStreaming}
+      <span class="streaming-caret" aria-hidden="true"></span>
+    {/if}
+    <svg
+      class="r-chevron"
+      viewBox="0 0 16 16"
+      width="10"
+      height="10"
+      style:transform={isOpen ? 'rotate(180deg)' : 'none'}
+      aria-hidden="true"
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  </summary>
+{/snippet}
+
+{#snippet toolArgumentLine(summary)}
+  <span class="te-arg">
+    <span class="te-arg-mark">(</span>
+    <span class="te-arg-value">{summary}</span>
+    <span class="te-arg-mark">)</span>
+  </span>
+{/snippet}
+
+<article class="msg assistant assistant-run">
+  <div class="msg-header">
+    <div class="msg-avatar">{avatarForItem(item)}</div>
+    <span class="msg-author"
+      >{agentName || t('chat.role.assistant', 'Assistant').toUpperCase()}</span
+    >
+    {#if formatTime(timestampForItem(item))}
+      <span class="msg-timestamp">{formatTime(timestampForItem(item))}</span>
+    {/if}
+    {#each runMetaParts(item) as metaPart (metaPart)}
+      <span class="msg-meta-extra">· {metaPart}</span>
+    {/each}
+    {#if showRetry}
+      <button type="button" class="retry-btn" onclick={onRetry}
+        >{t('chat.retryRun', 'Retry last turn')}</button
+      >
+    {/if}
+  </div>
+  <div class="msg-content assistant-run-content">
+    {#each visibleRunChildren(item) as child (child.id)}
+      {#if child.type === 'reasoning'}
+        <details
+          class="reasoning-block"
+          open={isReasoningOpen(child.id)}
+          ontoggle={(event) =>
+            onReasoningOpenChange(child.id, event.currentTarget.open)}
+        >
+          {@render reasoningSummary(
+            Boolean(child.streaming),
+            isReasoningOpen(child.id),
+          )}
+          <div class="reasoning-body">{child.content}</div>
+        </details>
+      {:else if child.type === 'tool_call'}
+        {#if isSubAgentTool(child)}
+          {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
+          <details class="tool-event run-tool-event subagent-tool-event">
+            <summary class="tool-event-line subagent-line">
+              <span
+                class:done={dotStatus === 'success'}
+                class:error={dotStatus === 'failed'}
+                class:cancelled={dotStatus === 'cancelled'}
+                class:running={dotStatus === 'running'}
+                class="te-dot">●</span
+              >
+              <span class="te-fn">
+                {t('chat.subagent.label', 'Sub-agent')}
+              </span>
+              <span class="subagent-agent">
+                {t('agents.form.id', 'Agent ID')}: {subAgentAgentId(child)}
+              </span>
+              {#if subAgentPreview(child)}
+                <span class="te-arg subagent-preview">
+                  {subAgentPreview(child)}
+                </span>
+              {/if}
+              {#if subAgentNavigationTarget(child)}
+                <button
+                  type="button"
+                  class="subagent-link"
+                  onclick={(event) => handleSubAgentNavigate(event, child)}
+                >
+                  {t('chat.subagent.viewSession', 'view session')}
+                </button>
+              {:else if isStartingBlockingSubAgent(child)}
+                <span class="subagent-state">
+                  {t('chat.subagent.starting', 'starting')}
+                </span>
+              {/if}
+              {#if toolStatusLabel(child)}
+                <span
+                  class="te-time"
+                  class:cancelled={toolStatus(child) === 'cancelled'}
+                >
+                  {toolStatusLabel(child)}
+                </span>
+              {/if}
+            </summary>
+            <div class="tool-event-body">
+              {@render toolDetailSection(
+                t('chat.toolArgs', 'Args'),
+                toolArguments(child),
+                false,
+                false,
+                toolNameForRunTool(child),
+                child,
+              )}
+              {#if child.stdout}
+                {@render toolDetailSection(
+                  t('chat.toolStdout', 'Stdout'),
+                  child.stdout,
+                )}
+              {/if}
+              {#if child.stderr}
+                {@render toolDetailSection(
+                  t('chat.toolStderr', 'Stderr'),
+                  child.stderr,
+                  true,
+                )}
+              {/if}
+              {@render toolDetailSection(
+                t('chat.toolResultLabel', 'Result'),
+                child.result,
+                toolStatus(child) === 'failed',
+                true,
+                toolNameForRunTool(child),
+                child,
+              )}
+            </div>
+          </details>
+        {:else}
+          <details class="tool-event run-tool-event">
+            <summary class="tool-event-line">
+              <span
+                class:done={toolStatus(child) === 'success'}
+                class:error={toolStatus(child) === 'failed'}
+                class:cancelled={toolStatus(child) === 'cancelled'}
+                class:running={toolStatus(child) === 'running'}
+                class="te-dot">●</span
+              >
+              <span class="te-fn">{toolNameForRunTool(child)}</span>
+              {#if toolArgumentSummary(child)}
+                {@render toolArgumentLine(toolArgumentSummary(child))}
+              {/if}
+              {#if toolStatusLabel(child)}
+                <span
+                  class="te-time"
+                  class:cancelled={toolStatus(child) === 'cancelled'}
+                >
+                  {toolStatusLabel(child)}
+                </span>
+              {/if}
+            </summary>
+            <div class="tool-event-body">
+              {@render toolDetailSection(
+                t('chat.toolArgs', 'Args'),
+                toolArguments(child),
+                false,
+                false,
+                toolNameForRunTool(child),
+                child,
+              )}
+              {#if child.stdout}
+                {@render toolDetailSection(
+                  t('chat.toolStdout', 'Stdout'),
+                  child.stdout,
+                )}
+              {/if}
+              {#if child.stderr}
+                {@render toolDetailSection(
+                  t('chat.toolStderr', 'Stderr'),
+                  child.stderr,
+                  true,
+                )}
+              {/if}
+              {@render toolDetailSection(
+                t('chat.toolResultLabel', 'Result'),
+                child.result,
+                toolStatus(child) === 'failed',
+                true,
+                toolNameForRunTool(child),
+                child,
+              )}
+            </div>
+          </details>
+          {#if isTextToSpeechTool(child)}
+            {@const speechArtifact = speechArtifactFromTool(child)}
+            {#if speechArtifact}
+              <audio
+                class="speech-audio-player"
+                src={speechArtifact.url}
+                controls
+                oncanplay={(event) =>
+                  event.currentTarget.play().catch(() => {})}
+              ></audio>
+            {/if}
+          {/if}
+        {/if}
+      {:else if child.type === 'assistant_output'}
+        <div class="msg-markdown" class:streaming-text={child.streaming}>
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+          {@html child.streaming
+            ? renderMarkdownStreaming(child.content ?? '')
+            : renderMarkdown(child.content ?? '')}
+          {#if child.streaming}<span class="streaming-caret" aria-hidden="true"
+            ></span>{/if}
+        </div>
+      {:else if child.type === 'model_fallback'}
+        <div class="model-fallback-notice">
+          {t('chat.modelFallbackActivated', 'Switched to {model}', {
+            model: child.to_model,
+          })}
+        </div>
+      {/if}
+    {/each}
+  </div>
+</article>
