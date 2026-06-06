@@ -1,5 +1,3 @@
-export const DEBUG_BODY_PLACEHOLDER = '—';
-export const DEBUG_ID_TRUNCATE_LENGTH = 28;
 export const DEBUG_TAB_RAW = 'raw';
 export const DEBUG_TAB_FORMATTED = 'formatted';
 
@@ -371,27 +369,6 @@ export function streamEventText(event) {
     return event;
   }
   return safeStringify(event);
-}
-
-export function truncatedId(value, maxLength = DEBUG_ID_TRUNCATE_LENGTH) {
-  const text = asText(value);
-  if (text.length === 0) {
-    return { text: '', full: '', truncated: false };
-  }
-  if (text.length <= maxLength) {
-    return { text, full: text, truncated: false };
-  }
-  const safeMax = Math.max(1, Math.floor(maxLength));
-  const truncated = `${text.slice(0, safeMax - 1)}…`;
-  return { text: truncated, full: text, truncated: true };
-}
-
-export function isRawBodyTab(tab) {
-  return tab === DEBUG_TAB_RAW || tab == null;
-}
-
-export function isFormattedBodyTab(tab) {
-  return tab === DEBUG_TAB_FORMATTED;
 }
 
 function formatHeaderValue(value) {
