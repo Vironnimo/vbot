@@ -634,7 +634,7 @@ export const englishCatalog = Object.freeze({
   'debug.localWarning':
     'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
 
-  'debug.clearing': 'Clearing…',
+  'debug.clearing': 'Clearing\u2026',
 
   'debug.request': 'Request',
   'debug.requestMethod': 'Method',
