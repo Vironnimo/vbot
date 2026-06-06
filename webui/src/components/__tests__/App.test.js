@@ -18,6 +18,7 @@ const subscribeServerEventsMock = vi.fn(() => ({
   close: vi.fn(),
   socket: null,
 }));
+const debugStatusMock = vi.fn().mockResolvedValue({ enabled: false });
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -29,7 +30,7 @@ vi.mock('$lib/api.js', () => ({
   RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
   RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
   RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
-  debugStatus: vi.fn().mockResolvedValue({ enabled: false }),
+  debugStatus: (...args) => debugStatusMock(...args),
   rpc: (...args) => rpcMock(...args),
   listQueue: (...args) => listQueueMock(...args),
   listLogs: (...args) => listLogsMock(...args),
@@ -56,6 +57,8 @@ describe('App', () => {
     subscribeLogEventsMock.mockClear();
     subscribeRunEventsMock.mockClear();
     subscribeServerEventsMock.mockClear();
+    debugStatusMock.mockReset();
+    debugStatusMock.mockResolvedValue({ enabled: false });
     rpcMock.mockImplementation(createEmptyChatRpcMock());
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11.log'],
@@ -350,6 +353,109 @@ describe('App', () => {
       expect(document.body.textContent).toContain('Sub-agent response');
     });
   });
+
+  it('shows the Debug nav after enabling Debug Mode in Settings without remounting', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({ initialDebugEnabled: false }),
+    );
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Debug')).toBeFalsy();
+    });
+
+    sidebarNavButton('Settings')?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(settingsPanelButton('Debug')).toBeTruthy();
+    });
+    settingsPanelButton('Debug')?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      const checkbox = debugEnabledCheckbox();
+      expect(checkbox).toBeTruthy();
+      expect(checkbox.checked).toBe(false);
+    });
+
+    const currentMount = mountedComponent;
+    const settingsUpdateCallsBefore = rpcMock.mock.calls.filter(
+      ([method]) => method === 'settings.update',
+    ).length;
+
+    debugEnabledCheckbox()?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      const updateCalls = rpcMock.mock.calls.filter(
+        ([method]) => method === 'settings.update',
+      );
+      expect(updateCalls.length).toBeGreaterThan(settingsUpdateCallsBefore);
+      const lastCall = updateCalls[updateCalls.length - 1];
+      expect(lastCall[1]?.debug?.enabled).toBe(true);
+    });
+
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Debug')).toBeTruthy();
+    });
+
+    expect(mountedComponent).toBe(currentMount);
+  });
+
+  it('hides the Debug nav after disabling Debug Mode in Settings without remounting', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({ initialDebugEnabled: true }),
+    );
+    debugStatusMock.mockResolvedValue({ enabled: true });
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Debug')).toBeTruthy();
+    });
+
+    sidebarNavButton('Settings')?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      expect(settingsPanelButton('Debug')).toBeTruthy();
+    });
+    settingsPanelButton('Debug')?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      const checkbox = debugEnabledCheckbox();
+      expect(checkbox).toBeTruthy();
+      expect(checkbox.checked).toBe(true);
+    });
+
+    const currentMount = mountedComponent;
+    const settingsUpdateCallsBefore = rpcMock.mock.calls.filter(
+      ([method]) => method === 'settings.update',
+    ).length;
+
+    debugEnabledCheckbox()?.click();
+    flushSync();
+
+    await waitForCondition(() => {
+      const updateCalls = rpcMock.mock.calls.filter(
+        ([method]) => method === 'settings.update',
+      );
+      expect(updateCalls.length).toBeGreaterThan(settingsUpdateCallsBefore);
+      const lastCall = updateCalls[updateCalls.length - 1];
+      expect(lastCall[1]?.debug?.enabled).toBe(false);
+    });
+
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Debug')).toBeFalsy();
+    });
+
+    expect(mountedComponent).toBe(currentMount);
+  });
 });
 
 async function waitForAssertion(assertion) {
@@ -592,4 +698,124 @@ function returnToCurrentSessionButton() {
   return Array.from(document.querySelectorAll('button')).find(
     (button) => button.textContent?.trim() === 'Return to current session',
   );
+}
+
+function sidebarNavButton(text) {
+  return Array.from(
+    document.querySelectorAll('nav.app-shell__navigation .app-shell__nav-item'),
+  ).find((button) => button.textContent?.trim() === text);
+}
+
+function settingsPanelButton(text) {
+  return Array.from(
+    document.querySelectorAll('nav.settings-nav .snav-item'),
+  ).find((button) => button.textContent?.trim() === text);
+}
+
+function debugEnabledCheckbox() {
+  return document.querySelector(
+    'input.s-checkbox[type="checkbox"][aria-label="Enable debug mode"]',
+  );
+}
+
+async function waitForCondition(assertion, options = {}) {
+  const attempts = options.attempts ?? 60;
+  const intervalMs = options.intervalMs ?? 50;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      if (attempt === attempts - 1) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      flushSync();
+    }
+  }
+}
+
+function createSettingsRpcMock(options = {}) {
+  let debugEnabled = options.initialDebugEnabled ?? false;
+  let traceLimit = options.initialTraceLimit ?? 50;
+
+  const baseSettings = () => ({
+    general: {
+      server: { listen_host: '127.0.0.1', listen_port: 8420 },
+      data_directory: 'C:/data',
+    },
+    appearance: { language: 'en', available_languages: ['en'] },
+    skills: { default_directory: 'C:/data/skills', directories: [] },
+    subagents: {
+      max_subagent_depth: 4,
+      max_subagents_per_turn: 8,
+      subagent_timeout_minutes: 60,
+    },
+    compaction: {
+      auto: true,
+      threshold: 0.8,
+      tail_tokens: 15000,
+      summary_model: null,
+    },
+    recall: {
+      backend: 'jsonl_scan',
+      available_backends: ['jsonl_scan', 'sqlite_fts'],
+    },
+    web_search: {
+      provider: 'brave',
+      available_providers: ['brave', 'searxng'],
+      searxng: { base_url: 'http://localhost:8888' },
+    },
+    providers: {
+      items: [],
+      custom_endpoints: { supported: false, items: [] },
+    },
+    defaults: { agent: {} },
+    debug: { enabled: debugEnabled, trace_limit: traceLimit },
+  });
+
+  return async (method, params = {}) => {
+    if (method === 'agent.list') {
+      return { agents: [] };
+    }
+
+    if (method === 'chat.commands') {
+      return { items: [] };
+    }
+
+    if (method === 'chat.history') {
+      return {
+        agent_id: params?.agent_id ?? '',
+        session_id: params?.session_id ?? '',
+        messages: [],
+      };
+    }
+
+    if (method === 'chat.queue_list') {
+      return { items: [] };
+    }
+
+    if (method === 'skill.list') {
+      return { skills: [], invalid_skills: [] };
+    }
+
+    if (method === 'settings.get') {
+      return baseSettings();
+    }
+
+    if (method === 'settings.update') {
+      if (params?.debug && typeof params.debug === 'object') {
+        if (typeof params.debug.enabled === 'boolean') {
+          debugEnabled = params.debug.enabled;
+        }
+        if (Number.isInteger(params.debug.trace_limit)) {
+          traceLimit = params.debug.trace_limit;
+        }
+      }
+      return baseSettings();
+    }
+
+    throw new Error(`Unexpected RPC method: ${method}`);
+  };
 }

@@ -645,7 +645,7 @@ export const englishCatalog = Object.freeze({
   'debug.responseHeaders': 'Headers',
   'debug.responseBody': 'Body',
   'debug.streamEvents': 'Stream Events',
-  'debug.streamEventIndex': 'Event {n}',
+  'debug.streamEventIndex': 'Event {index}',
   'debug.streamRaw': 'Raw',
   'debug.streamParsed': 'Parsed',
   'debug.noStreamEvents': 'No stream events',
@@ -670,7 +670,9 @@ export const englishCatalog = Object.freeze({
   'debug.modelProbe.selectProvider': 'Select a provider',
   'debug.modelProbe.selectConnection': 'Select a connection',
 
-  'debug.emptyHeader': '(none)',
+  'debug.emptyHeader': 'No traces captured yet',
+  'debug.expandRow': 'Expand row',
+  'debug.collapseRow': 'Collapse row',
 
   'app.serverStatus': 'Local UI placeholder',
   'app.statusPlaceholder': 'Local UI placeholder',

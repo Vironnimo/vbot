@@ -184,6 +184,7 @@
     desktopCapabilities = null,
     targetPanelId = '',
     targetPanelRequestId = 0,
+    onDebugEnabledChange = noop,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -967,6 +968,7 @@
       return;
     }
 
+    const nextEnabled = debugSettings.enabled === true;
     saving = true;
     saveError = '';
 
@@ -976,6 +978,7 @@
       });
       commitSettings(nextSettings);
       debugSettings = getDebugSettings(nextSettings);
+      onDebugEnabledChange(nextEnabled);
       showSettingsToast(t('debug.settings', 'Debug'), 'success');
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
