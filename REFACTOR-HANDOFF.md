@@ -1,9 +1,9 @@
 # Refactor Handoff — Large-File Decomposition
 
-**Status:** in progress (Wave 1 done; Wave 2 SettingsView done) · **Owner:** Julian · **Started:** 2026-06-06
-**Next action:** continue Wave 2 → split timeline projection out of `chatState.js` into
-`webui/src/lib/chatTimeline.js`, preserving the existing `chatState.js` public surface and
-test behavior.
+**Status:** in progress (Wave 1 done; Wave 2 SettingsView + chatState done) · **Owner:** Julian · **Started:** 2026-06-06
+**Next action:** continue Wave 2 → decompose `ChatTimeline.svelte`, starting with the
+presentation-helper boundary described under "Planned UI decomposition" below. Preserve
+the rendered DOM/test contract and keep scrolling/pagination behavior in the parent.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -363,15 +363,85 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   2. ~~**Specialized Models**~~ — DONE (see Done block above).
   3. ~~**Providers**~~ — DONE (see Done block above).
 
-- [ ] **`chatState.js` (1927)** ◀── START HERE — two concerns: session/run state mutation **+**
-  timeline projection (`buildVisibleTimelineItems`, `liveTimelineItems`,
-  `historyTimelineItems` & helpers, ~line 473→end). Move the projection half →
-  `webui/src/lib/chatTimeline.js`; `chatState.js` keeps session/run state. Clean seam,
-  covered by `chatState.test.js` (3389).
+- [x] **`chatState.js` (1927 → 721, DONE 2026-06-06)** — moved pure history/live
+  timeline projection into `webui/src/lib/chatTimeline.js` (1269). `chatState.js`
+  retains Agent/Session/Run mutation, queue state, replay tracking, streaming-buffer
+  mutation, status constants, and the existing public import surface; the three
+  timeline selectors are re-exported from the new module, so component and test imports
+  remain unchanged. No test edits. Focused frontend gate green (298/298) and
+  `chatState.test.js` green (69/69). Full frontend gate green (vitest 525/525,
+  build PASS). WebUI spec updated with the new ownership/import boundary.
 
-- [ ] Then same pattern, in rough size order: **ChatTimeline.svelte** (2523),
-  **AgentsView.svelte** (2025), **DebugView.svelte** (1700), **ChatView.svelte** (1594),
-  **api.js** (1227 — split RPC client per domain), **ChatComposer.svelte** (1075).
+- [ ] **`ChatTimeline.svelte` (2523)** ◀── START HERE
+- [ ] **`AgentsView.svelte` (2025)**
+- [ ] **`DebugView.svelte` (1700)**
+- [ ] **`ChatView.svelte` (1594)**
+- [ ] **`api.js` (1227)**
+- [ ] **`ChatComposer.svelte` (1075)**
+
+### Planned UI decomposition (surveyed 2026-06-06)
+
+Use this as the starting plan, then re-check dependents and tests before each cut.
+Preserve the current parent component/API import surfaces throughout.
+
+1. **`ChatTimeline.svelte` (2523; 76 component tests).**
+   - First extract the large pure presentation cluster (message/content-block helpers,
+     tool labels/details/results, Sub-Agent status/links, duration/date formatting) into
+     one deep `chatTimelinePresentation.js` helper module with focused unit tests.
+   - Keep timeline projection in `lib/chatTimeline.js`; do not mix presentation
+     formatting back into it.
+   - Then extract cohesive render children for an assistant Run and a normal
+     message/event item. The parent keeps timeline iteration, date separators,
+     submitted-turn scrolling, bottom-follow behavior, and older-history pagination.
+   - Scoped parent CSS will not style child markup. Before child extraction, either
+     lift the existing timeline styles into one settings-style global
+     `styles/chat-timeline.css`, or move each child's rules with its markup. Prefer one
+     stylesheet over duplicating selectors across children.
+
+2. **`AgentsView.svelte` (2025; 28 component tests).**
+   - Split the stable visual regions into `AgentListPane`, `AgentEditor`, and
+     `AgentCreateModal`. Keep list loading/selection and shared-Agent callbacks in the
+     parent.
+   - Let `AgentEditor` own edit form state, autosave, delete, model selectors, and
+     tool/skill access rendering; let `AgentCreateModal` own its isolated create form
+     and submit state. Existing `agentForm.js` and `modelSelection.js` remain the pure
+     business helpers.
+   - Lift or redistribute scoped CSS before moving markup; preserve DOM classes and RPC
+     calls because the existing tests mount the real view.
+
+3. **`DebugView.svelte` (1700; 10 component tests).**
+   - Extract `DebugTraceDetail` (metadata/request/response tabs and body formatting) and
+     `DebugModelProbe` (provider/connection selection and probe result rendering).
+   - Keep trace catalog loading, trace selection, limit/clear controls, and top-level
+     empty/error/loading states in `DebugView`; a later cut may isolate the trace list if
+     the parent remains large.
+   - Most of the file is CSS (starts around line 924), so move rules with the extracted
+     components or lift one debug-specific stylesheet before markup moves.
+
+4. **`ChatView.svelte` (1594; 29 component tests).**
+   - Extract the stateful Run-stream collaborator first: subscription ownership, SSE
+     reconnect, delayed delta batching, retained-event merge, server-event conversion,
+     and cleanup belong in a constructor/factory-injected `chatRunStream.js`.
+   - Keep Agent/Session selection, history RPC orchestration, queue actions, command
+     handling, and child-component wiring in `ChatView`.
+   - Only extract the Agent bar/header as a child if the stream cut leaves the component
+     above threshold; avoid fragmenting the already-small main markup.
+
+5. **`api.js` (1227; 33 unit tests).**
+   - Keep `api.js` as the compatibility facade. Extract generic RPC/error/URL/JSON
+     transport primitives, Run/server/log event subscriptions, and binary
+     attachment/speech HTTP into cohesive private modules.
+   - Group thin RPC wrappers by real domains only where the group is substantial
+     (Chat/session/queue, channels/providers/settings, debug/logs/automation); re-export
+     every existing symbol from `api.js`. Do not create one shallow file per method.
+
+6. **`ChatComposer.svelte` (1075; 16 component tests).**
+   - Extract pure trigger detection/filtering/insertion helpers first, then the
+     attachment upload/content-block conversion lifecycle if the component remains over
+     threshold.
+   - Keep textarea focus/resize, keyboard submission, voice recording, and top-level
+     send orchestration together unless a later cohesive voice-control child is clearly
+     warranted. This is borderline size, so stop once it is comfortably under 1000.
 
 ### Wave 3 — central, well-tested core (do last)
 
