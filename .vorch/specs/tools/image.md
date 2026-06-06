@@ -8,7 +8,7 @@ Built-in `image_generation` tool for creating image artifacts through the centra
 - Registration: `register_image_generation_tool(registry, image_service)`
 - Schema: required `prompt` (string, `minLength: 1`); `additionalProperties: false`. The tool intentionally exposes only `prompt` — model, provider, size, aspect ratio, and other options come from Settings `model_tasks.image_generation`.
 - Display: summary field `prompt`.
-- Success data: `{ message, images: [artifact, ...] }`; the same artifact dicts are also returned in the top-level `artifacts` list.
+- Success data: `{ message, images: [artifact, ...] }`; the same artifact dicts are also returned in the top-level `artifacts` list. `message` is an agent-facing instruction: the chat never renders image artifacts on its own, so the message tells the agent to display each image by embedding its `url` as Markdown (`![description](url)`) and includes ready-to-paste Markdown for the generated image(s).
 - Artifact shape: `{ id, kind: "image", filename, media_type, size_bytes, url, index }`. `url` is a server-local image artifact URL (`/api/images/artifacts/<id>`), not an attachment URL.
 - Invalid or empty `prompt` returns `invalid_arguments`. Expected image failures return `image_error` instead of crashing the Run.
 

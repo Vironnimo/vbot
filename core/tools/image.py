@@ -32,6 +32,24 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 }
 
 
+def _image_display_message(artifacts: list[JsonObject]) -> str:
+    """Tell the agent how to surface generated images in the chat.
+
+    The chat does not render image artifacts on its own; the agent shows an
+    image by embedding its artifact ``url`` as Markdown in its reply.
+    """
+
+    markdown_snippets = "\n".join(
+        f"![generated image]({artifact['url']})" for artifact in artifacts
+    )
+    return (
+        "Image generation complete. The chat does not display the image "
+        "automatically — to show it, embed each image in your reply as Markdown "
+        "using its 'url' field, e.g. ![short description](url). Markdown for the "
+        f"image(s) you just generated:\n{markdown_snippets}"
+    )
+
+
 def make_image_generation_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
@@ -48,7 +66,7 @@ def make_image_generation_handler(image_service: Any):
         artifact_payloads = [a.to_dict() for a in artifacts]
         return tool_success(
             {
-                "message": "Image generation complete.",
+                "message": _image_display_message(artifact_payloads),
                 "images": artifact_payloads,
             },
             artifacts=artifact_payloads,
