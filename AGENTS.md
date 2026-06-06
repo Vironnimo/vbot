@@ -10,7 +10,7 @@ Every session begins by reading these files — immediately, before anything els
 1. `.vorch/PROJECT.md`
 2. `.vorch/GLOSSARY.md`
 
-**Read each file completely — from the first line to the last line. Do NOT stop after 100–200 lines and assume you have enough context. Do NOT skim. The full content of every file is required. If the file is long, keep reading until you reach the end.**
+**Read each file completely, start to end — don't skim, and don't stop after the first 100–200 lines assuming you have enough.**
 
 Your agent file lists any additional files to read on top of these. Apply the same rule: read them in full.
 
@@ -18,7 +18,7 @@ Your agent file lists any additional files to read on top of these. Apply the sa
 
 | Responsibility | Owner |
 |---|---|
-| Git (branches, commits, merges) | **Orchestrator** |
+| Git (branches, commits, merges) | **Orchestrator + User** |
 | Project docs (`.vorch/PROJECT.md`) | **Orchestrator only** |
 | Spec files (`.vorch/specs/`) | **Orchestrator only** |
 | Glossary (`.vorch/GLOSSARY.md`) | **Orchestrator only** |
@@ -28,7 +28,7 @@ Your agent file lists any additional files to read on top of these. Apply the sa
 | Web research (tech, libraries, APIs) | **Researcher** |
 | Codebase exploration & structured summaries | **Explorer** |
 
-**No agent operates outside their role.** Only the Orchestrator touches git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. Every other agent writes only within the scope defined by their role.
+**No agent operates outside their role.** Only the Orchestrator and User touch git. Only the Orchestrator writes `.vorch/PROJECT.md`, `.vorch/GLOSSARY.md`, and files under `.vorch/specs/`. Every other agent writes only within the scope defined by their role.
 
 ## Code Quality
 
