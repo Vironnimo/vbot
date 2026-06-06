@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-03T21:58:08.226699+00:00",
+  "fetched_at": "2026-06-06T12:53:49.224681+00:00",
   "models": {
     "claude-haiku-4.5": {
       "capabilities": {
@@ -123,7 +123,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 200000,
+      "context_window": 264000,
       "max_output_tokens": 64000,
       "metadata": {
         "github_copilot": {
@@ -133,7 +133,11 @@
           "min_thinking_budget": 1024,
           "parallel_tool_calls": true,
           "reasoning_efforts": [
-            "medium"
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
           ],
           "streaming": true,
           "structured_outputs": true,
@@ -176,7 +180,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 200000,
+      "context_window": 264000,
       "max_output_tokens": 64000,
       "metadata": {
         "github_copilot": {
@@ -186,7 +190,11 @@
           "min_thinking_budget": 1024,
           "parallel_tool_calls": true,
           "reasoning_efforts": [
-            "medium"
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
           ],
           "streaming": true,
           "structured_outputs": true,
@@ -276,8 +284,8 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 200000,
-      "max_output_tokens": 32000,
+      "context_window": 264000,
+      "max_output_tokens": 64000,
       "metadata": {
         "github_copilot": {
           "adaptive_thinking": true,
@@ -288,7 +296,8 @@
           "reasoning_efforts": [
             "low",
             "medium",
-            "high"
+            "high",
+            "max"
           ],
           "streaming": true,
           "structured_outputs": true,
@@ -421,7 +430,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 128000,
+      "context_window": 264000,
       "max_output_tokens": 64000,
       "metadata": {
         "github_copilot": {
@@ -472,7 +481,7 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 200000,
+      "context_window": 264000,
       "max_output_tokens": 64000,
       "metadata": {
         "github_copilot": {
@@ -481,6 +490,7 @@
           "min_thinking_budget": 256,
           "parallel_tool_calls": true,
           "reasoning_efforts": [
+            "minimal",
             "low",
             "medium",
             "high"
@@ -1078,113 +1088,6 @@
       },
       "name": "GPT-5 mini"
     },
-    "gpt-5.2": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "reasoning_effort",
-          "structured_outputs",
-          "tool_calls"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 264000,
-      "max_output_tokens": 64000,
-      "metadata": {
-        "github_copilot": {
-          "family": "gpt-5.2",
-          "parallel_tool_calls": true,
-          "reasoning_efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "streaming": true,
-          "structured_outputs": true,
-          "supported_endpoints": [
-            "/chat/completions",
-            "/responses",
-            "ws:/responses"
-          ],
-          "tool_calls": true,
-          "vendor": "OpenAI",
-          "version": "gpt-5.2"
-        }
-      },
-      "name": "GPT-5.2"
-    },
-    "gpt-5.2-codex": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "parallel_tool_calls",
-          "reasoning_effort",
-          "structured_outputs",
-          "tool_calls"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 400000,
-      "max_output_tokens": 128000,
-      "metadata": {
-        "github_copilot": {
-          "family": "gpt-5.2-codex",
-          "parallel_tool_calls": true,
-          "reasoning_efforts": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
-          "streaming": true,
-          "structured_outputs": true,
-          "supported_endpoints": [
-            "/responses",
-            "ws:/responses"
-          ],
-          "tool_calls": true,
-          "vendor": "OpenAI",
-          "version": "gpt-5.2-codex"
-        }
-      },
-      "name": "GPT-5.2-Codex"
-    },
     "gpt-5.3-codex": {
       "capabilities": {
         "input_modalities": [
@@ -1273,6 +1176,7 @@
           "family": "gpt-5.4",
           "parallel_tool_calls": true,
           "reasoning_efforts": [
+            "none",
             "low",
             "medium",
             "high",
@@ -1444,6 +1348,102 @@
           "tool_calls": true,
           "vendor": "Azure OpenAI",
           "version": "mai-code-1-flash"
+        }
+      },
+      "name": "MAI-Code-1-Flash"
+    },
+    "mai-code-1-flash-secondary": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "oswe-vscode-modelD",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "mai-code-1-flash-secondary"
+        }
+      },
+      "name": "MAI-Code-1-Flash"
+    },
+    "mai-code-1-flash-tertiary": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "structured_outputs",
+          "tool_calls"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "github_copilot": {
+          "family": "oswe-vscode-modelD",
+          "parallel_tool_calls": true,
+          "reasoning_efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "streaming": true,
+          "structured_outputs": true,
+          "supported_endpoints": [
+            "/responses"
+          ],
+          "tool_calls": true,
+          "vendor": "Azure OpenAI",
+          "version": "mai-code-1-flash-tertiary"
         }
       },
       "name": "MAI-Code-1-Flash"

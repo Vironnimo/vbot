@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-03T21:58:10.916449+00:00",
+  "fetched_at": "2026-06-06T12:53:52.141857+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -3976,7 +3976,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 16384,
+      "max_output_tokens": 8192,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -5859,7 +5859,7 @@
         "vision": false
       },
       "context_window": 204800,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 196608,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -7240,47 +7240,6 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
-    "nousresearch/hermes-2-pro-llama-3-8b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "context_window": 8192,
-      "max_output_tokens": 8192,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "NousResearch: Hermes 2 Pro - Llama-3 8B"
-    },
     "nousresearch/hermes-3-llama-3.1-405b": {
       "capabilities": {
         "input_modalities": [
@@ -7749,6 +7708,130 @@
       },
       "name": "NVIDIA: Nemotron 3 Super (free)"
     },
+    "nvidia/nemotron-3-ultra-550b-a55b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 16384,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3 Ultra"
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3 Ultra (free)"
+    },
+    "nvidia/nemotron-3.5-content-safety:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 128000,
+      "max_output_tokens": 8192,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "NVIDIA: Nemotron 3.5 Content Safety (free)"
+    },
     "nvidia/nemotron-nano-12b-v2-vl:free": {
       "capabilities": {
         "input_modalities": [
@@ -8139,50 +8222,6 @@
         }
       },
       "name": "OpenAI: GPT-4"
-    },
-    "openai/gpt-4-0314": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 8191,
-      "max_output_tokens": 4096,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "OpenAI: GPT-4 (older v0314)"
     },
     "openai/gpt-4-1106-preview": {
       "capabilities": {
@@ -12128,7 +12167,7 @@
         "vision": false
       },
       "context_window": 131072,
-      "max_output_tokens": 20000,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -14383,47 +14422,6 @@
       },
       "name": "Relace: Relace Search"
     },
-    "sao10k/l3-euryale-70b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 8192,
-      "max_output_tokens": 8192,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "Sao10k: Llama 3 Euryale 70B v2.1"
-    },
     "sao10k/l3-lunaris-8b": {
       "capabilities": {
         "input_modalities": [
@@ -14785,6 +14783,72 @@
         }
       },
       "name": "Sourceful: Riverflow V2 Standard Preview"
+    },
+    "sourceful/riverflow-v2.5-fast:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2.5 Fast (free)"
+    },
+    "sourceful/riverflow-v2.5-pro:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Sourceful: Riverflow V2.5 Pro (free)"
     },
     "stepfun/step-3.5-flash": {
       "capabilities": {
@@ -15578,14 +15642,11 @@
           "max_tokens",
           "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
-          "seed",
           "stop",
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_p"
         ],
         "task_types": [
@@ -16213,8 +16274,10 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",

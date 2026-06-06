@@ -1,8 +1,179 @@
 {
-  "fetched_at": "2026-06-03T21:58:10.916449+00:00",
+  "fetched_at": "2026-06-06T12:53:52.141857+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/nemotron-3.5-content-safety-20260604",
+        "context_length": 128000,
+        "created": 1780581864,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from Google Gemma-3-4B. It moderates both inputs to and responses from LLMs and VLMs, accepting...",
+        "expiration_date": null,
+        "hugging_face_id": "nvidia/Nemotron-3.5-Content-Safety",
+        "id": "nvidia/nemotron-3.5-content-safety:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/nemotron-3.5-content-safety-20260604/endpoints"
+        },
+        "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 128000,
+          "is_moderated": false,
+          "max_completion_tokens": 8192
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+        "context_length": 1000000,
+        "created": 1780551208,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": 1,
+          "top_k": null,
+          "top_p": 0.95
+        },
+        "description": "NVIDIA Nemotron 3 Ultra is an open frontier-reasoning and orchestration model from NVIDIA, with 55B active parameters out of 550B total (MoE). Built on a hybrid Transformer-Mamba mixture-of-experts architecture, it...",
+        "expiration_date": null,
+        "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+        "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b-20260604/endpoints"
+        },
+        "name": "NVIDIA: Nemotron 3 Ultra (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "seed",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 1000000,
+          "is_moderated": false,
+          "max_completion_tokens": 65536
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
+        "context_length": 1000000,
+        "created": 1780551208,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": 1,
+          "top_k": null,
+          "top_p": 0.95
+        },
+        "description": "NVIDIA Nemotron 3 Ultra is an open frontier-reasoning and orchestration model from NVIDIA, with 55B active parameters out of 550B total (MoE). Built on a hybrid Transformer-Mamba mixture-of-experts architecture, it...",
+        "expiration_date": null,
+        "hugging_face_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16",
+        "id": "nvidia/nemotron-3-ultra-550b-a55b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/nemotron-3-ultra-550b-a55b-20260604/endpoints"
+        },
+        "name": "NVIDIA: Nemotron 3 Ultra",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.0000025",
+          "input_cache_read": "0.00000015",
+          "prompt": "0.0000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 262144,
+          "is_moderated": false,
+          "max_completion_tokens": 16384
+        }
+      },
       {
         "architecture": {
           "input_modalities": [
@@ -2982,8 +3153,10 @@
           "logprobs",
           "max_tokens",
           "min_p",
+          "parallel_tool_calls",
           "presence_penalty",
           "reasoning",
+          "reasoning_effort",
           "repetition_penalty",
           "response_format",
           "seed",
@@ -3215,7 +3388,8 @@
         "name": "Google: Gemma 4 31B",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000037",
+          "completion": "0.00000036",
+          "input_cache_read": "0.00000009",
           "prompt": "0.00000012"
         },
         "supported_parameters": [
@@ -3241,9 +3415,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 262144,
+          "context_length": 256000,
           "is_moderated": false,
-          "max_completion_tokens": 16384
+          "max_completion_tokens": 8192
         }
       },
       {
@@ -3837,7 +4011,7 @@
         "top_provider": {
           "context_length": 196608,
           "is_moderated": false,
-          "max_completion_tokens": 131072
+          "max_completion_tokens": 196608
         }
       },
       {
@@ -6816,14 +6990,11 @@
           "max_tokens",
           "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
-          "seed",
           "stop",
           "temperature",
           "tool_choice",
           "tools",
-          "top_k",
           "top_p"
         ],
         "supported_voices": null,
@@ -10778,7 +10949,7 @@
           "top_p": null
         },
         "description": "NVIDIA-Nemotron-Nano-9B-v2 is a large language model (LLM) trained from scratch by NVIDIA, and designed as a unified model for both reasoning and non-reasoning tasks. It responds to user queries and...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-11",
         "hugging_face_id": "nvidia/NVIDIA-Nemotron-Nano-9B-v2",
         "id": "nvidia/nemotron-nano-9b-v2",
         "knowledge_cutoff": "2025-03-31",
@@ -11940,8 +12111,8 @@
         "name": "Qwen: Qwen3 30B A3B Instruct 2507",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000001716",
-          "prompt": "0.0000000428"
+          "completion": "0.00000019305",
+          "prompt": "0.00000004815"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -11988,7 +12159,7 @@
           "top_p": null
         },
         "description": "GLM-4.5 is our latest flagship foundation model, purpose-built for agent-based applications. It leverages a Mixture-of-Experts (MoE) architecture and supports a context length of up to 128k tokens. GLM-4.5 delivers significantly...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-19",
         "hugging_face_id": "zai-org/GLM-4.5",
         "id": "z-ai/glm-4.5",
         "knowledge_cutoff": "2024-12-31",
@@ -13826,7 +13997,7 @@
           "top_p": null
         },
         "description": "Qwen3, the latest generation in the Qwen large language model series, features both dense and mixture-of-experts (MoE) architectures to excel in reasoning, multilingual support, and advanced agent tasks. Its unique...",
-        "expiration_date": "2026-06-05",
+        "expiration_date": null,
         "hugging_face_id": "Qwen/Qwen3-30B-A3B",
         "id": "qwen/qwen3-30b-a3b",
         "knowledge_cutoff": "2025-03-31",
@@ -13864,7 +14035,7 @@
         "top_provider": {
           "context_length": 40960,
           "is_moderated": false,
-          "max_completion_tokens": 20000
+          "max_completion_tokens": 16384
         }
       },
       {
@@ -15851,7 +16022,7 @@
         "created": 1737663169,
         "default_parameters": {},
         "description": "DeepSeek R1 Distill Llama 70B is a distilled large language model based on [Llama-3.3-70B-Instruct](/meta-llama/llama-3.3-70b-instruct), using outputs from [DeepSeek R1](/deepseek/deepseek-r1). The model combines advanced distillation techniques to achieve high performance across...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-11",
         "hugging_face_id": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
         "id": "deepseek/deepseek-r1-distill-llama-70b",
         "knowledge_cutoff": "2024-07-31",
@@ -16939,19 +17110,19 @@
           ],
           "tokenizer": "Other"
         },
-        "canonical_slug": "inflection/inflection-3-pi",
+        "canonical_slug": "inflection/inflection-3-productivity",
         "context_length": 8000,
         "created": 1728604800,
         "default_parameters": {},
-        "description": "Inflection 3 Pi powers Inflection's [Pi](https://pi.ai) chatbot, including backstory, emotional intelligence, productivity, and safety. It has access to recent news, and excels in scenarios like customer support and roleplay. Pi...",
+        "description": "Inflection 3 Productivity is optimized for following instructions. It is better for tasks requiring JSON output or precise adherence to provided guidelines. It has access to recent news. For emotional...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "inflection/inflection-3-pi",
+        "id": "inflection/inflection-3-productivity",
         "knowledge_cutoff": "2024-10-31",
         "links": {
-          "details": "/api/v1/models/inflection/inflection-3-pi/endpoints"
+          "details": "/api/v1/models/inflection/inflection-3-productivity/endpoints"
         },
-        "name": "Inflection: Inflection 3 Pi",
+        "name": "Inflection: Inflection 3 Productivity",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00001",
@@ -16982,19 +17153,19 @@
           ],
           "tokenizer": "Other"
         },
-        "canonical_slug": "inflection/inflection-3-productivity",
+        "canonical_slug": "inflection/inflection-3-pi",
         "context_length": 8000,
         "created": 1728604800,
         "default_parameters": {},
-        "description": "Inflection 3 Productivity is optimized for following instructions. It is better for tasks requiring JSON output or precise adherence to provided guidelines. It has access to recent news. For emotional...",
+        "description": "Inflection 3 Pi powers Inflection's [Pi](https://pi.ai) chatbot, including backstory, emotional intelligence, productivity, and safety. It has access to recent news, and excels in scenarios like customer support and roleplay. Pi...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "inflection/inflection-3-productivity",
+        "id": "inflection/inflection-3-pi",
         "knowledge_cutoff": "2024-10-31",
         "links": {
-          "details": "/api/v1/models/inflection/inflection-3-productivity/endpoints"
+          "details": "/api/v1/models/inflection/inflection-3-pi/endpoints"
         },
-        "name": "Inflection: Inflection 3 Productivity",
+        "name": "Inflection: Inflection 3 Pi",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00001",
@@ -17067,56 +17238,6 @@
           "context_length": 32768,
           "is_moderated": false,
           "max_completion_tokens": 32768
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": "llama3",
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Llama3"
-        },
-        "canonical_slug": "meta-llama/llama-3.2-1b-instruct",
-        "context_length": 131072,
-        "created": 1727222400,
-        "default_parameters": {},
-        "description": "Llama 3.2 1B is a 1-billion-parameter language model focused on efficiently performing natural language tasks, such as summarization, dialogue, and multilingual text analysis. Its smaller size allows it to operate...",
-        "expiration_date": null,
-        "hugging_face_id": "meta-llama/Llama-3.2-1B-Instruct",
-        "id": "meta-llama/llama-3.2-1b-instruct",
-        "knowledge_cutoff": "2023-12-31",
-        "links": {
-          "details": "/api/v1/models/meta-llama/llama-3.2-1b-instruct/endpoints"
-        },
-        "name": "Meta: Llama 3.2 1B Instruct",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000000201",
-          "prompt": "0.000000027"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 60000,
-          "is_moderated": false,
-          "max_completion_tokens": 60000
         }
       },
       {
@@ -17213,6 +17334,56 @@
           "context_length": 80000,
           "is_moderated": false,
           "max_completion_tokens": 80000
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": "llama3",
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "Llama3"
+        },
+        "canonical_slug": "meta-llama/llama-3.2-1b-instruct",
+        "context_length": 131072,
+        "created": 1727222400,
+        "default_parameters": {},
+        "description": "Llama 3.2 1B is a 1-billion-parameter language model focused on efficiently performing natural language tasks, such as summarization, dialogue, and multilingual text analysis. Its smaller size allows it to operate...",
+        "expiration_date": null,
+        "hugging_face_id": "meta-llama/Llama-3.2-1B-Instruct",
+        "id": "meta-llama/llama-3.2-1b-instruct",
+        "knowledge_cutoff": "2023-12-31",
+        "links": {
+          "details": "/api/v1/models/meta-llama/llama-3.2-1b-instruct/endpoints"
+        },
+        "name": "Meta: Llama 3.2 1B Instruct",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.000000201",
+          "prompt": "0.000000027"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 60000,
+          "is_moderated": false,
+          "max_completion_tokens": 60000
         }
       },
       {
@@ -17333,23 +17504,23 @@
           ],
           "tokenizer": "Cohere"
         },
-        "canonical_slug": "cohere/command-r-08-2024",
+        "canonical_slug": "cohere/command-r-plus-08-2024",
         "context_length": 128000,
         "created": 1724976000,
         "default_parameters": {},
-        "description": "command-r-08-2024 is an update of the [Command R](/models/cohere/command-r) with improved performance for multilingual retrieval-augmented generation (RAG) and tool use. More broadly, it is better at math, code and reasoning and...",
+        "description": "command-r-plus-08-2024 is an update of the [Command R+](/models/cohere/command-r-plus) with roughly 50% higher throughput and 25% lower latencies as compared to the previous Command R+ version, while keeping the hardware footprint...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "cohere/command-r-08-2024",
+        "id": "cohere/command-r-plus-08-2024",
         "knowledge_cutoff": "2024-03-31",
         "links": {
-          "details": "/api/v1/models/cohere/command-r-08-2024/endpoints"
+          "details": "/api/v1/models/cohere/command-r-plus-08-2024/endpoints"
         },
-        "name": "Cohere: Command R (08-2024)",
+        "name": "Cohere: Command R+ (08-2024)",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000006",
-          "prompt": "0.00000015"
+          "completion": "0.00001",
+          "prompt": "0.0000025"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17384,23 +17555,23 @@
           ],
           "tokenizer": "Cohere"
         },
-        "canonical_slug": "cohere/command-r-plus-08-2024",
+        "canonical_slug": "cohere/command-r-08-2024",
         "context_length": 128000,
         "created": 1724976000,
         "default_parameters": {},
-        "description": "command-r-plus-08-2024 is an update of the [Command R+](/models/cohere/command-r-plus) with roughly 50% higher throughput and 25% lower latencies as compared to the previous Command R+ version, while keeping the hardware footprint...",
+        "description": "command-r-08-2024 is an update of the [Command R](/models/cohere/command-r) with improved performance for multilingual retrieval-augmented generation (RAG) and tool use. More broadly, it is better at math, code and reasoning and...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "cohere/command-r-plus-08-2024",
+        "id": "cohere/command-r-08-2024",
         "knowledge_cutoff": "2024-03-31",
         "links": {
-          "details": "/api/v1/models/cohere/command-r-plus-08-2024/endpoints"
+          "details": "/api/v1/models/cohere/command-r-08-2024/endpoints"
         },
-        "name": "Cohere: Command R+ (08-2024)",
+        "name": "Cohere: Command R (08-2024)",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00001",
-          "prompt": "0.0000025"
+          "completion": "0.0000006",
+          "prompt": "0.00000015"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17764,7 +17935,7 @@
         "name": "Meta: Llama 3.1 8B Instruct",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000005",
+          "completion": "0.00000003",
           "prompt": "0.00000002"
         },
         "supported_parameters": [
@@ -17786,7 +17957,7 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 16384,
+          "context_length": 131072,
           "is_moderated": false,
           "max_completion_tokens": 16384
         }
@@ -18068,106 +18239,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
-          ],
-          "instruct_type": "llama3",
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Llama3"
-        },
-        "canonical_slug": "sao10k/l3-euryale-70b",
-        "context_length": 8192,
-        "created": 1718668800,
-        "default_parameters": {},
-        "description": "Euryale 70B v2.1 is a model focused on creative roleplay from [Sao10k](https://ko-fi.com/sao10k). - Better prompt adherence. - Better anatomy / spatial awareness. - Adapts much better to unique and custom...",
-        "expiration_date": "2026-06-05",
-        "hugging_face_id": "Sao10K/L3-70B-Euryale-v2.1",
-        "id": "sao10k/l3-euryale-70b",
-        "knowledge_cutoff": "2023-12-31",
-        "links": {
-          "details": "/api/v1/models/sao10k/l3-euryale-70b/endpoints"
-        },
-        "name": "Sao10k: Llama 3 Euryale 70B v2.1",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000148",
-          "prompt": "0.00000148"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 8192,
-          "is_moderated": false,
-          "max_completion_tokens": 8192
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": "chatml",
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Llama3"
-        },
-        "canonical_slug": "nousresearch/hermes-2-pro-llama-3-8b",
-        "context_length": 8192,
-        "created": 1716768000,
-        "default_parameters": {},
-        "description": "Hermes 2 Pro is an upgraded, retrained version of Nous Hermes 2, consisting of an updated and cleaned version of the OpenHermes 2.5 Dataset, as well as a newly introduced...",
-        "expiration_date": "2026-06-05",
-        "hugging_face_id": "NousResearch/Hermes-2-Pro-Llama-3-8B",
-        "id": "nousresearch/hermes-2-pro-llama-3-8b",
-        "knowledge_cutoff": "2023-12-31",
-        "links": {
-          "details": "/api/v1/models/nousresearch/hermes-2-pro-llama-3-8b/endpoints"
-        },
-        "name": "NousResearch: Hermes 2 Pro - Llama-3 8B",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000014",
-          "prompt": "0.00000014"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "max_tokens",
-          "presence_penalty",
-          "repetition_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 8192,
-          "is_moderated": false,
-          "max_completion_tokens": 8192
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text",
             "image",
             "file"
@@ -18296,7 +18367,7 @@
         "created": 1713398400,
         "default_parameters": {},
         "description": "Meta's latest class of model (Llama 3) launched with a variety of sizes & flavors. This 8B instruct-tuned version was optimized for high quality dialogue usecases. It has demonstrated strong...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-19",
         "hugging_face_id": "meta-llama/Meta-Llama-3-8B-Instruct",
         "id": "meta-llama/llama-3-8b-instruct",
         "knowledge_cutoff": "2023-12-31",
@@ -18347,7 +18418,7 @@
         "created": 1713398400,
         "default_parameters": {},
         "description": "Meta's latest class of model (Llama 3) launched with a variety of sizes & flavors. This 70B instruct-tuned version was optimized for high quality dialogue usecases. It has demonstrated strong...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-19",
         "hugging_face_id": "meta-llama/Meta-Llama-3-70B-Instruct",
         "id": "meta-llama/llama-3-70b-instruct",
         "knowledge_cutoff": "2023-12-31",
@@ -18651,59 +18722,6 @@
           ],
           "tokenizer": "GPT"
         },
-        "canonical_slug": "openai/gpt-3.5-turbo-0613",
-        "context_length": 4095,
-        "created": 1706140800,
-        "default_parameters": {},
-        "description": "GPT-3.5 Turbo is OpenAI's fastest model. It can understand and generate natural language or code, and is optimized for chat and traditional completion tasks.\n\nTraining data up to Sep 2021.",
-        "expiration_date": null,
-        "hugging_face_id": null,
-        "id": "openai/gpt-3.5-turbo-0613",
-        "knowledge_cutoff": "2021-09-30",
-        "links": {
-          "details": "/api/v1/models/openai/gpt-3.5-turbo-0613/endpoints"
-        },
-        "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.000002",
-          "prompt": "0.000001"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_completion_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 4095,
-          "is_moderated": false,
-          "max_completion_tokens": 4096
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "GPT"
-        },
         "canonical_slug": "openai/gpt-4-turbo-preview",
         "context_length": 128000,
         "created": 1706140800,
@@ -18742,6 +18760,59 @@
         "top_provider": {
           "context_length": 128000,
           "is_moderated": true,
+          "max_completion_tokens": 4096
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->text",
+          "output_modalities": [
+            "text"
+          ],
+          "tokenizer": "GPT"
+        },
+        "canonical_slug": "openai/gpt-3.5-turbo-0613",
+        "context_length": 4095,
+        "created": 1706140800,
+        "default_parameters": {},
+        "description": "GPT-3.5 Turbo is OpenAI's fastest model. It can understand and generate natural language or code, and is optimized for chat and traditional completion tasks.\n\nTraining data up to Sep 2021.",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "openai/gpt-3.5-turbo-0613",
+        "knowledge_cutoff": "2021-09-30",
+        "links": {
+          "details": "/api/v1/models/openai/gpt-3.5-turbo-0613/endpoints"
+        },
+        "name": "OpenAI: GPT-3.5 Turbo (older v0613)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0.000002",
+          "prompt": "0.000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_completion_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 4095,
+          "is_moderated": false,
           "max_completion_tokens": 4096
         }
       },
@@ -19152,19 +19223,19 @@
           ],
           "tokenizer": "GPT"
         },
-        "canonical_slug": "openai/gpt-4-0314",
+        "canonical_slug": "openai/gpt-4",
         "context_length": 8191,
         "created": 1685232000,
         "default_parameters": {},
-        "description": "GPT-4-0314 is the first version of GPT-4 released, with a context length of 8,192 tokens, and was supported until June 14. Training data: up to Sep 2021.",
+        "description": "OpenAI's flagship model, GPT-4 is a large-scale multimodal language model capable of solving difficult problems with greater accuracy than previous models due to its broader general knowledge and advanced reasoning...",
         "expiration_date": null,
         "hugging_face_id": null,
-        "id": "openai/gpt-4-0314",
+        "id": "openai/gpt-4",
         "knowledge_cutoff": "2021-09-30",
         "links": {
-          "details": "/api/v1/models/openai/gpt-4-0314/endpoints"
+          "details": "/api/v1/models/openai/gpt-4/endpoints"
         },
-        "name": "OpenAI: GPT-4 (older v0314)",
+        "name": "OpenAI: GPT-4",
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00006",
@@ -19174,6 +19245,7 @@
           "frequency_penalty",
           "logit_bias",
           "logprobs",
+          "max_completion_tokens",
           "max_tokens",
           "presence_penalty",
           "response_format",
@@ -19249,60 +19321,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "GPT"
-        },
-        "canonical_slug": "openai/gpt-4",
-        "context_length": 8191,
-        "created": 1685232000,
-        "default_parameters": {},
-        "description": "OpenAI's flagship model, GPT-4 is a large-scale multimodal language model capable of solving difficult problems with greater accuracy than previous models due to its broader general knowledge and advanced reasoning...",
-        "expiration_date": null,
-        "hugging_face_id": null,
-        "id": "openai/gpt-4",
-        "knowledge_cutoff": "2021-09-30",
-        "links": {
-          "details": "/api/v1/models/openai/gpt-4/endpoints"
-        },
-        "name": "OpenAI: GPT-4",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00006",
-          "prompt": "0.00003"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_completion_tokens",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 8191,
-          "is_moderated": true,
-          "max_completion_tokens": 4096
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "audio"
           ],
           "instruct_type": null,
@@ -21508,6 +21526,202 @@
         ],
         "top_provider": {
           "context_length": 4096,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2.5-pro-20260605",
+        "context_length": 8192,
+        "created": 1780584991,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2.5 Pro is the most powerful variant of Sourceful's Riverflow 2.5 lineup, best for top-tier control and quality-sensitive outputs. The Riverflow 2.5 series is a unified text-to-image and image-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sourceful/riverflow-v2.5-pro:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2.5-pro-20260605/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2.5 Pro (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2.5-pro-20260605",
+        "context_length": 8192,
+        "created": 1780584991,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2.5 Pro is the most powerful variant of Sourceful's Riverflow 2.5 lineup, best for top-tier control and quality-sensitive outputs. The Riverflow 2.5 series is a unified text-to-image and image-to-image...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sourceful/riverflow-v2.5-pro:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2.5-pro-20260605/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2.5 Pro (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2.5-fast-20260605",
+        "context_length": 8192,
+        "created": 1780584983,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2.5 Fast is the speed-optimized variant of Sourceful's Riverflow 2.5 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.5 series is a unified text-to-image and image-to-image family...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sourceful/riverflow-v2.5-fast:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2.5-fast-20260605/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2.5 Fast (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->image",
+          "output_modalities": [
+            "image"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sourceful/riverflow-v2.5-fast-20260605",
+        "context_length": 8192,
+        "created": 1780584983,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Riverflow V2.5 Fast is the speed-optimized variant of Sourceful's Riverflow 2.5 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.5 series is a unified text-to-image and image-to-image family...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "sourceful/riverflow-v2.5-fast:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sourceful/riverflow-v2.5-fast-20260605/endpoints"
+        },
+        "name": "Sourceful: Riverflow V2.5 Fast (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "reasoning"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
           "is_moderated": false,
           "max_completion_tokens": null
         }
