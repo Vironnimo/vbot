@@ -1,7 +1,10 @@
 """Tests for ProviderDebugRecorder / _TraceCapture: shape, redaction, lifecycle.
 
 These drive the capture object directly (as the HTTP transport does) without a
-real network, asserting the canonical trace shape in ``.vorch/specs/debug.md``.
+real network, asserting the canonical trace shape in ``.vorch/specs/debug.md``:
+one complete raw request and one complete raw response per provider call, with
+the full aggregate body (streaming or not) under ``response.body`` and no
+``stream.events`` split.
 """
 
 from __future__ import annotations
@@ -140,7 +143,8 @@ class TestRedaction:
 
 
 class TestStreaming:
-    def test_streaming_body_split_into_raw_frames(self, recorder, store):
+    def test_streaming_body_stored_as_raw_aggregate_in_response_body(self, recorder, store):
+        """A streaming success keeps the full raw SSE text in ``response.body``."""
         recorder.set_context(_make_context(streaming=True))
         capture = recorder.begin_capture(
             method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
@@ -151,10 +155,13 @@ class TestStreaming:
         capture.finalize()
 
         trace = _latest_trace(store)
-        assert trace["stream"]["events"] == ['data: {"delta":"hi"}', "data: [DONE]"]
-        assert trace["response"]["body"] is None
+        assert trace["response"]["body"] == 'data: {"delta":"hi"}\n\ndata: [DONE]\n\n'
+        # The canonical trace is one request and one response — no per-frame
+        # split is produced for streaming success.
+        assert "stream" not in trace
 
-    def test_non_streaming_omits_stream_key(self, recorder, store):
+    def test_non_streaming_body_stored_in_response_body(self, recorder, store):
+        """A non-streaming response keeps its raw body in ``response.body``."""
         recorder.set_context(_make_context(streaming=False))
         capture = recorder.begin_capture(
             method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
@@ -163,7 +170,24 @@ class TestStreaming:
         capture.feed_body(b'{"ok":true}')
         capture.finalize()
 
-        assert "stream" not in _latest_trace(store)
+        trace = _latest_trace(store)
+        assert trace["response"]["body"] == '{"ok":true}'
+        assert "stream" not in trace
+
+    def test_streaming_error_status_keeps_raw_error_body(self, recorder, store):
+        """A streaming request that returns an error status keeps its raw body."""
+        recorder.set_context(_make_context(streaming=True))
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+        capture.record_response_head(429, {})
+        capture.feed_body(b'{"error":{"message":"Rate limit exceeded"}}')
+        capture.finalize()
+
+        trace = _latest_trace(store)
+        assert trace["response"]["status_code"] == 429
+        assert trace["response"]["body"] == '{"error":{"message":"Rate limit exceeded"}}'
+        assert "stream" not in trace
 
 
 class TestErrorCapture:
