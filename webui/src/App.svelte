@@ -256,6 +256,14 @@
     selectView('settings');
   };
 
+  const handleDebugEnabledChange = (enabled) => {
+    const isEnabled = enabled === true;
+    debugEnabled = isEnabled;
+    if (!isEnabled && activeViewId === 'debug') {
+      selectView('settings');
+    }
+  };
+
   onMount(() => {
     let cancelled = false;
 
@@ -355,6 +363,7 @@
       {desktopCapabilities}
       targetPanelId={settingsPanelTarget}
       targetPanelRequestId={settingsPanelTargetRequestId}
+      onDebugEnabledChange={handleDebugEnabledChange}
     />
   {:else if activeViewId === 'logs'}
     <LogsView />
