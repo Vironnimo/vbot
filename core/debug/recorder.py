@@ -167,6 +167,14 @@ class _TraceCapture:
         duration_ms = int((time.monotonic() - self._start) * 1000)
         body_text = _decode_body(b"".join(self._body_chunks)) if self._body_chunks else None
 
+        # The complete raw aggregate body — including every byte of an SSE
+        # stream — lives in response.body. We never split it into per-frame
+        # metadata; the canonical trace is one request and one response. When
+        # no response head was recorded, the whole response stays None.
+        response: dict[str, Any] | None = None
+        if self._response is not None:
+            response = {**self._response, "body": body_text}
+
         trace: dict[str, Any] = {
             "trace_id": self._trace_id,
             "type": _TRACE_TYPE_PROVIDER_REQUEST,
@@ -176,14 +184,8 @@ class _TraceCapture:
             "provider_id": self._context.provider_id if self._context else "",
             "model_id": self._context.model_id if self._context else "",
             "request": self._request,
-            "response": self._response,
+            "response": response,
         }
-
-        # The complete raw aggregate body — including every byte of an SSE
-        # stream — lives in response.body. We never split it into per-frame
-        # metadata; the canonical trace is one request and one response.
-        if self._response is not None:
-            self._response["body"] = body_text
 
         if self._error is not None:
             trace["error"] = self._error
