@@ -1,11 +1,13 @@
 <script>
   import { onMount } from 'svelte';
 
-  import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
+  import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
+  import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
+  import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
   import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
@@ -34,13 +36,8 @@
     taskModelBindingsMatch,
   } from '$lib/taskModelSettings.js';
   import {
-    AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
     SETTINGS_LAYOUT_CLASS,
-    buildAgentDefaultsPayload,
     describeProvider,
-    formatServerHost,
-    getDataDirectoryValue,
-    normalizeAgentDefaultsSettings,
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
@@ -57,22 +54,8 @@
     summary_model: null,
   });
 
-  const DEBUG_SETTING_DEFAULTS = Object.freeze({
-    enabled: false,
-    trace_limit: 50,
-  });
-
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
-  const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
-    'none',
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-  ]);
 
   function normalizeCompactionSettingsFallback(rawSettings) {
     const compaction = rawSettings?.compaction ?? {};
@@ -100,22 +83,6 @@
     };
   }
 
-  function getDebugSettings(rawSettings) {
-    const debug = rawSettings?.debug ?? {};
-    const traceLimit = Number(debug.trace_limit);
-
-    return {
-      enabled:
-        typeof debug.enabled === 'boolean'
-          ? debug.enabled
-          : DEBUG_SETTING_DEFAULTS.enabled,
-      trace_limit:
-        Number.isInteger(traceLimit) && traceLimit >= 1 && traceLimit <= 500
-          ? traceLimit
-          : DEBUG_SETTING_DEFAULTS.trace_limit,
-    };
-  }
-
   function buildCompactionSettingsPayloadFallback(formValues) {
     return {
       compaction: normalizeCompactionSettingsFallback({
@@ -136,21 +103,6 @@
     buildCompactionSettingsPayloadFallback;
   const getCompactionSettings =
     settingsViewHelpers.getCompactionSettings ?? getCompactionSettingsFallback;
-
-  function normalizeAgentDefaultsFormValues(rawSettings) {
-    const normalized = normalizeAgentDefaultsSettings(rawSettings);
-
-    return {
-      model: normalized.model,
-      fallback_model: normalized.fallback_model,
-      temperature:
-        normalized.temperature === null ? '' : String(normalized.temperature),
-      thinking_effort:
-        normalized.thinking_effort === null
-          ? AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT
-          : normalized.thinking_effort,
-    };
-  }
 
   let {
     providerAuthEvent = null,
@@ -316,9 +268,7 @@
   let loadError = $state('');
   let saveError = $state('');
   let saving = $state(false);
-  let agentDefaults = $state(normalizeAgentDefaultsFormValues(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
-  let debugSettings = $state(getDebugSettings(null));
   let taskModelBindings = $state(normalizeTaskModelSettings(null));
   let taskModelTargetsByType = $state({});
   let taskModelSchemasByType = $state({});
@@ -337,31 +287,14 @@
   let handledProviderAuthEvent = null;
   let copiedDeviceFlowConnectionId = $state('');
   let compactionSettingsAutoSaveTimer = null;
-  let debugSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
     panels.find((panel) => panel.id === activePanelId) ?? panels[0],
   );
-  let serverHostValue = $derived(
-    formatServerHost(settings?.general?.server, t),
-  );
-  let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
   let providerItems = $derived(getProviderItems(settings));
   let hasRefreshEligibleProvider = $derived(
     providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
-  );
-  let defaultModelOptions = $derived(
-    selectModelOptions(
-      agentDefaults.model,
-      t('settings.defaults.noModelDefault', '— (no default)'),
-    ),
-  );
-  let defaultFallbackModelOptions = $derived(
-    selectModelOptions(
-      agentDefaults.fallback_model,
-      t('settings.defaults.noFallbackModelDefault', '— (no default)'),
-    ),
   );
   let compactionSummaryModelOptions = $derived(
     selectModelOptions(
@@ -369,37 +302,11 @@
       t('settings.compaction.summaryModelPlaceholder', 'Active agent model'),
     ),
   );
-  let defaultModelSelectValue = $derived(
-    selectModelValue(agentDefaults.model, defaultModelOptions),
-  );
-  let defaultFallbackModelSelectValue = $derived(
-    selectModelValue(agentDefaults.fallback_model, defaultFallbackModelOptions),
-  );
   let compactionSummaryModelSelectValue = $derived(
     selectModelValue(
       compactionSettings.summary_model ?? '',
       compactionSummaryModelOptions,
     ),
-  );
-  let thinkingEffortOptions = $derived([
-    {
-      value: AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
-      label: t('settings.defaults.noThinkingEffort', '— (no default)'),
-    },
-    {
-      value: '',
-      label: t(
-        'settings.defaults.providerThinkingEffortDefault',
-        '— (provider default)',
-      ),
-    },
-    ...AGENT_THINKING_EFFORT_OPTIONS.map((option) => ({
-      value: option,
-      label: t(`agents.form.thinkingEffortOption.${option}`, option),
-    })),
-  ]);
-  let agentDefaultsSaveDisabled = $derived(
-    loading || saving || agentDefaultsMatch(agentDefaults, settings),
   );
   let compactionSettingsSaveDisabled = $derived(
     loading ||
@@ -408,11 +315,6 @@
         compactionSettings,
         getCompactionSettings(settings),
       ),
-  );
-  let debugSettingsSaveDisabled = $derived(
-    loading ||
-      saving ||
-      debugSettingsMatch(debugSettings, getDebugSettings(settings)),
   );
   let taskModelSaveDisabled = $derived(
     loading ||
@@ -430,7 +332,6 @@
 
     return () => {
       clearCompactionSettingsAutoSaveTimer();
-      clearDebugSettingsAutoSaveTimer();
     };
   });
 
@@ -475,25 +376,6 @@
     };
   });
 
-  $effect(() => {
-    if (activePanelId !== 'debug') {
-      return;
-    }
-
-    if (debugSettingsSaveDisabled) {
-      return;
-    }
-
-    debugSettingsAutoSaveTimer = setTimeout(() => {
-      debugSettingsAutoSaveTimer = null;
-      void saveDebugSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearDebugSettingsAutoSaveTimer();
-    };
-  });
-
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
@@ -508,7 +390,7 @@
   }
 
   function panelUsesModelPicker(panelId) {
-    return panelId === 'defaults' || panelId === 'compaction';
+    return panelId === 'compaction';
   }
 
   async function ensureModelCatalogsLoaded() {
@@ -542,9 +424,7 @@
     settings = nextSettings;
 
     const language = nextSettings?.appearance?.language ?? 'en';
-    agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
-    debugSettings = getDebugSettings(nextSettings);
     taskModelBindings = normalizeTaskModelSettings(nextSettings);
     init(language);
   }
@@ -567,32 +447,6 @@
     }
   }
 
-  async function saveAgentDefaults() {
-    if (agentDefaultsSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildAgentDefaultsPayload(agentDefaults),
-      );
-      commitSettings(nextSettings);
-      agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
-      showSettingsToast(
-        t('settings.defaults.saveSuccess', 'Agent defaults updated.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
   async function saveCompactionSettings() {
     if (compactionSettingsSaveDisabled) {
       return;
@@ -611,30 +465,6 @@
         t('settings.compaction.saved', 'Compaction settings saved.'),
         'success',
       );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function saveDebugSettings() {
-    if (debugSettingsSaveDisabled) {
-      return;
-    }
-
-    const nextEnabled = debugSettings.enabled === true;
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc('settings.update', {
-        debug: getDebugSettings({ debug: debugSettings }),
-      });
-      commitSettings(nextSettings);
-      debugSettings = getDebugSettings(nextSettings);
-      onDebugEnabledChange(nextEnabled);
-      showSettingsToast(t('debug.settings', 'Debug'), 'success');
     } catch (error) {
       saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
     } finally {
@@ -734,28 +564,8 @@
     }
   }
 
-  function clearDebugSettingsAutoSaveTimer() {
-    if (debugSettingsAutoSaveTimer !== null) {
-      clearTimeout(debugSettingsAutoSaveTimer);
-      debugSettingsAutoSaveTimer = null;
-    }
-  }
-
   function showAlreadySavedToast() {
     showSettingsToast(t('common.alreadySaved', 'Already saved'), 'success');
-  }
-
-  function handleManualAgentDefaultsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (agentDefaultsSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    void saveAgentDefaults();
   }
 
   function handleManualCompactionSettingsSave() {
@@ -783,14 +593,6 @@
     }
 
     void saveTaskModelBindings();
-  }
-
-  function handleAgentDefaultsChange(key, value) {
-    agentDefaults = {
-      ...agentDefaults,
-      [key]: value,
-    };
-    saveError = '';
   }
 
   function handleCompactionSettingChange(key, value) {
@@ -870,14 +672,6 @@
     return value;
   }
 
-  function updateAgentDefaultsModelSelection(key, selectedValue) {
-    const selection = parseModelSelectionValue(selectedValue);
-    handleAgentDefaultsChange(
-      key,
-      modelSelectionValue(selection.model, selection.connectionLocalId),
-    );
-  }
-
   function updateCompactionSummaryModelSelection(selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
     handleCompactionSettingChange(
@@ -909,28 +703,6 @@
       normalizedLeft.threshold === normalizedRight.threshold &&
       normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
       normalizedLeft.summary_model === normalizedRight.summary_model
-    );
-  }
-
-  function debugSettingsMatch(left, right) {
-    const normalizedLeft = getDebugSettings({ debug: left });
-    const normalizedRight = getDebugSettings({ debug: right });
-
-    return (
-      normalizedLeft.enabled === normalizedRight.enabled &&
-      normalizedLeft.trace_limit === normalizedRight.trace_limit
-    );
-  }
-
-  function agentDefaultsMatch(left, right) {
-    const normalizedLeft = normalizeAgentDefaultsSettings(left);
-    const normalizedRight = normalizeAgentDefaultsSettings(right);
-
-    return (
-      normalizedLeft.model === normalizedRight.model &&
-      normalizedLeft.fallback_model === normalizedRight.fallback_model &&
-      normalizedLeft.temperature === normalizedRight.temperature &&
-      normalizedLeft.thinking_effort === normalizedRight.thinking_effort
     );
   }
 
@@ -1326,192 +1098,14 @@
         {/if}
 
         {#if activePanelId === 'general'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.general.serverHost', 'Server host')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.general.serverHostDescription',
-                  'Address and port the vBot server listens on.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--input">
-              <div class="s-value-box">{serverHostValue}</div>
-            </div>
-          </div>
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.general.dataDirectory', 'Data directory')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.general.dataDirectoryDescription',
-                  'Root path for agents, sessions, and workspace files.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--input">
-              <div class="s-value-box">{dataDirectoryValue}</div>
-            </div>
-          </div>
+          <SettingsGeneralPanel {settings} />
         {:else if activePanelId === 'defaults'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.defaults.model', 'Model')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.defaults.modelDescription',
-                  'Used when an agent model is empty.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--model">
-              <SearchableDropdown
-                id="settings-defaults-model"
-                value={defaultModelSelectValue}
-                options={defaultModelOptions}
-                placeholder={t(
-                  'settings.defaults.noModelDefault',
-                  '— (no default)',
-                )}
-                searchPlaceholder={t(
-                  'agents.form.modelSearchPlaceholder',
-                  'Filter models…',
-                )}
-                emptyLabel={t(
-                  'agents.form.modelSearchEmpty',
-                  'No models match',
-                )}
-                ariaLabel={t('settings.defaults.model', 'Model')}
-                triggerClass="settings-view__dropdown"
-                panelClass="settings-view__model-panel"
-                onValueChange={(selectedValue) =>
-                  updateAgentDefaultsModelSelection('model', selectedValue)}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.defaults.fallbackModel', 'Fallback model')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.defaults.fallbackModelDescription',
-                  'Used when an agent fallback model is empty.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--model">
-              <SearchableDropdown
-                id="settings-defaults-fallback-model"
-                value={defaultFallbackModelSelectValue}
-                options={defaultFallbackModelOptions}
-                placeholder={t(
-                  'settings.defaults.noFallbackModelDefault',
-                  '— (no default)',
-                )}
-                searchPlaceholder={t(
-                  'agents.form.modelSearchPlaceholder',
-                  'Filter models…',
-                )}
-                emptyLabel={t(
-                  'agents.form.modelSearchEmpty',
-                  'No models match',
-                )}
-                ariaLabel={t(
-                  'settings.defaults.fallbackModel',
-                  'Fallback model',
-                )}
-                triggerClass="settings-view__dropdown"
-                panelClass="settings-view__model-panel"
-                onValueChange={(selectedValue) =>
-                  updateAgentDefaultsModelSelection(
-                    'fallback_model',
-                    selectedValue,
-                  )}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.defaults.temperature', 'Temperature')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.defaults.temperatureDescription',
-                  'Used when an agent temperature is unset.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                id="settings-defaults-temperature"
-                class="s-input"
-                type="number"
-                min="0"
-                max="2"
-                step="0.1"
-                value={agentDefaults.temperature}
-                aria-label={t('settings.defaults.temperature', 'Temperature')}
-                oninput={(event) =>
-                  handleAgentDefaultsChange(
-                    'temperature',
-                    event.currentTarget.value,
-                  )}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.defaults.thinkingEffort', 'Thinking effort')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.defaults.thinkingEffortDescription',
-                  'Used when an agent thinking effort is unset.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--model">
-              <Dropdown
-                id="settings-defaults-thinking-effort"
-                value={agentDefaults.thinking_effort}
-                options={thinkingEffortOptions}
-                ariaLabel={t(
-                  'settings.defaults.thinkingEffort',
-                  'Thinking effort',
-                )}
-                triggerClass="settings-view__dropdown"
-                listClass="settings-view__thinking-list"
-                onValueChange={(selectedValue) =>
-                  handleAgentDefaultsChange('thinking_effort', selectedValue)}
-              />
-            </div>
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualAgentDefaultsSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </button>
-          </div>
+          <SettingsDefaultsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'skills'}
           <SettingsSkillsPanel
             {settings}
@@ -1681,116 +1275,13 @@
             onError={(message) => (saveError = message)}
           />
         {:else if activePanelId === 'debug'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('debug.enabled', 'Enable debug mode')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'debug.enabledDescription',
-                  'Capture provider requests and responses for inspection.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--checkbox">
-              <label class="s-checkbox-wrap">
-                <input
-                  class="s-checkbox"
-                  type="checkbox"
-                  checked={debugSettings.enabled === true}
-                  aria-label={t('debug.enabled', 'Enable debug mode')}
-                  onchange={(event) => {
-                    debugSettings = {
-                      ...debugSettings,
-                      enabled: event.currentTarget.checked,
-                    };
-                    saveError = '';
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('debug.traceLimit', 'Trace limit')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'debug.traceLimitDescription',
-                  'Maximum number of traces to keep. Older traces are removed when the limit is reached.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                id="settings-debug-trace-limit"
-                class="s-input"
-                type="number"
-                min="1"
-                max="500"
-                step="1"
-                value={debugSettings.trace_limit}
-                aria-label={t('debug.traceLimit', 'Trace limit')}
-                oninput={(event) => {
-                  const rawValue = event.currentTarget.value;
-                  if (rawValue === '') {
-                    debugSettings = {
-                      ...debugSettings,
-                      trace_limit: rawValue,
-                    };
-                    saveError = '';
-                    return;
-                  }
-                  const numberValue = Number(rawValue);
-                  if (
-                    Number.isInteger(numberValue) &&
-                    numberValue >= 1 &&
-                    numberValue <= 500
-                  ) {
-                    debugSettings = {
-                      ...debugSettings,
-                      trace_limit: numberValue,
-                    };
-                    saveError = '';
-                  }
-                }}
-              />
-            </div>
-          </div>
-
-          <div class="s-debug-warning">
-            <div class="s-debug-warning-icon" aria-hidden="true">
-              <svg
-                viewBox="0 0 16 16"
-                width="14"
-                height="14"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M8 2L1 14h14L8 2z" />
-                <path d="M8 7v2" />
-                <circle
-                  cx="8"
-                  cy="11.5"
-                  r="0.5"
-                  fill="currentColor"
-                  stroke="none"
-                />
-              </svg>
-            </div>
-            <p class="s-debug-warning-text">
-              {t(
-                'debug.localWarning',
-                'Debug traces are stored locally. Provider requests and responses are captured in full, including raw prompt content sent to models. Secret values like API keys and tokens are automatically redacted.',
-              )}
-            </p>
-          </div>
+          <SettingsDebugPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+            {onDebugEnabledChange}
+          />
         {:else if activePanelId === 'specialized_models'}
           {#if taskModelLoading}
             <div class="s-feedback s-feedback--neutral">

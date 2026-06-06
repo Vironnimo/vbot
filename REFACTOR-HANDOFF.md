@@ -2,8 +2,8 @@
 
 **Status:** in progress (Wave 1 done; Wave 2 SettingsView in progress) · **Owner:** Julian · **Started:** 2026-06-06
 **Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction. CSS, Channels,
-Sub-Agents, Recall, Web Search, Skills, Appearance done. **Extract exactly the next ONE
-panel** (see "CONTINUE HERE": Debug), then stop and update this handoff.
+Sub-Agents, Recall, Web Search, Skills, Appearance, Debug, General, Defaults done. **Extract
+the next panel** (see "CONTINUE HERE": Compaction), then stop and update this handoff.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -231,6 +231,32 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     `loading: false` (child only mounts when active). Does NOT re-seed after save. Parent
     keeps its own `init(language)` in `applySettings` (still imported).
 
+  **Done (2026-06-06, three panels in one session — user override of the one-panel rule,
+  "mach aber 3 panels"; full gate green at the end · vitest 525/525 · build PASS;
+  `SettingsView.svelte` 2241 → 1731):**
+  - **Debug** → `SettingsDebugPanel.svelte` (215). Checkbox + trace-limit number, **auto-save
+    only, no Save button / no sticky footer**. Extra **`onDebugEnabledChange`** prop (parent
+    threads its own through); fired with the new enabled flag after a successful save.
+    Re-seeds after save. `getDebugSettings`/`DEBUG_SETTING_DEFAULTS` + `debugSettingsMatch`
+    moved into the child (not exported, not in `settingsView.test.js`). Auto-save `$effect`
+    has no panel guard (child only exists while active).
+  - **General** → `SettingsGeneralPanel.svelte` (47). **Read-only, no state/save**: two
+    `s-value-box` rows (`serverHostValue` via `formatServerHost`, `dataDirectoryValue` via
+    `getDataDirectoryValue`). Props `{ settings }` only. Removed those two `$derived` +
+    `formatServerHost`/`getDataDirectoryValue` imports from the parent.
+  - **Defaults** → `SettingsDefaultsPanel.svelte` (337). Model + fallback-model
+    `SearchableDropdown` + temperature + thinking-effort `Dropdown`. **Manual save only**
+    (matches the parent — Defaults had NO auto-save `$effect`/timer). Loads the model picker
+    itself: `model.list` + `connection.list` in `onMount` (keeps `waitForModelCatalogs()` in
+    the test seeing both calls). Re-seeds after save. `normalizeAgentDefaultsFormValues` +
+    `AGENT_THINKING_EFFORT_OPTIONS` moved into the child; `normalizeAgentDefaultsSettings` /
+    `buildAgentDefaultsPayload` / `AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT` still imported
+    from `settingsView.js` (the first two stay because `settingsView.test.js` covers them).
+    Parent kept its own model-catalog machinery (`availableModels`/`availableConnections`/
+    `ensureModelCatalogsLoaded`) for **Compaction**, and `panelUsesModelPicker` is now
+    `compaction`-only. Parent `Dropdown` import removed (only Compaction's `SearchableDropdown`
+    remains).
+
   **Validated extraction recipe — shared-settings panels (FOLLOW EXACTLY; executed for
   subagents/recall/web_search, zero test edits, 525/525):**
   - **Props `{ settings, onCommit, onToast, onError }`.** Parent wires them in the
@@ -281,30 +307,16 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     not remove/rename existing `settingsView.js` exports, only add.
 
   **Remaining panels — one per session (ordered queue; simplest first, providers last):**
-  1. **Debug** ◀── CONTINUE HERE. checkbox + trace-limit number; **auto-save only, no Save button** (no
-     sticky footer). Needs an extra **`onDebugEnabledChange`** prop (parent passes its
-     own `onDebugEnabledChange` prop through); call it with the new enabled flag after a
-     successful save. Re-seeds after save. `getDebugSettings`/`DEBUG_SETTING_DEFAULTS`
-     live inline in `SettingsView` today — move them into the child (or a helper).
-  2. **General** — **read-only**, no save/state: two `s-value-box` rows (`serverHostValue`
-     via `formatServerHost`, `dataDirectoryValue` via `getDataDirectoryValue`). Trivial;
-     pass `{ settings }` only (+ `t`). Removes those two `$derived` from the parent.
-  3. **Defaults** — model + fallback-model `SearchableDropdown` + temperature + thinking
-     effort. Needs the **model picker** (`availableModels`/`availableConnections`); load
-     them in the child on mount (`model.list` + `connection.list`, as `ensureModelCatalogsLoaded`
-     does) so `waitForModelCatalogs()` in the test still sees both calls. Re-seeds after
-     save. Uses `modelSelection.js` + `buildModelSelectOptions`. Keep ids
-     `settings-defaults-model` / `-fallback-model` / `-temperature` / `-thinking-effort`.
-  4. **Compaction** — auto checkbox + threshold + tail_tokens + summary-model picker.
+  1. **Compaction** ◀── CONTINUE HERE. auto checkbox + threshold + tail_tokens + summary-model picker.
      Same model-picker need as Defaults (id `settings-compaction-summary-model`).
      `normalizeCompactionSettings`/`buildCompactionSettingsPayload`/`getCompactionSettings`
      exist in `settingsView.js` (the inline fallbacks in `SettingsView` shadow them — use
      the lib ones in the child).
-  5. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
+  2. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
      lazy-loads targets/schemas on mount, **no test coverage** (build/eslint only). Many
      own state vars (`taskModel*`) + `updateTaskModelSettings`/`listTaskModelTargets`/
      `getTaskModelOptions` from `$lib/api.js`. Extract carefully.
-  6. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
+  3. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
      `disconnectProvider`, the exported `handleProviderAuthCompleted`, `model.refresh_db`
      + the **header refresh button** (currently rendered in the parent's `s-panel-header`,
      gated on `activePanelId === 'providers'`), the device-flow OAuth dialog, and all the
