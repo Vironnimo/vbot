@@ -1,40 +1,20 @@
 <script>
   import { onMount } from 'svelte';
 
-  import SearchableDropdown from './SearchableDropdown.svelte';
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
+  import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
   import SettingsDefaultsPanel from './settings/SettingsDefaultsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
   import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
+  import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
-  import {
-    getTaskModelOptions,
-    listTaskModelTargets,
-    rpc,
-    updateTaskModelSettings,
-  } from '$lib/api.js';
+  import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
-  import {
-    buildModelSelectOptions,
-    modelSelectionValue,
-    parseModelSelectionValue,
-    selectModelValue,
-  } from '$lib/modelSelection.js';
-  import * as settingsViewHelpers from '$lib/settingsView.js';
-  import {
-    TASK_MODEL_ROWS,
-    applyOptionDefaults,
-    createTaskModelUpdatePayload,
-    normalizeOptionSchema,
-    normalizeTargets,
-    normalizeTaskModelSettings,
-    taskModelBindingsMatch,
-  } from '$lib/taskModelSettings.js';
   import {
     SETTINGS_LAYOUT_CLASS,
     describeProvider,
@@ -47,62 +27,7 @@
     isOAuthConnection,
   } from '$lib/settingsView.js';
 
-  const COMPACTION_SETTING_DEFAULTS = Object.freeze({
-    auto: true,
-    threshold: 0.8,
-    tail_tokens: 15000,
-    summary_model: null,
-  });
-
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
-
-  function normalizeCompactionSettingsFallback(rawSettings) {
-    const compaction = rawSettings?.compaction ?? {};
-    const threshold = Number(compaction.threshold);
-    const tailTokens = Number(compaction.tail_tokens);
-    const summaryModel =
-      typeof compaction.summary_model === 'string'
-        ? compaction.summary_model.trim()
-        : '';
-
-    return {
-      auto:
-        typeof compaction.auto === 'boolean'
-          ? compaction.auto
-          : COMPACTION_SETTING_DEFAULTS.auto,
-      threshold:
-        Number.isFinite(threshold) && threshold > 0 && threshold <= 1
-          ? threshold
-          : COMPACTION_SETTING_DEFAULTS.threshold,
-      tail_tokens:
-        Number.isInteger(tailTokens) && tailTokens > 0
-          ? tailTokens
-          : COMPACTION_SETTING_DEFAULTS.tail_tokens,
-      summary_model: summaryModel.length > 0 ? summaryModel : null,
-    };
-  }
-
-  function buildCompactionSettingsPayloadFallback(formValues) {
-    return {
-      compaction: normalizeCompactionSettingsFallback({
-        compaction: formValues,
-      }),
-    };
-  }
-
-  function getCompactionSettingsFallback(settings) {
-    return normalizeCompactionSettingsFallback(settings);
-  }
-
-  const normalizeCompactionSettings =
-    settingsViewHelpers.normalizeCompactionSettings ??
-    normalizeCompactionSettingsFallback;
-  const buildCompactionSettingsPayload =
-    settingsViewHelpers.buildCompactionSettingsPayload ??
-    buildCompactionSettingsPayloadFallback;
-  const getCompactionSettings =
-    settingsViewHelpers.getCompactionSettings ?? getCompactionSettingsFallback;
 
   let {
     providerAuthEvent = null,
@@ -267,26 +192,12 @@
   let loading = $state(true);
   let loadError = $state('');
   let saveError = $state('');
-  let saving = $state(false);
-  let compactionSettings = $state(normalizeCompactionSettings(null));
-  let taskModelBindings = $state(normalizeTaskModelSettings(null));
-  let taskModelTargetsByType = $state({});
-  let taskModelSchemasByType = $state({});
-  let taskModelPanelLoaded = $state(false);
-  let taskModelLoading = $state(false);
-  let taskModelSaving = $state(false);
-  let taskModelError = $state('');
-  let availableModels = $state([]);
-  let availableConnections = $state([]);
-  let modelCatalogsLoaded = $state(false);
-  let modelCatalogsLoading = $state(false);
   let refreshingModels = $state(false);
   let modelRefreshMessage = $state('');
   let modelRefreshError = $state('');
   let oauthConnectionStates = $state({});
   let handledProviderAuthEvent = null;
   let copiedDeviceFlowConnectionId = $state('');
-  let compactionSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
 
   let activePanel = $derived(
@@ -296,43 +207,9 @@
   let hasRefreshEligibleProvider = $derived(
     providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
   );
-  let compactionSummaryModelOptions = $derived(
-    selectModelOptions(
-      compactionSettings.summary_model ?? '',
-      t('settings.compaction.summaryModelPlaceholder', 'Active agent model'),
-    ),
-  );
-  let compactionSummaryModelSelectValue = $derived(
-    selectModelValue(
-      compactionSettings.summary_model ?? '',
-      compactionSummaryModelOptions,
-    ),
-  );
-  let compactionSettingsSaveDisabled = $derived(
-    loading ||
-      saving ||
-      compactionSettingsMatch(
-        compactionSettings,
-        getCompactionSettings(settings),
-      ),
-  );
-  let taskModelSaveDisabled = $derived(
-    loading ||
-      saving ||
-      taskModelSaving ||
-      taskModelLoading ||
-      taskModelBindingsMatch(
-        taskModelBindings,
-        normalizeTaskModelSettings(settings),
-      ),
-  );
 
   onMount(() => {
     loadSettings();
-
-    return () => {
-      clearCompactionSettingsAutoSaveTimer();
-    };
   });
 
   $effect(() => {
@@ -357,75 +234,15 @@
     }
   });
 
-  $effect(() => {
-    if (activePanelId !== 'compaction') {
-      return;
-    }
-
-    if (compactionSettingsSaveDisabled) {
-      return;
-    }
-
-    compactionSettingsAutoSaveTimer = setTimeout(() => {
-      compactionSettingsAutoSaveTimer = null;
-      void saveCompactionSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearCompactionSettingsAutoSaveTimer();
-    };
-  });
-
   function selectPanel(panelId) {
     activePanelId = panelId;
     saveError = '';
-
-    if (panelId === 'specialized_models') {
-      void ensureTaskModelPanelLoaded();
-    }
-
-    if (panelUsesModelPicker(panelId)) {
-      void ensureModelCatalogsLoaded();
-    }
-  }
-
-  function panelUsesModelPicker(panelId) {
-    return panelId === 'compaction';
-  }
-
-  async function ensureModelCatalogsLoaded() {
-    if (modelCatalogsLoaded || modelCatalogsLoading) {
-      return;
-    }
-
-    modelCatalogsLoading = true;
-
-    try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
-      ]);
-
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
-      availableConnections = Array.isArray(connectionsResult?.connections)
-        ? connectionsResult.connections
-        : [];
-      modelCatalogsLoaded = true;
-    } catch (error) {
-      saveError = `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`;
-    } finally {
-      modelCatalogsLoading = false;
-    }
   }
 
   function applySettings(nextSettings) {
     settings = nextSettings;
 
     const language = nextSettings?.appearance?.language ?? 'en';
-    compactionSettings = getCompactionSettings(nextSettings);
-    taskModelBindings = normalizeTaskModelSettings(nextSettings);
     init(language);
   }
 
@@ -445,265 +262,6 @@
     } finally {
       loading = false;
     }
-  }
-
-  async function saveCompactionSettings() {
-    if (compactionSettingsSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        buildCompactionSettingsPayload(compactionSettings),
-      );
-      commitSettings(nextSettings);
-      showSettingsToast(
-        t('settings.compaction.saved', 'Compaction settings saved.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function ensureTaskModelPanelLoaded() {
-    if (taskModelPanelLoaded || taskModelLoading) {
-      return;
-    }
-
-    taskModelLoading = true;
-    taskModelError = '';
-
-    try {
-      const targetEntries = await Promise.all(
-        TASK_MODEL_ROWS.map(async (row) => {
-          const result = await listTaskModelTargets(row.taskType);
-          return [row.taskType, normalizeTargets(result)];
-        }),
-      );
-      taskModelTargetsByType = Object.fromEntries(targetEntries);
-      taskModelPanelLoaded = true;
-
-      for (const row of TASK_MODEL_ROWS) {
-        const target = taskModelBindings[row.taskType]?.target ?? '';
-        if (target) {
-          await loadTaskModelSchema(row.taskType, target);
-        }
-      }
-    } catch (error) {
-      taskModelError = `${t('settings.specializedModels.loadError', 'Specialized model targets could not be loaded.')} ${error.message}`;
-    } finally {
-      taskModelLoading = false;
-    }
-  }
-
-  async function loadTaskModelSchema(taskType, target) {
-    if (!target) {
-      taskModelSchemasByType = {
-        ...taskModelSchemasByType,
-        [taskType]: [],
-      };
-      return;
-    }
-
-    const result = await getTaskModelOptions(taskType, target);
-    const fields = normalizeOptionSchema(result);
-    taskModelSchemasByType = {
-      ...taskModelSchemasByType,
-      [taskType]: fields,
-    };
-    taskModelBindings = {
-      ...taskModelBindings,
-      [taskType]: applyOptionDefaults(taskModelBindings[taskType], fields),
-    };
-  }
-
-  async function saveTaskModelBindings() {
-    if (taskModelSaveDisabled) {
-      return;
-    }
-
-    taskModelSaving = true;
-    taskModelError = '';
-    saveError = '';
-
-    try {
-      const result = await updateTaskModelSettings(
-        createTaskModelUpdatePayload(taskModelBindings),
-      );
-      const nextSettings = {
-        ...settings,
-        model_tasks: result.model_tasks ?? {},
-      };
-      commitSettings(nextSettings);
-      taskModelBindings = normalizeTaskModelSettings(nextSettings);
-      showSettingsToast(
-        t(
-          'settings.specializedModels.saveSuccess',
-          'Specialized model bindings updated.',
-        ),
-        'success',
-      );
-    } catch (error) {
-      taskModelError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      taskModelSaving = false;
-    }
-  }
-
-  function clearCompactionSettingsAutoSaveTimer() {
-    if (compactionSettingsAutoSaveTimer !== null) {
-      clearTimeout(compactionSettingsAutoSaveTimer);
-      compactionSettingsAutoSaveTimer = null;
-    }
-  }
-
-  function showAlreadySavedToast() {
-    showSettingsToast(t('common.alreadySaved', 'Already saved'), 'success');
-  }
-
-  function handleManualCompactionSettingsSave() {
-    if (saving) {
-      return;
-    }
-
-    if (compactionSettingsSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearCompactionSettingsAutoSaveTimer();
-    void saveCompactionSettings();
-  }
-
-  function handleManualTaskModelSave() {
-    if (saving || taskModelSaving) {
-      return;
-    }
-
-    if (taskModelSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    void saveTaskModelBindings();
-  }
-
-  function handleCompactionSettingChange(key, value) {
-    compactionSettings = {
-      ...compactionSettings,
-      [key]: value,
-    };
-    saveError = '';
-  }
-
-  async function handleTaskModelTargetChange(taskType, event) {
-    const target = event.currentTarget.value;
-    taskModelError = '';
-    taskModelBindings = {
-      ...taskModelBindings,
-      [taskType]: {
-        target,
-        options: {},
-      },
-    };
-
-    try {
-      await loadTaskModelSchema(taskType, target);
-    } catch (error) {
-      taskModelError = `${t('settings.specializedModels.optionsLoadError', 'Model options could not be loaded.')} ${error.message}`;
-    }
-  }
-
-  function handleTaskModelOptionChange(taskType, field, event) {
-    const currentBinding = taskModelBindings[taskType] ?? {
-      target: '',
-      options: {},
-    };
-    const value = valueFromTaskModelOptionField(field, event);
-    taskModelBindings = {
-      ...taskModelBindings,
-      [taskType]: {
-        ...currentBinding,
-        options: {
-          ...(currentBinding.options ?? {}),
-          [field.name]: value,
-        },
-      },
-    };
-    taskModelError = '';
-  }
-
-  function valueFromTaskModelOptionField(field, event) {
-    if (field.type === 'boolean') {
-      return event.currentTarget.checked === true;
-    }
-    if (field.type === 'number') {
-      const value = event.currentTarget.value;
-      if (value === '') {
-        return '';
-      }
-      const numberValue = Number(value);
-      return Number.isFinite(numberValue) ? numberValue : value;
-    }
-    return event.currentTarget.value;
-  }
-
-  function taskModelTargets(taskType) {
-    return taskModelTargetsByType[taskType] ?? [];
-  }
-
-  function taskModelFields(taskType) {
-    return taskModelSchemasByType[taskType] ?? [];
-  }
-
-  function taskModelOptionValue(taskType, field) {
-    const options = taskModelBindings[taskType]?.options ?? {};
-    const value = options[field.name];
-    if (value === undefined || value === null) {
-      return field.default ?? '';
-    }
-    return value;
-  }
-
-  function updateCompactionSummaryModelSelection(selectedValue) {
-    const selection = parseModelSelectionValue(selectedValue);
-    handleCompactionSettingChange(
-      'summary_model',
-      modelSelectionValue(selection.model, selection.connectionLocalId),
-    );
-  }
-
-  function selectModelOptions(selectedModelValue, emptyLabel) {
-    return buildModelSelectOptions({
-      models: availableModels,
-      connections: availableConnections,
-      selectedModelValue,
-      emptyLabel,
-      translate: t,
-    });
-  }
-
-  function compactionSettingsMatch(left, right) {
-    const normalizedLeft = normalizeCompactionSettings({
-      compaction: left,
-    });
-    const normalizedRight = normalizeCompactionSettings({
-      compaction: right,
-    });
-
-    return (
-      normalizedLeft.auto === normalizedRight.auto &&
-      normalizedLeft.threshold === normalizedRight.threshold &&
-      normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
-      normalizedLeft.summary_model === normalizedRight.summary_model
-    );
   }
 
   function providerAppearsRefreshEligible(provider) {
@@ -950,10 +508,7 @@
     try {
       const result = await rpc('model.refresh_db');
       applyProviderRefreshResult(result);
-      const modelsResult = await rpc('model.list');
-      availableModels = Array.isArray(modelsResult?.models)
-        ? modelsResult.models
-        : [];
+      await rpc('model.list');
       modelRefreshMessage = t(
         'settings.providers.refreshSuccess',
         'Model DB updated: {providerCount} providers, {count} models available.',
@@ -1121,145 +676,12 @@
             onError={(message) => (saveError = message)}
           />
         {:else if activePanelId === 'compaction'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.compaction.auto', 'Auto-compact')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.compaction.autoDescription',
-                  'Automatically compact when the context threshold is reached.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--checkbox">
-              <label class="s-checkbox-wrap">
-                <input
-                  class="s-checkbox"
-                  type="checkbox"
-                  checked={compactionSettings.auto === true}
-                  aria-label={t('settings.compaction.auto', 'Auto-compact')}
-                  onchange={(event) =>
-                    handleCompactionSettingChange(
-                      'auto',
-                      event.currentTarget.checked,
-                    )}
-                />
-              </label>
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.compaction.threshold', 'Threshold')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.compaction.thresholdDescription',
-                  'Compact when context usage exceeds this fraction (0–1).',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                class="s-input"
-                type="number"
-                min="0.05"
-                max="1"
-                step="0.05"
-                value={compactionSettings.threshold}
-                aria-label={t('settings.compaction.threshold', 'Threshold')}
-                oninput={(event) =>
-                  handleCompactionSettingChange(
-                    'threshold',
-                    event.currentTarget.value,
-                  )}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.compaction.tailTokens', 'Tail tokens')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.compaction.tailTokensDescription',
-                  'Number of tokens preserved verbatim at the end of context.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--number">
-              <input
-                class="s-input"
-                type="number"
-                min="1"
-                step="1000"
-                value={compactionSettings.tail_tokens}
-                aria-label={t('settings.compaction.tailTokens', 'Tail tokens')}
-                oninput={(event) =>
-                  handleCompactionSettingChange(
-                    'tail_tokens',
-                    event.currentTarget.value,
-                  )}
-              />
-            </div>
-          </div>
-
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.compaction.summaryModel', 'Summary model')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.compaction.summaryModelDescription',
-                  'Model used for summarization. Leave blank to use the active agent model.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--model">
-              <SearchableDropdown
-                id="settings-compaction-summary-model"
-                value={compactionSummaryModelSelectValue}
-                options={compactionSummaryModelOptions}
-                placeholder={t(
-                  'settings.compaction.summaryModelPlaceholder',
-                  'Active agent model',
-                )}
-                searchPlaceholder={t(
-                  'agents.form.modelSearchPlaceholder',
-                  'Filter models…',
-                )}
-                emptyLabel={t(
-                  'agents.form.modelSearchEmpty',
-                  'No models match',
-                )}
-                ariaLabel={t(
-                  'settings.compaction.summaryModel',
-                  'Summary model',
-                )}
-                triggerClass="settings-view__dropdown"
-                panelClass="settings-view__model-panel"
-                onValueChange={updateCompactionSummaryModelSelection}
-              />
-            </div>
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualCompactionSettingsSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('settings.compaction.save', 'Save')}
-            </button>
-          </div>
+          <SettingsCompactionPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'recall'}
           <SettingsRecallPanel
             {settings}
@@ -1283,179 +705,12 @@
             {onDebugEnabledChange}
           />
         {:else if activePanelId === 'specialized_models'}
-          {#if taskModelLoading}
-            <div class="s-feedback s-feedback--neutral">
-              {t(
-                'settings.specializedModels.loading',
-                'Loading specialized model targets…',
-              )}
-            </div>
-          {/if}
-
-          {#if taskModelError}
-            <div class="s-feedback s-feedback--error">{taskModelError}</div>
-          {/if}
-
-          <div class="s-task-model-list">
-            {#each TASK_MODEL_ROWS as row (row.taskType)}
-              {@const binding = taskModelBindings[row.taskType] ?? {
-                target: '',
-                options: {},
-              }}
-              {@const targets = taskModelTargets(row.taskType)}
-              {@const fields = taskModelFields(row.taskType)}
-              <div class="s-row s-row--stacked s-task-model-row">
-                <div class="s-task-model-head">
-                  <div class="s-row-info">
-                    <div class="s-row-label">
-                      {t(row.titleKey, row.titleFallback)}
-                    </div>
-                    <div class="s-row-desc">
-                      {t(row.descriptionKey, row.descriptionFallback)}
-                    </div>
-                  </div>
-                  <div class="s-row-control s-row-control--task-model">
-                    <select
-                      class="s-select"
-                      value={binding.target}
-                      aria-label={t(row.titleKey, row.titleFallback)}
-                      disabled={taskModelLoading || taskModelSaving}
-                      onchange={(event) =>
-                        handleTaskModelTargetChange(row.taskType, event)}
-                    >
-                      <option value="">
-                        {t(
-                          'settings.specializedModels.noTarget',
-                          'Not configured',
-                        )}
-                      </option>
-                      {#each targets as target (target.id)}
-                        <option value={target.id}>{target.label}</option>
-                      {/each}
-                      {#if binding.target && !targets.some((target) => target.id === binding.target)}
-                        <option value={binding.target}>
-                          {t(
-                            'settings.specializedModels.customTarget',
-                            'Custom target: {target}',
-                            { target: binding.target },
-                          )}
-                        </option>
-                      {/if}
-                    </select>
-                  </div>
-                </div>
-
-                {#if binding.target && fields.length > 0}
-                  <div class="s-task-model-options">
-                    {#each fields as field (field.name)}
-                      <label class="s-field">
-                        <span class="s-field-label">{field.label}</span>
-                        {#if field.type === 'select'}
-                          <select
-                            class="s-select"
-                            value={taskModelOptionValue(row.taskType, field)}
-                            disabled={taskModelSaving}
-                            onchange={(event) =>
-                              handleTaskModelOptionChange(
-                                row.taskType,
-                                field,
-                                event,
-                              )}
-                          >
-                            {#each field.options as option (option.value)}
-                              <option value={option.value}>
-                                {option.label}
-                              </option>
-                            {/each}
-                          </select>
-                        {:else if field.type === 'textarea'}
-                          <textarea
-                            class="s-input s-textarea"
-                            rows="3"
-                            value={taskModelOptionValue(row.taskType, field)}
-                            disabled={taskModelSaving}
-                            oninput={(event) =>
-                              handleTaskModelOptionChange(
-                                row.taskType,
-                                field,
-                                event,
-                              )}
-                          ></textarea>
-                        {:else if field.type === 'number'}
-                          <input
-                            class="s-input"
-                            type="number"
-                            min={field.min ?? undefined}
-                            max={field.max ?? undefined}
-                            step={field.step ?? 'any'}
-                            value={taskModelOptionValue(row.taskType, field)}
-                            disabled={taskModelSaving}
-                            oninput={(event) =>
-                              handleTaskModelOptionChange(
-                                row.taskType,
-                                field,
-                                event,
-                              )}
-                          />
-                        {:else if field.type === 'boolean'}
-                          <input
-                            class="s-checkbox"
-                            type="checkbox"
-                            checked={taskModelOptionValue(
-                              row.taskType,
-                              field,
-                            ) === true}
-                            disabled={taskModelSaving}
-                            onchange={(event) =>
-                              handleTaskModelOptionChange(
-                                row.taskType,
-                                field,
-                                event,
-                              )}
-                          />
-                        {:else}
-                          <input
-                            class="s-input"
-                            type="text"
-                            value={taskModelOptionValue(row.taskType, field)}
-                            disabled={taskModelSaving}
-                            oninput={(event) =>
-                              handleTaskModelOptionChange(
-                                row.taskType,
-                                field,
-                                event,
-                              )}
-                          />
-                        {/if}
-                        {#if field.description}
-                          <span class="s-field-help">{field.description}</span>
-                        {/if}
-                      </label>
-                    {/each}
-                  </div>
-                {:else if binding.target}
-                  <div class="s-row-desc">
-                    {t(
-                      'settings.specializedModels.noOptions',
-                      'This target has no configurable options.',
-                    )}
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualTaskModelSave}
-            >
-              {taskModelSaving
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </button>
-          </div>
+          <SettingsSpecializedModelsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'providers'}
           {#if providerItems.length === 0}
             <div class="s-feedback s-feedback--neutral">
