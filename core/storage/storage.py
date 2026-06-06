@@ -1,54 +1,51 @@
-"""Storage manager for vBot data directories and prompt fragments."""
+"""Storage manager for vBot data directories, settings, and prompt fragments.
+
+``StorageManager`` owns the data-directory lifecycle, ``.env`` credential snapshots,
+and serialized read-modify-write transactions over ``settings.json``. Section
+normalization is delegated to :mod:`core.storage.settings_normalizers` and prompt
+fragments to :class:`core.storage.prompt_fragments.PromptFragmentStore`.
+"""
 
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from pathlib import Path
 from threading import RLock
-from typing import Any, Protocol, TypeVar, cast
-from uuid import uuid4
+from typing import Any, Protocol, TypeVar
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.search_config import (
-    DEFAULT_SEARXNG_BASE_URL,
-    DEFAULT_WEB_SEARCH_PROVIDER,
-    FIRST_PARTY_WEB_SEARCH_PROVIDERS,
-)
 from core.settings import SettingsValidationError, load_validated_settings_json
+from core.storage.atomic import remove_temporary_file, temporary_path
+from core.storage.errors import StorageError
+from core.storage.prompt_fragments import PromptFragmentStore
+from core.storage.settings_normalizers import (
+    SUPPORTED_APPEARANCE_LANGUAGES,
+    coerce_defaults_section,
+    coerce_defaults_update,
+    coerce_skills_update,
+    normalize_agent_default_value,
+    normalize_agent_defaults,
+    normalize_appearance_settings,
+    normalize_compaction_settings,
+    normalize_debug_settings,
+    normalize_defaults_settings,
+    normalize_json_object,
+    normalize_model_task_settings,
+    normalize_recall_settings,
+    normalize_skill_directories,
+    normalize_subagent_integer,
+    normalize_web_search_settings,
+    validate_supported_agent_default_fields,
+)
 from core.utils.config import build_environment_snapshot, read_env_file
-from core.utils.errors import VBotError
 
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-PROMPT_FRAGMENT_NAMES = frozenset(
-    {
-        "system.md",
-        "runtime.md",
-        "tools.md",
-        "channels.md",
-        "skills.md",
-        "compaction.md",
-    }
-)
-AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
-    {
-        "system.md",
-        "runtime.md",
-        "tools.md",
-        "channels.md",
-        "skills.md",
-    }
-)
-AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-DEFAULT_APPEARANCE_LANGUAGE = "en"
-SUPPORTED_APPEARANCE_LANGUAGES = frozenset({DEFAULT_APPEARANCE_LANGUAGE})
 SUBAGENT_SETTING_DEFAULTS = {
     "max_subagent_depth": 4,
     "max_subagents_per_turn": 8,
@@ -67,28 +64,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "debug",
     }
 )
-DEFAULT_RECALL_SETTINGS = {"backend": "jsonl_scan"}
-DEFAULT_WEB_SEARCH_SETTINGS = {
-    "provider": DEFAULT_WEB_SEARCH_PROVIDER,
-    "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
-}
-DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
-    "enabled": False,
-    "trace_limit": 50,
-}
-COMPACTION_SETTING_DEFAULTS: dict[str, Any] = {
-    "auto": True,
-    "threshold": 0.8,
-    "tail_tokens": 15_000,
-    "summary_model": None,
-}
 SUPPORTED_DEFAULTS_SECTIONS = frozenset({"agent"})
-AGENT_DEFAULT_FIELDS = frozenset({"model", "fallback_model", "temperature", "thinking_effort"})
-ALLOWED_THINKING_EFFORTS = frozenset(
-    {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
-)
-MIN_TEMPERATURE = 0.0
-MAX_TEMPERATURE = 2.0
 PHASE_TWO_DIRECTORIES = (
     ".tmp",
     "agents",
@@ -113,10 +89,6 @@ class ConfigProtocol(Protocol):
         """Return a config value."""
 
 
-class StorageError(VBotError):
-    """Raised for invalid storage data or unsafe storage paths."""
-
-
 class StorageManager:
     """Owns Phase 2 data-directory setup, settings JSON, and prompt fragments."""
 
@@ -130,6 +102,11 @@ class StorageManager:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
         self._settings_lock = RLock()
+        self._prompt_fragments = PromptFragmentStore(
+            data_dir=self.data_dir,
+            resources_dir=self.resources_dir,
+            ensure_directories=self.ensure_directories,
+        )
 
     @property
     def settings_path(self) -> Path:
@@ -204,12 +181,12 @@ class StorageManager:
         if not replaced:
             updated_lines.append(new_line)
 
-        temp_path = self._temporary_path(env_path)
+        temp_path = temporary_path(self.data_dir, env_path)
         try:
             temp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
             os.replace(temp_path, env_path)
         except OSError as exc:
-            self._remove_temporary_file(temp_path)
+            remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
     def build_environment_snapshot(self) -> dict[str, str]:
@@ -263,7 +240,7 @@ class StorageManager:
                     settings_update["appearance"],
                 )
             if "skills" in settings_update:
-                skills_update = self._coerce_skills_update(settings_update["skills"])
+                skills_update = coerce_skills_update(settings_update["skills"])
                 updated_sections["skills"] = {
                     "directories": self._apply_skill_directory_settings(
                         settings,
@@ -281,7 +258,7 @@ class StorageManager:
                     settings_update["compaction"],
                 )
             if "defaults" in settings_update:
-                defaults_update = self._coerce_defaults_update(settings_update["defaults"])
+                defaults_update = coerce_defaults_update(settings_update["defaults"])
                 updated_sections["defaults"] = self._apply_defaults(
                     settings,
                     "agent",
@@ -320,7 +297,7 @@ class StorageManager:
         """Return normalized persisted Appearance settings."""
 
         settings = self.load_settings()
-        return self._normalize_appearance_settings(settings.get("appearance"))
+        return normalize_appearance_settings(settings.get("appearance"))
 
     def update_appearance_settings(self, appearance: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported Appearance Settings subset and return it."""
@@ -346,14 +323,14 @@ class StorageManager:
         if "language" not in appearance:
             raise StorageError("Appearance settings must include language")
 
-        settings["appearance"] = self._normalize_appearance_settings(appearance)
+        settings["appearance"] = normalize_appearance_settings(appearance)
         return dict(settings["appearance"])
 
     def load_skill_directory_settings(self) -> list[str]:
         """Return normalized extra skill directory settings."""
 
         settings = self.load_settings()
-        return self._normalize_skill_directories(settings.get("skill_directories"))
+        return normalize_skill_directories(settings.get("skill_directories"))
 
     def update_skill_directory_settings(self, directories: Any) -> list[str]:
         """Persist the extra skill directory list and return it."""
@@ -369,7 +346,7 @@ class StorageManager:
     ) -> list[str]:
         """Merge extra skill directories into an in-memory settings mapping."""
 
-        normalized_directories = self._normalize_skill_directories(directories)
+        normalized_directories = normalize_skill_directories(directories)
         settings["skill_directories"] = normalized_directories
         return normalized_directories
 
@@ -378,7 +355,7 @@ class StorageManager:
 
         settings = self.load_settings()
         return {
-            key: self._normalize_subagent_integer(key, settings.get(key), default)
+            key: normalize_subagent_integer(key, settings.get(key), default)
             for key, default in SUBAGENT_SETTING_DEFAULTS.items()
         }
 
@@ -402,7 +379,7 @@ class StorageManager:
             raise StorageError(f"Missing sub-agent settings: {', '.join(missing_fields)}")
 
         normalized_subagents = {
-            key: self._normalize_subagent_integer(key, subagents[key], default)
+            key: normalize_subagent_integer(key, subagents[key], default)
             for key, default in SUBAGENT_SETTING_DEFAULTS.items()
         }
         settings.update(normalized_subagents)
@@ -412,37 +389,37 @@ class StorageManager:
         """Return normalized persisted compaction settings."""
 
         settings = self.load_settings()
-        return self._normalize_compaction_settings(settings.get("compaction"))
+        return normalize_compaction_settings(settings.get("compaction"))
 
     def load_defaults(self) -> dict[str, Any]:
         """Return normalized persisted defaults settings."""
 
         settings = self.load_settings()
-        return self._normalize_defaults_settings(settings.get("defaults"))
+        return normalize_defaults_settings(settings.get("defaults"))
 
     def load_recall_settings(self) -> dict[str, str]:
         """Return normalized persisted recall backend settings."""
 
         settings = self.load_settings()
-        return self._normalize_recall_settings(settings.get("recall"))
+        return normalize_recall_settings(settings.get("recall"))
 
     def load_debug_settings(self) -> dict[str, Any]:
         """Return normalized persisted debug settings."""
 
         settings = self.load_settings()
-        return self._normalize_debug_settings(settings.get("debug"))
+        return normalize_debug_settings(settings.get("debug"))
 
     def load_web_search_settings(self) -> dict[str, Any]:
         """Return normalized persisted web search provider settings."""
 
         settings = self.load_settings()
-        return self._normalize_web_search_settings(settings.get("web_search"))
+        return normalize_web_search_settings(settings.get("web_search"))
 
     def load_model_task_settings(self) -> dict[str, dict[str, Any]]:
         """Return normalized persisted task-model bindings."""
 
         settings = self.load_settings()
-        return self._normalize_model_task_settings(settings.get("model_tasks"))
+        return normalize_model_task_settings(settings.get("model_tasks"))
 
     def update_recall_settings(self, recall: Mapping[str, Any]) -> dict[str, str]:
         """Persist the supported recall settings subset and return it."""
@@ -463,7 +440,7 @@ class StorageManager:
         if unsupported_fields:
             raise StorageError(f"Unsupported recall settings: {', '.join(unsupported_fields)}")
 
-        normalized_recall = self._normalize_recall_settings(recall)
+        normalized_recall = normalize_recall_settings(recall)
         settings["recall"] = normalized_recall
         return dict(normalized_recall)
 
@@ -486,9 +463,9 @@ class StorageManager:
         if unsupported_fields:
             raise StorageError(f"Unsupported debug settings: {', '.join(unsupported_fields)}")
 
-        normalized_debug = self._normalize_debug_settings(
+        normalized_debug = normalize_debug_settings(
             {
-                **self._normalize_debug_settings(settings.get("debug")),
+                **normalize_debug_settings(settings.get("debug")),
                 **dict(debug),
             }
         )
@@ -516,14 +493,14 @@ class StorageManager:
         if unsupported_fields:
             raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
 
-        current_settings = self._normalize_web_search_settings(settings.get("web_search"))
+        current_settings = normalize_web_search_settings(settings.get("web_search"))
         raw_searxng_update = web_search.get("searxng", {})
         if raw_searxng_update is None:
             raw_searxng_update = {}
         if not isinstance(raw_searxng_update, Mapping):
             raise StorageError("Expected settings.web_search.searxng to be an object")
 
-        normalized_web_search = self._normalize_web_search_settings(
+        normalized_web_search = normalize_web_search_settings(
             {
                 **current_settings,
                 **dict(web_search),
@@ -556,7 +533,7 @@ class StorageManager:
     ) -> dict[str, dict[str, Any]]:
         """Merge task-model bindings into an in-memory settings mapping."""
 
-        merged_model_tasks = self._normalize_model_task_settings(settings.get("model_tasks"))
+        merged_model_tasks = normalize_model_task_settings(settings.get("model_tasks"))
 
         for task_type, raw_binding in model_tasks.items():
             if task_type not in SUPPORTED_TASK_TYPES:
@@ -585,7 +562,7 @@ class StorageManager:
 
             options = current_binding.get("options", {})
             if "options" in raw_binding:
-                options = self._normalize_json_object(
+                options = normalize_json_object(
                     raw_binding["options"],
                     f"settings.model_tasks.{task_type}.options",
                 )
@@ -600,7 +577,7 @@ class StorageManager:
         else:
             settings.pop("model_tasks", None)
 
-        return self._normalize_model_task_settings(settings.get("model_tasks"))
+        return normalize_model_task_settings(settings.get("model_tasks"))
 
     def update_defaults(self, section: str, values: Mapping[str, Any]) -> dict[str, Any]:
         """Persist normalized defaults for a single section and return persisted values."""
@@ -622,13 +599,13 @@ class StorageManager:
     ) -> dict[str, Any]:
         """Merge defaults into an in-memory settings mapping."""
 
-        merged_defaults = self._coerce_defaults_section(settings.get("defaults"))
+        merged_defaults = coerce_defaults_section(settings.get("defaults"))
 
         if section == "agent":
-            current_agent_defaults = self._normalize_agent_defaults(merged_defaults.get("agent"))
-            self._validate_supported_agent_default_fields(values)
+            current_agent_defaults = normalize_agent_defaults(merged_defaults.get("agent"))
+            validate_supported_agent_default_fields(values)
             for field, value in values.items():
-                normalized_value = self._normalize_agent_default_value(field, value)
+                normalized_value = normalize_agent_default_value(field, value)
                 if normalized_value is None:
                     current_agent_defaults.pop(field, None)
                     continue
@@ -644,7 +621,7 @@ class StorageManager:
         else:
             settings.pop("defaults", None)
 
-        return self._normalize_defaults_settings(merged_defaults)
+        return normalize_defaults_settings(merged_defaults)
 
     def update_compaction_settings(self, compaction: Mapping[str, Any]) -> dict[str, Any]:
         """Persist compaction settings and return normalized values."""
@@ -663,9 +640,9 @@ class StorageManager:
         if not isinstance(compaction, Mapping):
             raise StorageError("Compaction settings must be a mapping")
 
-        normalized_compaction = self._normalize_compaction_settings(
+        normalized_compaction = normalize_compaction_settings(
             {
-                **self._normalize_compaction_settings(settings.get("compaction")),
+                **normalize_compaction_settings(settings.get("compaction")),
                 **dict(compaction),
             }
         )
@@ -680,190 +657,70 @@ class StorageManager:
 
         with self._settings_lock:
             self.ensure_directories()
-            temp_path = self._temporary_path(self.settings_path)
+            temp_path = temporary_path(self.data_dir, self.settings_path)
             try:
                 with temp_path.open("w", encoding="utf-8") as file:
                     json.dump(dict(settings), file, ensure_ascii=False, indent=2, sort_keys=True)
                     file.write("\n")
                 os.replace(temp_path, self.settings_path)
             except TypeError as exc:
-                self._remove_temporary_file(temp_path)
+                remove_temporary_file(temp_path)
                 raise StorageError(
                     f"Settings contain a value that cannot be serialized: {exc}"
                 ) from exc
             except OSError as exc:
-                self._remove_temporary_file(temp_path)
+                remove_temporary_file(temp_path)
                 raise StorageError(f"Cannot write {self.settings_path}: {exc}") from exc
 
     def copy_prompt_fragments(self, *, overwrite: bool = False) -> list[Path]:
-        """Copy bundled prompt fragments into ``<data_dir>/prompts``.
+        """Copy bundled prompt fragments into ``<data_dir>/prompts``."""
 
-        Existing user-copy fragments are preserved unless ``overwrite`` is true.
-        Returns the data-directory prompt paths that were written.
-        """
-
-        self.ensure_directories()
-        written_paths: list[Path] = []
-        for fragment_name in sorted(PROMPT_FRAGMENT_NAMES):
-            source_path = self.resource_prompts_dir / fragment_name
-            target_path = self.prompts_dir / fragment_name
-            if target_path.exists() and not overwrite:
-                continue
-
-            try:
-                content = source_path.read_text(encoding="utf-8")
-                target_path.write_text(content, encoding="utf-8")
-            except OSError as exc:
-                raise StorageError(f"Cannot copy prompt fragment {fragment_name}: {exc}") from exc
-            written_paths.append(target_path)
-        return written_paths
+        return self._prompt_fragments.copy_prompt_fragments(overwrite=overwrite)
 
     def copy_agent_prompt_fragments(self, agent_id: str, *, overwrite: bool = False) -> list[Path]:
-        """Seed an Agent prompt scope from the currently effective default fragments.
+        """Seed an Agent prompt scope from the currently effective default fragments."""
 
-        Existing Agent copies are preserved unless ``overwrite`` is true. Only
-        normal editable system-prompt fragments are copied; backend-only prompt
-        fragments such as ``compaction.md`` are never Agent-scoped.
-        """
-
-        safe_agent_id = self._validate_agent_id(agent_id)
-        self.ensure_directories()
-        target_dir = self.agent_prompts_dir(safe_agent_id)
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        written_paths: list[Path] = []
-        for fragment_name in sorted(AGENT_PROMPT_FRAGMENT_NAMES):
-            target_path = target_dir / fragment_name
-            if target_path.exists() and not overwrite:
-                continue
-
-            content = self.read_prompt_fragment(fragment_name)
-            temp_path = self._temporary_path(target_path)
-            try:
-                temp_path.write_text(content, encoding="utf-8")
-                os.replace(temp_path, target_path)
-            except OSError as exc:
-                self._remove_temporary_file(temp_path)
-                raise StorageError(
-                    f"Cannot copy Agent prompt fragment {fragment_name}: {exc}"
-                ) from exc
-            written_paths.append(target_path)
-        return written_paths
+        return self._prompt_fragments.copy_agent_prompt_fragments(agent_id, overwrite=overwrite)
 
     def agent_prompts_dir(self, agent_id: str) -> Path:
         """Return the prompt-fragment directory for one Agent."""
 
-        safe_agent_id = self._validate_agent_id(agent_id)
-        return self.data_dir / "agents" / safe_agent_id / "prompts"
+        return self._prompt_fragments.agent_prompts_dir(agent_id)
 
     def agent_prompt_fragment_exists(self, agent_id: str, fragment_name: str) -> bool:
         """Return whether an Agent prompt fragment exists on disk."""
 
-        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
-        return (self.agent_prompts_dir(agent_id) / safe_name).exists()
+        return self._prompt_fragments.agent_prompt_fragment_exists(agent_id, fragment_name)
 
     def read_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> str:
         """Read an Agent prompt fragment, returning an empty string when absent."""
 
-        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
-        prompt_path = self.agent_prompts_dir(agent_id) / safe_name
-        if not prompt_path.exists():
-            return ""
-
-        try:
-            return prompt_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Cannot read Agent prompt fragment {safe_name}: {exc}") from exc
+        return self._prompt_fragments.read_agent_prompt_fragment(agent_id, fragment_name)
 
     def write_agent_prompt_fragment(self, agent_id: str, fragment_name: str, content: str) -> Path:
         """Write one Agent prompt fragment."""
 
-        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
-        target_dir = self.agent_prompts_dir(agent_id)
-        target_path = target_dir / safe_name
-
-        self.ensure_directories()
-        target_dir.mkdir(parents=True, exist_ok=True)
-        temp_path = self._temporary_path(target_path)
-        try:
-            temp_path.write_text(content, encoding="utf-8")
-            os.replace(temp_path, target_path)
-        except OSError as exc:
-            self._remove_temporary_file(temp_path)
-            raise StorageError(f"Cannot write Agent prompt fragment {safe_name}: {exc}") from exc
-
-        return target_path
+        return self._prompt_fragments.write_agent_prompt_fragment(agent_id, fragment_name, content)
 
     def reset_agent_prompt_fragment(self, agent_id: str, fragment_name: str) -> Path:
         """Reset one Agent prompt fragment to the current default-scope content."""
 
-        safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
-        return self.write_agent_prompt_fragment(
-            agent_id, safe_name, self.read_prompt_fragment(safe_name)
-        )
+        return self._prompt_fragments.reset_agent_prompt_fragment(agent_id, fragment_name)
 
     def reset_prompt_fragment(self, fragment_name: str) -> Path:
-        """Reset a user-copy prompt fragment to its bundled default.
+        """Reset a user-copy prompt fragment to its bundled default."""
 
-        Validates the name, reads the bundled resource fragment, and atomically
-        overwrites the user copy in ``<data_dir>/prompts/``.  Returns the
-        written path.
-        """
-
-        safe_name = self._validate_prompt_fragment_name(fragment_name)
-        source_path = self.resource_prompts_dir / safe_name
-        target_path = self.prompts_dir / safe_name
-
-        try:
-            content = source_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Cannot read bundled prompt fragment {safe_name}: {exc}") from exc
-
-        self.ensure_directories()
-        temp_path = self._temporary_path(target_path)
-        try:
-            temp_path.write_text(content, encoding="utf-8")
-            os.replace(temp_path, target_path)
-        except OSError as exc:
-            self._remove_temporary_file(temp_path)
-            raise StorageError(f"Cannot write prompt fragment {safe_name}: {exc}") from exc
-
-        return target_path
+        return self._prompt_fragments.reset_prompt_fragment(fragment_name)
 
     def write_prompt_fragment(self, fragment_name: str, content: str) -> Path:
-        """Write arbitrary content to a user-copy prompt fragment.
+        """Write arbitrary content to a user-copy prompt fragment."""
 
-        Validates the name against the allowlist and atomically writes the
-        given string (UTF-8) to ``<data_dir>/prompts/<fragment_name>``.
-        Returns the written path.
-        """
-
-        safe_name = self._validate_prompt_fragment_name(fragment_name)
-        target_path = self.prompts_dir / safe_name
-
-        self.ensure_directories()
-        temp_path = self._temporary_path(target_path)
-        try:
-            temp_path.write_text(content, encoding="utf-8")
-            os.replace(temp_path, target_path)
-        except OSError as exc:
-            self._remove_temporary_file(temp_path)
-            raise StorageError(f"Cannot write prompt fragment {safe_name}: {exc}") from exc
-
-        return target_path
+        return self._prompt_fragments.write_prompt_fragment(fragment_name, content)
 
     def read_prompt_fragment(self, fragment_name: str) -> str:
         """Read a prompt fragment from the data directory, falling back to resources."""
 
-        safe_name = self._validate_prompt_fragment_name(fragment_name)
-        data_path = self.prompts_dir / safe_name
-        resource_path = self.resource_prompts_dir / safe_name
-        prompt_path = data_path if data_path.exists() else resource_path
-
-        try:
-            return prompt_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Cannot read prompt fragment {safe_name}: {exc}") from exc
+        return self._prompt_fragments.read_prompt_fragment(fragment_name)
 
     @staticmethod
     def _resolve_data_dir(data_dir: str | Path | None, config: ConfigProtocol | None) -> Path:
@@ -885,414 +742,3 @@ class StorageManager:
         if resources_dir is not None:
             return Path(resources_dir)
         return Path(__file__).resolve().parents[2] / "resources"
-
-    @classmethod
-    def _normalize_appearance_settings(cls, appearance: Any) -> dict[str, str]:
-        return {"language": cls._normalize_appearance_language(appearance)}
-
-    @classmethod
-    def _normalize_appearance_language(cls, appearance: Any) -> str:
-        section = cls._coerce_appearance_section(appearance)
-        value = section.get("language")
-        if value is None:
-            return DEFAULT_APPEARANCE_LANGUAGE
-        return cls._validate_appearance_language(value)
-
-    @staticmethod
-    def _coerce_appearance_section(appearance: Any) -> dict[str, Any]:
-        if appearance is None:
-            return {}
-        if not isinstance(appearance, Mapping):
-            raise StorageError("Expected settings.appearance to be an object")
-        return dict(appearance)
-
-    @staticmethod
-    def _coerce_skills_update(skills: Any) -> dict[str, Any]:
-        if not isinstance(skills, Mapping):
-            raise StorageError("Skills settings must be a mapping")
-        unsupported_fields = sorted(set(skills) - {"directories"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported skills settings: {', '.join(unsupported_fields)}")
-        if "directories" not in skills:
-            raise StorageError("Skills settings must include directories")
-        return dict(skills)
-
-    @staticmethod
-    def _coerce_defaults_update(defaults: Any) -> dict[str, Any]:
-        if not isinstance(defaults, Mapping):
-            raise StorageError("Defaults settings must be a mapping")
-        unsupported_sections = sorted(set(defaults) - {"agent"})
-        if unsupported_sections:
-            raise StorageError(f"Unsupported defaults settings: {', '.join(unsupported_sections)}")
-        if "agent" not in defaults:
-            raise StorageError("Defaults settings must include agent")
-        if not isinstance(defaults["agent"], Mapping):
-            raise StorageError("Defaults agent settings must be a mapping")
-        return dict(defaults)
-
-    @staticmethod
-    def _validate_appearance_language(value: Any) -> str:
-        if not isinstance(value, str) or not value:
-            raise StorageError("Appearance language must be a non-empty string")
-        if value not in SUPPORTED_APPEARANCE_LANGUAGES:
-            supported = ", ".join(sorted(SUPPORTED_APPEARANCE_LANGUAGES))
-            raise StorageError(f"Unsupported appearance language: {value}. Supported: {supported}")
-        return value
-
-    @staticmethod
-    def _normalize_skill_directories(directories: Any) -> list[str]:
-        if directories is None:
-            return []
-        if not isinstance(directories, list):
-            raise StorageError("settings.skill_directories must be a list")
-
-        normalized_directories: list[str] = []
-        for directory in directories:
-            if not isinstance(directory, str) or not directory.strip():
-                raise StorageError("Skill directories must be non-empty strings")
-            normalized_directory = directory.strip()
-            if not _is_absolute_or_home_relative_path(normalized_directory):
-                raise StorageError(
-                    "Skill directories must be absolute paths or home-relative paths "
-                    "starting with ~"
-                )
-            normalized_directories.append(normalized_directory)
-        return normalized_directories
-
-    @staticmethod
-    def _normalize_subagent_integer(key: str, value: Any, default: int) -> int:
-        if value is None:
-            return default
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise StorageError(f"Sub-agent setting {key} must be an integer")
-        if value <= 0:
-            raise StorageError(f"Sub-agent setting {key} must be positive")
-        return cast("int", value)
-
-    @classmethod
-    def _normalize_compaction_settings(cls, compaction: Any) -> dict[str, Any]:
-        section = cls._coerce_compaction_section(compaction)
-        return {
-            "auto": cls._normalize_compaction_auto(section.get("auto")),
-            "threshold": cls._normalize_compaction_threshold(section.get("threshold")),
-            "tail_tokens": cls._normalize_compaction_tail_tokens(section.get("tail_tokens")),
-            "summary_model": cls._normalize_compaction_summary_model(section.get("summary_model")),
-        }
-
-    @staticmethod
-    def _coerce_compaction_section(compaction: Any) -> dict[str, Any]:
-        if compaction is None:
-            return {}
-        if not isinstance(compaction, Mapping):
-            raise StorageError("Expected settings.compaction to be an object")
-        return dict(compaction)
-
-    @staticmethod
-    def _normalize_compaction_auto(value: Any) -> bool:
-        if value is None:
-            return cast("bool", COMPACTION_SETTING_DEFAULTS["auto"])
-        if not isinstance(value, bool):
-            raise StorageError("Compaction setting auto must be a boolean")
-        return value
-
-    @staticmethod
-    def _normalize_compaction_threshold(value: Any) -> float:
-        if value is None:
-            return cast("float", COMPACTION_SETTING_DEFAULTS["threshold"])
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            raise StorageError("Compaction setting threshold must be a number")
-
-        normalized_value = float(value)
-        if normalized_value <= 0 or normalized_value > 1:
-            raise StorageError("Compaction setting threshold must be in (0, 1]")
-        return normalized_value
-
-    @staticmethod
-    def _normalize_compaction_tail_tokens(value: Any) -> int:
-        if value is None:
-            return cast("int", COMPACTION_SETTING_DEFAULTS["tail_tokens"])
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise StorageError("Compaction setting tail_tokens must be an integer")
-        if value <= 0:
-            raise StorageError("Compaction setting tail_tokens must be positive")
-        return value
-
-    @staticmethod
-    def _normalize_compaction_summary_model(value: Any) -> str | None:
-        if value is None:
-            return cast("str | None", COMPACTION_SETTING_DEFAULTS["summary_model"])
-        if not isinstance(value, str):
-            raise StorageError("Compaction setting summary_model must be a string or null")
-        return value
-
-    @classmethod
-    def _normalize_defaults_settings(cls, defaults: Any) -> dict[str, Any]:
-        section = cls._coerce_defaults_section(defaults)
-        normalized_agent_defaults = cls._normalize_agent_defaults(section.get("agent"))
-        if not normalized_agent_defaults:
-            return {}
-        return {"agent": normalized_agent_defaults}
-
-    @classmethod
-    def _normalize_recall_settings(cls, recall: Any) -> dict[str, str]:
-        section = cls._coerce_recall_section(recall)
-        backend = section.get("backend", DEFAULT_RECALL_SETTINGS["backend"])
-        if not isinstance(backend, str) or not backend.strip():
-            raise StorageError("Recall backend must be a non-empty string")
-        return {"backend": backend.strip()}
-
-    @classmethod
-    def _normalize_debug_settings(cls, debug: Any) -> dict[str, Any]:
-        section = cls._coerce_debug_section(debug)
-        return {
-            "enabled": cls._normalize_debug_enabled(section.get("enabled")),
-            "trace_limit": cls._normalize_debug_trace_limit(section.get("trace_limit")),
-        }
-
-    @staticmethod
-    def _normalize_debug_enabled(value: Any) -> bool:
-        if value is None:
-            return cast("bool", DEBUG_SETTING_DEFAULTS["enabled"])
-        if not isinstance(value, bool):
-            raise StorageError("Debug setting enabled must be a boolean")
-        return value
-
-    @staticmethod
-    def _normalize_debug_trace_limit(value: Any) -> int:
-        if value is None:
-            return cast("int", DEBUG_SETTING_DEFAULTS["trace_limit"])
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise StorageError("Debug setting trace_limit must be an integer")
-        if value <= 0:
-            raise StorageError("Debug setting trace_limit must be positive")
-        if value > 500:
-            raise StorageError("Debug setting trace_limit must be at most 500")
-        return value
-
-    @classmethod
-    def _normalize_web_search_settings(cls, web_search: Any) -> dict[str, Any]:
-        section = cls._coerce_web_search_section(web_search)
-        provider = section.get("provider", DEFAULT_WEB_SEARCH_SETTINGS["provider"])
-        if not isinstance(provider, str) or provider not in FIRST_PARTY_WEB_SEARCH_PROVIDERS:
-            allowed = ", ".join(sorted(FIRST_PARTY_WEB_SEARCH_PROVIDERS))
-            raise StorageError(f"Web search provider must be one of: {allowed}")
-
-        searxng = section.get("searxng", {})
-        if searxng is None:
-            searxng = {}
-        if not isinstance(searxng, Mapping):
-            raise StorageError("Expected settings.web_search.searxng to be an object")
-
-        unsupported_searxng_fields = sorted(set(searxng) - {"base_url"})
-        if unsupported_searxng_fields:
-            raise StorageError(
-                "Unsupported SearXNG settings: " + ", ".join(unsupported_searxng_fields)
-            )
-
-        base_url = searxng.get("base_url", DEFAULT_SEARXNG_BASE_URL)
-        if not isinstance(base_url, str) or not base_url.strip():
-            raise StorageError("SearXNG base_url must be a non-empty string")
-
-        return {
-            "provider": provider,
-            "searxng": {"base_url": base_url.strip()},
-        }
-
-    @classmethod
-    def _normalize_model_task_settings(cls, model_tasks: Any) -> dict[str, dict[str, Any]]:
-        section = cls._coerce_model_tasks_section(model_tasks)
-        normalized: dict[str, dict[str, Any]] = {}
-
-        for task_type, raw_binding in section.items():
-            if task_type not in SUPPORTED_TASK_TYPES:
-                raise StorageError(f"Unsupported model task type: {task_type}")
-            if not isinstance(raw_binding, Mapping):
-                raise StorageError(f"Expected settings.model_tasks.{task_type} to be an object")
-
-            unsupported_fields = sorted(set(raw_binding) - {"target", "options"})
-            if unsupported_fields:
-                raise StorageError(
-                    f"Unsupported model task settings for {task_type}: "
-                    f"{', '.join(unsupported_fields)}"
-                )
-
-            target = raw_binding.get("target")
-            if not isinstance(target, str) or not target.strip():
-                raise StorageError(f"Model task target for {task_type} must be a non-empty string")
-
-            normalized[task_type] = {
-                "target": target.strip(),
-                "options": cls._normalize_json_object(
-                    raw_binding.get("options", {}),
-                    f"settings.model_tasks.{task_type}.options",
-                ),
-            }
-        return normalized
-
-    @staticmethod
-    def _coerce_model_tasks_section(model_tasks: Any) -> dict[str, Any]:
-        if model_tasks is None:
-            return {}
-        if not isinstance(model_tasks, Mapping):
-            raise StorageError("Expected settings.model_tasks to be an object")
-        return dict(model_tasks)
-
-    @staticmethod
-    def _coerce_web_search_section(web_search: Any) -> dict[str, Any]:
-        if web_search is None:
-            return {}
-        if not isinstance(web_search, Mapping):
-            raise StorageError("Expected settings.web_search to be an object")
-        unsupported_fields = sorted(set(web_search) - {"provider", "searxng"})
-        if unsupported_fields:
-            raise StorageError(f"Unsupported web_search settings: {', '.join(unsupported_fields)}")
-        return dict(web_search)
-
-    @classmethod
-    def _normalize_json_object(cls, value: Any, path: str) -> dict[str, Any]:
-        if not isinstance(value, Mapping):
-            raise StorageError(f"Expected {path} to be an object")
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise StorageError(f"Expected {path} keys to be non-empty strings")
-            normalized[key] = cls._normalize_json_value(item, f"{path}.{key}")
-        return normalized
-
-    @classmethod
-    def _normalize_json_value(cls, value: Any, path: str) -> Any:
-        if value is None or isinstance(value, str | int | float | bool):
-            return value
-        if isinstance(value, list):
-            return [
-                cls._normalize_json_value(item, f"{path}[{index}]")
-                for index, item in enumerate(value)
-            ]
-        if isinstance(value, Mapping):
-            return cls._normalize_json_object(value, path)
-        raise StorageError(f"Unsupported JSON value at {path}")
-
-    @staticmethod
-    def _coerce_recall_section(recall: Any) -> dict[str, Any]:
-        if recall is None:
-            return {}
-        if not isinstance(recall, Mapping):
-            raise StorageError("Expected settings.recall to be an object")
-        return dict(recall)
-
-    @staticmethod
-    def _coerce_debug_section(debug: Any) -> dict[str, Any]:
-        if debug is None:
-            return {}
-        if not isinstance(debug, Mapping):
-            raise StorageError("Expected settings.debug to be an object")
-        return dict(debug)
-
-    @staticmethod
-    def _coerce_defaults_section(defaults: Any) -> dict[str, Any]:
-        if defaults is None:
-            return {}
-        if not isinstance(defaults, Mapping):
-            raise StorageError("Expected settings.defaults to be an object")
-        return dict(defaults)
-
-    @classmethod
-    def _normalize_agent_defaults(cls, defaults: Any) -> dict[str, Any]:
-        section = cls._coerce_agent_defaults_section(defaults)
-        cls._validate_supported_agent_default_fields(section)
-
-        normalized_agent_defaults: dict[str, Any] = {}
-        for field, value in section.items():
-            normalized_value = cls._normalize_agent_default_value(field, value)
-            if normalized_value is None:
-                continue
-            normalized_agent_defaults[field] = normalized_value
-        return normalized_agent_defaults
-
-    @staticmethod
-    def _coerce_agent_defaults_section(defaults: Any) -> dict[str, Any]:
-        if defaults is None:
-            return {}
-        if not isinstance(defaults, Mapping):
-            raise StorageError("Expected settings.defaults.agent to be an object")
-        return dict(defaults)
-
-    @staticmethod
-    def _validate_supported_agent_default_fields(values: Mapping[str, Any]) -> None:
-        unsupported_fields = sorted(set(values) - AGENT_DEFAULT_FIELDS)
-        if unsupported_fields:
-            raise StorageError(
-                f"Unsupported defaults.agent settings: {', '.join(unsupported_fields)}"
-            )
-
-    @staticmethod
-    def _normalize_agent_default_value(field: str, value: Any) -> str | float | None:
-        if value is None:
-            return None
-
-        if field in {"model", "fallback_model"}:
-            if not isinstance(value, str):
-                raise StorageError(f"Agent default {field} must be a string")
-            return value
-
-        if field == "temperature":
-            if isinstance(value, bool) or not isinstance(value, int | float):
-                raise StorageError("Agent default temperature must be a number or null")
-            temperature = float(value)
-            if not math.isfinite(temperature):
-                raise StorageError("Agent default temperature must be finite")
-            if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-                raise StorageError(
-                    "Agent default temperature must be between "
-                    f"{MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
-                )
-            return temperature
-
-        if field == "thinking_effort":
-            if not isinstance(value, str):
-                raise StorageError("Agent default thinking_effort must be a string or null")
-            if value not in ALLOWED_THINKING_EFFORTS:
-                allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-                raise StorageError(f"Agent default thinking_effort must be one of: {allowed}")
-            return value
-
-        raise StorageError(f"Unsupported defaults.agent setting: {field}")
-
-    @staticmethod
-    def _validate_prompt_fragment_name(fragment_name: str) -> str:
-        path = Path(fragment_name)
-        if path.name != fragment_name or path.is_absolute():
-            raise StorageError(f"Unsafe prompt fragment name: {fragment_name}")
-        if fragment_name not in PROMPT_FRAGMENT_NAMES:
-            raise StorageError(f"Unknown prompt fragment: {fragment_name}")
-        return fragment_name
-
-    @staticmethod
-    def _validate_agent_id(agent_id: str) -> str:
-        if not isinstance(agent_id, str) or AGENT_ID_PATTERN.fullmatch(agent_id) is None:
-            raise StorageError(f"Unsafe agent id: {agent_id}")
-        return agent_id
-
-    @staticmethod
-    def _validate_agent_prompt_fragment_name(fragment_name: str) -> str:
-        path = Path(fragment_name)
-        if path.name != fragment_name or path.is_absolute():
-            raise StorageError(f"Unsafe Agent prompt fragment name: {fragment_name}")
-        if fragment_name not in AGENT_PROMPT_FRAGMENT_NAMES:
-            raise StorageError(f"Unknown Agent prompt fragment: {fragment_name}")
-        return fragment_name
-
-    def _temporary_path(self, target_path: Path) -> Path:
-        temp_dir = self.data_dir / ".tmp"
-        return temp_dir / f".{target_path.name}.{uuid4().hex}.tmp"
-
-    @staticmethod
-    def _remove_temporary_file(temp_path: Path) -> None:
-        with suppress(OSError):
-            temp_path.unlink(missing_ok=True)
-
-
-def _is_absolute_or_home_relative_path(path: str) -> bool:
-    if path == "~" or path.startswith(("~/", "~\\")):
-        return True
-    return Path(path).is_absolute()

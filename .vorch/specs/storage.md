@@ -20,7 +20,7 @@ Other domains may create additional data under the same root on demand. For exam
 
 ## Interfaces
 
-- `core/storage/__init__.py` exports `StorageManager`, `StorageError`, `ConfigProtocol`, `DEFAULT_DATA_DIR`, `PHASE_TWO_DIRECTORIES`, prompt constants, and appearance/recall defaults used by callers and tests.
+- `core/storage/__init__.py` exports `StorageManager`, `StorageError`, `ConfigProtocol`, `DEFAULT_DATA_DIR`, `PHASE_TWO_DIRECTORIES`, prompt constants, and appearance/recall defaults used by callers and tests. Import from the package; the internal module split is not a public surface.
 - `StorageManager(data_dir=None, config=None, resources_dir=None)` resolves `data_dir`, stores the resources root, and owns a process-local re-entrant lock for settings transactions.
 - Data-root and credentials: `ensure_directories()`, `load_environment()`, `load_data_dir_credentials()`, `set_data_dir_credential(key, value)`, and `build_environment_snapshot()`.
 - Raw settings transactions: `load_settings()`, `save_settings(settings)`, `update_settings(mutator)`, and `update_settings_sections(settings_update)`. `load_settings()` returns `{}` for a missing file and raises `StorageError` for invalid JSON/schema diagnostics from `core/settings/validation.py`.
@@ -36,6 +36,7 @@ Other domains may create additional data under the same root on demand. For exam
 - `.env` values must never be copied back into `os.environ` and must never be logged.
 - Prompt fragment names and Agent IDs are allowlisted before paths are constructed. Path traversal and absolute fragment paths are invalid storage data, not inputs to sanitize later.
 - `update_settings_sections()` expects a parsed public Settings update from `core/settings.parse_settings_update()`. If any section fails Storage-level normalization, the existing `settings.json` is left unchanged.
+- Where new code goes: stateless per-section validation/normalization belongs in `settings_normalizers.py`, prompt-fragment file access in `prompt_fragments.py` (`PromptFragmentStore`, owned and delegated to by `StorageManager`), and shared temp-file/atomic writes in `atomic.py`. `StorageManager` stays the orchestration entry point, not a home for new normalization or path logic.
 
 ## Constraints & Gotchas
 
