@@ -368,7 +368,7 @@
   {:else if activeViewId === 'logs'}
     <LogsView />
   {:else if activeViewId === 'debug'}
-    <DebugView {debugEnabled} />
+    <DebugView />
   {/if}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>

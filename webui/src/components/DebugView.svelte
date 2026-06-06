@@ -838,10 +838,9 @@
                         </summary>
                         <div class="debug-view__stream-body">
                           <pre
-                            class="debug-view__code-block debug-view__code-block--raw"
-                            title={streamEventTextValue(
+                            class="debug-view__code-block debug-view__code-block--raw">{streamEventTextValue(
                               event,
-                            )}>{streamEventTextValue(event) || '—'}</pre>
+                            ) || '—'}</pre>
                         </div>
                       </details>
                     {/each}
@@ -1332,16 +1331,6 @@
 
   .debug-trace--selected .debug-trace__expand {
     border-left-color: rgba(232, 135, 10, 0.28);
-  }
-
-  .debug-trace__row .debug-trace__columns {
-    display: contents;
-  }
-
-  .debug-trace--expanded .debug-trace__row {
-    grid-template-columns:
-      minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.2fr)
-      minmax(0, auto) minmax(0, auto) minmax(0, auto);
   }
 
   .debug-trace__row {

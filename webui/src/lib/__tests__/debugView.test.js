@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEBUG_ID_TRUNCATE_LENGTH,
-  DEBUG_TAB_FORMATTED,
-  DEBUG_TAB_RAW,
   applyDebugStatus,
   applyModelProbeProviders,
   applyModelProbeResult,
@@ -14,9 +11,7 @@ import {
   formatHeadersForDisplay,
   formattedBodyText,
   hasParseableBody,
-  isFormattedBodyTab,
   isJsonParseableText,
-  isRawBodyTab,
   modelProbeCanProbe,
   modelProbeConnectionOptions,
   normalizeModelProbeProviders,
@@ -29,7 +24,6 @@ import {
   selectModelProbeProvider,
   selectTrace,
   streamEventText,
-  truncatedId,
 } from '../debugView.js';
 
 describe('debugView helpers', () => {
@@ -350,69 +344,6 @@ describe('debugView helpers', () => {
       expect(streamEventText({ event: 'foo', data: 'bar' })).toBe(
         '{\n  "event": "foo",\n  "data": "bar"\n}',
       );
-    });
-  });
-
-  describe('truncatedId', () => {
-    it('returns the original text when shorter than the limit', () => {
-      const result = truncatedId('short', 10);
-      expect(result).toEqual({
-        text: 'short',
-        full: 'short',
-        truncated: false,
-      });
-    });
-
-    it('returns the original text when exactly at the limit', () => {
-      const result = truncatedId('0123456789', 10);
-      expect(result).toEqual({
-        text: '0123456789',
-        full: '0123456789',
-        truncated: false,
-      });
-    });
-
-    it('truncates and appends an ellipsis when over the limit', () => {
-      const result = truncatedId('a-very-long-id-that-overflows', 8);
-      expect(result.truncated).toBe(true);
-      expect(result.text.endsWith('…')).toBe(true);
-      expect(result.text.length).toBe(8);
-      expect(result.full).toBe('a-very-long-id-that-overflows');
-    });
-
-    it('handles empty and null values without throwing', () => {
-      expect(truncatedId('')).toEqual({ text: '', full: '', truncated: false });
-      expect(truncatedId(null)).toEqual({
-        text: '',
-        full: '',
-        truncated: false,
-      });
-      expect(truncatedId(undefined)).toEqual({
-        text: '',
-        full: '',
-        truncated: false,
-      });
-    });
-
-    it('uses the module default max length when no override is given', () => {
-      const long = 'a'.repeat(DEBUG_ID_TRUNCATE_LENGTH + 4);
-      const result = truncatedId(long);
-      expect(result.truncated).toBe(true);
-      expect(result.text.length).toBe(DEBUG_ID_TRUNCATE_LENGTH);
-    });
-  });
-
-  describe('body tab helpers', () => {
-    it('identifies the raw tab and treats null as raw', () => {
-      expect(isRawBodyTab(DEBUG_TAB_RAW)).toBe(true);
-      expect(isRawBodyTab(null)).toBe(true);
-      expect(isRawBodyTab(DEBUG_TAB_FORMATTED)).toBe(false);
-    });
-
-    it('identifies the formatted tab', () => {
-      expect(isFormattedBodyTab(DEBUG_TAB_FORMATTED)).toBe(true);
-      expect(isFormattedBodyTab(DEBUG_TAB_RAW)).toBe(false);
-      expect(isFormattedBodyTab(null)).toBe(false);
     });
   });
 
