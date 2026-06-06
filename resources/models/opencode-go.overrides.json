@@ -375,8 +375,35 @@
         "vision": true
       },
       "context_window": 1000000,
-      "max_output_tokens": 64000,
+      "max_output_tokens": 65536,
       "name": "Qwen3.6 Plus"
+    },
+    "qwen3.7-plus": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "name": "Qwen3.7 Plus"
     }
   }
 }
