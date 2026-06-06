@@ -2,8 +2,8 @@
 
 **Status:** in progress (Wave 1 done; Wave 2 SettingsView in progress) · **Owner:** Julian · **Started:** 2026-06-06
 **Next action:** continue Wave 2 → `SettingsView.svelte` panel extraction. CSS, Channels,
-Sub-Agents, Recall, Web Search done. **Extract exactly the next ONE panel** (see "CONTINUE
-HERE": Skills), then stop and update this handoff.
+Sub-Agents, Recall, Web Search, Skills, Appearance done. **Extract exactly the next ONE
+panel** (see "CONTINUE HERE": Debug), then stop and update this handoff.
 
 This document is self-contained: a fresh session should be able to continue from it
 alone. Read it top to bottom before touching code.
@@ -203,7 +203,7 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
 > `python scripts/quality-frontend.py <path>`. Tests live in
 > `webui/src/components/__tests__/` and `webui/src/lib/__tests__/`. No TypeScript.
 
-- [ ] **`SettingsView.svelte` (4475 → 2574, IN PROGRESS)** — one child component per
+- [ ] **`SettingsView.svelte` (4475 → 2240, IN PROGRESS)** — one child component per
   panel under `webui/src/components/settings/`; `SettingsView.svelte` becomes a thin
   nav/panel container (target each panel 150–350 lines). **Do one panel per session**
   (see WORKFLOW box at the top). Box stays unchecked until the container is thin.
@@ -221,6 +221,15 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   - **Recall** → `SettingsRecallPanel.svelte` (156). Dropdown, re-seeds after save.
   - **Web Search** → `SettingsWebSearchPanel.svelte` (203). Dropdown + conditional
     SearXNG URL, re-seeds after save.
+  - **Skills** → `SettingsSkillsPanel.svelte` (229). Read-only default-dir row (reads
+    `settings`) + add/remove directory list with `newSkillDirectory` child-local state +
+    manual & auto-save. `directoriesMatch` moved into the child (it was a parent-local fn,
+    not a `settingsView.js` export). Does NOT re-seed after save.
+  - **Appearance** → `SettingsAppearancePanel.svelte` (158). Language `<select>`
+    (`bind:value` + `handleLanguageChange`) + manual & auto-save; calls `init(language)`
+    from `$lib/i18n.js` after a successful save. `isLanguageSaveDisabled` is called with
+    `loading: false` (child only mounts when active). Does NOT re-seed after save. Parent
+    keeps its own `init(language)` in `applySettings` (still imported).
 
   **Validated extraction recipe — shared-settings panels (FOLLOW EXACTLY; executed for
   subagents/recall/web_search, zero test edits, 525/525):**
@@ -272,39 +281,30 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
     not remove/rename existing `settingsView.js` exports, only add.
 
   **Remaining panels — one per session (ordered queue; simplest first, providers last):**
-  1. **Skills** ◀── CONTINUE HERE. List of skill dirs + add/remove + manual & auto-save.
-     Uses `getSkillDirectories`, `createSkillDirectoriesUpdatePayload`, `directoriesMatch`,
-     `getDefaultSkillDirectoryValue` (read-only default dir row reads `settings`), plus
-     `newSkillDirectory`/`addSkillDirectory`/`removeSkillDirectory`/`handleSkillDirectoryKeydown`.
-     Does NOT re-seed after save.
-  2. **Appearance** — language `<select>` + manual & auto-save. ⚠ calls `init(language)`
-     from `$lib/i18n.js` on save (re-applies i18n); uses `buildLanguageOptions`,
-     `getPersistedLanguageId`, `isLanguageSaveDisabled`, `createLanguageUpdatePayload`.
-     The select is `bind:value` on a local `selectedLanguageId`; keep `handleLanguageChange`.
-  3. **Debug** — checkbox + trace-limit number; **auto-save only, no Save button** (no
+  1. **Debug** ◀── CONTINUE HERE. checkbox + trace-limit number; **auto-save only, no Save button** (no
      sticky footer). Needs an extra **`onDebugEnabledChange`** prop (parent passes its
      own `onDebugEnabledChange` prop through); call it with the new enabled flag after a
      successful save. Re-seeds after save. `getDebugSettings`/`DEBUG_SETTING_DEFAULTS`
      live inline in `SettingsView` today — move them into the child (or a helper).
-  4. **General** — **read-only**, no save/state: two `s-value-box` rows (`serverHostValue`
+  2. **General** — **read-only**, no save/state: two `s-value-box` rows (`serverHostValue`
      via `formatServerHost`, `dataDirectoryValue` via `getDataDirectoryValue`). Trivial;
      pass `{ settings }` only (+ `t`). Removes those two `$derived` from the parent.
-  5. **Defaults** — model + fallback-model `SearchableDropdown` + temperature + thinking
+  3. **Defaults** — model + fallback-model `SearchableDropdown` + temperature + thinking
      effort. Needs the **model picker** (`availableModels`/`availableConnections`); load
      them in the child on mount (`model.list` + `connection.list`, as `ensureModelCatalogsLoaded`
      does) so `waitForModelCatalogs()` in the test still sees both calls. Re-seeds after
      save. Uses `modelSelection.js` + `buildModelSelectOptions`. Keep ids
      `settings-defaults-model` / `-fallback-model` / `-temperature` / `-thinking-effort`.
-  6. **Compaction** — auto checkbox + threshold + tail_tokens + summary-model picker.
+  4. **Compaction** — auto checkbox + threshold + tail_tokens + summary-model picker.
      Same model-picker need as Defaults (id `settings-compaction-summary-model`).
      `normalizeCompactionSettings`/`buildCompactionSettingsPayload`/`getCompactionSettings`
      exist in `settingsView.js` (the inline fallbacks in `SettingsView` shadow them — use
      the lib ones in the child).
-  7. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
+  5. **Specialized Models** — task-model bindings; uses `taskModelSettings.js`,
      lazy-loads targets/schemas on mount, **no test coverage** (build/eslint only). Many
      own state vars (`taskModel*`) + `updateTaskModelSettings`/`listTaskModelTargets`/
      `getTaskModelOptions` from `$lib/api.js`. Extract carefully.
-  8. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
+  6. **Providers** — **most coupled, do last.** Props `providerAuthEvent`/`connectProvider`/
      `disconnectProvider`, the exported `handleProviderAuthCompleted`, `model.refresh_db`
      + the **header refresh button** (currently rendered in the parent's `s-panel-header`,
      gated on `activePanelId === 'providers'`), the device-flow OAuth dialog, and all the

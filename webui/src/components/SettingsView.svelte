@@ -4,8 +4,10 @@
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
+  import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
+  import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import {
@@ -34,25 +36,18 @@
   import {
     AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
     SETTINGS_LAYOUT_CLASS,
-    buildLanguageOptions,
-    createLanguageUpdatePayload,
-    createSkillDirectoriesUpdatePayload,
     buildAgentDefaultsPayload,
     describeProvider,
     formatServerHost,
     getDataDirectoryValue,
-    getDefaultSkillDirectoryValue,
-    getSkillDirectories,
     normalizeAgentDefaultsSettings,
     providerStatusClass,
     providerStatusLabel,
     getProviderItems,
     getOAuthConnectionStatus,
     getPublicConnectionId,
-    getPersistedLanguageId,
     isOAuthDeviceFlowConnection,
     isOAuthConnection,
-    isLanguageSaveDisabled,
   } from '$lib/settingsView.js';
 
   const COMPACTION_SETTING_DEFAULTS = Object.freeze({
@@ -321,8 +316,6 @@
   let loadError = $state('');
   let saveError = $state('');
   let saving = $state(false);
-  let selectedLanguageId = $state('en');
-  let skillDirectories = $state([]);
   let agentDefaults = $state(normalizeAgentDefaultsFormValues(null));
   let compactionSettings = $state(normalizeCompactionSettings(null));
   let debugSettings = $state(getDebugSettings(null));
@@ -333,7 +326,6 @@
   let taskModelLoading = $state(false);
   let taskModelSaving = $state(false);
   let taskModelError = $state('');
-  let newSkillDirectory = $state('');
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let modelCatalogsLoaded = $state(false);
@@ -344,8 +336,6 @@
   let oauthConnectionStates = $state({});
   let handledProviderAuthEvent = null;
   let copiedDeviceFlowConnectionId = $state('');
-  let languageAutoSaveTimer = null;
-  let skillDirectoriesAutoSaveTimer = null;
   let compactionSettingsAutoSaveTimer = null;
   let debugSettingsAutoSaveTimer = null;
   let handledTargetPanelRequestId = -1;
@@ -357,15 +347,9 @@
     formatServerHost(settings?.general?.server, t),
   );
   let dataDirectoryValue = $derived(getDataDirectoryValue(settings, t));
-  let defaultSkillDirectoryValue = $derived(
-    getDefaultSkillDirectoryValue(settings, t),
-  );
   let providerItems = $derived(getProviderItems(settings));
   let hasRefreshEligibleProvider = $derived(
     providerItems.some((provider) => providerAppearsRefreshEligible(provider)),
-  );
-  let availableLanguageOptions = $derived(
-    buildLanguageOptions(settings?.appearance),
   );
   let defaultModelOptions = $derived(
     selectModelOptions(
@@ -414,20 +398,6 @@
       label: t(`agents.form.thinkingEffortOption.${option}`, option),
     })),
   ]);
-  let persistedLanguageId = $derived(getPersistedLanguageId(settings));
-  let saveDisabled = $derived(
-    isLanguageSaveDisabled({
-      loading,
-      saving,
-      selectedLanguageId,
-      persistedLanguageId,
-    }),
-  );
-  let skillDirectoriesSaveDisabled = $derived(
-    loading ||
-      saving ||
-      directoriesMatch(skillDirectories, getSkillDirectories(settings)),
-  );
   let agentDefaultsSaveDisabled = $derived(
     loading || saving || agentDefaultsMatch(agentDefaults, settings),
   );
@@ -459,8 +429,6 @@
     loadSettings();
 
     return () => {
-      clearLanguageAutoSaveTimer();
-      clearSkillDirectoriesAutoSaveTimer();
       clearCompactionSettingsAutoSaveTimer();
       clearDebugSettingsAutoSaveTimer();
     };
@@ -486,44 +454,6 @@
       handledProviderAuthEvent = providerAuthEvent;
       handleProviderAuthEvent(providerAuthEvent);
     }
-  });
-
-  $effect(() => {
-    if (activePanelId !== 'appearance') {
-      return;
-    }
-
-    if (saveDisabled) {
-      return;
-    }
-
-    languageAutoSaveTimer = setTimeout(() => {
-      languageAutoSaveTimer = null;
-      void saveLanguage();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearLanguageAutoSaveTimer();
-    };
-  });
-
-  $effect(() => {
-    if (activePanelId !== 'skills') {
-      return;
-    }
-
-    if (skillDirectoriesSaveDisabled) {
-      return;
-    }
-
-    skillDirectoriesAutoSaveTimer = setTimeout(() => {
-      skillDirectoriesAutoSaveTimer = null;
-      void saveSkillDirectories();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearSkillDirectoriesAutoSaveTimer();
-    };
   });
 
   $effect(() => {
@@ -612,13 +542,10 @@
     settings = nextSettings;
 
     const language = nextSettings?.appearance?.language ?? 'en';
-    selectedLanguageId = language;
-    skillDirectories = getSkillDirectories(nextSettings);
     agentDefaults = normalizeAgentDefaultsFormValues(nextSettings);
     compactionSettings = getCompactionSettings(nextSettings);
     debugSettings = getDebugSettings(nextSettings);
     taskModelBindings = normalizeTaskModelSettings(nextSettings);
-    newSkillDirectory = '';
     init(language);
   }
 
@@ -637,56 +564,6 @@
       loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;
     } finally {
       loading = false;
-    }
-  }
-
-  async function saveLanguage() {
-    if (saveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc('settings.update', {
-        ...createLanguageUpdatePayload(selectedLanguageId),
-      });
-      commitSettings(nextSettings);
-      init(selectedLanguageId);
-      showSettingsToast(
-        t('settings.appearance.saveSuccess', 'Language preference updated.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function saveSkillDirectories() {
-    if (skillDirectoriesSaveDisabled) {
-      return;
-    }
-
-    saving = true;
-    saveError = '';
-
-    try {
-      const nextSettings = await rpc(
-        'settings.update',
-        createSkillDirectoriesUpdatePayload(skillDirectories),
-      );
-      commitSettings(nextSettings);
-      showSettingsToast(
-        t('settings.skills.saveSuccess', 'Skill directories updated.'),
-        'success',
-      );
-    } catch (error) {
-      saveError = `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`;
-    } finally {
-      saving = false;
     }
   }
 
@@ -850,20 +727,6 @@
     }
   }
 
-  function clearLanguageAutoSaveTimer() {
-    if (languageAutoSaveTimer !== null) {
-      clearTimeout(languageAutoSaveTimer);
-      languageAutoSaveTimer = null;
-    }
-  }
-
-  function clearSkillDirectoriesAutoSaveTimer() {
-    if (skillDirectoriesAutoSaveTimer !== null) {
-      clearTimeout(skillDirectoriesAutoSaveTimer);
-      skillDirectoriesAutoSaveTimer = null;
-    }
-  }
-
   function clearCompactionSettingsAutoSaveTimer() {
     if (compactionSettingsAutoSaveTimer !== null) {
       clearTimeout(compactionSettingsAutoSaveTimer);
@@ -880,34 +743,6 @@
 
   function showAlreadySavedToast() {
     showSettingsToast(t('common.alreadySaved', 'Already saved'), 'success');
-  }
-
-  function handleManualLanguageSave() {
-    if (saving) {
-      return;
-    }
-
-    if (saveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearLanguageAutoSaveTimer();
-    void saveLanguage();
-  }
-
-  function handleManualSkillDirectoriesSave() {
-    if (saving) {
-      return;
-    }
-
-    if (skillDirectoriesSaveDisabled) {
-      showAlreadySavedToast();
-      return;
-    }
-
-    clearSkillDirectoriesAutoSaveTimer();
-    void saveSkillDirectories();
   }
 
   function handleManualAgentDefaultsSave() {
@@ -948,39 +783,6 @@
     }
 
     void saveTaskModelBindings();
-  }
-
-  function addSkillDirectory() {
-    const directory = newSkillDirectory.trim();
-    if (!directory) {
-      return;
-    }
-
-    if (!skillDirectories.includes(directory)) {
-      skillDirectories = [...skillDirectories, directory];
-    }
-
-    newSkillDirectory = '';
-    saveError = '';
-  }
-
-  function removeSkillDirectory(directory) {
-    skillDirectories = skillDirectories.filter((item) => item !== directory);
-    saveError = '';
-  }
-
-  function handleLanguageChange(event) {
-    selectedLanguageId = event.currentTarget.value;
-    saveError = '';
-  }
-
-  function handleSkillDirectoryKeydown(event) {
-    if (event.key !== 'Enter') {
-      return;
-    }
-
-    event.preventDefault();
-    addSkillDirectory();
   }
 
   function handleAgentDefaultsChange(key, value) {
@@ -1118,14 +920,6 @@
       normalizedLeft.enabled === normalizedRight.enabled &&
       normalizedLeft.trace_limit === normalizedRight.trace_limit
     );
-  }
-
-  function directoriesMatch(left, right) {
-    if (left.length !== right.length) {
-      return false;
-    }
-
-    return left.every((item, index) => item === right[index]);
   }
 
   function agentDefaultsMatch(left, right) {
@@ -1719,104 +1513,12 @@
             </button>
           </div>
         {:else if activePanelId === 'skills'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t(
-                  'settings.skills.defaultDirectory',
-                  'Default skill directory',
-                )}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.skills.defaultDirectoryDescription',
-                  'Always scanned from the vBot data directory and kept read-only here.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--input">
-              <div class="s-value-box">{defaultSkillDirectoryValue}</div>
-            </div>
-          </div>
-
-          <div class="s-row s-row--stacked">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t(
-                  'settings.skills.extraDirectories',
-                  'Additional skill directories',
-                )}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.skills.extraDirectoriesDescription',
-                  'Absolute or home-relative paths from settings.json skill_directories.',
-                )}
-              </div>
-            </div>
-
-            <div class="s-skill-directory-list">
-              {#if skillDirectories.length === 0}
-                <div class="s-feedback s-feedback--neutral s-feedback--compact">
-                  {t(
-                    'settings.skills.emptyDirectories',
-                    'No additional skill directories configured.',
-                  )}
-                </div>
-              {:else}
-                {#each skillDirectories as directory (directory)}
-                  <div class="s-skill-directory-item">
-                    <span>{directory}</span>
-                    <button
-                      class="btn-outline s-directory-remove"
-                      type="button"
-                      aria-label={t(
-                        'settings.skills.removeDirectory',
-                        'Remove skill directory {path}',
-                        { path: directory },
-                      )}
-                      onclick={() => removeSkillDirectory(directory)}
-                    >
-                      {t('common.remove', 'Remove')}
-                    </button>
-                  </div>
-                {/each}
-              {/if}
-            </div>
-
-            <div class="s-skill-directory-add">
-              <input
-                class="s-input"
-                type="text"
-                bind:value={newSkillDirectory}
-                placeholder={t(
-                  'settings.skills.pathPlaceholder',
-                  'C:/path/to/skills',
-                )}
-                onkeydown={handleSkillDirectoryKeydown}
-              />
-              <button
-                class="btn-outline"
-                type="button"
-                disabled={!newSkillDirectory.trim()}
-                onclick={addSkillDirectory}
-              >
-                {t('settings.skills.addDirectory', 'Add directory')}
-              </button>
-            </div>
-
-            <div class="s-sticky-footer">
-              <button
-                class="btn-primary s-save-button s-save-button--inline"
-                type="button"
-                onclick={handleManualSkillDirectoriesSave}
-              >
-                {saving
-                  ? t('common.saving', 'Saving…')
-                  : t('common.save', 'Save')}
-              </button>
-            </div>
-          </div>
+          <SettingsSkillsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {:else if activePanelId === 'subagents'}
           <SettingsSubAgentsPanel
             {settings}
@@ -2525,48 +2227,12 @@
         {:else if activePanelId === 'voice'}
           <WakewordVoiceSettings {agents} {onToast} />
         {:else if activePanelId === 'appearance'}
-          <div class="s-row">
-            <div class="s-row-info">
-              <div class="s-row-label">
-                {t('settings.appearance.language', 'Language')}
-              </div>
-              <div class="s-row-desc">
-                {t(
-                  'settings.appearance.languageDescription',
-                  'Interface language.',
-                )}
-              </div>
-            </div>
-            <div class="s-row-control s-row-control--appearance">
-              <select
-                bind:value={selectedLanguageId}
-                class="s-select"
-                aria-label={t('settings.appearance.language', 'Language')}
-                disabled={loading ||
-                  saving ||
-                  availableLanguageOptions.length <= 1}
-                onchange={handleLanguageChange}
-              >
-                {#each availableLanguageOptions as language (language.id)}
-                  <option value={language.id}>
-                    {t(language.labelKey, language.labelFallback)}
-                  </option>
-                {/each}
-              </select>
-            </div>
-          </div>
-
-          <div class="s-sticky-footer">
-            <button
-              class="btn-primary s-save-button s-save-button--inline"
-              type="button"
-              onclick={handleManualLanguageSave}
-            >
-              {saving
-                ? t('common.saving', 'Saving…')
-                : t('common.save', 'Save')}
-            </button>
-          </div>
+          <SettingsAppearancePanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => (saveError = message)}
+          />
         {/if}
       {/if}
     </div>
