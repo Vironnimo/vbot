@@ -230,18 +230,44 @@ Ordering: **low risk + clean seam + good test coverage first**, central/risky la
   - Panels that load lazily on select (`onMount` in the child) match the established
     voice-panel pattern; the old parent caching (`channelsLoaded` guard) drops out.
 
-  **Remaining panels** (still inline in `SettingsView`, share the `settings`/`saving`/
-  `commitSettings`/auto-save-`$effect`/`saveXxx` pattern — see `applySettings` and the
-  per-panel `$effect` blocks): defaults, skills, subagents, compaction, recall,
-  web_search, debug, specialized_models, providers, general, appearance. These DO read
-  the shared loaded `settings` object, so each child should take `settings` (or its
-  slice) + an `onCommit(nextSettings)` callback + `onToast`, own its form state +
-  auto-save `$effect` + `saveXxx`. `providers` is the most coupled (uses
-  `providerAuthEvent`/`connectProvider`/`disconnectProvider` props + exported
-  `handleProviderAuthCompleted` + `model.refresh_db`). `specialized_models` uses
-  `taskModelSettings.js`. Spec: `.vorch/specs/webui.md` already says "SettingsView…
-  own Settings panel state" — per §4 step 5, no inventory needed; the per-panel split
-  is internal. Box stays unchecked until the container is thin.
+  **Remaining panels** (still inline in `SettingsView`): defaults, skills, subagents,
+  compaction, recall, web_search, debug, specialized_models, providers, general,
+  appearance. Unlike Channels these read the **shared loaded `settings` object**, so
+  they need the shared-settings contract below. Note the parent groups code **by kind,
+  not by panel** — each panel's pieces are scattered across the script (all `$state`
+  together near L330, all `$derived` `…SaveDisabled` near L450, all auto-save `$effect`
+  blocks near L560, the `saveXxx`/`clearXxxTimer`/`handleManualXxxSave`/`handleXxxChange`/
+  `xxxMatch` fns spread through L800–L1500, plus a line in `applySettings`). So each
+  extraction is ~10 small edits in the parent + one new child. Use a Python splice
+  script with `assert`-guarded anchors (as with Channels) rather than hand-editing.
+
+  **Validated shared-settings child contract** (worked out, not yet executed):
+  props `{ settings, onCommit, onToast, onError }` where the parent wires
+  `onCommit={commitSettings}` (updates parent `settings`), `{onToast}` (parent's prop),
+  `onError={(msg) => (saveError = msg)}` (the `saveError` banner is **shared**, rendered
+  in the parent header above every panel — the child must keep using it, calling
+  `onError('')` on field change + at save start, `onError(msg)` on save failure, exactly
+  as the inline `saveXxx`/`handleXxxChange` do today). The child owns: form `$state`
+  seeded `normalizeXxx(settings)`, a **child-local** `saving` flag (drop the parent
+  `loading`/`saving` from `saveDisabled` — the child only mounts when its panel is
+  active, so those are unobservable here; behavior-equivalent), `saveDisabled =
+  saving || xxxMatch(form, normalizeXxx(settings))`, and the auto-save `$effect`
+  **without** the `activePanelId !== 'x'` guard (the child only exists while active):
+  `$effect(() => { if (saveDisabled) return; timer = setTimeout(save, 800); return () =>
+  clearTimer(); })`, plus `onDestroy(clearTimer)`. `saveXxx` does
+  `rpc('settings.update', buildXxxPayload(form))` → `onCommit(next)` → success toast;
+  panels that re-seed after save (agentDefaults/recall/web_search/debug) keep that line.
+  `debug` also needs an `onDebugEnabledChange` prop. `defaults`/`compaction` additionally
+  need the model picker (`availableModels`/`availableConnections`, loaded lazily in the
+  parent today via `ensureModelCatalogsLoaded` — either load in the child on mount or
+  pass the catalogs down). `providers` is the most coupled (props `providerAuthEvent`/
+  `connectProvider`/`disconnectProvider` + exported `handleProviderAuthCompleted` +
+  `model.refresh_db` + the header refresh button) — do it last. `specialized_models`
+  uses `taskModelSettings.js`, lazy-loads targets/schemas on mount, and has **no test
+  coverage** — extract it carefully (build/eslint only safety net). Spec
+  `.vorch/specs/webui.md` already says "SettingsView… own Settings panel state"; per §4
+  step 5 no inventory is needed, the split is internal. Box stays unchecked until the
+  container is thin.
 
 - [ ] **`chatState.js` (1927)** — two concerns: session/run state mutation **+**
   timeline projection (`buildVisibleTimelineItems`, `liveTimelineItems`,
