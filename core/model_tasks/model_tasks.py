@@ -200,11 +200,19 @@ class TaskModelService:
         """Return the backend-owned option schema for a target.
 
         Provider targets get their option schema from the task/provider
-        defaults in :mod:`core.model_tasks.options`. Local targets get
-        the schema declared by the registered descriptor — future
-        user-configured local engines advertise their own fields through
-        ``LocalTaskTargetDescriptor.option_fields`` so the Settings UI
-        can render them generically.
+        defaults in :mod:`core.model_tasks.options`, which is now
+        model-aware: we resolve the target's :class:`core.models.Model`
+        from the injected registry and pass its capabilities (voice list,
+        supported parameters) and ``model_id`` (for family-specific
+        Recraft/Sourceful image profiles and aspect-ratio/image-size
+        exceptions) to the schema builder. If the model is missing from
+        the registry we fall back to the provider-level conservative
+        schema that the model-aware branches extend.
+
+        Local targets get the schema declared by the registered
+        descriptor — future user-configured local engines advertise their
+        own fields through ``LocalTaskTargetDescriptor.option_fields`` so
+        the Settings UI can render them generically.
         """
 
         normalized_task_type = validate_task_type(task_type)
@@ -216,11 +224,31 @@ class TaskModelService:
                 target=target_ref.target,
                 fields=descriptor.option_fields,
             )
+        model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
         return option_schema_for(
             normalized_task_type,
             target_ref.provider_id,
             target_ref.target,
+            model=model,
         )
+
+    def _resolve_model(self, provider_id: str, model_id: str) -> Any | None:
+        """Return the registry's ``Model`` for *(provider_id, model_id)*, or ``None``.
+
+        Returns ``None`` when the registry has no ``get`` method (test
+        double missing the seam) or when the lookup raises ``KeyError``
+        (model not in the catalog, e.g. an override-only entry that has
+        not been refreshed yet). The model-aware schema builder treats
+        ``None`` as "fall back to provider-level conservative defaults".
+        """
+
+        get_model = getattr(self._models, "get", None)
+        if not callable(get_model):
+            return None
+        try:
+            return get_model(provider_id, model_id)
+        except KeyError:
+            return None
 
     def options_with_defaults(self, binding: TaskModelBinding) -> JsonObject:
         """Return binding options merged over schema defaults."""

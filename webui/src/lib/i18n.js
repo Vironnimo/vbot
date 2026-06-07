@@ -486,6 +486,10 @@ export const englishCatalog = Object.freeze({
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.noOptions':
     'This target has no configurable options.',
+  'settings.specializedModels.jsonPlaceholder':
+    'e.g. [{"text":"hello","bbox":[[0,0],[1,0],[1,1],[0,1]]}]',
+  'settings.specializedModels.jsonInvalid': 'Invalid JSON',
+
   'settings.providers.title': 'Providers',
   'settings.providers.subtitle':
     'Credential status and endpoint metadata for available providers.',

@@ -12,6 +12,12 @@ vi.mock('svelte', async () => {
 
 vi.mock('$lib/api.js', () => ({
   rpc: (...args) => rpcMock(...args),
+  getTaskModelOptions: (taskType, target) =>
+    rpcMock('task_model.options', { task_type: taskType, target }),
+  listTaskModelTargets: (taskType) =>
+    rpcMock('task_model.list_targets', { task_type: taskType }),
+  updateTaskModelSettings: (modelTasks) =>
+    rpcMock('task_model.update', { model_tasks: modelTasks }),
 }));
 
 const { default: SettingsView } = await import('../SettingsView.svelte');
@@ -746,6 +752,234 @@ describe('SettingsView', () => {
       },
     });
   });
+
+  it('renders a json option field and stores the parsed structure on valid input', async () => {
+    const target = 'openrouter/recraft/recraft-v3::api-key';
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        taskModelTargets: [
+          {
+            id: target,
+            kind: 'provider',
+            provider_id: 'openrouter',
+            model_id: 'recraft/recraft-v3',
+            connection_id: 'openrouter:api-key',
+            connection_label: 'API Key',
+            label: 'Recraft v3',
+            task_types: ['image_generation'],
+            usable: true,
+          },
+        ],
+        taskModelOptions: {
+          [target]: {
+            schema: {
+              task_type: 'image_generation',
+              target,
+              fields: [
+                {
+                  name: 'text_layout',
+                  type: 'json',
+                  label: 'Text layout',
+                  default: [],
+                  description: 'Array of {text, bbox} entries (recraft-v3).',
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: {
+        targetPanelId: 'specialized_models',
+        targetPanelRequestId: 1,
+      },
+    });
+    flushSync();
+    await openSpecializedModelsPanel();
+
+    openSimpleDropdown('settings-specialized-image_generation');
+    await waitForCondition(() => getSimpleList() !== null);
+    selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
+
+    await waitForCondition(
+      () => document.body.querySelector('.s-textarea--json') !== null,
+    );
+
+    const jsonTextarea = document.body.querySelector('.s-textarea--json');
+    expect(jsonTextarea).toBeTruthy();
+    // Default empty array serializes to "[]" — confirms the renderer
+    // stringifies structured defaults rather than treating them as text.
+    expect(jsonTextarea.value).toBe('[]');
+    expect(jsonTextarea.getAttribute('aria-invalid')).toBe('false');
+
+    const validText = JSON.stringify([
+      {
+        text: 'hi',
+        bbox: [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+        ],
+      },
+    ]);
+    setTextareaValue('.s-textarea--json', validText);
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.s-field-error') === null &&
+        jsonTextarea.getAttribute('aria-invalid') === 'false',
+    );
+
+    // Save and inspect what reached the settings update — must be the
+    // parsed array, not the raw JSON string.
+    vi.useFakeTimers();
+    getButton('Save').click();
+    vi.advanceTimersByTime(1);
+    await flushAsyncUpdates();
+    vi.useRealTimers();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'task_model.update' &&
+          call[1]?.model_tasks?.image_generation?.options?.text_layout !==
+            undefined,
+      ),
+    );
+
+    const updateCall = rpcMock.mock.calls
+      .filter((call) => call[0] === 'task_model.update')
+      .pop();
+    expect(updateCall[1].model_tasks.image_generation.target).toBe(target);
+    expect(
+      updateCall[1].model_tasks.image_generation.options.text_layout,
+    ).toEqual([
+      {
+        text: 'hi',
+        bbox: [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 1],
+        ],
+      },
+    ]);
+  });
+
+  it('shows an inline parse error for invalid JSON and does not update the binding', async () => {
+    const target = 'openrouter/recraft/recraft-v3::api-key';
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        taskModelTargets: [
+          {
+            id: target,
+            kind: 'provider',
+            provider_id: 'openrouter',
+            model_id: 'recraft/recraft-v3',
+            connection_id: 'openrouter:api-key',
+            connection_label: 'API Key',
+            label: 'Recraft v3',
+            task_types: ['image_generation'],
+            usable: true,
+          },
+        ],
+        taskModelOptions: {
+          [target]: {
+            schema: {
+              task_type: 'image_generation',
+              target,
+              fields: [
+                {
+                  name: 'text_layout',
+                  type: 'json',
+                  label: 'Text layout',
+                  default: [],
+                },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: {
+        targetPanelId: 'specialized_models',
+        targetPanelRequestId: 1,
+      },
+    });
+    flushSync();
+    await openSpecializedModelsPanel();
+
+    openSimpleDropdown('settings-specialized-image_generation');
+    await waitForCondition(() => getSimpleList() !== null);
+    selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
+
+    await waitForCondition(
+      () => document.body.querySelector('.s-textarea--json') !== null,
+    );
+
+    setTextareaValue('.s-textarea--json', '[{"text": "hi"');
+
+    await waitForCondition(
+      () => document.body.querySelector('.s-field-error') !== null,
+    );
+
+    const jsonTextarea = document.body.querySelector('.s-textarea--json');
+    expect(jsonTextarea.getAttribute('aria-invalid')).toBe('true');
+    expect(document.body.querySelector('.s-field-error')).toBeTruthy();
+    expect(document.body.textContent).toContain('Invalid JSON');
+
+    // The parse error means the typed text was NOT applied to the
+    // binding — saving now persists only the default `[]` (from the
+    // schema), not the malformed string the user typed.
+    vi.useFakeTimers();
+    getButton('Save').click();
+    vi.advanceTimersByTime(1);
+    await flushAsyncUpdates();
+    vi.useRealTimers();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some((call) => call[0] === 'task_model.update'),
+    );
+
+    const updateCall = rpcMock.mock.calls
+      .filter((call) => call[0] === 'task_model.update')
+      .pop();
+    expect(updateCall[1].model_tasks.image_generation.target).toBe(target);
+    // The options either contain the parsed default (empty array) or no
+    // text_layout key at all — never the malformed input string.
+    const savedTextLayout =
+      updateCall[1].model_tasks.image_generation.options?.text_layout;
+    expect(savedTextLayout).not.toBe('[{"text": "hi"');
+    expect(
+      savedTextLayout === undefined || Array.isArray(savedTextLayout),
+    ).toBe(true);
+
+    // Repairing the input clears the error and lets the binding update.
+    setTextareaValue(
+      '.s-textarea--json',
+      JSON.stringify([
+        {
+          text: 'repaired',
+          bbox: [
+            [0, 0],
+            [1, 1],
+          ],
+        },
+      ]),
+    );
+
+    await waitForCondition(
+      () => document.body.querySelector('.s-field-error') === null,
+    );
+    expect(jsonTextarea.getAttribute('aria-invalid')).toBe('false');
+  });
 });
 
 async function openProvidersPanel() {
@@ -810,6 +1044,20 @@ async function openDefaultsPanel() {
   );
 }
 
+async function openSpecializedModelsPanel() {
+  // Settings must have loaded at least once (the panel depends on the
+  // outer settings to be hydrated before it fires its own RPCs).
+  await waitForCondition(() =>
+    rpcMock.mock.calls.some((call) => call[0] === 'settings.get'),
+  );
+  // The panel itself calls task_model.list_targets on mount; waiting
+  // for that call is the strongest signal the panel is mounted and
+  // its first paint is committed.
+  await waitForCondition(() =>
+    rpcMock.mock.calls.some((call) => call[0] === 'task_model.list_targets'),
+  );
+}
+
 async function waitForModelCatalogs() {
   await waitForCondition(
     () =>
@@ -858,6 +1106,14 @@ function setInputValue(selector, value) {
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+function setTextareaValue(selector, value) {
+  const textarea = document.body.querySelector(selector);
+  expect(textarea).toBeTruthy();
+  textarea.value = value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 }
 
@@ -1000,6 +1256,15 @@ function createSettingsRpcMock(options = {}) {
         },
       ];
     }),
+  );
+  const taskModelTargets = Array.isArray(options.taskModelTargets)
+    ? options.taskModelTargets.map((target) => ({ ...target }))
+    : [];
+  const taskModelOptionsByTarget = new Map(
+    Object.entries(options.taskModelOptions ?? {}).map(([targetId, schema]) => [
+      targetId,
+      deepClone(schema),
+    ]),
   );
 
   return async (method, params = {}) => {
@@ -1144,6 +1409,34 @@ function createSettingsRpcMock(options = {}) {
       return { ok: true };
     }
 
+    if (method === 'task_model.list_targets') {
+      return {
+        targets: taskModelTargets
+          .filter((target) =>
+            Array.isArray(target.task_types)
+              ? target.task_types.includes(params.task_type)
+              : target.task_type === params.task_type,
+          )
+          .map((target) => ({ ...target })),
+      };
+    }
+
+    if (method === 'task_model.options') {
+      const schema = taskModelOptionsByTarget.get(params.target);
+      if (!schema) {
+        throw new Error(`No task model options for target: ${params.target}`);
+      }
+      return deepClone(schema);
+    }
+
+    if (method === 'task_model.update') {
+      const nextModelTasks = deepClone(params.model_tasks ?? {});
+      currentSettings = mergeSettingsPayload(currentSettings, {
+        model_tasks: nextModelTasks,
+      });
+      return { model_tasks: deepClone(nextModelTasks) };
+    }
+
     throw new Error(`Unexpected RPC method: ${method}`);
   };
 }
@@ -1233,6 +1526,13 @@ function mergeSettingsPayload(currentSettings, patch) {
 
       nextSettings.defaults.agent = nextAgentDefaults;
     }
+  }
+
+  if (patch?.model_tasks && typeof patch.model_tasks === 'object') {
+    nextSettings.model_tasks = {
+      ...(nextSettings.model_tasks ?? {}),
+      ...deepClone(patch.model_tasks),
+    };
   }
 
   return nextSettings;
