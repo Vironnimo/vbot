@@ -20,7 +20,7 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 ## Catalog Normalization
 
 - Reads OpenRouter `/models` fields such as `architecture.input_modalities`, `architecture.output_modalities`, `architecture.modality`, `supported_parameters`, `context_length`, and `top_provider.max_completion_tokens`.
-- The default `/models` response omits some non-text-output models. `OpenRouterAdapter.supplementary_discovery_params()` adds discovery fetches for `output_modalities=transcription`, `speech`, and `image`; discovery merges and deduplicates those models by id.
+- The default `/models` response only returns text-output models. `OpenRouterAdapter.supplementary_discovery_params()` adds discovery fetches for `output_modalities=transcription`, `speech`, `image`, `audio`, and `video`; discovery merges and deduplicates those models by id. The `video` fetch is what populates the `video_generation` task type, and `audio` covers generic audio-generation models that do not also expose text output.
 - If `top_provider.max_completion_tokens` is missing or `null`, normalized `max_output_tokens` stays `null` instead of copying request defaults.
 - Normalized capabilities preserve input/output modalities, supported parameters, derived task types, and small runtime metadata under `metadata.openrouter`.
 

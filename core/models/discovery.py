@@ -98,7 +98,8 @@ async def refresh_models(
 
         # Some providers (e.g. OpenRouter) require supplementary API calls
         # with different query parameters to discover dedicated task models
-        # (STT, TTS) that are excluded from the default model listing.
+        # (STT, TTS, image/audio/video generation) excluded from the default
+        # model listing.
         supplementary_params = _get_supplementary_params(adapter_class)
         if supplementary_params:
             seen_ids = {m.get("id") for m in raw_models if isinstance(m.get("id"), str)}
@@ -123,9 +124,11 @@ async def refresh_models(
                 for model in supplementary_models:
                     model_id = model.get("id")
                     if isinstance(model_id, str) and model_id not in seen_ids:
+                        # ``raw_models`` is the same list object held inside
+                        # ``raw_payload`` (see ``_fetch_raw_models``), so this
+                        # single append also extends the persisted raw payload.
                         raw_models.append(model)
                         seen_ids.add(model_id)
-                        _append_raw_payload_model(raw_payload, model)
 
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -245,14 +248,6 @@ def _raw_models_from_payload(payload: Any) -> Any:
     if "data" in payload:
         return payload.get("data")
     return payload.get("models")
-
-
-def _append_raw_payload_model(raw_payload: Any, model: Mapping[str, Any]) -> None:
-    if not isinstance(raw_payload, dict):
-        return
-    raw_models = _raw_models_from_payload(raw_payload)
-    if isinstance(raw_models, list):
-        raw_models.append(model)
 
 
 def _build_headers(
