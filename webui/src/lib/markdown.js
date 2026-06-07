@@ -19,6 +19,33 @@ md.renderer.rules['link_open'] = (tokens, idx, options, env, self) => {
   return defaultLinkOpenRender(tokens, idx, options, env, self);
 };
 
+// Rendering is pure for a given source string, so we memoize results. The chat
+// timeline rebuilds every visible item on each streaming flush (~30x/second),
+// which would otherwise re-parse the Markdown of every finished message on every
+// tick. The cache turns those into O(1) lookups; only the one actively
+// streaming block (whose source keeps changing) misses and re-parses. The cache
+// is bounded with least-recently-used eviction so it cannot grow without limit.
+const RENDER_CACHE_LIMIT = 300;
+const renderCache = new Map();
+
+function cachedRender(src) {
+  const cached = renderCache.get(src);
+  if (cached !== undefined) {
+    // Refresh recency: move the entry to the end of the insertion order.
+    renderCache.delete(src);
+    renderCache.set(src, cached);
+    return cached;
+  }
+
+  const html = md.render(src);
+  renderCache.set(src, html);
+  if (renderCache.size > RENDER_CACHE_LIMIT) {
+    const oldestKey = renderCache.keys().next().value;
+    renderCache.delete(oldestKey);
+  }
+  return html;
+}
+
 function escapeHtml(value) {
   return value
     .replaceAll('&', '&amp;')
@@ -38,7 +65,7 @@ function lastUnclosedFenceIndex(src) {
 
 export function renderMarkdown(src) {
   if (!src) return '';
-  return md.render(src);
+  return cachedRender(src);
 }
 
 export function renderMarkdownStreaming(src) {
