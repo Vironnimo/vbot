@@ -1,4 +1,14 @@
-"""Local task-model target registration hooks."""
+"""Local task-model target registration hooks.
+
+Local targets bypass provider catalogs and credentials — a descriptor
+declares the option schema the Settings UI should render for the local
+engine, and the execution domain later dispatches to it. The registry
+starts empty; user-configurable local engines (Whisper, Piper, local
+video, …) will be added in a follow-up phase by constructing descriptors
+from persisted user settings. The descriptor-owned option schema seam is
+prepared here so that future engines can declare their own fields without
+touching provider option code.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.model_tasks.constants import SUPPORTED_TASK_TYPES
+from core.model_tasks.options import TaskModelOptionField
 from core.utils.errors import VBotError
 
 
@@ -15,13 +26,21 @@ class LocalTaskTargetError(VBotError):
 
 @dataclass(frozen=True)
 class LocalTaskTargetDescriptor:
-    """Description of a local task target such as a future Whisper backend."""
+    """Description of a local task target such as a future Whisper backend.
+
+    ``option_fields`` carries the descriptor-owned option schema the
+    Settings UI should render for this local engine, in the same
+    :class:`TaskModelOptionField` shape used by provider option schemas.
+    Empty by default so existing descriptors are unaffected; future
+    user-configured engines will populate this from user settings.
+    """
 
     id: str
     label: str
     task_types: tuple[str, ...]
     usable: bool = True
     metadata: dict[str, Any] | None = None
+    option_fields: tuple[TaskModelOptionField, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id or "/" in self.id or "::" in self.id:
@@ -33,6 +52,7 @@ class LocalTaskTargetDescriptor:
             raise ValueError(f"Unsupported local task types: {', '.join(invalid_task_types)}")
         object.__setattr__(self, "task_types", tuple(dict.fromkeys(self.task_types)))
         object.__setattr__(self, "metadata", dict(self.metadata or {}))
+        object.__setattr__(self, "option_fields", tuple(self.option_fields))
 
     @property
     def public_id(self) -> str:

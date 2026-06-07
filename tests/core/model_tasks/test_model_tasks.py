@@ -8,16 +8,20 @@ from typing import cast
 import pytest
 
 from core.model_tasks import (
+    SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
     TaskModelBinding,
+    TaskModelOptionField,
     TaskModelService,
     TaskModelValidationError,
     parse_task_model_target_id,
+    validate_task_type,
 )
+from core.model_tasks import constants as model_task_constants
 from core.models import Model, ModelQuery
 
 
@@ -238,6 +242,158 @@ def test_options_with_defaults_merges_binding_values() -> None:
     assert options["voice"] == "nova"
     assert options["response_format"] == "mp3"
     assert options["speed"] == 1.0
+
+
+def test_options_for_local_descriptor_surfaces_descriptor_option_fields() -> None:
+    """A test-only local descriptor carrying option fields exposes them via
+    ``task_model.options``. The descriptor owns the schema — provider option
+    code is not involved."""
+
+    local_registry = LocalTaskTargetRegistry(
+        [
+            LocalTaskTargetDescriptor(
+                id="whisper-local",
+                label="Local Whisper",
+                task_types=(TASK_SPEECH_TO_TEXT,),
+                option_fields=(
+                    TaskModelOptionField(
+                        name="language",
+                        type="text",
+                        label="Language",
+                        default="auto",
+                    ),
+                    TaskModelOptionField(
+                        name="beam_size",
+                        type="number",
+                        label="Beam size",
+                        default=5,
+                        min_value=1,
+                        max_value=10,
+                    ),
+                ),
+            )
+        ]
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models([]),
+        _Credentials(),
+        _Storage(),
+        local_targets=local_registry,
+    )
+
+    schema = service.options(TASK_SPEECH_TO_TEXT, "local/whisper-local")
+
+    assert schema.task_type == TASK_SPEECH_TO_TEXT
+    assert schema.target == "local/whisper-local"
+    assert [field.name for field in schema.fields] == ["language", "beam_size"]
+    assert schema.default_options() == {"language": "auto", "beam_size": 5}
+
+
+def test_options_for_local_descriptor_without_option_fields_returns_empty_schema() -> None:
+    """A local descriptor that declares no option fields still produces a
+    valid (empty) schema — pre-existing descriptors without options stay
+    backward-compatible."""
+
+    local_registry = LocalTaskTargetRegistry(
+        [
+            LocalTaskTargetDescriptor(
+                id="whisper-local",
+                label="Local Whisper",
+                task_types=(TASK_SPEECH_TO_TEXT,),
+            )
+        ]
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models([]),
+        _Credentials(),
+        _Storage(),
+        local_targets=local_registry,
+    )
+
+    schema = service.options(TASK_SPEECH_TO_TEXT, "local/whisper-local")
+
+    assert schema.task_type == TASK_SPEECH_TO_TEXT
+    assert schema.target == "local/whisper-local"
+    assert schema.fields == ()
+    assert schema.default_options() == {}
+
+
+def test_options_with_defaults_uses_descriptor_fields_for_local_target() -> None:
+    """``options_with_defaults`` merges descriptor-owned defaults for a local
+    target, just like it does for provider targets."""
+
+    local_registry = LocalTaskTargetRegistry(
+        [
+            LocalTaskTargetDescriptor(
+                id="whisper-local",
+                label="Local Whisper",
+                task_types=(TASK_SPEECH_TO_TEXT,),
+                option_fields=(
+                    TaskModelOptionField(
+                        name="language",
+                        type="text",
+                        label="Language",
+                        default="auto",
+                    ),
+                ),
+            )
+        ]
+    )
+    service = TaskModelService(
+        _Providers(),
+        _Models([]),
+        _Credentials(),
+        _Storage(),
+        local_targets=local_registry,
+    )
+    binding = TaskModelBinding(
+        task_type=TASK_SPEECH_TO_TEXT,
+        target="local/whisper-local",
+        options={"language": "en"},
+    )
+
+    options = service.options_with_defaults(binding)
+
+    # User value wins over descriptor default.
+    assert options == {"language": "en"}
+
+
+def test_options_for_provider_target_unchanged() -> None:
+    """The provider branch of ``options()`` still uses the
+    task/provider option code in :mod:`core.model_tasks.options` —
+    descriptor-owned fields do not leak into provider schemas."""
+
+    service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
+
+    schema = service.options(
+        TASK_SPEECH_TO_TEXT,
+        "openrouter/openai/gpt-4o-transcribe::api-key",
+    )
+
+    field_names = [field.name for field in schema.fields]
+    assert "language" in field_names
+    assert "temperature" in field_names
+
+
+def test_image_edit_vocabulary_removed_from_constants() -> None:
+    """``TASK_IMAGE_EDIT`` and the string ``"image_edit"`` are gone from the
+    task-model vocabulary. ``SUPPORTED_TASK_TYPES`` and the exported constant
+    names no longer mention image-edit."""
+
+    assert not hasattr(model_task_constants, "TASK_IMAGE_EDIT")
+    assert "image_edit" not in SUPPORTED_TASK_TYPES
+    assert "image_edit" not in set(dir(model_task_constants))
+
+
+def test_validate_task_type_rejects_image_edit() -> None:
+    """``validate_task_type`` rejects ``"image_edit"`` with a clear message —
+    removing the constant does not accidentally let the dead vocabulary
+    back in via string equality."""
+
+    with pytest.raises(TaskModelValidationError, match="Unsupported task type 'image_edit'"):
+        validate_task_type("image_edit")
 
 
 def _model(

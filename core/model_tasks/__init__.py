@@ -3,7 +3,6 @@
 from core.model_tasks.constants import (
     SPEECH_TASK_TYPES,
     SUPPORTED_TASK_TYPES,
-    TASK_IMAGE_EDIT,
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
@@ -40,7 +39,6 @@ __all__ = [
     "LocalTaskTargetRegistry",
     "SPEECH_TASK_TYPES",
     "SUPPORTED_TASK_TYPES",
-    "TASK_IMAGE_EDIT",
     "TASK_IMAGE_GENERATION",
     "TASK_SPEECH_TO_TEXT",
     "TASK_TEXT_TO_SPEECH",
