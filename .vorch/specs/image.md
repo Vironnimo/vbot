@@ -18,7 +18,7 @@ Provider-neutral image generation execution and artifact storage for the configu
 
 ## Provider Wire Behavior
 
-OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` built from the task-model options. Only known `image_config` keys present in the options dict are forwarded — absent keys are never invented.
+OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` built from the task-model options. Only known `image_config` keys present in the options dict are forwarded — absent keys are never invented. Empty placeholder values (`None`, `""`, `[]`, `{}`) are treated as unset and dropped, because the option schema injects empty defaults for optional text/json fields (e.g. `background_hex_color: ""`, empty `font_inputs`) that the provider would otherwise reject; numeric `0`/`0.0` and `False` are real values and are kept. The same empty-placeholder omission applies to the OpenAI `/v1/images/generations` keys.
 
 Universal image_config keys forwarded: `aspect_ratio`, `image_size`. Top-level `seed` is sent separately (not under `image_config`) when present in options and the model's `supported_parameters` includes `"seed"`.
 
