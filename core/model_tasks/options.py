@@ -1,4 +1,16 @@
-"""Backend-owned option schemas for specialized task models."""
+"""Backend-owned option schemas for specialized task models.
+
+Schemas are model-aware: ``option_schema_for`` accepts the resolved
+:class:`core.models.Model` (when available) and adapts fields to what
+that model advertises — TTS voices come from ``supported_voices``,
+``seed`` appears only for image models that list it in
+``supported_parameters``, ``response_format`` appears for STT models
+that list it, and Recraft/Sourceful family-specific image options are
+added by family. The image render hints that the provider API does not
+expose (Recraft/Sourceful field lists, aspect-ratio/image-size
+exceptions) are authored here, consistent with the convention that
+options are backend-owned render hints.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +22,7 @@ from core.model_tasks.constants import (
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_TO_SPEECH,
 )
+from core.models import Model
 
 JsonObject = dict[str, Any]
 
@@ -24,6 +37,109 @@ ALLOWED_OPTION_TYPES: frozenset[str] = frozenset(
 
 class TaskModelOptionValidationError(ValueError):
     """Raised when a task-model option field is malformed."""
+
+
+# ---------------------------------------------------------------------------
+# OpenAI fallback tables
+#
+# OpenRouter does not publish the OpenAI voice list (or the full OpenAI
+# response_format set) for every model. When a target has no model-specific
+# ``supported_voices`` we still want the OpenAI provider to expose the
+# canonical voice/format lists; for every other provider we fall back to
+# free-text inputs because the list of valid voices is model-specific.
+# ---------------------------------------------------------------------------
+
+OPENAI_TTS_VOICES: tuple[tuple[str, str], ...] = (
+    ("alloy", "Alloy"),
+    ("ash", "Ash"),
+    ("ballad", "Ballad"),
+    ("coral", "Coral"),
+    ("echo", "Echo"),
+    ("fable", "Fable"),
+    ("nova", "Nova"),
+    ("onyx", "Onyx"),
+    ("sage", "Sage"),
+    ("shimmer", "Shimmer"),
+    ("verse", "Verse"),
+)
+
+OPENAI_TTS_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("mp3", "MP3"),
+    ("opus", "Opus"),
+    ("aac", "AAC"),
+    ("flac", "FLAC"),
+    ("wav", "WAV"),
+    ("pcm", "PCM"),
+)
+
+OPENROUTER_TTS_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("mp3", "MP3"),
+    ("pcm", "PCM"),
+)
+
+# OpenAI Whisper-style STT response formats — used when a model advertises
+# ``response_format`` support. Other providers using the OpenAI-compatible
+# audio endpoint also accept this set.
+STT_RESPONSE_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("json", "JSON"),
+    ("text", "Text"),
+    ("srt", "SRT"),
+    ("verbose_json", "Verbose JSON"),
+    ("vtt", "VTT"),
+)
+
+# Base image aspect ratios. Models with restricted or extended ratios
+# override the choices via :func:`_aspect_ratio_choices_for_model`.
+BASE_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
+    ("1:1", "1:1 (1024×1024)"),
+    ("2:3", "2:3 (832×1248)"),
+    ("3:2", "3:2 (1248×832)"),
+    ("3:4", "3:4 (864×1184)"),
+    ("4:3", "4:3 (1184×864)"),
+    ("4:5", "4:5 (896×1152)"),
+    ("5:4", "5:4 (1152×896)"),
+    ("9:16", "9:16 (768×1344)"),
+    ("16:9", "16:9 (1344×768)"),
+    ("21:9", "21:9 (1536×672)"),
+)
+
+# microsoft/mai-image-2.5 advertises a reduced aspect-ratio set.
+MAI_IMAGE_2_5_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
+    ("1:1", "1:1 (1024×1024)"),
+    ("4:3", "4:3 (1184×864)"),
+    ("3:4", "3:4 (864×1184)"),
+    ("16:9", "16:9 (1344×768)"),
+    ("9:16", "9:16 (768×1344)"),
+    ("3:2", "3:2 (1248×832)"),
+    ("2:3", "2:3 (832×1248)"),
+)
+
+# google/gemini-3.1-flash-image-preview extends the base set with very
+# narrow/wide ratios that the other image models do not accept.
+GEMINI_3_1_FLASH_IMAGE_EXTRA_ASPECT_RATIOS: tuple[tuple[str, str], ...] = (
+    ("1:4", "1:4"),
+    ("4:1", "4:1"),
+    ("1:8", "1:8"),
+    ("8:1", "8:1"),
+)
+
+# google/gemini-3.1-flash-image-preview is the only model that advertises
+# 0.5K as an image_size choice.
+HALF_K_IMAGE_SIZE = ("0.5K", "0.5K")
+
+BASE_IMAGE_SIZES: tuple[tuple[str, str], ...] = (
+    ("1K", "1K (standard)"),
+    ("2K", "2K"),
+    ("4K", "4K"),
+)
+
+# Model IDs that get profile-specific overrides.
+MAI_IMAGE_2_5_MODEL_ID = "microsoft/mai-image-2.5"
+GEMINI_3_1_FLASH_IMAGE_MODEL_ID = "google/gemini-3.1-flash-image-preview"
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -109,38 +225,148 @@ class TaskModelOptionSchema:
         }
 
 
-def option_schema_for(task_type: str, provider_id: str, target: str) -> TaskModelOptionSchema:
-    """Return a conservative option schema for *task_type* and provider."""
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def option_schema_for(
+    task_type: str,
+    provider_id: str,
+    target: str,
+    *,
+    model: Model | None = None,
+) -> TaskModelOptionSchema:
+    """Return a model-aware option schema for *task_type* and *provider_id*.
+
+    *model* is the resolved :class:`core.models.Model` for the target when
+    available. Without it, the schema falls back to the provider-level
+    conservative defaults that the model-aware branches extend.
+    """
 
     if task_type == TASK_SPEECH_TO_TEXT:
         return TaskModelOptionSchema(
             task_type=task_type,
             target=target,
-            fields=_speech_to_text_fields(provider_id),
+            fields=_speech_to_text_fields(provider_id, model),
         )
     if task_type == TASK_TEXT_TO_SPEECH:
         return TaskModelOptionSchema(
             task_type=task_type,
             target=target,
-            fields=_text_to_speech_fields(provider_id),
+            fields=_text_to_speech_fields(provider_id, model),
         )
     if task_type == TASK_IMAGE_GENERATION:
         return TaskModelOptionSchema(
             task_type=task_type,
             target=target,
-            fields=_image_generation_fields(provider_id),
+            fields=_image_generation_fields(provider_id, model),
         )
     return TaskModelOptionSchema(task_type=task_type, target=target)
 
 
-def _speech_to_text_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]:
-    language_default = "auto"
-    fields = [
+# ---------------------------------------------------------------------------
+# TTS
+# ---------------------------------------------------------------------------
+
+
+def _text_to_speech_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
+    format_choices = (
+        OPENAI_TTS_FORMAT_CHOICES if provider_id == "openai" else OPENROUTER_TTS_FORMAT_CHOICES
+    )
+    return (
+        _tts_voice_field(model, provider_id),
+        TaskModelOptionField(
+            name="response_format",
+            type="select",
+            label="Format",
+            default="mp3",
+            options=_to_choices(format_choices),
+        ),
+        TaskModelOptionField(
+            name="speed",
+            type="number",
+            label="Speed",
+            default=1.0,
+            min_value=0.25,
+            max_value=4.0,
+            step=0.05,
+        ),
+        TaskModelOptionField(
+            name="instructions",
+            type="textarea",
+            label="Instructions",
+            default="",
+            description="Optional speaking style instructions when the selected model supports it.",
+        ),
+    )
+
+
+def _tts_voice_field(model: Model | None, provider_id: str) -> TaskModelOptionField:
+    """Build the TTS ``voice`` field.
+
+    The shape depends on what we know about the model:
+
+    * ``model.capabilities.supported_voices`` non-empty → ``select`` with
+      those voices (the only authoritative list — published by the
+      provider per model).
+    * Otherwise, ``provider_id == "openai"`` → ``select`` with the OpenAI
+      canonical voice list (kokoro, gemini-tts, voxtral, … may also
+      accept these names, but we do not invent them as a default).
+    * Otherwise → ``text`` field with no default. The model is unknown
+      to us and the user is expected to provide a voice id the provider
+      accepts; this replaces the previous bug that always sent the
+      OpenAI list to every provider.
+    """
+
+    if model is not None and model.capabilities.supported_voices:
+        choices = tuple(
+            TaskModelOptionChoice(value=voice_id, label=voice_id)
+            for voice_id in model.capabilities.supported_voices
+        )
+        return TaskModelOptionField(
+            name="voice",
+            type="select",
+            label="Voice",
+            required=True,
+            options=choices,
+        )
+    if provider_id == "openai":
+        return TaskModelOptionField(
+            name="voice",
+            type="select",
+            label="Voice",
+            default="alloy",
+            required=True,
+            options=_to_choices(OPENAI_TTS_VOICES),
+        )
+    return TaskModelOptionField(
+        name="voice",
+        type="text",
+        label="Voice",
+        default="",
+        description="Voice id supported by the selected model.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# STT
+# ---------------------------------------------------------------------------
+
+
+def _speech_to_text_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
+    fields: list[TaskModelOptionField] = [
         TaskModelOptionField(
             name="language",
             type="text",
             label="Language",
-            default=language_default,
+            default="auto",
             description="ISO-639-1 code, or auto to let the provider detect it.",
         ),
         TaskModelOptionField(
@@ -164,107 +390,280 @@ def _speech_to_text_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]
                 description="Optional vocabulary or context bias for the transcription.",
             ),
         )
+    if model is not None and "response_format" in model.capabilities.supported_parameters:
+        fields.append(
+            TaskModelOptionField(
+                name="response_format",
+                type="select",
+                label="Response format",
+                default="json",
+                options=_to_choices(STT_RESPONSE_FORMAT_CHOICES),
+                description="Format the provider returns the transcription in.",
+            )
+        )
     return tuple(fields)
 
 
-def _text_to_speech_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]:
-    format_choices: tuple[TaskModelOptionChoice, ...] = (
-        _choice("mp3", "MP3"),
-        _choice("pcm", "PCM"),
-    )
-    if provider_id == "openai":
-        format_choices = (
-            _choice("mp3", "MP3"),
-            _choice("opus", "Opus"),
-            _choice("aac", "AAC"),
-            _choice("flac", "FLAC"),
-            _choice("wav", "WAV"),
-            _choice("pcm", "PCM"),
-        )
-
-    return (
-        TaskModelOptionField(
-            name="voice",
-            type="select",
-            label="Voice",
-            default="alloy",
-            required=True,
-            options=(
-                _choice("alloy", "Alloy"),
-                _choice("ash", "Ash"),
-                _choice("ballad", "Ballad"),
-                _choice("coral", "Coral"),
-                _choice("echo", "Echo"),
-                _choice("fable", "Fable"),
-                _choice("nova", "Nova"),
-                _choice("onyx", "Onyx"),
-                _choice("sage", "Sage"),
-                _choice("shimmer", "Shimmer"),
-                _choice("verse", "Verse"),
-            ),
-        ),
-        TaskModelOptionField(
-            name="response_format",
-            type="select",
-            label="Format",
-            default="mp3",
-            options=format_choices,
-        ),
-        TaskModelOptionField(
-            name="speed",
-            type="number",
-            label="Speed",
-            default=1.0,
-            min_value=0.25,
-            max_value=4.0,
-            step=0.05,
-        ),
-        TaskModelOptionField(
-            name="instructions",
-            type="textarea",
-            label="Instructions",
-            default="",
-            description="Optional speaking style instructions when the selected model supports it.",
-        ),
-    )
+# ---------------------------------------------------------------------------
+# Image
+# ---------------------------------------------------------------------------
 
 
-def _image_generation_fields(provider_id: str) -> tuple[TaskModelOptionField, ...]:
+def _image_generation_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
     if provider_id != "openrouter":
+        # OpenAI image options (size, quality, background, n, output_format,
+        # style) land in Phase 5. For unknown providers we return an empty
+        # schema — the conservative behavior — and Phase 5 will fill in
+        # the OpenAI branch without touching the OpenRouter tree.
         return ()
 
-    return (
-        TaskModelOptionField(
-            name="aspect_ratio",
-            type="select",
-            label="Aspect ratio",
-            default="1:1",
-            options=(
-                _choice("1:1", "1:1 (1024×1024)"),
-                _choice("2:3", "2:3 (832×1248)"),
-                _choice("3:2", "3:2 (1248×832)"),
-                _choice("3:4", "3:4 (864×1184)"),
-                _choice("4:3", "4:3 (1184×864)"),
-                _choice("4:5", "4:5 (896×1152)"),
-                _choice("5:4", "5:4 (1152×896)"),
-                _choice("9:16", "9:16 (768×1344)"),
-                _choice("16:9", "16:9 (1344×768)"),
-                _choice("21:9", "21:9 (1536×672)"),
-            ),
-        ),
-        TaskModelOptionField(
-            name="image_size",
-            type="select",
-            label="Image size",
-            default="1K",
-            options=(
-                _choice("1K", "1K (standard)"),
-                _choice("2K", "2K"),
-                _choice("4K", "4K"),
-            ),
+    fields: list[TaskModelOptionField] = [
+        _aspect_ratio_field(model),
+        _image_size_field(model),
+    ]
+
+    if model is not None and "seed" in model.capabilities.supported_parameters:
+        fields.append(_seed_field())
+
+    if model is not None:
+        if model.model_id.startswith("recraft/"):
+            fields.extend(_recraft_fields(model.model_id))
+        elif model.model_id.startswith("sourceful/"):
+            fields.extend(_sourceful_fields(model.model_id))
+
+    return tuple(fields)
+
+
+def _aspect_ratio_choices_for_model(model: Model | None) -> tuple[tuple[str, str], ...]:
+    if model is not None and model.model_id == MAI_IMAGE_2_5_MODEL_ID:
+        return MAI_IMAGE_2_5_ASPECT_RATIOS
+    if model is not None and model.model_id == GEMINI_3_1_FLASH_IMAGE_MODEL_ID:
+        return BASE_ASPECT_RATIOS + GEMINI_3_1_FLASH_IMAGE_EXTRA_ASPECT_RATIOS
+    return BASE_ASPECT_RATIOS
+
+
+def _image_size_choices_for_model(model: Model | None) -> tuple[tuple[str, str], ...]:
+    if model is not None and model.model_id == GEMINI_3_1_FLASH_IMAGE_MODEL_ID:
+        return (HALF_K_IMAGE_SIZE,) + BASE_IMAGE_SIZES
+    return BASE_IMAGE_SIZES
+
+
+def _aspect_ratio_field(model: Model | None) -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="aspect_ratio",
+        type="select",
+        label="Aspect ratio",
+        default="1:1",
+        options=_to_choices(_aspect_ratio_choices_for_model(model)),
+    )
+
+
+def _image_size_field(model: Model | None) -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="image_size",
+        type="select",
+        label="Image size",
+        default="1K",
+        options=_to_choices(_image_size_choices_for_model(model)),
+    )
+
+
+def _seed_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="seed",
+        type="number",
+        label="Seed",
+        default=None,
+        step=1,
+        description="Reproducible generation seed. Provider-specific support.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recraft family
+# ---------------------------------------------------------------------------
+
+
+def _recraft_fields(model_id: str) -> tuple[TaskModelOptionField, ...]:
+    """Recraft family image options, gated by model variant.
+
+    v3, v4, v4-pro, and conservatively v4.1 share the strength / rgb_colors
+    / background_rgb_color fields. v3 also exposes ``text_layout`` and
+    ``style`` (vector styles are explicitly unsupported there per the
+    provider docs).
+    """
+
+    is_v3 = "recraft-v3" in model_id
+    is_v4_family = "recraft-v4" in model_id
+
+    fields: list[TaskModelOptionField] = []
+    if is_v3 or is_v4_family:
+        fields.append(
+            TaskModelOptionField(
+                name="strength",
+                type="number",
+                label="Strength",
+                default=0.2,
+                min_value=0.0,
+                max_value=1.0,
+                step=0.05,
+                description="Image-to-image strength (Recraft).",
+            )
+        )
+        fields.append(
+            TaskModelOptionField(
+                name="rgb_colors",
+                type="json",
+                label="RGB colors",
+                default=[],
+                description="Array of [r,g,b] (0-255). Example: [[0,128,255],[255,0,0]].",
+            )
+        )
+        fields.append(
+            TaskModelOptionField(
+                name="background_rgb_color",
+                type="json",
+                label="Background RGB color",
+                default=None,
+                description="[r,g,b] (0-255). Example: [255,255,255].",
+            )
+        )
+    if is_v3:
+        fields.append(
+            TaskModelOptionField(
+                name="text_layout",
+                type="json",
+                label="Text layout",
+                default=[],
+                description='Array of {"text": str, "bbox": [[x,y]×4] (0-1)}. Recraft-v3 only.',
+            )
+        )
+        fields.append(
+            TaskModelOptionField(
+                name="style",
+                type="text",
+                label="Style",
+                default="",
+                description="Recraft-v3 style id. Vector styles are unsupported.",
+            )
+        )
+    return tuple(fields)
+
+
+# ---------------------------------------------------------------------------
+# Sourceful family
+# ---------------------------------------------------------------------------
+
+
+def _sourceful_fields(model_id: str) -> tuple[TaskModelOptionField, ...]:
+    """Sourceful Riverflow family image options, gated by model variant.
+
+    v2.5 must be detected before v2 because ``v2.5`` contains ``v2`` as
+    a substring. v2 exposes ``font_inputs`` and ``super_resolution_references``
+    (img2img-only); v2.5 exposes ``font_inputs``, ``scoring_prompt``,
+    ``scoring_rubric``, and the background controls.
+    """
+
+    is_v2_5 = "riverflow-v2.5" in model_id
+    is_v2 = "riverflow-v2" in model_id and not is_v2_5
+
+    fields: list[TaskModelOptionField] = []
+    if is_v2 or is_v2_5:
+        fields.append(_sourceful_font_inputs())
+    if is_v2:
+        fields.append(_sourceful_super_resolution_references())
+    if is_v2_5:
+        fields.append(_sourceful_scoring_prompt())
+        fields.append(_sourceful_scoring_rubric())
+        fields.append(_sourceful_background_mode())
+        fields.append(_sourceful_background_hex_color())
+    return tuple(fields)
+
+
+def _sourceful_font_inputs() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="font_inputs",
+        type="json",
+        label="Font inputs",
+        default=[],
+        description='Array of {"font_url": str, "text": str}, max 2. Sourceful v2 / v2.5.',
+    )
+
+
+def _sourceful_super_resolution_references() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="super_resolution_references",
+        type="json",
+        label="Super-resolution references",
+        default=[],
+        description="Array of image URL strings, max 4. Sourceful v2 (img2img only).",
+    )
+
+
+def _sourceful_scoring_prompt() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="scoring_prompt",
+        type="textarea",
+        label="Scoring prompt",
+        default="",
+        description="Scoring prompt for the rubric. Sourceful v2.5 only.",
+    )
+
+
+def _sourceful_scoring_rubric() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="scoring_rubric",
+        type="json",
+        label="Scoring rubric",
+        default=[],
+        description=(
+            "Array of rubric entries (1-8). Each entry has key, label, "
+            "description, weight, optional passing_score and score_guidance. "
+            "Sourceful v2.5 only."
         ),
     )
+
+
+def _sourceful_background_mode() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="background_mode",
+        type="select",
+        label="Background mode",
+        default="original",
+        options=_to_choices(
+            (
+                ("original", "Original"),
+                ("transparent", "Transparent"),
+                ("solid", "Solid"),
+            )
+        ),
+        description="Sourceful v2.5 only.",
+    )
+
+
+def _sourceful_background_hex_color() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="background_hex_color",
+        type="text",
+        label="Background hex color",
+        default="",
+        description="#RRGGBB. Required when background_mode is 'solid'. Sourceful v2.5 only.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 
 def _choice(value: str, label: str) -> TaskModelOptionChoice:
     return TaskModelOptionChoice(value=value, label=label)
+
+
+def _to_choices(
+    pairs: tuple[tuple[str, str], ...],
+) -> tuple[TaskModelOptionChoice, ...]:
+    return tuple(_choice(value, label) for value, label in pairs)
