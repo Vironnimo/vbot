@@ -108,6 +108,25 @@ def _tool(message_id: str, *, tool_call_id: str, name: str, content: str) -> Cha
     )
 
 
+def _checkpoint(
+    message_id: str,
+    *,
+    boundary: str,
+    content: str,
+    compacted_tokens: int,
+) -> ChatMessage:
+    return ChatMessage.from_dict(
+        {
+            "id": message_id,
+            "timestamp": TIMESTAMP,
+            "role": "compaction_checkpoint",
+            "content": content,
+            "tail_boundary_id": boundary,
+            "usage": {"compacted_token_count": compacted_tokens},
+        }
+    )
+
+
 def _content_tokens(content: Any) -> int:
     tokens, _ = estimate_tokens(str(content))
     return tokens
@@ -253,6 +272,57 @@ async def test_summarization_strategy_compact_happy_path() -> None:
     assert "Need to debug parser." in prompt
     assert "SECRET TOOL OUTPUT" not in prompt
     assert TOOL_RESULT_CONTENT_PLACEHOLDER in prompt
+
+
+@pytest.mark.asyncio
+async def test_summarization_strategy_compact_is_incremental_after_checkpoint() -> None:
+    # A prior checkpoint already folded u1/a1 into "PRIOR SUMMARY"; its preserved
+    # tail started at u2. A second compaction must only summarize the messages
+    # added since that boundary (u2..a3), never re-summarize u1/a1.
+    messages = [
+        _user("u1", "ALREADY COMPACTED user turn one"),
+        _assistant("a1", "ALREADY COMPACTED assistant one"),
+        _user("u2", "summarized boundary turn"),
+        _assistant("a2", "boundary answer"),
+        _checkpoint("c1", boundary="u2", content="PRIOR SUMMARY", compacted_tokens=50),
+        _user("u3", "newer turn"),
+        _assistant("a3", "newer answer"),
+        _user("u4", "latest tail turn"),
+        _assistant("a4", "latest tail answer"),
+    ]
+
+    adapter = StubSummaryAdapter({"content": "Merged continuation context."})
+    storage = StubStorage("Create a continuation context.")
+    settings = CompactionSettings(tail_tokens=4)
+    strategy = SummarizationStrategy()
+
+    checkpoint = await strategy.compact(
+        messages,
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="anthropic/claude-sonnet-4",
+        storage=storage,
+        settings=settings,
+    )
+
+    assert checkpoint.tail_boundary_id == "u4"
+
+    # compacted_token_count accumulates: prior 50 + the newly folded delta.
+    delta_tokens = sum(
+        estimate_message_tokens(message.to_dict())[0]
+        for message in messages
+        if message.id in {"u2", "a2", "u3", "a3"}
+    )
+    assert checkpoint.usage == {"compacted_token_count": 50 + delta_tokens}
+
+    prompt = adapter.requests[0]["messages"][0]["content"]
+    # The previous summary is seeded so the model carries it forward.
+    assert "PRIOR SUMMARY" in prompt
+    # The newly added (uncompacted) delta is summarized.
+    assert "summarized boundary turn" in prompt
+    # The already-compacted region must not be re-sent for summarization.
+    assert "ALREADY COMPACTED user turn one" not in prompt
+    assert "ALREADY COMPACTED assistant one" not in prompt
 
 
 def test_compaction_service_should_auto_compact_thresholds() -> None:

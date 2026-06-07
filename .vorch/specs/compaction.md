@@ -24,6 +24,7 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 - `CompactionService.should_auto_compact(input_tokens, context_window, threshold) -> bool` evaluates configured threshold ratio.
 - `CompactionService.estimate_messages_tokens(messages) -> int` estimates prompt size when provider usage is unavailable. The estimate counts provider-relevant structured message fields such as content blocks, tool calls, tool result metadata, and reasoning fields; storage-only fields such as ids, timestamps, usage, and timing are ignored.
 - `SummarizationStrategy.compact(...)` reads `compaction.md` through the provided storage object, sends one user prompt to the summary adapter with `temperature=0.0` and provider-default thinking effort, and returns `ChatMessage.compaction_checkpoint(...)`.
+- **Incremental compaction:** When the supplied history already contains a `compaction_checkpoint`, `compact` summarizes only the messages from that checkpoint's `tail_boundary_id` onward (its previously preserved tail), not the whole session. The previous summary is seeded into the prompt inside `<previous_summary>...</previous_summary>` so the model carries its facts forward, and the new checkpoint's `usage.compacted_token_count` accumulates the prior count plus the newly folded delta. Without a prior checkpoint, the full history is the candidate region.
 
 ## Cross-Domain Contracts
 
@@ -49,3 +50,4 @@ The chat loop decides when compaction is safe to run. The compaction domain deci
 - Manual `/compact` (`compact_session`) refuses while a Run is active for the session (returns "Cannot compact while a run is active for this session"); auto-compaction only runs at the chat loop's safe points. Neither path compacts mid-turn.
 - Existing completed-turn provider reasoning metadata must not be blindly carried into summaries or later provider requests.
 - Failed automatic compaction should not fail the active Run; the chat loop logs a warning and continues without compaction.
+- Compaction assumes a context window of **at least ~32k tokens** with the default settings (`threshold=0.8`, `tail_tokens=15_000`). On much smaller windows the preserved tail alone can exceed the trigger threshold so compaction never reduces below it. `tail_tokens` is a floor, not a cap, and is not clamped against the context window — see `.vorch/FLAGGED.md` for the residual edge cases that were intentionally deferred under the 32k assumption.

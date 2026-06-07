@@ -2,6 +2,8 @@ Here is the context of the ongoing task. Reconstruct a continuation context for 
 
 The conversation history to compact is provided inside <history>...</history>.
 
+If an earlier compaction summary is provided inside <previous_summary>...</previous_summary>, treat it as established context that precedes <history>. Carry its still-relevant facts forward into your output — do not drop them just because they are not repeated in <history>. Your output must stand alone as the complete continuation context, covering both the previous summary and the new history.
+
 Requirements:
 - Preserve exact file paths, symbol names, command names, and exact error strings.
 - Preserve what has already been tried and the outcome of each attempt.
