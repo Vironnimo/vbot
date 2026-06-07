@@ -17,7 +17,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from core.models.query import ModelQuery
 
 MODEL_TASK_ORDER = (
     "chat",
@@ -269,6 +272,24 @@ class ModelRegistry:
             [model for (pid, _), model in self._models.items() if pid == provider_id],
             key=lambda model: model.model_id,
         )
+
+    def query(self, model_query: ModelQuery) -> list[tuple[str, Model]]:
+        """Return ``(provider_id, model)`` tuples matching ``model_query``.
+
+        Results are sorted by ``(provider_id, model_id)`` and contain no
+        credential awareness — the caller is responsible for any
+        per-connection gating. An empty list is returned for an unknown
+        ``provider_id`` and for any query that matches no models.
+        """
+
+        provider_filter = model_query.provider_id
+        matches: list[tuple[str, Model]] = []
+        for (provider_id, _), model in self._models.items():
+            if provider_filter and provider_id != provider_filter:
+                continue
+            if model_query.matches(model):
+                matches.append((provider_id, model))
+        return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
 
 def _freeze_metadata_value(value: Any) -> Any:

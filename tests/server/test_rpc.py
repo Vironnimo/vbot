@@ -22,7 +22,7 @@ from core.automation import TriggerService
 from core.chat import ChatLoop, ChatMessage, ChatSessionManager, ToolCall
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
-from core.models import Capabilities, Model, ReasoningCapabilities
+from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import ModelRegistry
 from core.runs import ChatRunManager, Run
@@ -32,6 +32,8 @@ from core.tools import ToolRegistry, register_read_tool
 from core.utils.errors import ConfigError
 from server.delegates import dispatch_rpc
 from server.events import ServerEventBus
+from server.rpc.payloads import _model_response
+from server.rpc.provider_access import _provider_has_credentials
 
 JsonObject = dict[str, Any]
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
@@ -303,6 +305,17 @@ class StubModels:
 
     def list_for_provider(self, provider_id: str) -> list[object]:
         return list(self._models[provider_id])
+
+    def query(self, model_query: ModelQuery) -> list[tuple[str, Model]]:
+        provider_filter = model_query.provider_id
+        matches: list[tuple[str, Model]] = []
+        for provider_id, models in self._models.items():
+            if provider_filter and provider_id != provider_filter:
+                continue
+            for model in models:
+                if model_query.matches(model):
+                    matches.append((provider_id, model))
+        return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
 
 class EmptyStubModels(StubModels):
@@ -1886,6 +1899,127 @@ async def test_model_list_filters_by_task_and_modality(
     assert [model["id"] for model in image_response["result"]["models"]] == ["openai/gpt-image"]
     assert audio_response["result"]["models"] == []
     assert [model["id"] for model in context_response["result"]["models"]] == ["openai/gpt-5.2"]
+
+
+@pytest.mark.asyncio
+async def test_model_list_filters_by_provider_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    state = make_state(tmp_path, StubAdapter())
+
+    openai_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"provider_id": "openai"}},
+    )
+    anthropic_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"provider_id": "anthropic"}},
+    )
+    uppercase_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"provider_id": "OpenAI"}},
+    )
+    unknown_response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"provider_id": "nonexistent"}},
+    )
+
+    assert [model["id"] for model in openai_response["result"]["models"]] == [
+        "openai/gpt-4.1-mini",
+        "openai/gpt-5.2",
+    ]
+    assert [model["id"] for model in anthropic_response["result"]["models"]] == [
+        "anthropic/claude-sonnet-4-20250219"
+    ]
+    assert [model["id"] for model in uppercase_response["result"]["models"]] == [
+        "openai/gpt-4.1-mini",
+        "openai/gpt-5.2",
+    ]
+    assert unknown_response["result"]["models"] == []
+
+
+@pytest.mark.asyncio
+async def test_model_list_rejects_unsupported_fields(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"provider_id": "openai", "extra": True}},
+    )
+
+    assert response == {
+        "ok": False,
+        "error": {
+            "code": "invalid_request",
+            "message": "unsupported model.list fields: extra",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_list_rejects_invalid_filter_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.list", "params": {"min_context_window": -1}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "non-negative integer" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_model_list_delegates_filtering_to_model_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The RPC result must match what ``ModelQuery.from_filters`` + ``query`` produce.
+
+    This locks in the byte-identical contract while routing filtering through
+    the core query instead of duplicating it in the RPC layer.
+    """
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.list",
+            "params": {"task": "image_generation", "min_context_window": 1000},
+        },
+    )
+
+    # Cross-check the RPC result against the core query path directly. If
+    # either path diverges, this test fails — making the "delegate to the
+    # core query" contract enforced.
+    expected = sorted(
+        (
+            (
+                provider_id,
+                _model_response(provider_id, model),
+            )
+            for provider_id, model in state.runtime.models.query(
+                ModelQuery.from_filters({"task": "image_generation", "min_context_window": 1000})
+            )
+            if _provider_has_credentials(state.runtime, provider_id)
+        ),
+        key=lambda item: (item[1]["provider_id"], item[1]["model_id"]),
+    )
+    expected_models = [item[1] for item in expected]
+
+    assert response["result"]["models"] == expected_models
 
 
 @pytest.mark.asyncio
