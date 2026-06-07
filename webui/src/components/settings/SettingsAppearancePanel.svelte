@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import Dropdown from '../Dropdown.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import {
@@ -30,6 +31,12 @@
 
   let availableLanguageOptions = $derived(
     buildLanguageOptions(settings?.appearance),
+  );
+  let languageDropdownOptions = $derived(
+    availableLanguageOptions.map((language) => ({
+      value: language.id,
+      label: t(language.labelKey, language.labelFallback),
+    })),
   );
   let persistedLanguageId = $derived(getPersistedLanguageId(settings));
   let saveDisabled = $derived(
@@ -67,8 +74,8 @@
     }
   }
 
-  function handleLanguageChange(event) {
-    selectedLanguageId = event.currentTarget.value;
+  function handleLanguageChange(value) {
+    selectedLanguageId = value;
     onError('');
   }
 
@@ -131,23 +138,20 @@
     </div>
   </div>
   <div class="s-row-control s-row-control--appearance">
-    <select
-      bind:value={selectedLanguageId}
-      class="s-select"
-      aria-label={t('settings.appearance.language', 'Language')}
+    <Dropdown
+      id="settings-appearance-language"
+      value={selectedLanguageId}
+      options={languageDropdownOptions}
+      ariaLabel={t('settings.appearance.language', 'Language')}
       disabled={saving || availableLanguageOptions.length <= 1}
-      onchange={handleLanguageChange}
-    >
-      {#each availableLanguageOptions as language (language.id)}
-        <option value={language.id}>
-          {t(language.labelKey, language.labelFallback)}
-        </option>
-      {/each}
-    </select>
+      triggerClass="settings-view__dropdown"
+      listClass="settings-view__thinking-list"
+      onValueChange={handleLanguageChange}
+    />
   </div>
 </div>
 
-<div class="s-sticky-footer">
+<div class="s-footer">
   <button
     class="btn-primary s-save-button s-save-button--inline"
     type="button"

@@ -1,5 +1,5 @@
 <script>
-  import { onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
@@ -18,6 +18,7 @@
   } from '$lib/settingsView.js';
 
   const noop = () => {};
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const AGENT_THINKING_EFFORT_OPTIONS = Object.freeze([
     'none',
     'minimal',
@@ -58,6 +59,7 @@
   let saving = $state(false);
   let availableModels = $state([]);
   let availableConnections = $state([]);
+  let autoSaveTimer = null;
 
   let defaultModelOptions = $derived(
     selectModelOptions(
@@ -101,6 +103,32 @@
   onMount(() => {
     void loadModelCatalogs();
   });
+
+  onDestroy(() => {
+    clearAutoSaveTimer();
+  });
+
+  $effect(() => {
+    if (saveDisabled) {
+      return;
+    }
+
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      void saveAgentDefaults();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearAutoSaveTimer();
+    };
+  });
+
+  function clearAutoSaveTimer() {
+    if (autoSaveTimer !== null) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+  }
 
   async function loadModelCatalogs() {
     try {
@@ -173,6 +201,7 @@
       return;
     }
 
+    clearAutoSaveTimer();
     void saveAgentDefaults();
   }
 
@@ -326,7 +355,7 @@
   </div>
 </div>
 
-<div class="s-sticky-footer">
+<div class="s-footer">
   <button
     class="btn-primary s-save-button s-save-button--inline"
     type="button"

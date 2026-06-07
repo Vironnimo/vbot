@@ -1,6 +1,7 @@
 <script>
-  import { onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
 
+  import Dropdown from '../Dropdown.svelte';
   import {
     getTaskModelOptions,
     listTaskModelTargets,
@@ -18,6 +19,7 @@
   } from '$lib/taskModelSettings.js';
 
   const noop = () => {};
+  const AUTO_SAVE_DEBOUNCE_MS = 800;
 
   let {
     settings = null,
@@ -36,6 +38,8 @@
   let taskModelLoading = $state(false);
   let taskModelSaving = $state(false);
   let taskModelError = $state('');
+  let autoSaveTimer = null;
+  let autoSaveArmed = $state(false);
 
   let saveDisabled = $derived(
     taskModelSaving ||
@@ -49,6 +53,34 @@
   onMount(() => {
     void loadTaskModelPanel();
   });
+
+  onDestroy(() => {
+    clearAutoSaveTimer();
+  });
+
+  // Auto-save is armed only after a real user edit so that applying option
+  // defaults during the initial load does not silently persist settings.
+  $effect(() => {
+    if (!autoSaveArmed || saveDisabled) {
+      return;
+    }
+
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      void saveTaskModelBindings();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearAutoSaveTimer();
+    };
+  });
+
+  function clearAutoSaveTimer() {
+    if (autoSaveTimer !== null) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+  }
 
   async function loadTaskModelPanel() {
     if (taskModelLoading) {
@@ -114,6 +146,7 @@
       return;
     }
 
+    clearAutoSaveTimer();
     void saveTaskModelBindings();
   }
 
@@ -136,6 +169,7 @@
       };
       onCommit(nextSettings);
       taskModelBindings = normalizeTaskModelSettings(nextSettings);
+      autoSaveArmed = false;
       onToast({
         title: t(
           'settings.specializedModels.saveSuccess',
@@ -150,9 +184,9 @@
     }
   }
 
-  async function handleTaskModelTargetChange(taskType, event) {
-    const target = event.currentTarget.value;
+  async function handleTaskModelTargetChange(taskType, target) {
     taskModelError = '';
+    autoSaveArmed = true;
     taskModelBindings = {
       ...taskModelBindings,
       [taskType]: {
@@ -169,11 +203,18 @@
   }
 
   function handleTaskModelOptionChange(taskType, field, event) {
+    setTaskModelOption(
+      taskType,
+      field,
+      valueFromTaskModelOptionField(field, event),
+    );
+  }
+
+  function setTaskModelOption(taskType, field, value) {
     const currentBinding = taskModelBindings[taskType] ?? {
       target: '',
       options: {},
     };
-    const value = valueFromTaskModelOptionField(field, event);
     taskModelBindings = {
       ...taskModelBindings,
       [taskType]: {
@@ -185,6 +226,7 @@
       },
     };
     taskModelError = '';
+    autoSaveArmed = true;
   }
 
   function valueFromTaskModelOptionField(field, event) {
@@ -204,6 +246,36 @@
 
   function taskModelTargets(taskType) {
     return taskModelTargetsByType[taskType] ?? [];
+  }
+
+  function taskModelTargetOptions(taskType, binding) {
+    const targets = taskModelTargets(taskType);
+    const options = [
+      {
+        value: '',
+        label: t('settings.specializedModels.noTarget', 'Not configured'),
+      },
+      ...targets.map((target) => ({
+        value: target.id,
+        label: target.label,
+      })),
+    ];
+
+    if (
+      binding.target &&
+      !targets.some((target) => target.id === binding.target)
+    ) {
+      options.push({
+        value: binding.target,
+        label: t(
+          'settings.specializedModels.customTarget',
+          'Custom target: {target}',
+          { target: binding.target },
+        ),
+      });
+    }
+
+    return options;
   }
 
   function taskModelFields(taskType) {
@@ -239,7 +311,6 @@
       target: '',
       options: {},
     }}
-    {@const targets = taskModelTargets(row.taskType)}
     {@const fields = taskModelFields(row.taskType)}
     <div class="s-row s-row--stacked s-task-model-row">
       <div class="s-task-model-head">
@@ -252,52 +323,43 @@
           </div>
         </div>
         <div class="s-row-control s-row-control--task-model">
-          <select
-            class="s-select"
+          <Dropdown
+            id={`settings-specialized-${row.taskType}`}
             value={binding.target}
-            aria-label={t(row.titleKey, row.titleFallback)}
+            options={taskModelTargetOptions(row.taskType, binding)}
+            placeholder={t(
+              'settings.specializedModels.noTarget',
+              'Not configured',
+            )}
+            ariaLabel={t(row.titleKey, row.titleFallback)}
             disabled={taskModelLoading || taskModelSaving}
-            onchange={(event) =>
-              handleTaskModelTargetChange(row.taskType, event)}
-          >
-            <option value="">
-              {t('settings.specializedModels.noTarget', 'Not configured')}
-            </option>
-            {#each targets as target (target.id)}
-              <option value={target.id}>{target.label}</option>
-            {/each}
-            {#if binding.target && !targets.some((target) => target.id === binding.target)}
-              <option value={binding.target}>
-                {t(
-                  'settings.specializedModels.customTarget',
-                  'Custom target: {target}',
-                  { target: binding.target },
-                )}
-              </option>
-            {/if}
-          </select>
+            triggerClass="settings-view__dropdown"
+            listClass="settings-view__thinking-list"
+            onValueChange={(value) =>
+              handleTaskModelTargetChange(row.taskType, value)}
+          />
         </div>
       </div>
 
       {#if binding.target && fields.length > 0}
         <div class="s-task-model-options">
           {#each fields as field (field.name)}
-            <label class="s-field">
+            <svelte:element
+              this={field.type === 'select' ? 'div' : 'label'}
+              class="s-field"
+            >
               <span class="s-field-label">{field.label}</span>
               {#if field.type === 'select'}
-                <select
-                  class="s-select"
+                <Dropdown
                   value={taskModelOptionValue(row.taskType, field)}
+                  options={field.options}
+                  ariaLabel={field.label}
                   disabled={taskModelSaving}
-                  onchange={(event) =>
-                    handleTaskModelOptionChange(row.taskType, field, event)}
-                >
-                  {#each field.options as option (option.value)}
-                    <option value={option.value}>
-                      {option.label}
-                    </option>
-                  {/each}
-                </select>
+                  triggerClass="settings-view__dropdown"
+                  listClass="settings-view__thinking-list"
+                  onValueChange={(value) =>
+                    setTaskModelOption(row.taskType, field, value)}
+                />
               {:else if field.type === 'textarea'}
                 <textarea
                   class="s-input s-textarea"
@@ -341,7 +403,7 @@
               {#if field.description}
                 <span class="s-field-help">{field.description}</span>
               {/if}
-            </label>
+            </svelte:element>
           {/each}
         </div>
       {:else if binding.target}
@@ -356,7 +418,7 @@
   {/each}
 </div>
 
-<div class="s-sticky-footer">
+<div class="s-footer">
   <button
     class="btn-primary s-save-button s-save-button--inline"
     type="button"

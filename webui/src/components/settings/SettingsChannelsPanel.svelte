@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
 
+  import Dropdown from '../Dropdown.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
@@ -32,7 +33,7 @@
 
   let channelPlatformOptions = $derived(
     CHANNEL_PLATFORMS.map((platformId) => ({
-      id: platformId,
+      value: platformId,
       label:
         platformId === 'telegram'
           ? t('sessions.platform_telegram', 'Telegram')
@@ -41,8 +42,14 @@
   );
   let channelDmScopeOptions = $derived(
     CHANNEL_DM_SCOPES.map((scopeId) => ({
-      id: scopeId,
+      value: scopeId,
       label: channelDmScopeLabel(scopeId),
+    })),
+  );
+  let channelAgentOptions = $derived(
+    channelAgents.map((agent) => ({
+      value: agent.id,
+      label: agent.name,
     })),
   );
   let channelPanelBusy = $derived(
@@ -182,6 +189,15 @@
     event.preventDefault();
 
     if (channelBusy) {
+      return;
+    }
+
+    if (!channelFormValues.agent_id) {
+      clearChannelFeedback();
+      channelError = t(
+        'settings.channels.agent.required',
+        'Select an agent before saving.',
+      );
       return;
     }
 
@@ -345,65 +361,56 @@
         />
       </label>
 
-      <label class="s-field" for="channel-platform-select">
+      <div class="s-field">
         <span class="s-field-label">
           {t('settings.channels.platform', 'Platform')}
         </span>
-        <select
+        <Dropdown
           id="channel-platform-select"
-          class="s-select"
           value={channelFormValues.platform}
+          options={channelPlatformOptions}
+          ariaLabel={t('settings.channels.platform', 'Platform')}
           disabled={channelBusy}
-          onchange={(event) =>
-            setChannelFormField('platform', event.currentTarget.value)}
-        >
-          {#each channelPlatformOptions as option (option.id)}
-            <option value={option.id}>{option.label}</option>
-          {/each}
-        </select>
-      </label>
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => setChannelFormField('platform', value)}
+        />
+      </div>
 
-      <label class="s-field" for="channel-agent-select">
+      <div class="s-field">
         <span class="s-field-label">
           {t('settings.channels.agent', 'Agent')}
         </span>
-        <select
+        <Dropdown
           id="channel-agent-select"
-          class="s-select"
           value={channelFormValues.agent_id}
-          required
+          options={channelAgentOptions}
+          placeholder={channelAgents.length > 0
+            ? t('settings.channels.agent.placeholder', 'Select agent')
+            : t('settings.channels.agent.none', 'No agents available')}
+          ariaLabel={t('settings.channels.agent', 'Agent')}
           disabled={channelBusy || channelAgents.length === 0}
-          onchange={(event) =>
-            setChannelFormField('agent_id', event.currentTarget.value)}
-        >
-          <option value="" disabled>
-            {channelAgents.length > 0
-              ? t('settings.channels.agent.placeholder', 'Select agent')
-              : t('settings.channels.agent.none', 'No agents available')}
-          </option>
-          {#each channelAgents as agent (agent.id)}
-            <option value={agent.id}>{agent.name}</option>
-          {/each}
-        </select>
-      </label>
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => setChannelFormField('agent_id', value)}
+        />
+      </div>
 
-      <label class="s-field" for="channel-dm-scope-select">
+      <div class="s-field">
         <span class="s-field-label">
           {t('settings.channels.dm_scope', 'DM scope')}
         </span>
-        <select
+        <Dropdown
           id="channel-dm-scope-select"
-          class="s-select"
           value={channelFormValues.dm_scope}
+          options={channelDmScopeOptions}
+          ariaLabel={t('settings.channels.dm_scope', 'DM scope')}
           disabled={channelBusy}
-          onchange={(event) =>
-            setChannelFormField('dm_scope', event.currentTarget.value)}
-        >
-          {#each channelDmScopeOptions as option (option.id)}
-            <option value={option.id}>{option.label}</option>
-          {/each}
-        </select>
-      </label>
+          triggerClass="settings-view__dropdown"
+          listClass="settings-view__thinking-list"
+          onValueChange={(value) => setChannelFormField('dm_scope', value)}
+        />
+      </div>
 
       <label class="s-field" for="channel-token-env-input">
         <span class="s-field-label">
