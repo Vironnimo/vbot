@@ -19,6 +19,27 @@ _DEFAULT_IMAGE_TIMEOUT = 120.0
 _BASE64_DATA_URL_PATTERN = re.compile(r"^data:([^;]+);base64,(.+)$", re.ASCII)
 _LOGGER = get_logger("image.providers")
 
+# All known OpenRouter ``image_config`` keys. The wire layer only sends a key
+# when it is present in the merged task-model options; the values are passed
+# through unchanged so the provider receives the shape it expects (arrays for
+# ``rgb_colors`` / ``text_layout`` / ``font_inputs`` / etc., strings for
+# ``style`` / ``scoring_prompt``, numbers for ``strength``).
+_IMAGE_CONFIG_KEYS: tuple[str, ...] = (
+    "aspect_ratio",
+    "image_size",
+    "strength",
+    "style",
+    "rgb_colors",
+    "background_rgb_color",
+    "text_layout",
+    "font_inputs",
+    "super_resolution_references",
+    "scoring_prompt",
+    "scoring_rubric",
+    "background_mode",
+    "background_hex_color",
+)
+
 
 class ProviderImageClient:
     """Small provider HTTP client bound to one image-generation target."""
@@ -75,18 +96,7 @@ class ProviderImageClient:
         *,
         options: JsonObject,
     ) -> ImageGenerationResult:
-        aspect_ratio = options.get("aspect_ratio", "1:1")
-        image_size = options.get("image_size", "1K")
-
-        payload: JsonObject = {
-            "model": self._model_id,
-            "messages": [{"role": "user", "content": prompt}],
-            "modalities": ["image"],
-            "image_config": {
-                "aspect_ratio": aspect_ratio,
-                "image_size": image_size,
-            },
-        }
+        payload = _build_openrouter_image_payload(self._model_id, prompt, options)
 
         _LOGGER.debug(
             "Image generation request: url=%s%s model=%s",
@@ -119,6 +129,38 @@ class ProviderImageClient:
         if self._provider.extra_headers:
             headers.update(self._provider.extra_headers)
         return headers
+
+
+def _build_openrouter_image_payload(
+    model_id: str,
+    prompt: str,
+    options: JsonObject,
+) -> JsonObject:
+    """Build the OpenRouter image-generation request payload.
+
+    ``image_config`` is assembled from the known image_config keys that are
+    actually present in *options* — no defaults are invented for absent keys,
+    so providers that default to ``1:1``/``1K`` (or any other value) keep
+    their own defaults when the user has not pinned a value. The top-level
+    ``seed`` is sent when it is present in *options*; the field is
+    provider-level, not nested under ``image_config``.
+    """
+
+    image_config: JsonObject = {}
+    for key in _IMAGE_CONFIG_KEYS:
+        if key in options:
+            image_config[key] = options[key]
+
+    payload: JsonObject = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image"],
+    }
+    if image_config:
+        payload["image_config"] = image_config
+    if "seed" in options:
+        payload["seed"] = options["seed"]
+    return payload
 
 
 def _classify_image_response(response: httpx.Response) -> None:

@@ -75,6 +75,45 @@ async def test_openrouter_tts_returns_audio_bytes() -> None:
     assert result.generation_id == "gen_1"
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_tts_forwards_model_specific_voice_verbatim() -> None:
+    # Kokoro advertises 54 voice ids via ``supported_voices``; ``af_aoede`` is
+    # not in the OpenAI canonical list and is the kind of value an OpenRouter
+    # TTS target would surface through the model-aware schema. The wire must
+    # forward whatever the user/model picked without rewriting it.
+    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
+        return_value=httpx.Response(
+            200,
+            content=b"audio",
+            headers={"content-type": "audio/mpeg"},
+        )
+    )
+    client = _openrouter_client("hexgrad/kokoro-82m")
+
+    result = await client.synthesize(
+        "hello",
+        options={
+            "voice": "af_aoede",
+            "response_format": "pcm",
+            "speed": 1.25,
+        },
+    )
+
+    payload = json.loads(route.calls[0].request.content)
+    assert payload["model"] == "hexgrad/kokoro-82m"
+    assert payload["input"] == "hello"
+    assert payload["voice"] == "af_aoede"
+    assert payload["response_format"] == "pcm"
+    assert payload["speed"] == 1.25
+    # No provider-options wrapper should leak in when no ``instructions`` are
+    # set — the model-specific voice path must not be polluted by other keys.
+    assert "provider" not in payload
+    assert result.audio == b"audio"
+    assert result.media_type == "audio/mpeg"
+    assert result.format == "pcm"
+
+
 def _openrouter_client(model_id: str) -> ProviderSpeechClient:
     provider = ProviderConfig(
         id="openrouter",
