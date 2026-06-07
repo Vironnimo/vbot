@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-06T12:53:52.141857+00:00",
+  "fetched_at": "2026-06-07T14:11:13.050326+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -2115,8 +2115,8 @@
         "name": "Qwen: Qwen3.6 27B",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000032",
-          "prompt": "0.00000029"
+          "completion": "0.0000024",
+          "prompt": "0.000000289"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -2141,9 +2141,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 262140,
+          "context_length": 131072,
           "is_moderated": false,
-          "max_completion_tokens": 262140
+          "max_completion_tokens": 131072
         }
       },
       {
@@ -4473,7 +4473,7 @@
         "per_request_limits": null,
         "pricing": {
           "completion": "0.00000015",
-          "prompt": "0.00000004"
+          "prompt": "0.0000001"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -4500,7 +4500,7 @@
         "top_provider": {
           "context_length": 262144,
           "is_moderated": false,
-          "max_completion_tokens": 81920
+          "max_completion_tokens": 262144
         }
       },
       {
@@ -9595,7 +9595,7 @@
         "per_request_limits": null,
         "pricing": {
           "completion": "0.0000004",
-          "prompt": "0.0000001"
+          "prompt": "0.0000004"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -11321,59 +11321,6 @@
           ],
           "tokenizer": "Other"
         },
-        "canonical_slug": "baidu/ernie-4.5-vl-28b-a3b",
-        "context_length": 131072,
-        "created": 1755032836,
-        "default_parameters": {},
-        "description": "A powerful multimodal Mixture-of-Experts chat model featuring 28B total parameters with 3B activated per token, delivering exceptional text and vision understanding through its innovative heterogeneous MoE structure with modality-isolated routing....",
-        "expiration_date": null,
-        "hugging_face_id": "baidu/ERNIE-4.5-VL-28B-A3B-PT",
-        "id": "baidu/ernie-4.5-vl-28b-a3b",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/baidu/ernie-4.5-vl-28b-a3b/endpoints"
-        },
-        "name": "Baidu: ERNIE 4.5 VL 28B A3B",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000056",
-          "prompt": "0.00000014"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 30000,
-          "is_moderated": false,
-          "max_completion_tokens": 8000
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text",
-            "image"
-          ],
-          "instruct_type": null,
-          "modality": "text+image->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
         "canonical_slug": "z-ai/glm-4.5v",
         "context_length": 65536,
         "created": 1754922288,
@@ -12658,7 +12605,7 @@
         "per_request_limits": null,
         "pricing": {
           "completion": "0.0000001",
-          "prompt": "0.000000071"
+          "prompt": "0.00000009"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -13728,56 +13675,6 @@
       {
         "architecture": {
           "input_modalities": [
-            "image",
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text+image->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "Other"
-        },
-        "canonical_slug": "arcee-ai/spotlight",
-        "context_length": 131072,
-        "created": 1746481552,
-        "default_parameters": {},
-        "description": "Spotlight is a 7\u2011billion\u2011parameter vision\u2011language model derived from Qwen 2.5\u2011VL and fine\u2011tuned by Arcee AI for tight image\u2011text grounding tasks. It offers a 32 k\u2011token context window, enabling rich multimodal...",
-        "expiration_date": null,
-        "hugging_face_id": "",
-        "id": "arcee-ai/spotlight",
-        "knowledge_cutoff": "2025-03-31",
-        "links": {
-          "details": "/api/v1/models/arcee-ai/spotlight/endpoints"
-        },
-        "name": "Arcee AI: Spotlight",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00000018",
-          "prompt": "0.00000018"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 131072,
-          "is_moderated": false,
-          "max_completion_tokens": 65537
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
             "text"
           ],
           "instruct_type": null,
@@ -14007,8 +13904,8 @@
         "name": "Qwen: Qwen3 30B A3B",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000045",
-          "prompt": "0.00000009"
+          "completion": "0.0000005",
+          "prompt": "0.00000012"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -14662,7 +14559,7 @@
         "per_request_limits": null,
         "pricing": {
           "completion": "0.0000003",
-          "prompt": "0.00000008"
+          "prompt": "0.0000001"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -14872,8 +14769,8 @@
         "name": "Google: Gemma 3 4B",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000008",
-          "prompt": "0.00000004"
+          "completion": "0.0000001",
+          "prompt": "0.00000005"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -14925,8 +14822,8 @@
         "name": "Google: Gemma 3 12B",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000013",
-          "prompt": "0.00000004"
+          "completion": "0.00000015",
+          "prompt": "0.00000005"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17414,8 +17311,8 @@
         "name": "Meta: Llama 3.2 11B Vision Instruct",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.000000245",
-          "prompt": "0.000000245"
+          "completion": "0.000000345",
+          "prompt": "0.000000345"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -17675,8 +17572,8 @@
         "name": "Nous: Hermes 3 70B Instruct",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.0000003",
-          "prompt": "0.0000003"
+          "completion": "0.0000007",
+          "prompt": "0.0000007"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -18367,7 +18264,7 @@
         "created": 1713398400,
         "default_parameters": {},
         "description": "Meta's latest class of model (Llama 3) launched with a variety of sizes & flavors. This 8B instruct-tuned version was optimized for high quality dialogue usecases. It has demonstrated strong...",
-        "expiration_date": "2026-06-19",
+        "expiration_date": null,
         "hugging_face_id": "meta-llama/Meta-Llama-3-8B-Instruct",
         "id": "meta-llama/llama-3-8b-instruct",
         "knowledge_cutoff": "2023-12-31",
@@ -18377,8 +18274,8 @@
         "name": "Meta: Llama 3 8B Instruct",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000004",
-          "prompt": "0.00000004"
+          "completion": "0.00000014",
+          "prompt": "0.00000014"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -18387,8 +18284,6 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
-          "response_format",
-          "seed",
           "stop",
           "temperature",
           "top_k",
@@ -18398,7 +18293,7 @@
         "top_provider": {
           "context_length": 8192,
           "is_moderated": false,
-          "max_completion_tokens": 8192
+          "max_completion_tokens": null
         }
       },
       {
@@ -18886,60 +18781,6 @@
           "context_length": null,
           "is_moderated": false,
           "max_completion_tokens": null
-        }
-      },
-      {
-        "architecture": {
-          "input_modalities": [
-            "text"
-          ],
-          "instruct_type": null,
-          "modality": "text->text",
-          "output_modalities": [
-            "text"
-          ],
-          "tokenizer": "GPT"
-        },
-        "canonical_slug": "openai/gpt-4-1106-preview",
-        "context_length": 128000,
-        "created": 1699228800,
-        "default_parameters": {},
-        "description": "The latest GPT-4 Turbo model with vision capabilities. Vision requests can now use JSON mode and function calling.\n\nTraining data: up to April 2023.",
-        "expiration_date": null,
-        "hugging_face_id": null,
-        "id": "openai/gpt-4-1106-preview",
-        "knowledge_cutoff": "2023-04-30",
-        "links": {
-          "details": "/api/v1/models/openai/gpt-4-1106-preview/endpoints"
-        },
-        "name": "OpenAI: GPT-4 Turbo (older v1106)",
-        "per_request_limits": null,
-        "pricing": {
-          "completion": "0.00003",
-          "prompt": "0.00001",
-          "web_search": "0.01"
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": null,
-        "top_provider": {
-          "context_length": 128000,
-          "is_moderated": true,
-          "max_completion_tokens": 4096
         }
       },
       {
@@ -21555,7 +21396,7 @@
           "top_p": null
         },
         "description": "Riverflow V2.5 Pro is the most powerful variant of Sourceful's Riverflow 2.5 lineup, best for top-tier control and quality-sensitive outputs. The Riverflow 2.5 series is a unified text-to-image and image-to-image...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-09",
         "hugging_face_id": null,
         "id": "sourceful/riverflow-v2.5-pro:free",
         "knowledge_cutoff": null,
@@ -21604,7 +21445,7 @@
           "top_p": null
         },
         "description": "Riverflow V2.5 Pro is the most powerful variant of Sourceful's Riverflow 2.5 lineup, best for top-tier control and quality-sensitive outputs. The Riverflow 2.5 series is a unified text-to-image and image-to-image...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-09",
         "hugging_face_id": null,
         "id": "sourceful/riverflow-v2.5-pro:free",
         "knowledge_cutoff": null,
@@ -21653,7 +21494,7 @@
           "top_p": null
         },
         "description": "Riverflow V2.5 Fast is the speed-optimized variant of Sourceful's Riverflow 2.5 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.5 series is a unified text-to-image and image-to-image family...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-09",
         "hugging_face_id": null,
         "id": "sourceful/riverflow-v2.5-fast:free",
         "knowledge_cutoff": null,
@@ -21702,7 +21543,7 @@
           "top_p": null
         },
         "description": "Riverflow V2.5 Fast is the speed-optimized variant of Sourceful's Riverflow 2.5 lineup, best for production deployments and latency-critical workflows. The Riverflow 2.5 series is a unified text-to-image and image-to-image family...",
-        "expiration_date": null,
+        "expiration_date": "2026-06-09",
         "hugging_face_id": null,
         "id": "sourceful/riverflow-v2.5-fast:free",
         "knowledge_cutoff": null,

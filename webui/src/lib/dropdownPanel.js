@@ -49,13 +49,18 @@ export function portal(node, target = document.body) {
  * @returns {{ placement: 'top' | 'bottom', left: number, width: number,
  *             verticalRule: string, optionsMaxHeight: number }}
  */
-export function computePanelPosition(triggerElement, { reservedHeight = 0 } = {}) {
+export function computePanelPosition(
+  triggerElement,
+  { reservedHeight = 0 } = {},
+) {
   const rect = triggerElement.getBoundingClientRect();
   const width = rect.width;
 
-  const availableBelow = window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
+  const availableBelow =
+    window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
   const availableAbove = rect.top - OFFSET - EDGE_PADDING;
-  const useAbove = availableBelow < FLIP_THRESHOLD && availableAbove > availableBelow;
+  const useAbove =
+    availableBelow < FLIP_THRESHOLD && availableAbove > availableBelow;
 
   const available = useAbove ? availableAbove : availableBelow;
   const optionsMaxHeight = Math.max(
