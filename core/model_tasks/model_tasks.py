@@ -12,6 +12,7 @@ from core.model_tasks.local_targets import (
     LocalTaskTargetRegistry,
 )
 from core.model_tasks.options import TaskModelOptionSchema, option_schema_for
+from core.models import ModelQuery
 from core.utils.errors import VBotError
 
 JsonObject = dict[str, Any]
@@ -215,6 +216,16 @@ class TaskModelService:
         return {**schema.default_options(), **dict(binding.options)}
 
     def _provider_targets(self, task_type: str) -> list[TaskModelTarget]:
+        """Return provider targets for *task_type*, filtered by capability and credentials.
+
+        Capability / task matching is delegated to the shared :class:`ModelQuery`
+        in :mod:`core.models` so that the same vocabulary and matching rules
+        are used by ``model.list`` and ``task_model.list_targets``. This
+        method owns the provider-side concerns: credential gating (which
+        connections are usable) and multi-connection expansion (one target
+        per usable connection). The query itself is credential-free.
+        """
+
         targets: list[TaskModelTarget] = []
         for provider_id in self._providers.list_ids():
             provider = self._providers.get(provider_id)
@@ -227,9 +238,9 @@ class TaskModelService:
                 continue
 
             multiple_connections = len(usable_connections) > 1
-            for model in self._models.list_for_provider(provider_id):
-                if task_type not in model.capabilities.task_types:
-                    continue
+            for matched_provider_id, model in self._models.query(
+                ModelQuery(provider_id=provider_id, tasks=(task_type,))
+            ):
                 for connection in usable_connections:
                     connection_label = getattr(connection, "label", connection.id)
                     label = f"{provider.name} / {model.name}"
@@ -238,12 +249,12 @@ class TaskModelService:
                     targets.append(
                         TaskModelTarget(
                             id=public_provider_target_id(
-                                provider_id, model.model_id, connection.id
+                                matched_provider_id, model.model_id, connection.id
                             ),
                             kind="provider",
-                            provider_id=provider_id,
+                            provider_id=matched_provider_id,
                             model_id=model.model_id,
-                            connection_id=f"{provider_id}:{connection.id}",
+                            connection_id=f"{matched_provider_id}:{connection.id}",
                             connection_label=connection_label,
                             label=label,
                             task_types=tuple(model.capabilities.task_types),
