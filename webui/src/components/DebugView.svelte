@@ -32,7 +32,7 @@
   let traceLimitDirty = $state(false);
   let loadingDetail = $state(false);
   let detailError = $state('');
-  let detailRequestToken = 0;
+  let detailRequestToken = $state(0);
 
   let hasTraces = $derived(viewState.traces.length > 0);
   let hasSelection = $derived(viewState.selectedTrace !== null);

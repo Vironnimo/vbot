@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T14:11:09.761962+00:00",
+  "fetched_at": "2026-06-07T17:39:40.878433+00:00",
   "models": {
     "claude-haiku-4.5": {
       "capabilities": {
@@ -19,6 +19,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -66,6 +67,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -114,6 +116,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -171,6 +174,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -227,6 +231,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -275,6 +280,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -330,6 +336,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -373,6 +380,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -421,6 +429,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -472,6 +481,7 @@
           "reasoning_effort",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -521,6 +531,7 @@
         "supported_parameters": [
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -556,6 +567,7 @@
         "supported_parameters": [
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -591,6 +603,7 @@
         "supported_parameters": [
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -627,6 +640,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -663,6 +677,7 @@
         "supported_parameters": [
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -699,6 +714,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -738,6 +754,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -780,6 +797,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -821,6 +839,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -861,6 +880,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -900,6 +920,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -938,6 +959,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -977,6 +999,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1014,6 +1037,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1054,6 +1078,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1107,6 +1132,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1160,6 +1186,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1215,6 +1242,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1269,6 +1297,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1322,6 +1351,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1370,6 +1400,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1418,6 +1449,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1466,6 +1498,7 @@
           "structured_outputs",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1507,6 +1540,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1538,6 +1572,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1569,6 +1604,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1603,6 +1639,7 @@
           "parallel_tool_calls",
           "tool_calls"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"

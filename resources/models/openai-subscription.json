@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T14:11:11.454963+00:00",
+  "fetched_at": "2026-06-07T17:39:42.452356+00:00",
   "models": {
     "codex-auto-review": {
       "capabilities": {
@@ -20,6 +20,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -52,6 +53,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -84,6 +86,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -116,6 +119,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",

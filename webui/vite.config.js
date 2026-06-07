@@ -10,4 +10,7 @@ export default defineConfig({
       $lib: path.resolve(import.meta.dirname, 'src/lib'),
     },
   },
+  build: {
+    chunkSizeWarningLimit: 800,
+  },
 });

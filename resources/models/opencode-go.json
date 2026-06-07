@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T14:11:12.429403+00:00",
+  "fetched_at": "2026-06-07T17:39:43.272469+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -338,6 +338,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -416,6 +417,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
