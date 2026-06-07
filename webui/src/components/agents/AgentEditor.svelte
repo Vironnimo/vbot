@@ -62,7 +62,6 @@
   let isSaving = $state(false);
   let isDeleting = $state(false);
   let errorMessage = $state('');
-  let isThinkingEffortOpen = $state(false);
   let agentAutoSaveTimer = null;
   let destroyed = false;
 
@@ -643,10 +642,7 @@
       </div>
     </div>
 
-    <div
-      class="detail-group agents-view__model-group"
-      class:agents-view__model-group--dropdown-open={isThinkingEffortOpen}
-    >
+    <div class="detail-group agents-view__model-group">
       <div class="detail-group-title">
         {t('agents.detail.model', 'Model')}
       </div>
@@ -707,9 +703,6 @@
             ariaLabel={t('agents.form.thinkingEffort', 'Thinking effort')}
             triggerClass="agents-view__dropdown"
             listClass="agents-view__thinking-list"
-            onOpenChange={(nextOpen) => {
-              isThinkingEffortOpen = nextOpen;
-            }}
             onValueChange={(selectedValue) => {
               formValues.thinking_effort = selectedValue;
             }}

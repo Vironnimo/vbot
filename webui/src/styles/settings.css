@@ -247,10 +247,6 @@
   width: 100%;
 }
 
-.settings-view__model-panel {
-  z-index: 220;
-}
-
 .settings-view__thinking-list {
   max-height: 280px;
   overflow-y: auto;

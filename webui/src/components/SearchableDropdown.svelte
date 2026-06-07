@@ -1,11 +1,10 @@
 <script>
   import { tick } from 'svelte';
 
+  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
 
-  const PANEL_EDGE_PADDING = 8;
-  const PANEL_OFFSET = 4;
-  const PANEL_MIN_OPTIONS_HEIGHT = 96;
+  const SEARCH_HEADER_HEIGHT = 44;
   const noop = () => {};
 
   let {
@@ -115,45 +114,34 @@
       return;
     }
 
-    const rect = triggerElement.getBoundingClientRect();
-    const width = rect.width;
-    const availableBelow =
-      window.innerHeight - rect.bottom - PANEL_OFFSET - PANEL_EDGE_PADDING;
-    const availableAbove = rect.top - PANEL_OFFSET - PANEL_EDGE_PADDING;
-    const useAbove = availableBelow < 200 && availableAbove > availableBelow;
-    const maxOptionsHeight = Math.max(
-      PANEL_MIN_OPTIONS_HEIGHT,
-      Math.min(useAbove ? availableAbove - 44 : availableBelow - 44, 240),
-    );
-    const left = Math.min(
-      Math.max(PANEL_EDGE_PADDING, rect.left),
-      Math.max(
-        PANEL_EDGE_PADDING,
-        window.innerWidth - width - PANEL_EDGE_PADDING,
-      ),
-    );
-    const top = useAbove
-      ? Math.max(PANEL_EDGE_PADDING, rect.top - PANEL_OFFSET)
-      : Math.min(
-          window.innerHeight - PANEL_EDGE_PADDING,
-          rect.bottom + PANEL_OFFSET,
-        );
+    const { placement, left, width, verticalRule, optionsMaxHeight } =
+      computePanelPosition(triggerElement, {
+        reservedHeight: SEARCH_HEADER_HEIGHT,
+      });
 
-    panelPlacement = useAbove ? 'top' : 'bottom';
+    panelPlacement = placement;
     panelStyle = [
       `left: ${left}px`,
-      useAbove
-        ? `bottom: ${window.innerHeight - rect.top + PANEL_OFFSET}px`
-        : `top: ${top}px`,
+      verticalRule,
       `width: ${width}px`,
-      `--searchable-dropdown-options-max-height: ${maxOptionsHeight}px`,
+      `--searchable-dropdown-options-max-height: ${optionsMaxHeight}px`,
     ].join('; ');
   }
 
   function handleDocumentMouseDown(event) {
-    if (!isOpen || !rootElement?.contains(event.target)) {
-      close();
+    if (!isOpen) {
+      return;
     }
+
+    // The panel is portaled out of `rootElement`, so check both.
+    if (
+      rootElement?.contains(event.target) ||
+      panelElement?.contains(event.target)
+    ) {
+      return;
+    }
+
+    close();
   }
 
   function handleDocumentKeyDown(event) {
@@ -245,11 +233,12 @@
     </svg>
   </button>
 
+  {#if isOpen}
   <div
     bind:this={panelElement}
+    use:portal
     class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
     role="listbox"
-    aria-hidden={!isOpen}
     data-placement={panelPlacement}
     data-positioning="fixed"
     style={panelStyle}
@@ -295,4 +284,5 @@
       {/if}
     </div>
   </div>
+  {/if}
 </div>

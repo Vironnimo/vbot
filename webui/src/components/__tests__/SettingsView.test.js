@@ -899,8 +899,9 @@ function getSearchableTrigger(id) {
   return trigger;
 }
 
-function getSearchablePanel(id) {
-  return getSearchableRoot(id)?.querySelector('.searchable-dropdown__panel');
+function getSearchablePanel() {
+  // The panel is portaled to <body>; only the open dropdown renders one.
+  return document.body.querySelector('.searchable-dropdown__panel');
 }
 
 function openSimpleDropdown(id) {
@@ -918,18 +919,15 @@ function selectSimpleOption(id, label) {
   flushSync();
 }
 
-function getSimpleRoot(id) {
-  return getSimpleTrigger(id)?.closest('.dropdown-primitive');
-}
-
 function getSimpleTrigger(id) {
   const trigger = document.body.querySelector(`button#${id}`);
   expect(trigger).toBeTruthy();
   return trigger;
 }
 
-function getSimpleList(id) {
-  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
+function getSimpleList() {
+  // The list is portaled to <body>; only the open dropdown renders one.
+  return document.body.querySelector('.dropdown-primitive__list');
 }
 
 function stubTriggerRect(trigger, rect) {
