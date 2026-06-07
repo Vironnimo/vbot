@@ -265,6 +265,69 @@ def test_build_payload_drops_explicit_none_for_seed() -> None:
     assert "seed" not in payload
 
 
+def test_build_payload_drops_empty_placeholder_image_config_values() -> None:
+    """Empty option placeholders injected by the schema defaults
+    (``background_hex_color: ""``, empty ``font_inputs``/``scoring_rubric``
+    arrays, empty ``style``) are unset and must not reach the wire. Sourceful
+    rejects ``background_hex_color: ""`` with a 400, so the regression guard
+    is that these keys are absent while real values stay."""
+
+    payload = _build_openrouter_image_payload(
+        "sourceful/riverflow-v2.5-pro",
+        "a cat",
+        {
+            "aspect_ratio": "1:1",
+            "background_mode": "original",
+            "background_hex_color": "",
+            "scoring_prompt": "",
+            "scoring_rubric": [],
+            "font_inputs": [],
+            "style": "",
+        },
+    )
+
+    assert payload["image_config"] == {
+        "aspect_ratio": "1:1",
+        "background_mode": "original",
+    }
+    assert "background_hex_color" not in payload["image_config"]
+    assert "scoring_prompt" not in payload["image_config"]
+    assert "scoring_rubric" not in payload["image_config"]
+    assert "font_inputs" not in payload["image_config"]
+    assert "style" not in payload["image_config"]
+
+
+def test_build_payload_keeps_zero_and_false_image_config_values() -> None:
+    """Numeric ``0`` and ``False`` are real values, not empty placeholders,
+    and must be forwarded — only ``None``/``""``/``[]``/``{}`` are dropped."""
+
+    payload = _build_openrouter_image_payload(
+        "recraft/recraft-v3",
+        "a cat",
+        {"strength": 0.0},
+    )
+
+    assert payload["image_config"] == {"strength": 0.0}
+
+
+def test_build_openai_payload_drops_empty_placeholder_values() -> None:
+    """The OpenAI builder also drops empty placeholders so a cleared optional
+    field is not forwarded to ``/v1/images/generations``."""
+
+    payload = _build_openai_image_payload(
+        "gpt-image-1",
+        "a cat",
+        {"size": "1024x1024", "style": "", "output_format": "", "n": 1},
+    )
+
+    assert payload == {
+        "model": "gpt-image-1",
+        "prompt": "a cat",
+        "size": "1024x1024",
+        "n": 1,
+    }
+
+
 def test_image_config_keys_constant_matches_plan() -> None:
     """The image_config key whitelist must match the spec in the plan."""
 

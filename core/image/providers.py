@@ -185,6 +185,21 @@ class ProviderImageClient:
         return headers
 
 
+def _is_omittable_option(value: Any) -> bool:
+    """True when an option value carries nothing to forward to the provider.
+
+    Empty placeholders (``None``, ``""``, ``[]``, ``{}``) are option-form
+    defaults that mean "unset" — they are injected by the schema's
+    ``default_options`` for optional text/json fields and must not reach the
+    wire (e.g. Sourceful rejects ``background_hex_color: ""``). Real values
+    such as numeric ``0``/``0.0`` and ``False`` carry information and are kept.
+    """
+
+    if value is None:
+        return True
+    return isinstance(value, (str, list, dict)) and len(value) == 0
+
+
 def _build_openrouter_image_payload(
     model_id: str,
     prompt: str,
@@ -195,14 +210,16 @@ def _build_openrouter_image_payload(
     ``image_config`` is assembled from the known image_config keys that are
     actually present in *options* — no defaults are invented for absent keys,
     so providers that default to ``1:1``/``1K`` (or any other value) keep
-    their own defaults when the user has not pinned a value. The top-level
-    ``seed`` is sent when it is present in *options*; the field is
-    provider-level, not nested under ``image_config``.
+    their own defaults when the user has not pinned a value. Keys whose value
+    is an empty placeholder (see :func:`_is_omittable_option`) are dropped so
+    unset optional fields are not forwarded. The top-level ``seed`` is sent
+    when it is present in *options*; the field is provider-level, not nested
+    under ``image_config``.
     """
 
     image_config: JsonObject = {}
     for key in _IMAGE_CONFIG_KEYS:
-        if key in options:
+        if key in options and not _is_omittable_option(options[key]):
             image_config[key] = options[key]
 
     payload: JsonObject = {
@@ -224,10 +241,12 @@ def _build_openai_image_payload(
 ) -> JsonObject:
     """Build the OpenAI ``/v1/images/generations`` request payload.
 
-    Only fields that are present in *options* are included; no defaults are
-    invented. ``n > 1`` is honored: the response ``data`` array is mapped to
-    one image per element downstream, and ``ImageService.generate_artifacts``
-    already loops over the result to persist one artifact per image.
+    Only fields that are present in *options* with a non-empty value are
+    included; no defaults are invented and empty placeholders are dropped
+    (see :func:`_is_omittable_option`). ``n > 1`` is honored: the response
+    ``data`` array is mapped to one image per element downstream, and
+    ``ImageService.generate_artifacts`` already loops over the result to
+    persist one artifact per image.
     """
 
     payload: JsonObject = {
@@ -235,7 +254,7 @@ def _build_openai_image_payload(
         "prompt": prompt,
     }
     for key in _OPENAI_IMAGE_KEYS:
-        if key in options:
+        if key in options and not _is_omittable_option(options[key]):
             payload[key] = options[key]
     return payload
 
