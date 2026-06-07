@@ -2,6 +2,41 @@ export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
 export const TASK_IMAGE_GENERATION = 'image_generation';
 
+export const JSON_OPTION_TYPE = 'json';
+
+// Result of parsing a JSON field's text input. The Settings UI keeps the
+// last valid value in the binding and shows the error message inline;
+// when ``error`` is non-empty, ``value`` is ``undefined`` and the binding
+// must not be updated with the typed text.
+export function parseJsonFieldValue(text) {
+  if (typeof text !== 'string' || text.length === 0) {
+    return { value: undefined, error: '' };
+  }
+  try {
+    return { value: JSON.parse(text), error: '' };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { value: undefined, error: message };
+  }
+}
+
+// Render a stored JSON value (object/array/primitive) for display in a
+// textarea. ``undefined``/``null`` fall back to an empty string so the
+// control starts blank; non-JSON values are stringified verbatim.
+export function stringifyJsonFieldValue(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 const SPEECH_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_SPEECH_TO_TEXT,
