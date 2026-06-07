@@ -1008,6 +1008,94 @@ describe('ChatTimeline', () => {
     expect(pre.textContent).toContain('const value = 1;');
   });
 
+  it('opens a lightbox when a markdown image is clicked and closes it on Escape', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-assistant-markdown-image-lightbox',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-assistant-markdown-image',
+      sequence: 1,
+      payload: {
+        message: {
+          role: 'assistant',
+          content: '![diagram](https://example.com/diagram.png)',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const image = document.querySelector('.assistant-run .msg-markdown img');
+    expect(image).toBeTruthy();
+    expect(image.getAttribute('src')).toBe('https://example.com/diagram.png');
+    expect(document.querySelector('.image-lightbox')).toBeNull();
+
+    image.click();
+    flushSync();
+
+    const lightbox = document.querySelector('.image-lightbox');
+    expect(lightbox).toBeTruthy();
+    expect(
+      lightbox.querySelector('.image-lightbox__image').getAttribute('src'),
+    ).toBe('https://example.com/diagram.png');
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    flushSync();
+
+    expect(document.querySelector('.image-lightbox')).toBeNull();
+  });
+
+  it('does not open the lightbox for user attachment thumbnails', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-user-attachment-no-lightbox',
+    );
+    sessionState.messages = [
+      {
+        id: 'user-attachment-image',
+        role: 'user',
+        content: [
+          {
+            type: 'media',
+            attachment_id: 'attachment-no-lightbox',
+            filename: 'photo.png',
+            media_type: 'image/png',
+          },
+        ],
+        timestamp: '2026-05-10T12:00:00Z',
+      },
+    ];
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const image = document.querySelector('.inline-attachment-image');
+    expect(image).toBeTruthy();
+
+    image.click();
+    flushSync();
+
+    expect(document.querySelector('.image-lightbox')).toBeNull();
+  });
+
   it('keeps markdown-like user text as plain text', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -16,6 +16,7 @@
   } from '../lib/chatState.js';
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
+  import ImageLightbox from './ImageLightbox.svelte';
 
   let {
     sessionState,
@@ -46,6 +47,7 @@
     new Set(timelineDateKeys.filter(Boolean)).size > 1,
   );
   let scrollContainer = $state();
+  let lightboxImage = $state(null);
   let reasoningDisclosureState = $state({});
   let pendingSubmittedTurnScrollKey = $state(0);
   let pendingSubmittedTurnScrollRunId = $state('');
@@ -123,6 +125,17 @@
     });
   });
 
+  // Delegated listener (not a markup handler) because Markdown images are
+  // rendered through {@html} and cannot carry their own Svelte click handler.
+  $effect(() => {
+    const container = scrollContainer;
+    if (!container) {
+      return undefined;
+    }
+    container.addEventListener('click', handleTimelineClick);
+    return () => container.removeEventListener('click', handleTimelineClick);
+  });
+
   function isNearBottom(container) {
     return (
       !container ||
@@ -146,6 +159,24 @@
         .join('~')}`;
     }
     return item.id;
+  }
+
+  function handleTimelineClick(event) {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement)) {
+      return;
+    }
+    // Only rendered Markdown images open the lightbox; user attachment
+    // thumbnails keep their existing open-in-new-tab link behavior.
+    if (!image.closest('.msg-markdown')) {
+      return;
+    }
+    event.preventDefault();
+    lightboxImage = { src: image.currentSrc || image.src, alt: image.alt };
+  }
+
+  function closeLightbox() {
+    lightboxImage = null;
   }
 
   function isReasoningOpen(id) {
@@ -356,3 +387,11 @@
     {/if}
   </div>
 </section>
+
+{#if lightboxImage}
+  <ImageLightbox
+    src={lightboxImage.src}
+    alt={lightboxImage.alt}
+    onClose={closeLightbox}
+  />
+{/if}
