@@ -9,12 +9,15 @@
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
+    JSON_OPTION_TYPE,
     TASK_MODEL_ROWS,
     applyOptionDefaults,
     createTaskModelUpdatePayload,
     normalizeOptionSchema,
     normalizeTargets,
     normalizeTaskModelSettings,
+    parseJsonFieldValue,
+    stringifyJsonFieldValue,
     taskModelBindingsMatch,
   } from '$lib/taskModelSettings.js';
 
@@ -38,6 +41,11 @@
   let taskModelLoading = $state(false);
   let taskModelSaving = $state(false);
   let taskModelError = $state('');
+  // Per-field JSON parse errors keyed by `${taskType}::${field.name}`.
+  // Empty string means "no error / not yet typed". The binding is never
+  // updated with an invalid value; this map only drives the inline error
+  // message under the textarea.
+  let taskModelJsonErrors = $state({});
   let autoSaveTimer = null;
   let autoSaveArmed = $state(false);
 
@@ -118,6 +126,7 @@
         ...taskModelSchemasByType,
         [taskType]: [],
       };
+      clearTaskModelJsonErrors(taskType);
       return;
     }
 
@@ -127,6 +136,7 @@
       ...taskModelSchemasByType,
       [taskType]: fields,
     };
+    clearTaskModelJsonErrors(taskType);
     taskModelBindings = {
       ...taskModelBindings,
       [taskType]: applyOptionDefaults(taskModelBindings[taskType], fields),
@@ -203,6 +213,15 @@
   }
 
   function handleTaskModelOptionChange(taskType, field, event) {
+    if (field.type === JSON_OPTION_TYPE) {
+      const text = event.currentTarget.value;
+      const { value, error } = parseJsonFieldValue(text);
+      setTaskModelJsonError(taskType, field, error);
+      if (error === '' && value !== undefined) {
+        setTaskModelOption(taskType, field, value);
+      }
+      return;
+    }
     setTaskModelOption(
       taskType,
       field,
@@ -286,9 +305,41 @@
     const options = taskModelBindings[taskType]?.options ?? {};
     const value = options[field.name];
     if (value === undefined || value === null) {
+      if (field.type === JSON_OPTION_TYPE) {
+        return stringifyJsonFieldValue(field.default);
+      }
       return field.default ?? '';
     }
+    if (field.type === JSON_OPTION_TYPE) {
+      return stringifyJsonFieldValue(value);
+    }
     return value;
+  }
+
+  function taskModelJsonError(taskType, field) {
+    return taskModelJsonErrors[`${taskType}::${field.name}`] ?? '';
+  }
+
+  function setTaskModelJsonError(taskType, field, message) {
+    const key = `${taskType}::${field.name}`;
+    const nextErrors = { ...taskModelJsonErrors };
+    if (message) {
+      nextErrors[key] = message;
+    } else {
+      delete nextErrors[key];
+    }
+    taskModelJsonErrors = nextErrors;
+  }
+
+  function clearTaskModelJsonErrors(taskType) {
+    const prefix = `${taskType}::`;
+    const nextErrors = {};
+    for (const [key, message] of Object.entries(taskModelJsonErrors)) {
+      if (!key.startsWith(prefix)) {
+        nextErrors[key] = message;
+      }
+    }
+    taskModelJsonErrors = nextErrors;
   }
 </script>
 
@@ -344,9 +395,15 @@
       {#if binding.target && fields.length > 0}
         <div class="s-task-model-options">
           {#each fields as field (field.name)}
+            {@const jsonError =
+              field.type === JSON_OPTION_TYPE
+                ? taskModelJsonError(row.taskType, field)
+                : ''}
             <svelte:element
-              this={field.type === 'select' ? 'div' : 'label'}
-              class="s-field"
+              this={field.type === 'select' || field.type === JSON_OPTION_TYPE
+                ? 'div'
+                : 'label'}
+              class={`s-field${field.type === JSON_OPTION_TYPE ? ' s-field--full' : ''}`}
             >
               <span class="s-field-label">{field.label}</span>
               {#if field.type === 'select'}
@@ -369,6 +426,39 @@
                   oninput={(event) =>
                     handleTaskModelOptionChange(row.taskType, field, event)}
                 ></textarea>
+              {:else if field.type === JSON_OPTION_TYPE}
+                <textarea
+                  class={`s-input s-textarea s-textarea--json${jsonError ? ' s-textarea--invalid' : ''}`}
+                  rows="8"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  aria-invalid={jsonError ? 'true' : 'false'}
+                  aria-describedby={jsonError
+                    ? `s-task-model-json-error-${row.taskType}-${field.name}`
+                    : undefined}
+                  placeholder={t(
+                    'settings.specializedModels.jsonPlaceholder',
+                    '[ … ] or { … }',
+                  )}
+                  value={taskModelOptionValue(row.taskType, field)}
+                  disabled={taskModelSaving}
+                  oninput={(event) =>
+                    handleTaskModelOptionChange(row.taskType, field, event)}
+                ></textarea>
+                {#if jsonError}
+                  <span
+                    id={`s-task-model-json-error-${row.taskType}-${field.name}`}
+                    class="s-field-error"
+                    role="alert"
+                  >
+                    {t(
+                      'settings.specializedModels.jsonInvalid',
+                      'Invalid JSON: {error}',
+                      { error: jsonError },
+                    )}
+                  </span>
+                {/if}
               {:else if field.type === 'number'}
                 <input
                   class="s-input"

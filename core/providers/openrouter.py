@@ -64,6 +64,11 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             if "output_modalities" in architecture
             else ["text"]
         )
+        # OpenRouter publishes ``supported_voices`` as a top-level array of
+        # plain voice-id strings on TTS-capable models (and empty/present on
+        # other models). Defensive default keeps the field safe to read for
+        # every model entry — providers omit it, not raise, when irrelevant.
+        supported_voices = _read_optional_string_list(raw, "supported_voices")
 
         return Model(
             model_id=_read_string(raw, "id"),
@@ -84,6 +89,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 input_modalities=tuple(input_modalities),
                 output_modalities=tuple(output_modalities),
                 supported_parameters=tuple(supported_parameters),
+                supported_voices=tuple(supported_voices),
             ),
             context_window=_read_int(raw, "context_length"),
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
@@ -121,3 +127,19 @@ def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str
     if isinstance(modality, str) and modality:
         return {"openrouter": {"modality": modality}}
     return {}
+
+
+def _read_optional_string_list(data: Mapping[str, Any], key: str) -> list[str]:
+    """Read an optional list-of-strings field, returning ``[]`` when absent or malformed.
+
+    Used for OpenRouter fields that are present-but-empty on most models (such as
+    ``supported_voices`` on non-TTS models) where a missing or wrong-shaped value
+    is a normal "not applicable" signal rather than a hard schema error.
+    """
+
+    value = data.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return []
+    return value
