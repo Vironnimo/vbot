@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-06T12:53:52.141857+00:00",
+  "fetched_at": "2026-06-07T14:11:13.050326+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -1228,49 +1228,6 @@
       },
       "name": "Arcee AI: Maestro Reasoning"
     },
-    "arcee-ai/spotlight": {
-      "capabilities": {
-        "input_modalities": [
-          "image",
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": false,
-        "vision": true
-      },
-      "context_window": 131072,
-      "max_output_tokens": 65537,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Arcee AI: Spotlight"
-    },
     "arcee-ai/trinity-large-thinking": {
       "capabilities": {
         "input_modalities": [
@@ -1399,52 +1356,6 @@
         }
       },
       "name": "Arcee AI: Virtuoso Large"
-    },
-    "baidu/ernie-4.5-vl-28b-a3b": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output",
-          "image_input",
-          "image_understanding"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "context_window": 131072,
-      "max_output_tokens": 8000,
-      "metadata": {
-        "openrouter": {
-          "modality": "text+image->text"
-        }
-      },
-      "name": "Baidu: ERNIE 4.5 VL 28B A3B"
     },
     "baidu/ernie-4.5-vl-424b-a47b": {
       "capabilities": {
@@ -4775,7 +4686,7 @@
         "input_modalities": [
           "text"
         ],
-        "json_mode": true,
+        "json_mode": false,
         "output_modalities": [
           "text"
         ],
@@ -4789,8 +4700,6 @@
           "min_p",
           "presence_penalty",
           "repetition_penalty",
-          "response_format",
-          "seed",
           "stop",
           "temperature",
           "top_k",
@@ -4804,7 +4713,7 @@
         "vision": false
       },
       "context_window": 8192,
-      "max_output_tokens": 8192,
+      "max_output_tokens": null,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -8222,50 +8131,6 @@
         }
       },
       "name": "OpenAI: GPT-4"
-    },
-    "openai/gpt-4-1106-preview": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "logit_bias",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "response_format",
-          "seed",
-          "stop",
-          "structured_outputs",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_logprobs",
-          "top_p"
-        ],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "OpenAI: GPT-4 Turbo (older v1106)"
     },
     "openai/gpt-4-turbo": {
       "capabilities": {
@@ -13450,7 +13315,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 81920,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -13646,7 +13511,7 @@
         "vision": true
       },
       "context_window": 262144,
-      "max_output_tokens": 262140,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"

@@ -883,7 +883,10 @@ describe('AgentsView', () => {
     // The panel only exists while open, so gate on the trigger label instead:
     // the connection suffix appears once both the agent and the connection
     // catalog have loaded.
-    await waitForCondition(() => modelTriggerLabel().includes('(API Key)'), 100);
+    await waitForCondition(
+      () => modelTriggerLabel().includes('(API Key)'),
+      100,
+    );
 
     await openSearchableDropdown('agent-model');
     selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');

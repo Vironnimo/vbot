@@ -234,55 +234,56 @@
   </button>
 
   {#if isOpen}
-  <div
-    bind:this={panelElement}
-    use:portal
-    class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
-    role="listbox"
-    data-placement={panelPlacement}
-    data-positioning="fixed"
-    style={panelStyle}
-  >
-    <div class="s-dropdown-search searchable-dropdown__search">
-      <svg viewBox="0 0 12 12" aria-hidden="true">
-        <circle cx="5" cy="5" r="3.5" />
-        <path d="M8 8l2.5 2.5" />
-      </svg>
-      <input
-        bind:this={searchInputElement}
-        type="text"
-        bind:value={searchQuery}
-        placeholder={searchPlaceholder}
-      />
-    </div>
+    <div
+      bind:this={panelElement}
+      use:portal
+      class="s-dropdown-panel searchable-dropdown__panel {panelClass}"
+      role="listbox"
+      data-placement={panelPlacement}
+      data-positioning="fixed"
+      style={panelStyle}
+    >
+      <div class="s-dropdown-search searchable-dropdown__search">
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <circle cx="5" cy="5" r="3.5" />
+          <path d="M8 8l2.5 2.5" />
+        </svg>
+        <input
+          bind:this={searchInputElement}
+          type="text"
+          bind:value={searchQuery}
+          placeholder={searchPlaceholder}
+        />
+      </div>
 
-    <div class="s-dropdown-options searchable-dropdown__options">
-      {#if filteredOptions.length > 0}
-        {#each filteredOptions as option (option.value)}
-          <button
-            class="s-dropdown-opt searchable-dropdown__option"
-            class:selected={option.value === value}
-            type="button"
-            role="option"
-            disabled={option.disabled}
-            aria-selected={option.value === value}
-            onclick={() => selectOption(option)}
-          >
-            <span class="searchable-dropdown__option-label">{option.label}</span
+      <div class="s-dropdown-options searchable-dropdown__options">
+        {#if filteredOptions.length > 0}
+          {#each filteredOptions as option (option.value)}
+            <button
+              class="s-dropdown-opt searchable-dropdown__option"
+              class:selected={option.value === value}
+              type="button"
+              role="option"
+              disabled={option.disabled}
+              aria-selected={option.value === value}
+              onclick={() => selectOption(option)}
             >
-            {#if option.secondaryLabel}
-              <span class="searchable-dropdown__option-meta">
-                {option.secondaryLabel}
-              </span>
-            {/if}
-          </button>
-        {/each}
-      {:else}
-        <div class="s-dropdown-empty searchable-dropdown__empty">
-          {emptyLabel}
-        </div>
-      {/if}
+              <span class="searchable-dropdown__option-label"
+                >{option.label}</span
+              >
+              {#if option.secondaryLabel}
+                <span class="searchable-dropdown__option-meta">
+                  {option.secondaryLabel}
+                </span>
+              {/if}
+            </button>
+          {/each}
+        {:else}
+          <div class="s-dropdown-empty searchable-dropdown__empty">
+            {emptyLabel}
+          </div>
+        {/if}
+      </div>
     </div>
-  </div>
   {/if}
 </div>
