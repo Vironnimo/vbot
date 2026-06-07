@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatLoop, ChatSessionManager
 from core.models import Capabilities, Model, ReasoningCapabilities
+from core.models.query import ModelQuery
 from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry, tool_success
 from server.app import create_app
@@ -144,6 +145,17 @@ class IntegrationModels:
 
     def list_for_provider(self, provider_id: str) -> list[Model]:
         return list(self._models[provider_id])
+
+    def query(self, model_query: ModelQuery) -> list[tuple[str, Model]]:
+        results: list[tuple[str, Model]] = []
+        for provider_id, models in self._models.items():
+            if model_query.provider_id is not None and provider_id != model_query.provider_id:
+                continue
+            for model in models:
+                if model_query.matches(model):
+                    results.append((provider_id, model))
+        results.sort(key=lambda item: (item[0], item[1].model_id))
+        return results
 
 
 class IntegrationStorage:
