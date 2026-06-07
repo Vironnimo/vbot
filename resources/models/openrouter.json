@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T14:11:13.050326+00:00",
+  "fetched_at": "2026-06-07T17:39:43.906814+00:00",
   "models": {
     "ai21/jamba-large-1.7": {
       "capabilities": {
@@ -22,6 +22,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -57,6 +58,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -92,6 +94,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -127,6 +130,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -160,6 +164,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -175,6 +180,76 @@
         }
       },
       "name": "AionLabs: Aion-RP 1.0 (8B)"
+    },
+    "alibaba/wan-2.6": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Alibaba: Wan 2.6"
+    },
+    "alibaba/wan-2.7": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Alibaba: Wan 2.7"
     },
     "allenai/olmo-3-32b-think": {
       "capabilities": {
@@ -204,6 +279,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -246,6 +322,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -289,6 +366,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -327,6 +405,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -364,6 +443,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -403,6 +483,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -450,6 +531,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -488,6 +570,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -528,6 +611,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -573,6 +657,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -617,6 +702,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -664,6 +750,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -711,6 +798,7 @@
           "top_k",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -760,6 +848,7 @@
           "top_p",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -807,6 +896,7 @@
           "top_p",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -852,6 +942,7 @@
           "tools",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -897,6 +988,7 @@
           "tools",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -942,6 +1034,7 @@
           "tools",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -987,6 +1080,7 @@
           "tools",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1032,6 +1126,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1079,6 +1174,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1128,6 +1224,7 @@
           "top_p",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1172,6 +1269,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1212,6 +1310,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1258,6 +1357,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1299,6 +1399,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1341,6 +1442,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1383,6 +1485,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1417,6 +1520,7 @@
         "supported_parameters": [
           "seed"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -1449,6 +1553,7 @@
         "supported_parameters": [
           "seed"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -1481,6 +1586,7 @@
         "supported_parameters": [
           "seed"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -1513,6 +1619,7 @@
         "supported_parameters": [
           "seed"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -1556,6 +1663,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1603,6 +1711,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1650,6 +1759,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1697,6 +1807,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1736,6 +1847,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -1751,6 +1863,105 @@
         }
       },
       "name": "ByteDance Seed: Seedream 4.5"
+    },
+    "bytedance/seedance-1-5-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "ByteDance: Seedance 1.5 Pro"
+    },
+    "bytedance/seedance-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "ByteDance: Seedance 2.0"
+    },
+    "bytedance/seedance-2.0-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "ByteDance: Seedance 2.0 Fast"
     },
     "bytedance/ui-tars-1.5-7b": {
       "capabilities": {
@@ -1777,6 +1988,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1820,6 +2032,15 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [
+          "dan",
+          "jess",
+          "leah",
+          "leo",
+          "mia",
+          "tara",
+          "zac"
+        ],
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -1859,6 +2080,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1899,6 +2121,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1941,6 +2164,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1983,6 +2207,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2023,6 +2248,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2067,6 +2293,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2112,6 +2339,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2157,6 +2385,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2204,6 +2433,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2250,6 +2480,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2297,6 +2528,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2341,6 +2573,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2385,6 +2618,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2432,6 +2666,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2479,6 +2714,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2526,6 +2762,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2575,6 +2812,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2624,6 +2862,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2668,6 +2907,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -2703,6 +2943,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -2749,6 +2990,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -2796,6 +3038,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -2844,6 +3087,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -2897,6 +3141,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -2950,6 +3195,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3002,6 +3248,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3053,6 +3300,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3106,6 +3354,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3155,6 +3404,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3199,6 +3449,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3247,6 +3498,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3300,6 +3552,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3342,6 +3595,38 @@
           "seed",
           "temperature",
           "top_p"
+        ],
+        "supported_voices": [
+          "achernar",
+          "achird",
+          "algenib",
+          "algieba",
+          "alnilam",
+          "aoede",
+          "autonoe",
+          "callirrhoe",
+          "charon",
+          "despina",
+          "enceladus",
+          "erinome",
+          "fenrir",
+          "gacrux",
+          "iapetus",
+          "kore",
+          "laomedeia",
+          "leda",
+          "orus",
+          "puck",
+          "pulcherrima",
+          "rasalgethi",
+          "sadachbia",
+          "sadaltager",
+          "schedar",
+          "sulafat",
+          "umbriel",
+          "vindemiatrix",
+          "zephyr",
+          "zubenelgenubi"
         ],
         "task_types": [
           "audio_generation",
@@ -3388,6 +3673,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3441,6 +3727,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3494,6 +3781,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3542,6 +3830,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -3588,6 +3877,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3636,6 +3926,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3682,6 +3973,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3724,6 +4016,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -3775,6 +4068,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3820,6 +4114,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3875,6 +4170,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3921,6 +4217,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -3962,6 +4259,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -4002,6 +4300,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -4020,6 +4319,117 @@
         }
       },
       "name": "Google: Lyria 3 Pro Preview"
+    },
+    "google/veo-3.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Google: Veo 3.1"
+    },
+    "google/veo-3.1-fast": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Google: Veo 3.1 Fast"
+    },
+    "google/veo-3.1-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Google: Veo 3.1 Lite"
     },
     "gryphe/mythomax-l2-13b": {
       "capabilities": {
@@ -4051,6 +4461,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4091,6 +4502,62 @@
           "temperature",
           "top_k",
           "top_p"
+        ],
+        "supported_voices": [
+          "af_alloy",
+          "af_aoede",
+          "af_bella",
+          "af_heart",
+          "af_jessica",
+          "af_kore",
+          "af_nicole",
+          "af_nova",
+          "af_river",
+          "af_sarah",
+          "af_sky",
+          "am_adam",
+          "am_echo",
+          "am_eric",
+          "am_fenrir",
+          "am_liam",
+          "am_michael",
+          "am_onyx",
+          "am_puck",
+          "am_santa",
+          "bf_alice",
+          "bf_emma",
+          "bf_isabella",
+          "bf_lily",
+          "bm_daniel",
+          "bm_fable",
+          "bm_george",
+          "bm_lewis",
+          "ef_dora",
+          "em_alex",
+          "em_santa",
+          "ff_siwis",
+          "hf_alpha",
+          "hf_beta",
+          "hm_omega",
+          "hm_psi",
+          "if_sara",
+          "im_nicola",
+          "jf_alpha",
+          "jf_gongitsune",
+          "jf_nezumi",
+          "jf_tebukuro",
+          "jm_kumo",
+          "pf_dora",
+          "pm_alex",
+          "pm_santa",
+          "zf_xiaobei",
+          "zf_xiaoni",
+          "zf_xiaoxiao",
+          "zf_xiaoyi",
+          "zm_yunjian",
+          "zm_yunxi",
+          "zm_yunxia",
+          "zm_yunyang"
         ],
         "task_types": [
           "audio_generation",
@@ -4133,6 +4600,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4176,6 +4644,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4215,6 +4684,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4258,6 +4728,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4301,6 +4772,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4345,6 +4817,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4379,6 +4852,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4413,6 +4887,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4458,6 +4933,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4473,6 +4949,111 @@
         }
       },
       "name": "Kwaipilot: KAT-Coder-Pro V2"
+    },
+    "kwaivgi/kling-v3.0-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Kling: Video v3.0 Pro"
+    },
+    "kwaivgi/kling-v3.0-std": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Kling: Video v3.0 Standard"
+    },
+    "kwaivgi/kling-video-o1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "Kling: Video O1"
     },
     "liquid/lfm-2-24b-a2b": {
       "capabilities": {
@@ -4498,6 +5079,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4538,6 +5120,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4580,6 +5163,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4625,6 +5209,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4665,6 +5250,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4705,6 +5291,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4750,6 +5337,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4795,6 +5383,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4838,6 +5427,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -4881,6 +5471,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4922,6 +5513,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -4959,6 +5551,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5004,6 +5597,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5043,6 +5637,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5089,6 +5684,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5137,6 +5733,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5180,6 +5777,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5223,6 +5821,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5259,6 +5858,7 @@
           "max_tokens",
           "temperature"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -5293,6 +5893,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -5327,6 +5928,12 @@
           "max_tokens",
           "temperature",
           "top_p"
+        ],
+        "supported_voices": [
+          "de-de-klaus:mai-voice-2",
+          "en-us-harper:mai-voice-2",
+          "es-mx-valeria:mai-voice-2",
+          "fr-fr-soleil:mai-voice-2"
         ],
         "task_types": [
           "audio_generation",
@@ -5373,6 +5980,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5414,6 +6022,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5454,6 +6063,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5469,6 +6079,41 @@
         }
       },
       "name": "WizardLM-2 8x22B"
+    },
+    "minimax/hailuo-2.3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "MiniMax: Hailuo 2.3"
     },
     "minimax/minimax-01": {
       "capabilities": {
@@ -5488,6 +6133,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5533,6 +6179,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5580,6 +6227,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5613,6 +6261,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5660,6 +6309,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5711,6 +6361,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5760,6 +6411,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -5800,6 +6452,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5846,6 +6499,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5890,6 +6544,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5937,6 +6592,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -5984,6 +6640,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6031,6 +6688,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6075,6 +6733,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6119,6 +6778,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6164,6 +6824,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6211,6 +6872,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6260,6 +6922,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6307,6 +6970,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6356,6 +7020,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -6398,6 +7063,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6443,6 +7109,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -6488,6 +7155,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6532,6 +7200,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6580,6 +7249,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6624,6 +7294,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6665,6 +7336,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -6704,6 +7376,38 @@
           "structured_outputs",
           "temperature",
           "top_p"
+        ],
+        "supported_voices": [
+          "en_paul_angry",
+          "en_paul_cheerful",
+          "en_paul_confident",
+          "en_paul_excited",
+          "en_paul_frustrated",
+          "en_paul_happy",
+          "en_paul_neutral",
+          "en_paul_sad",
+          "fr_marie_angry",
+          "fr_marie_curious",
+          "fr_marie_excited",
+          "fr_marie_happy",
+          "fr_marie_neutral",
+          "fr_marie_sad",
+          "gb_jane_confident",
+          "gb_jane_confused",
+          "gb_jane_curious",
+          "gb_jane_frustrated",
+          "gb_jane_jealousy",
+          "gb_jane_neutral",
+          "gb_jane_sad",
+          "gb_jane_sarcasm",
+          "gb_jane_shameful",
+          "gb_oliver_angry",
+          "gb_oliver_cheerful",
+          "gb_oliver_confident",
+          "gb_oliver_curious",
+          "gb_oliver_excited",
+          "gb_oliver_neutral",
+          "gb_oliver_sad"
         ],
         "task_types": [
           "audio_generation",
@@ -6748,6 +7452,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6793,6 +7498,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -6838,6 +7544,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -6885,6 +7592,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -6935,6 +7643,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -6989,6 +7698,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -7026,6 +7736,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -7061,6 +7772,7 @@
           "stop",
           "temperature"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7094,6 +7806,7 @@
           "stop",
           "temperature"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7133,6 +7846,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7176,6 +7890,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7213,6 +7928,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7256,6 +7972,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7296,6 +8013,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7336,6 +8054,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7382,6 +8101,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7428,6 +8148,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7466,6 +8187,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7507,6 +8229,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -7561,6 +8284,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7601,6 +8325,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7648,6 +8373,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7686,6 +8412,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7723,6 +8450,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -7765,6 +8493,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -7815,6 +8544,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7855,6 +8585,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7895,6 +8626,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -7940,6 +8672,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -7984,6 +8717,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8029,6 +8763,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8071,6 +8806,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8116,6 +8852,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8161,6 +8898,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8207,6 +8945,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8248,6 +8987,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8293,6 +9033,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8338,6 +9079,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8390,6 +9132,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8442,6 +9185,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8494,6 +9238,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8545,6 +9290,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8597,6 +9343,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8648,6 +9395,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8686,6 +9434,7 @@
           "structured_outputs",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8728,6 +9477,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -8763,6 +9513,7 @@
           "structured_outputs",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -8805,6 +9556,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -8847,6 +9599,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8887,6 +9640,7 @@
           "seed",
           "structured_outputs"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8930,6 +9684,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -8979,6 +9734,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9031,6 +9787,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9077,6 +9834,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9122,6 +9880,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9166,6 +9925,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9211,6 +9971,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9254,6 +10015,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9298,6 +10060,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9340,6 +10103,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9382,6 +10146,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9425,6 +10190,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9468,6 +10234,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9512,6 +10279,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9554,6 +10322,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9597,6 +10366,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9642,6 +10412,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9687,6 +10458,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9736,6 +10508,7 @@
           "structured_outputs",
           "top_logprobs"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9782,6 +10555,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9827,6 +10601,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9872,6 +10647,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9917,6 +10693,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -9961,6 +10738,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10011,6 +10789,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10060,6 +10839,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10107,6 +10887,7 @@
           "tools",
           "top_logprobs"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10160,6 +10941,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -10198,6 +10980,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -10247,6 +11030,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -10285,6 +11069,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -10325,6 +11110,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -10365,6 +11151,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10407,6 +11194,7 @@
           "seed",
           "structured_outputs"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10451,6 +11239,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10503,6 +11292,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10546,6 +11336,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10587,6 +11378,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10629,6 +11421,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10673,6 +11466,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10725,6 +11519,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10769,6 +11564,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10788,6 +11584,44 @@
         }
       },
       "name": "OpenAI: o4 Mini High"
+    },
+    "openai/sora-2-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "presence_penalty",
+          "stop",
+          "top_logprobs"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "OpenAI: Sora 2 Pro"
     },
     "openai/whisper-1": {
       "capabilities": {
@@ -10815,6 +11649,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -10858,6 +11693,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -10895,6 +11731,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -10952,6 +11789,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -10990,6 +11828,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11037,6 +11876,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11068,6 +11908,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11111,6 +11952,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11140,6 +11982,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11181,6 +12024,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11223,6 +12067,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11264,6 +12109,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11302,6 +12148,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11345,6 +12192,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11387,6 +12235,7 @@
           "top_p",
           "web_search_options"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11425,6 +12274,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11461,6 +12311,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11504,6 +12355,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11549,6 +12401,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11590,6 +12443,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11631,6 +12485,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11669,6 +12524,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11708,6 +12564,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11749,6 +12606,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11792,6 +12650,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -11843,6 +12702,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11883,6 +12743,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11928,6 +12789,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -11975,6 +12837,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12024,6 +12887,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12069,6 +12933,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12116,6 +12981,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12163,6 +13029,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12210,6 +13077,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12246,6 +13114,7 @@
           "temperature",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "text_output",
           "audio_input",
@@ -12292,6 +13161,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12335,6 +13205,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12373,6 +13244,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12418,6 +13290,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12457,6 +13330,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12496,6 +13370,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12534,6 +13409,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12575,6 +13451,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12620,6 +13497,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12661,6 +13539,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12708,6 +13587,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -12754,6 +13634,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -12801,6 +13682,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -12849,6 +13731,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -12897,6 +13780,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -12938,6 +13822,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -12986,6 +13871,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13030,6 +13916,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13083,6 +13970,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13138,6 +14026,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13193,6 +14082,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13248,6 +14138,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13303,6 +14194,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13350,6 +14242,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13397,6 +14290,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13444,6 +14338,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13499,6 +14394,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13554,6 +14450,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13601,6 +14498,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13648,6 +14546,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -13691,6 +14590,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13738,6 +14638,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -13782,6 +14683,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -13814,6 +14716,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13844,6 +14747,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13874,6 +14778,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13904,6 +14809,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13934,6 +14840,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13964,6 +14871,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -13994,6 +14902,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14024,6 +14933,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14054,6 +14964,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14084,6 +14995,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14114,6 +15026,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14157,6 +15070,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -14201,6 +15115,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14234,6 +15149,7 @@
           "seed",
           "stop"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14271,6 +15187,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14314,6 +15231,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14355,6 +15273,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14400,6 +15319,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14442,6 +15362,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14483,6 +15404,15 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [
+          "conversational_a",
+          "conversational_b",
+          "none",
+          "read_speech_a",
+          "read_speech_b",
+          "read_speech_c",
+          "read_speech_d"
+        ],
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -14513,6 +15443,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14543,6 +15474,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14573,6 +15505,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14603,6 +15536,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14633,6 +15567,7 @@
           "supported": false
         },
         "supported_parameters": [],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14666,6 +15601,7 @@
           "include_reasoning",
           "reasoning"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14699,6 +15635,7 @@
           "include_reasoning",
           "reasoning"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -14745,6 +15682,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14789,6 +15727,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -14831,6 +15770,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14870,6 +15810,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14912,6 +15853,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14952,6 +15894,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -14999,6 +15942,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15039,6 +15983,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15083,6 +16028,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15129,6 +16075,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15167,6 +16114,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15202,6 +16150,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15246,6 +16195,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15292,6 +16242,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15342,6 +16293,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15390,6 +16342,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15433,6 +16386,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "image_input",
           "image_generation"
@@ -15448,6 +16402,48 @@
         }
       },
       "name": "xAI: Grok Imagine Image Quality"
+    },
+    "x-ai/grok-imagine-video": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "image_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 0,
+      "max_output_tokens": null,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->video"
+        }
+      },
+      "name": "xAI: Grok Imagine Video"
     },
     "x-ai/grok-voice-tts-1.0": {
       "capabilities": {
@@ -15472,6 +16468,13 @@
           "temperature",
           "top_logprobs",
           "top_p"
+        ],
+        "supported_voices": [
+          "ara",
+          "eve",
+          "leo",
+          "rex",
+          "sal"
         ],
         "task_types": [
           "audio_generation",
@@ -15514,6 +16517,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15558,6 +16562,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15611,6 +16616,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15646,6 +16652,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15690,6 +16697,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15734,6 +16742,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15771,6 +16780,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15816,6 +16826,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15865,6 +16876,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -15911,6 +16923,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -15964,6 +16977,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -16011,6 +17025,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -16058,6 +17073,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -16104,6 +17120,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -16155,6 +17172,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -16195,6 +17213,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16240,6 +17259,13 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
+        ],
         "task_types": [
           "audio_generation",
           "text_to_speech"
@@ -16280,6 +17306,13 @@
           "temperature",
           "top_k",
           "top_p"
+        ],
+        "supported_voices": [
+          "american_female",
+          "american_male",
+          "british_female",
+          "british_male",
+          "random"
         ],
         "task_types": [
           "audio_generation",
@@ -16324,6 +17357,7 @@
           "top_k",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16369,6 +17403,7 @@
           "tools",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16418,6 +17453,7 @@
           "top_p",
           "verbosity"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16467,6 +17503,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16520,6 +17557,7 @@
           "tools",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16580,6 +17618,7 @@
           "top_logprobs",
           "top_p"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16623,6 +17662,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -16668,6 +17708,7 @@
           "tool_choice",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",

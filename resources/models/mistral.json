@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T14:11:10.703229+00:00",
+  "fetched_at": "2026-06-07T17:39:41.695513+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -17,6 +17,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -44,6 +45,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -71,6 +73,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -98,6 +101,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -125,6 +129,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -154,6 +159,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -185,6 +191,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -216,6 +223,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -247,6 +255,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -278,6 +287,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -308,6 +318,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -338,6 +349,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -368,6 +380,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -398,6 +411,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -428,6 +442,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -458,6 +473,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -487,6 +503,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -514,6 +531,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -541,6 +559,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -569,6 +588,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -599,6 +619,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -629,6 +650,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -659,6 +681,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -689,6 +712,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -720,6 +744,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -751,6 +776,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -782,6 +808,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -813,6 +840,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -844,6 +872,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -874,6 +903,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -904,6 +934,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -935,6 +966,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -966,6 +998,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -995,6 +1028,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1022,6 +1056,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1051,6 +1086,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1082,6 +1118,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1112,6 +1149,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output",
@@ -1141,6 +1179,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1168,6 +1207,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1194,6 +1234,7 @@
         "supported_parameters": [
           "response_format"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1220,6 +1261,7 @@
         "supported_parameters": [
           "response_format"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1247,6 +1289,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
@@ -1274,6 +1317,7 @@
           "response_format",
           "tools"
         ],
+        "supported_voices": [],
         "task_types": [
           "chat",
           "text_output"
