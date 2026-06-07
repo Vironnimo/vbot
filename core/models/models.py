@@ -58,6 +58,7 @@ class Capabilities:
     input_modalities: tuple[str, ...] = ()
     output_modalities: tuple[str, ...] = ()
     supported_parameters: tuple[str, ...] = ()
+    supported_voices: tuple[str, ...] = ()
     task_types: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -70,6 +71,7 @@ class Capabilities:
             output_modalities = ("text",)
 
         supported_parameters = _normalize_string_tuple(self.supported_parameters, sort=True)
+        supported_voices = _normalize_string_tuple(self.supported_voices, sort=True)
         task_types = _normalize_string_tuple(self.task_types)
         if not task_types:
             task_types = derive_model_task_types(input_modalities, output_modalities)
@@ -77,6 +79,7 @@ class Capabilities:
         object.__setattr__(self, "input_modalities", input_modalities)
         object.__setattr__(self, "output_modalities", output_modalities)
         object.__setattr__(self, "supported_parameters", supported_parameters)
+        object.__setattr__(self, "supported_voices", supported_voices)
         object.__setattr__(self, "task_types", task_types)
 
 
@@ -218,6 +221,7 @@ class ModelRegistry:
                     input_modalities=tuple(caps.get("input_modalities", ())),
                     output_modalities=tuple(caps.get("output_modalities", ())),
                     supported_parameters=tuple(caps.get("supported_parameters", ())),
+                    supported_voices=tuple(caps.get("supported_voices", ())),
                     task_types=tuple(caps.get("task_types", ())),
                 )
                 model = Model(

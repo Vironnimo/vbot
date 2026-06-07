@@ -71,6 +71,7 @@ class TestCapabilities:
         assert caps.input_modalities == ("text", "image")
         assert caps.output_modalities == ("text", "audio")
         assert caps.supported_parameters == ("response_format", "tools")
+        assert caps.supported_voices == ()
         assert caps.task_types == (
             "chat",
             "text_output",
@@ -78,6 +79,27 @@ class TestCapabilities:
             "image_understanding",
             "audio_generation",
         )
+
+    def test_supported_voices_default_to_empty_tuple(self):
+        caps = Capabilities(
+            vision=False,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        )
+
+        assert caps.supported_voices == ()
+
+    def test_supported_voices_normalizes_dedupes_and_sorts(self):
+        caps = Capabilities(
+            vision=False,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            supported_voices=(" af_sky ", "af_aoede", "af_sky", ""),
+        )
+
+        assert caps.supported_voices == ("af_aoede", "af_sky")
 
     def test_legacy_vision_derives_text_image_input(self):
         caps = Capabilities(
@@ -312,6 +334,41 @@ class TestModelRegistryLoad:
             "/responses",
             "/chat/completions",
         )
+
+    def test_load_reads_supported_voices_from_capabilities(self, tmp_path: Path):
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("speech-provider.json").write_text(
+            """
+            {
+              "provider_id": "speech-provider",
+              "models": {
+                "kokoro-tts": {
+                  "name": "Kokoro TTS",
+                  "capabilities": {
+                    "vision": false,
+                    "tools": false,
+                    "json_mode": true,
+                    "reasoning": {"supported": false},
+                    "input_modalities": ["text"],
+                    "output_modalities": ["speech"],
+                    "supported_parameters": ["response_format", "seed"],
+                    "supported_voices": ["af_sky", "af_aoede", "af_bella"],
+                    "task_types": ["text_to_speech", "audio_generation"]
+                  },
+                  "context_window": 4096,
+                  "max_output_tokens": null
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+        model = registry.get("speech-provider", "kokoro-tts")
+
+        assert model.capabilities.supported_voices == ("af_aoede", "af_bella", "af_sky")
 
     def test_load_preserves_unknown_max_output_tokens(self, tmp_path: Path):
         models_dir = tmp_path / "models"

@@ -55,8 +55,9 @@ def raw_openrouter_model(
     output_modalities: list[str] | None = None,
     supported_parameters: list[str] | None = None,
     max_completion_tokens: int | None = 64000,
+    supported_voices: list[str] | None = None,
 ) -> dict:
-    return {
+    raw: dict = {
         "id": "anthropic/claude-sonnet-4",
         "name": "Anthropic: Claude Sonnet 4",
         "architecture": {
@@ -72,6 +73,9 @@ def raw_openrouter_model(
         "context_length": 128000,
         "top_provider": {"max_completion_tokens": max_completion_tokens},
     }
+    if supported_voices is not None:
+        raw["supported_voices"] = supported_voices
+    return raw
 
 
 @respx.mock
@@ -279,3 +283,41 @@ def test_input_modalities_derive_vision(input_modalities: list[str], vision: boo
     )
 
     assert model.capabilities.vision is vision
+
+
+def test_normalize_catalog_entry_captures_supported_voices() -> None:
+    raw = {
+        "id": "hexgrad/kokoro-82m",
+        "name": "hexgrad: Kokoro 82M",
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["speech"],
+            "modality": "text->speech",
+        },
+        "supported_parameters": ["response_format", "seed"],
+        "supported_voices": ["af_alloy", "af_aoede", "af_sky"],
+        "context_length": 4096,
+        "top_provider": {"max_completion_tokens": None},
+    }
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.supported_voices == ("af_alloy", "af_aoede", "af_sky")
+    assert "text_to_speech" in model.capabilities.task_types
+
+
+def test_normalize_catalog_entry_defaults_supported_voices_when_absent() -> None:
+    model = OpenRouterAdapter.normalize_catalog_entry(raw_openrouter_model(), {})
+
+    assert model.capabilities.supported_voices == ()
+
+
+def test_normalize_catalog_entry_ignores_malformed_supported_voices() -> None:
+    """A non-list/mixed-type ``supported_voices`` value is treated as absent."""
+
+    raw = raw_openrouter_model()
+    raw["supported_voices"] = "not-a-list"
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.supported_voices == ()
