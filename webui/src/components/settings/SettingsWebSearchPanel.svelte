@@ -190,7 +190,7 @@
   </div>
 {/if}
 
-<div class="s-sticky-footer">
+<div class="s-footer">
   <button
     class="btn-primary s-save-button s-save-button--inline"
     type="button"

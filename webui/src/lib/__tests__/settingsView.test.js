@@ -380,9 +380,11 @@ describe('SettingsView', () => {
     clickButton('Appearance');
 
     const saveButton = getButton('Save');
-    const languageSelect = document.body.querySelector('select');
+    const languageTrigger = document.body.querySelector(
+      '#settings-appearance-language',
+    );
 
-    expect(languageSelect).not.toBeNull();
+    expect(languageTrigger).not.toBeNull();
     expect(saveButton.disabled).toBe(false);
 
     saveButton.click();
@@ -390,8 +392,14 @@ describe('SettingsView', () => {
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
 
-    languageSelect.value = 'fr';
-    languageSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    languageTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+
+    const frenchOption = Array.from(
+      document.body.querySelectorAll('.dropdown-option'),
+    ).find((option) => option.textContent.trim() === 'fr');
+    expect(frenchOption).toBeTruthy();
+    frenchOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
     getButton('Save').click();
@@ -414,7 +422,13 @@ describe('SettingsView', () => {
     expect(document.body.textContent).not.toContain(
       'Language preference updated.',
     );
-    expect(document.body.querySelector('select')?.value).toBe('fr');
+    expect(
+      document
+        .querySelector(
+          '#settings-appearance-language .dropdown-primitive__trigger-label',
+        )
+        ?.textContent.trim(),
+    ).toBe('fr');
     expect(saveButton.disabled).toBe(false);
   });
 });

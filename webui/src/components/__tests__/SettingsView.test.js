@@ -439,8 +439,10 @@ describe('SettingsView', () => {
     flushSync();
 
     setInputValue('#channel-id-input', 'tg-new');
-    setSelectValue('#channel-agent-select', 'assistant');
-    setSelectValue('#channel-dm-scope-select', 'main');
+    openSimpleDropdown('channel-agent-select');
+    selectSimpleOption('channel-agent-select', 'Assistant');
+    openSimpleDropdown('channel-dm-scope-select');
+    selectSimpleOption('channel-dm-scope-select', 'Main');
     setInputValue('#channel-token-env-input', 'TELEGRAM_BOT_TOKEN_TG_NEW');
     setInputValue('#channel-allowed-chat-ids-input', '12345, -100123');
 
@@ -856,14 +858,6 @@ function setInputValue(selector, value) {
   expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  flushSync();
-}
-
-function setSelectValue(selector, value) {
-  const select = document.body.querySelector(selector);
-  expect(select).toBeTruthy();
-  select.value = value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
   flushSync();
 }
 

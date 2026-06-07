@@ -537,13 +537,10 @@
   min-width: 0;
 }
 
-.s-sticky-footer {
-  position: sticky;
-  bottom: 0;
+.s-footer {
   display: flex;
   justify-content: flex-end;
   padding: 12px 0 0;
-  background: var(--surface);
 }
 
 .s-save-button {
@@ -757,7 +754,7 @@
     flex-direction: column;
   }
 
-  .s-sticky-footer {
+  .s-footer {
     justify-content: stretch;
   }
 
