@@ -972,3 +972,45 @@ class TestRefreshModels:
         assert result["model_count"] == 1
         registry = ModelRegistry.load(resources_dir)
         assert registry.get("openrouter", "openai/gpt-4o") is not None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_raw_file_records_supplementary_models_once(
+        self,
+        tmp_path: Path,
+        openrouter_config: ProviderConfig,
+    ):
+        """Supplementary models appear exactly once in the persisted raw payload."""
+        resources_dir = tmp_path / "resources"
+
+        main_models = {
+            "data": [raw_openrouter_model(model_id="openai/gpt-4o", name="GPT-4o")],
+        }
+        stt_models = {
+            "data": [
+                raw_openrouter_model(
+                    model_id="openai/whisper-1",
+                    name="Whisper 1",
+                    input_modalities=["audio"],
+                    output_modalities=["transcription"],
+                ),
+            ]
+        }
+
+        def openrouter_handler(request: httpx.Request) -> httpx.Response:
+            if "output_modalities=transcription" in str(request.url):
+                return httpx.Response(200, json=stt_models)
+            return httpx.Response(200, json=main_models)
+
+        respx.get(OPENROUTER_MODELS_URL).mock(side_effect=openrouter_handler)
+
+        await refresh_models(openrouter_config, API_KEY, resources_dir)
+
+        raw_output_data = json.loads(
+            (resources_dir / "models" / "openrouter.raw.json").read_text(encoding="utf-8")
+        )
+        raw_ids = [model["id"] for model in raw_output_data["raw_response"]["data"]]
+
+        # The supplementary STT model must not be duplicated in the raw payload.
+        assert raw_ids.count("openai/whisper-1") == 1
+        assert sorted(raw_ids) == ["openai/gpt-4o", "openai/whisper-1"]
