@@ -2,7 +2,11 @@
    shared .s-* primitives. Lifted from SettingsView.svelte during the
    Wave 2 panel decomposition (see REFACTOR-HANDOFF.md). */
 
-.settings-layout {
+/* `.settings-layout` always carries the global `.view` class; qualify the
+   selector so its row direction beats `.view { flex-direction: column }` in
+   app.css (equal single-class specificity would otherwise let the later
+   `.view` rule win and stack the content below the nav). */
+.settings-layout.view {
   display: flex;
   flex-direction: row;
   min-height: 0;
@@ -686,7 +690,7 @@
 }
 
 @media (max-width: 760px) {
-  .settings-layout {
+  .settings-layout.view {
     flex-direction: column;
     overflow: auto;
   }

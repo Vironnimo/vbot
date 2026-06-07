@@ -162,12 +162,6 @@ python -c "import core.runtime.runtime, server.app; print('ok')"
 
 | File | Lines | Core problem |
 |---|---|---|
-| `webui/src/components/SettingsView.svelte` | 4475 | ~10 independent settings panels in one component |
-| `webui/src/components/ChatTimeline.svelte` | 2523 | rendering + scroll logic + date grouping |
-| `core/chat/chat.py` | 2486 | data model + tool dispatch + orchestrator + model resolution + events |
-| `webui/src/components/AgentsView.svelte` | 2025 | agent list + form + detail in one view |
-| `webui/src/lib/chatState.js` | 1927 | session/run state **+** full timeline projection |
-| `webui/src/components/DebugView.svelte` | 1700 | trace list + detail + filters |
 | `webui/src/components/ChatView.svelte` | 1594 | |
 | `webui/src/lib/api.js` | 1227 | RPC client for all domains in one module |
 | `cli/main.py` | 1109 | 350-line `parse_args` + dispatchers + output formatters |
