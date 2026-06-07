@@ -283,6 +283,7 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
                 "input_modalities": list(model.capabilities.input_modalities),
                 "output_modalities": list(model.capabilities.output_modalities),
                 "supported_parameters": list(model.capabilities.supported_parameters),
+                "supported_voices": list(model.capabilities.supported_voices),
                 "task_types": list(model.capabilities.task_types),
             },
             "context_window": model.context_window,

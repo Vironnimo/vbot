@@ -289,6 +289,64 @@ class TestApplyOverrides:
         with pytest.raises(ValueError, match="Invalid override for model 'model-a'"):
             apply_overrides({"model-a": model_data("Original")}, overrides_path)
 
+    def test_override_merges_supported_voices_into_existing_model(self, tmp_path: Path):
+        """An authored full ``capabilities`` block with ``supported_voices`` round-trips
+        through ``apply_overrides`` and reaches the catalog JSON unchanged. OpenAI's
+        Phase-5 TTS models will land this way."""
+        overrides_path = tmp_path / "openai.overrides.json"
+        override = model_data("GPT-4o Mini TTS")
+        override["capabilities"]["supported_voices"] = [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+        ]
+        overrides_path.write_text(
+            json.dumps({"provider_id": "openai", "models": {"gpt-4o-mini-tts": override}}),
+            encoding="utf-8",
+        )
+
+        merged = apply_overrides({}, overrides_path)
+
+        assert merged["gpt-4o-mini-tts"]["capabilities"]["supported_voices"] == [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+        ]
+
+    def test_model_to_data_round_trips_supported_voices(self) -> None:
+        """The ``_model_to_data`` write path keeps ``supported_voices`` stable so a
+        normalized OpenRouter TTS entry survives serialize → ``ModelRegistry.load``."""
+
+        from core.models.discovery import _model_to_data
+
+        model = Model(
+            model_id="hexgrad/kokoro-82m",
+            name="hexgrad: Kokoro 82M",
+            capabilities=Capabilities(
+                vision=False,
+                tools=False,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+                input_modalities=("text",),
+                output_modalities=("speech",),
+                supported_parameters=("response_format", "seed"),
+                supported_voices=("af_aoede", "af_sky", "am_adam"),
+                task_types=("audio_generation", "text_to_speech"),
+            ),
+            context_window=4096,
+            max_output_tokens=None,
+        )
+
+        data = _model_to_data(model)
+
+        assert data["capabilities"]["supported_voices"] == [
+            "af_aoede",
+            "af_sky",
+            "am_adam",
+        ]
+
 
 class TestPassthroughFilters:
     def test_raw_filter_accepts_everything(self):
