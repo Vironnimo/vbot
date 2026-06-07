@@ -46,6 +46,15 @@
   --space-xl: 28px;
   --sidebar-width: 210px;
 
+  /* Stacking layers (higher = closer to the viewer). Floating UI such as
+     dropdown panels is portaled to <body> and must sit above modals so a
+     menu opened from inside a modal stays visible — keep `--z-floating`
+     the topmost layer. */
+  --z-sticky: 100;
+  --z-overlay: 300;
+  --z-modal: 500;
+  --z-floating: 1000;
+
   /* Compatibility aliases for existing Svelte components during migration. */
   --color-background: var(--bg);
   --color-panel: var(--surface);
@@ -688,7 +697,6 @@ textarea::placeholder {
   position: relative;
   display: inline-block;
 
-  --dropdown-gap: 4px;
   --dropdown-focus-border: rgba(232, 135, 10, 0.4);
   --dropdown-focus-ring: 0 0 0 3px rgba(232, 135, 10, 0.06);
   --dropdown-elevation: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -749,32 +757,27 @@ textarea::placeholder {
 
 .dropdown-list,
 .s-dropdown-panel {
-  display: none;
+  /* Both panels are portaled to <body> and positioned via inline
+     `left`/`top`/`width`, so they share the single top-most layer. This is
+     what keeps a menu from hiding behind a sibling card or a modal — do not
+     reintroduce per-usage z-index overrides. */
+  position: fixed;
+  z-index: var(--z-floating);
   overflow: hidden;
   border-radius: var(--r-md);
   background: var(--surface-2);
   box-shadow: var(--dropdown-elevation);
-  z-index: 100;
 }
 
 .dropdown-list {
-  position: absolute;
-  top: calc(100% + var(--dropdown-gap));
-  right: 0;
-  left: 0;
+  max-height: 280px;
+  overflow-y: auto;
   border: 1px solid var(--border-2);
 }
 
 .s-dropdown-panel {
-  position: fixed;
   border: 1px solid rgba(232, 135, 10, 0.3);
   box-shadow: var(--dropdown-elevation-strong);
-  z-index: 200;
-}
-
-.dropdown.open .dropdown-list,
-.s-dropdown.open .s-dropdown-panel {
-  display: block;
 }
 
 .dropdown-option,

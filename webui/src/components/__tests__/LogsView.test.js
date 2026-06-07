@@ -479,18 +479,15 @@ function simpleTriggerLabel(id) {
   );
 }
 
-function getSimpleRoot(id) {
-  return getSimpleTrigger(id)?.closest('.dropdown-primitive');
-}
-
 function getSimpleTrigger(id) {
   const trigger = document.body.querySelector(`button#${id}`);
   expect(trigger).toBeTruthy();
   return trigger;
 }
 
-function getSimpleList(id) {
-  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
+function getSimpleList() {
+  // The list is portaled to <body>; only the open dropdown renders one.
+  return document.body.querySelector('.dropdown-primitive__list');
 }
 
 async function waitForCondition(check, attempts = 20, withTimers = false) {

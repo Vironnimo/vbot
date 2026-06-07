@@ -880,7 +880,10 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForCondition(() => searchableOptionCountReady(), 100);
+    // The panel only exists while open, so gate on the trigger label instead:
+    // the connection suffix appears once both the agent and the connection
+    // catalog have loaded.
+    await waitForCondition(() => modelTriggerLabel().includes('(API Key)'), 100);
 
     await openSearchableDropdown('agent-model');
     selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
@@ -1020,7 +1023,11 @@ describe('AgentsView', () => {
     expect(
       getSearchableTrigger('agent-model').getAttribute('aria-expanded'),
     ).toBe('true');
-    expect(searchablePanel.getAttribute('aria-hidden')).toBe('false');
+    // Portaled out of the card to <body> so it can never be clipped or
+    // covered by a sibling card/modal.
+    expect(searchablePanel).toBeTruthy();
+    expect(searchablePanel.parentElement).toBe(document.body);
+    expect(searchablePanel.closest('.detail-group')).toBeNull();
     expect(searchablePanel.dataset.positioning).toBe('fixed');
     expect(searchablePanel.dataset.placement).toBe('bottom');
     expect(searchablePanel.getAttribute('style')).toContain('width: 344px');
@@ -1039,9 +1046,8 @@ describe('AgentsView', () => {
       100,
     );
 
-    expect(getSearchablePanel('agent-model').getAttribute('aria-hidden')).toBe(
-      'true',
-    );
+    // Closing removes the portaled panel from the DOM entirely.
+    expect(getSearchablePanel('agent-model')).toBeNull();
 
     await openSearchableDropdown('agent-model');
     getSearchableOptionsContainer('agent-model').dispatchEvent(
@@ -1065,7 +1071,8 @@ describe('AgentsView', () => {
     expect(
       getSimpleTrigger('agent-thinking-effort').getAttribute('aria-expanded'),
     ).toBe('true');
-    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+    expect(simpleList).toBeTruthy();
+    expect(simpleList.parentElement).toBe(document.body);
     expect(simpleRoot.querySelector('.dropdown-chevron')).toBeTruthy();
     expect(
       simpleRoot.querySelector('.dropdown-chevron')?.getAttribute('width'),
@@ -1080,9 +1087,8 @@ describe('AgentsView', () => {
       () => getSimpleRoot('agent-thinking-effort').dataset.state === 'closed',
       100,
     );
-    expect(
-      getSimpleList('agent-thinking-effort').getAttribute('aria-hidden'),
-    ).toBe('true');
+    // Closing removes the portaled list from the DOM entirely.
+    expect(getSimpleList('agent-thinking-effort')).toBeNull();
   });
 
   it('lets the simple thinking-effort dropdown escape the model card clipping', async () => {
@@ -1107,9 +1113,6 @@ describe('AgentsView', () => {
       false,
     );
     expect(simpleRoot.closest('.detail-group')).toBe(modelCard);
-    expect(
-      modelCard.classList.contains('agents-view__model-group--dropdown-open'),
-    ).toBe(false);
 
     openSimpleDropdown('agent-thinking-effort');
 
@@ -1118,10 +1121,10 @@ describe('AgentsView', () => {
     expect(simpleList.classList.contains('agents-view__thinking-list')).toBe(
       true,
     );
-    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
-    expect(
-      modelCard.classList.contains('agents-view__model-group--dropdown-open'),
-    ).toBe(true);
+    // The open list is portaled to <body>, so it lives outside the model card
+    // and cannot be clipped or covered by it.
+    expect(simpleList.parentElement).toBe(document.body);
+    expect(simpleList.closest('.detail-group')).toBeNull();
   });
 
   it('lets the memory dropdown escape the system prompt card clipping', async () => {
@@ -1157,7 +1160,10 @@ describe('AgentsView', () => {
     expect(simpleList.classList.contains('agents-view__memory-list')).toBe(
       true,
     );
-    expect(simpleList.getAttribute('aria-hidden')).toBe('false');
+    // The open list is portaled to <body>, so it lives outside the prompt card
+    // and cannot be clipped or covered by it.
+    expect(simpleList.parentElement).toBe(document.body);
+    expect(simpleList.closest('.detail-group')).toBeNull();
   });
 
   it('treats connection.list failure as a catalog load error', async () => {
@@ -1261,14 +1267,6 @@ function triggerTextContent(trigger) {
   );
 }
 
-function searchableOptionCountReady() {
-  return (
-    getSearchablePanel('agent-model')?.querySelectorAll(
-      '.searchable-dropdown__option',
-    ).length > 0
-  );
-}
-
 async function openSearchableDropdown(id, rect = defaultTriggerRect()) {
   const trigger = getSearchableTrigger(id);
   stubTriggerRect(trigger, rect);
@@ -1326,12 +1324,13 @@ function getSearchableTrigger(id) {
   return trigger;
 }
 
-function getSearchablePanel(id) {
-  return getSearchableRoot(id)?.querySelector('.searchable-dropdown__panel');
+function getSearchablePanel() {
+  // The panel is portaled to <body>; only the open dropdown renders one.
+  return document.body.querySelector('.searchable-dropdown__panel');
 }
 
-function getSearchableOptionsContainer(id) {
-  return getSearchablePanel(id)?.querySelector('.searchable-dropdown__options');
+function getSearchableOptionsContainer() {
+  return getSearchablePanel()?.querySelector('.searchable-dropdown__options');
 }
 
 function openSimpleDropdown(id) {
@@ -1366,8 +1365,9 @@ function getSimpleTrigger(id) {
   return trigger;
 }
 
-function getSimpleList(id) {
-  return getSimpleRoot(id)?.querySelector('.dropdown-primitive__list');
+function getSimpleList() {
+  // The list is portaled to <body>; only the open dropdown renders one.
+  return document.body.querySelector('.dropdown-primitive__list');
 }
 
 function stubTriggerRect(trigger, rect) {

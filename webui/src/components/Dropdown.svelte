@@ -1,4 +1,7 @@
 <script>
+  import { tick } from 'svelte';
+
+  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
 
   const noop = () => {};
@@ -18,7 +21,11 @@
   } = $props();
 
   let rootElement = $state();
+  let triggerElement = $state();
+  let listElement = $state();
   let isOpen = $state(false);
+  let listStyle = $state('');
+  let listPlacement = $state('bottom');
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let selectedOption = $derived(
@@ -46,17 +53,15 @@
     });
   }
 
-  function setOpen(nextOpen) {
+  async function open() {
     if (disabled) {
       return;
     }
 
-    isOpen = nextOpen;
-    onOpenChange(nextOpen);
-  }
-
-  function toggleOpen() {
-    setOpen(!isOpen);
+    isOpen = true;
+    onOpenChange(true);
+    await tick();
+    updateListPosition();
   }
 
   function close() {
@@ -65,19 +70,74 @@
     }
 
     isOpen = false;
+    listStyle = '';
+    listPlacement = 'bottom';
     onOpenChange(false);
   }
 
-  function handleDocumentMouseDown(event) {
-    if (!isOpen || !rootElement?.contains(event.target)) {
-      close();
+  function toggleOpen() {
+    if (disabled) {
+      return;
     }
+
+    if (isOpen) {
+      close();
+      return;
+    }
+
+    open();
+  }
+
+  function updateListPosition() {
+    if (!isOpen || !triggerElement) {
+      return;
+    }
+
+    const { placement, left, width, verticalRule } =
+      computePanelPosition(triggerElement);
+
+    listPlacement = placement;
+    listStyle = [`left: ${left}px`, verticalRule, `width: ${width}px`].join(
+      '; ',
+    );
+  }
+
+  function handleDocumentMouseDown(event) {
+    if (!isOpen) {
+      return;
+    }
+
+    // The list is portaled out of `rootElement`, so check both.
+    if (
+      rootElement?.contains(event.target) ||
+      listElement?.contains(event.target)
+    ) {
+      return;
+    }
+
+    close();
   }
 
   function handleDocumentKeyDown(event) {
     if (event.key === 'Escape') {
       close();
     }
+  }
+
+  function handleWindowResize() {
+    updateListPosition();
+  }
+
+  function handleWindowScroll(event) {
+    if (!isOpen) {
+      return;
+    }
+
+    if (event.target instanceof Node && listElement?.contains(event.target)) {
+      return;
+    }
+
+    close();
   }
 
   function selectOption(option) {
@@ -88,12 +148,26 @@
     onValueChange(option.value, option);
     close();
   }
+
+  $effect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    window.addEventListener('scroll', handleWindowScroll, true);
+
+    return () => {
+      window.removeEventListener('scroll', handleWindowScroll, true);
+    };
+  });
 </script>
 
 <svelte:document
   onmousedown={handleDocumentMouseDown}
   onkeydown={handleDocumentKeyDown}
 />
+
+<svelte:window onresize={handleWindowResize} />
 
 <div
   bind:this={rootElement}
@@ -106,6 +180,7 @@
   {/if}
 
   <button
+    bind:this={triggerElement}
     {id}
     class="dropdown-trigger dropdown-primitive__trigger"
     type="button"
@@ -132,28 +207,34 @@
     </svg>
   </button>
 
-  <div
-    class="dropdown-list dropdown-primitive__list {listClass}"
-    role="listbox"
-    aria-hidden={!isOpen}
-  >
-    {#each normalizedOptions as option (option.value)}
-      <button
-        class="dropdown-option dropdown-primitive__option"
-        class:selected={option.value === value}
-        type="button"
-        role="option"
-        disabled={option.disabled}
-        aria-selected={option.value === value}
-        onclick={() => selectOption(option)}
-      >
-        <span class="dropdown-primitive__option-label">{option.label}</span>
-        {#if option.secondaryLabel}
-          <span class="dropdown-primitive__option-meta">
-            {option.secondaryLabel}
-          </span>
-        {/if}
-      </button>
-    {/each}
-  </div>
+  {#if isOpen}
+    <div
+      bind:this={listElement}
+      use:portal
+      class="dropdown-list dropdown-primitive__list {listClass}"
+      role="listbox"
+      data-placement={listPlacement}
+      data-positioning="fixed"
+      style={listStyle}
+    >
+      {#each normalizedOptions as option (option.value)}
+        <button
+          class="dropdown-option dropdown-primitive__option"
+          class:selected={option.value === value}
+          type="button"
+          role="option"
+          disabled={option.disabled}
+          aria-selected={option.value === value}
+          onclick={() => selectOption(option)}
+        >
+          <span class="dropdown-primitive__option-label">{option.label}</span>
+          {#if option.secondaryLabel}
+            <span class="dropdown-primitive__option-meta">
+              {option.secondaryLabel}
+            </span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 </div>

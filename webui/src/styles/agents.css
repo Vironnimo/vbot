@@ -195,11 +195,6 @@
 .agents-view .agents-view__model-group,
 .agents-view .agents-view__prompt-group {
   overflow: visible;
-  z-index: 1;
-}
-
-.agents-view .agents-view__model-group--dropdown-open {
-  z-index: 3;
 }
 
 .agents-view .detail-group-title {
@@ -331,10 +326,6 @@
   width: 100%;
 }
 
-.agents-view .agents-view__memory-list {
-  z-index: 12;
-}
-
 .agents-view .agents-view__access-copy {
   display: flex;
   min-width: 0;
@@ -418,24 +409,6 @@
 
 .agents-view .agents-view__dropdown {
   width: 100%;
-}
-
-.agents-view .agents-view__dropdown.open {
-  z-index: 12;
-}
-
-.agents-view .agents-view__search-panel {
-  z-index: 220;
-}
-
-.agents-view .agents-view__modal-search-panel,
-.agents-view .agents-view__modal-thinking-list {
-  z-index: 620;
-}
-
-.agents-view .agents-view__thinking-field {
-  position: relative;
-  z-index: 2;
 }
 
 .agents-view .agents-view__thinking-list {
