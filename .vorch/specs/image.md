@@ -12,15 +12,25 @@ Provider-neutral image generation execution and artifact storage for the configu
 - `await ImageService.generate(prompt: str) -> ImageGenerationResult` — trims and validates `prompt`, resolves the configured binding, executes the provider request, and returns normalized bytes without persisting them.
 - `await ImageService.generate_artifacts(prompt: str) -> tuple[ImageArtifact, ...]` — calls `generate()`, writes each returned image plus JSON metadata sidecar, and returns persisted artifact metadata.
 - `ImageService.get_artifact(artifact_id: str) -> ImageArtifact` — accepts only 32-character lowercase hex ids, reads the metadata sidecar, recomputes `file_path` from the stored filename, and verifies the blob exists.
-- `await ProviderImageClient.generate(prompt: str, *, options: dict) -> ImageGenerationResult` — provider-bound HTTP entrypoint; currently supports OpenRouter only.
+- `await ProviderImageClient.generate(prompt: str, *, options: dict) -> ImageGenerationResult` — provider-bound HTTP entrypoint; supports OpenRouter (`/chat/completions`) and OpenAI (`/v1/images/generations`).
 
 `ImageGenerationResult` contains `images: tuple[bytes, ...]`, one `media_type` for the result set, `model`, optional provider `usage`, and optional raw response payload. `ImageArtifact.to_dict()` returns `{ id, kind: "image", filename, media_type, size_bytes, url, index }`, where `url` is `/api/images/artifacts/<id>` and is not an attachment URL.
 
 ## Provider Wire Behavior
 
-OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` from task-model options: `aspect_ratio` defaults to `1:1`, `image_size` defaults to `1K`.
+OpenRouter uses the selected provider connection's base URL (or provider base URL), connection auth header, provider `extra_headers`, a 120-second HTTP timeout, and `retry_async()` around retryable provider/network errors. The request is `POST /chat/completions` with `model`, one user text message, `modalities: ["image"]`, and `image_config` built from the task-model options. Only known `image_config` keys present in the options dict are forwarded — absent keys are never invented.
+
+Universal image_config keys forwarded: `aspect_ratio`, `image_size`. Top-level `seed` is sent separately (not under `image_config`) when present in options and the model's `supported_parameters` includes `"seed"`.
+
+Model-specific aspect-ratio overrides: `microsoft/mai-image-2.5` uses a reduced set; `google/gemini-3.1-flash-image-preview` uses an extended set (base + `1:4,4:1,1:8,8:1`) and adds `image_size` value `0.5K`.
+
+Recraft family (`recraft/*`) keys forwarded under `image_config`: `strength` (v3/v4/v4.1), `style` and `text_layout` (v3 only), `rgb_colors` and `background_rgb_color` (v3/v4/v4.1/v4-pro).
+
+Sourceful family (`sourceful/*`) keys forwarded under `image_config`: `font_inputs` (v2/v2.5), `super_resolution_references` (v2 only), `scoring_prompt`, `scoring_rubric`, `background_mode`, `background_hex_color` (v2.5 only).
 
 Response images are read from `choices[0].message.images[]`. Entries may be `{ image_url: { url } }`, `{ url }`, or a raw string URL; only Base64 data URLs matching `data:<media-type>;base64,<payload>` are decoded. Missing choices/messages/images or undecodable image payloads are `ProviderError(retryable=True)` at the client layer and become `ImageExecutionError` when surfaced through `ImageService.generate()`.
+
+OpenAI native image generation sends `POST /v1/images/generations` with `model`, `prompt`, and optional image-gen keys (`size`, `quality`, `background`, `n`, `output_format`, `style`, `response_format`). The response `data[].b64_json` entries are decoded as Base64 images; `n>1` returns one `ImageGenerationResult` with multiple images. `url`-only responses are rejected. The response parser derives `media_type` from the requested `output_format` (since the response body does not echo it).
 
 ## Artifacts
 

@@ -26,7 +26,7 @@ Local target IDs use `local/<local-id>`. Local IDs cannot contain `/` or `::`; d
 - `TaskModelService.binding_for(task_type)` returns a configured `TaskModelBinding` or raises `TaskModelError` when the task is unsupported or unconfigured.
 - `TaskModelService.list_targets(task_type)` returns provider and local `TaskModelTarget` descriptors for one supported task type, sorted by kind, label, and id.
 - `TaskModelTarget.to_dict()` returns public descriptors with `id`, `kind`, provider/model/connection fields, `label`, `task_types`, `usable`, and `metadata`; accessors should not infer provider connection ids by reparsing labels.
-- `TaskModelService.options(task_type, target)` returns a `TaskModelOptionSchema` for the parsed target. Local targets return the descriptor's `option_fields` (default empty; reserved for future user-configured engines). Provider targets return the backend-owned option schema as before.
+- `TaskModelService.options(task_type, target)` resolves the target's `Model` from `ModelRegistry.get(provider_id, model_id)` and passes it to `option_schema_for` to produce model-aware option schemas. Falls back to provider-level conservative defaults when the model is not found in the registry. Local targets return the descriptor's `option_fields` (default empty; reserved for future user-configured engines).
 - `TaskModelService.options_with_defaults(binding)` merges backend schema defaults under stored binding options; execution domains call this before provider routing.
 - `parse_task_model_target_id(target)` parses provider and local public IDs into `TaskModelTargetRef`; nested provider model IDs such as `openrouter/openai/gpt-4o-transcribe::api-key` are valid.
 - `public_provider_target_id(provider_id, model_id, local_connection_id)` creates the settings-facing provider target id.
@@ -36,7 +36,7 @@ Server RPC delegates in `server/rpc/settings_methods.py` expose `task_model.sett
 
 ## Conventions
 
-Option schemas are backend-owned render hints, not a provider capability matrix. Accessors should render `text`, `textarea`, `select`, `number`, and `boolean` fields generically and must not hardcode provider-specific option rules.
+Option schemas are backend-owned render hints, not a provider capability matrix. Accessors should render `text`, `textarea`, `select`, `number`, `boolean`, and `json` fields generically and must not hardcode provider-specific option rules. The `json` field type accepts free-form JSON (arrays/objects/primitives) rendered as a monospace textarea with inline validation; the value round-trips as the parsed JSON structure.
 
 Execution domains own final option interpretation and wire shaping. `core/model_tasks/options.py` provides conservative defaults, while `core/speech/`, `core/image/`, and provider-specific clients decide which options are sent to which API.
 
@@ -51,3 +51,4 @@ Add a new specialized workflow in this order: add/confirm the task type in `core
 - Local target hooks are intentionally dependency-free. Do not add Whisper, Piper, ffmpeg, or other engine dependencies without explicit approval.
 - `LocalTaskTargetDescriptor.option_fields` is a tuple of `TaskModelOptionField` values that the local target's option schema surfaces. Descriptors are currently registered with an empty fields tuple; future user-configured engines will construct descriptors with their own option fields from persisted settings. The registry itself stays empty until a user-config plan lands — no engine is pre-built here.
 - `audio_generation` is a model capability task type in `core/models/`, but not a configurable task-model binding. Generic audio output must not be routed as `text_to_speech` unless the model also advertises `speech` output and receives the `text_to_speech` task type.
+- Option schemas are now model-aware: `option_schema_for(task_type, provider_id, target, *, model)` receives the resolved `Model` (capabilities + metadata + model_id) and builds model-specific fields, value sets, and profiles. Authored render-hint profiles (Recraft/Sourceful image families, aspect-ratio/size exceptions, seed gating) live in `core/model_tasks/options.py`; discoverable facts (`supported_voices`, `supported_parameters`) read from the `Model`. Voice selection for TTS uses `model.capabilities.supported_voices` when non-empty, falling back to provider-level choices (OpenAI canonical voices only for OpenAI, free-text input otherwise).
