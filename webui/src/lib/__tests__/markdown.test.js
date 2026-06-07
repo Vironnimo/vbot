@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import MarkdownIt from 'markdown-it';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderMarkdown, renderMarkdownStreaming } from '../markdown.js';
 
@@ -107,5 +108,29 @@ describe('renderMarkdown()', () => {
     expect(html).toContain('<tbody>');
     expect(html).toContain('<th>A</th>');
     expect(html).toContain('<td>1</td>');
+  });
+
+  it('memoizes rendering so identical source is parsed only once', () => {
+    const renderSpy = vi.spyOn(MarkdownIt.prototype, 'render');
+    const source = `cache-hit-${Math.random()}\n\n**bold**`;
+
+    const first = renderMarkdown(source);
+    const second = renderMarkdown(source);
+
+    expect(second).toBe(first);
+    expect(second).toContain('<strong>bold</strong>');
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+
+    renderSpy.mockRestore();
+  });
+
+  it('keeps returning correct output after the cache limit is exceeded', () => {
+    for (let index = 0; index < 350; index += 1) {
+      renderMarkdown(`cache-filler-${index}\n\ncontent ${index}`);
+    }
+
+    const html = renderMarkdown('# After eviction');
+
+    expect(html).toContain('<h1>After eviction</h1>');
   });
 });
