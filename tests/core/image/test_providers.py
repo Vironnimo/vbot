@@ -252,9 +252,9 @@ def test_build_payload_does_not_send_seed_under_image_config() -> None:
     assert payload["seed"] == 99
 
 
-def test_build_payload_preserves_explicit_none_for_seed() -> None:
-    """An explicit ``seed: None`` in options is still considered present —
-    the wire sends ``null``. The provider decides what to do with it."""
+def test_build_payload_drops_explicit_none_for_seed() -> None:
+    """An explicit ``seed: None`` in options is treated the same as a missing
+    key — the wire omits the field rather than sending ``null``."""
 
     payload = _build_openrouter_image_payload(
         "black-forest-labs/flux.2-pro",
@@ -262,8 +262,7 @@ def test_build_payload_preserves_explicit_none_for_seed() -> None:
         {"aspect_ratio": "1:1", "image_size": "1K", "seed": None},
     )
 
-    assert "seed" in payload
-    assert payload["seed"] is None
+    assert "seed" not in payload
 
 
 def test_image_config_keys_constant_matches_plan() -> None:

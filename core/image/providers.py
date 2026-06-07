@@ -212,7 +212,7 @@ def _build_openrouter_image_payload(
     }
     if image_config:
         payload["image_config"] = image_config
-    if "seed" in options:
+    if options.get("seed") is not None:
         payload["seed"] = options["seed"]
     return payload
 
