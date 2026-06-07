@@ -13,6 +13,18 @@ from core.model_tasks.constants import (
 
 JsonObject = dict[str, Any]
 
+# Whitelist of field types the Settings UI knows how to render. The frontend
+# renderer treats anything outside this set as a plain text input, so we
+# validate the type here to catch typos and unknown additions before they
+# reach the wire as misleading options.
+ALLOWED_OPTION_TYPES: frozenset[str] = frozenset(
+    {"text", "textarea", "select", "number", "boolean", "json"}
+)
+
+
+class TaskModelOptionValidationError(ValueError):
+    """Raised when a task-model option field is malformed."""
+
 
 @dataclass(frozen=True)
 class TaskModelOptionChoice:
@@ -39,6 +51,17 @@ class TaskModelOptionField:
     min_value: float | None = None
     max_value: float | None = None
     step: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise TaskModelOptionValidationError(
+                "TaskModelOptionField.name must be a non-empty string"
+            )
+        if not isinstance(self.type, str) or self.type not in ALLOWED_OPTION_TYPES:
+            allowed = ", ".join(sorted(ALLOWED_OPTION_TYPES))
+            raise TaskModelOptionValidationError(
+                f"Unsupported option type '{self.type}' for field '{self.name}'. Allowed: {allowed}"
+            )
 
     def to_dict(self) -> JsonObject:
         payload: JsonObject = {
