@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import httpx
@@ -10,7 +11,9 @@ import respx
 
 from core.image.providers import (
     _IMAGE_CONFIG_KEYS,
+    _OPENAI_IMAGE_KEYS,
     ProviderImageClient,
+    _build_openai_image_payload,
     _build_openrouter_image_payload,
 )
 from core.image.types import ImageGenerationResult
@@ -541,3 +544,273 @@ def _openrouter_image_client(model_id: str) -> ProviderImageClient:
         credential="sk-test",
         model_id=model_id,
     )
+
+
+def _openai_image_client(model_id: str) -> ProviderImageClient:
+    """Build a ProviderImageClient wired to a mockable OpenAI endpoint."""
+
+    provider = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai_compatible",
+        base_url="https://api.openai.com/v1",
+        connections=[],
+    )
+    connection = ConnectionConfig(
+        id="api-key",
+        type="api_key",
+        label="API Key",
+        auth=AuthConfig(
+            header="Authorization",
+            prefix="Bearer ",
+            credential_key="OPENAI_API_KEY",
+        ),
+    )
+    return ProviderImageClient(
+        provider=provider,
+        connection=connection,
+        credential="sk-test",
+        model_id=model_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI payload builder — minimal schema, only the documented fields
+# ---------------------------------------------------------------------------
+
+
+def test_build_openai_payload_includes_model_and_prompt() -> None:
+    """The OpenAI wire always carries ``model`` and ``prompt`` at the top level.
+    No fields are invented when the user has not pinned a value."""
+
+    payload = _build_openai_image_payload("gpt-image-1", "a cat", {})
+
+    assert payload == {"model": "gpt-image-1", "prompt": "a cat"}
+
+
+def test_build_openai_payload_includes_only_known_option_keys() -> None:
+    """The OpenAI request only carries the documented ``/v1/images/generations``
+    keys — OpenRouter-only fields like ``aspect_ratio`` and ``seed`` are not
+    forwarded. ``style`` and ``response_format`` are valid OpenAI fields for
+    dall-e-3, so they are forwarded when present even if the request targets
+    gpt-image-1 (the provider is responsible for rejecting the unsupported
+    shape)."""
+
+    payload = _build_openai_image_payload(
+        "gpt-image-1",
+        "a cat",
+        {
+            "size": "1024x1024",
+            "quality": "auto",
+            "background": "opaque",
+            "n": 2,
+            "output_format": "png",
+            # OpenRouter-only fields — must be dropped.
+            "aspect_ratio": "1:1",
+            "image_size": "1K",
+            "seed": 42,
+            "strength": 0.5,
+            "image_config": {"aspect_ratio": "1:1"},
+        },
+    )
+
+    assert payload == {
+        "model": "gpt-image-1",
+        "prompt": "a cat",
+        "size": "1024x1024",
+        "quality": "auto",
+        "background": "opaque",
+        "n": 2,
+        "output_format": "png",
+    }
+
+
+def test_build_openai_payload_dall_e_3_style_and_response_format() -> None:
+    """dall-e-3-specific options ``style`` and ``response_format`` are
+    forwarded to the wire when present in options."""
+
+    payload = _build_openai_image_payload(
+        "dall-e-3",
+        "a cat",
+        {
+            "size": "1792x1024",
+            "quality": "hd",
+            "style": "natural",
+            "response_format": "b64_json",
+        },
+    )
+
+    assert payload == {
+        "model": "dall-e-3",
+        "prompt": "a cat",
+        "size": "1792x1024",
+        "quality": "hd",
+        "style": "natural",
+        "response_format": "b64_json",
+    }
+
+
+def test_openai_image_keys_constant_matches_plan() -> None:
+    """The OpenAI image key whitelist must match the spec in the plan."""
+
+    assert _OPENAI_IMAGE_KEYS == (
+        "n",
+        "size",
+        "quality",
+        "background",
+        "output_format",
+        "style",
+        "response_format",
+    )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI end-to-end wire — payload reaches /v1/images/generations correctly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_sends_request_and_decodes_b64_json() -> None:
+    """A single-image OpenAI request returns one ``ImageGenerationResult``
+    with decoded bytes and the correct media type. The HTTP body contains
+    only model + prompt + the user-pinned options."""
+
+    b64_payload = base64.b64encode(b"openai-png").decode("ascii")
+    route = respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": b64_payload}]},
+        )
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    result = await client.generate(
+        "a cat",
+        options={"size": "1024x1024", "quality": "auto"},
+    )
+
+    request = route.calls[0].request
+    assert json.loads(request.content) == {
+        "model": "gpt-image-1",
+        "prompt": "a cat",
+        "size": "1024x1024",
+        "quality": "auto",
+    }
+    assert isinstance(result, ImageGenerationResult)
+    assert result.images == (b"openai-png",)
+    assert result.media_type == "image/png"
+    assert result.model == "gpt-image-1"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_maps_n_multiple_to_multiple_artifacts() -> None:
+    """``n > 1`` is honored: the response ``data`` array is mapped one-to-one
+    into the normalized ``images`` tuple. ``ImageService.generate_artifacts``
+    then creates one artifact per image downstream."""
+
+    payloads = [
+        base64.b64encode(b"alpha").decode("ascii"),
+        base64.b64encode(b"beta").decode("ascii"),
+        base64.b64encode(b"gamma").decode("ascii"),
+    ]
+    route = respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": p} for p in payloads]},
+        )
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    result = await client.generate("a cat", options={"n": 3, "size": "1024x1024"})
+
+    assert json.loads(route.calls[0].request.content)["n"] == 3
+    assert result.images == (b"alpha", b"beta", b"gamma")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_records_output_format_in_media_type() -> None:
+    """When the request pins ``output_format`` the response media type mirrors
+    it (``image/jpeg``, ``image/webp``, …) so the artifact's file extension
+    is correct."""
+
+    b64_payload = base64.b64encode(b"jpegbytes").decode("ascii")
+    respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": b64_payload}]},
+        )
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    result = await client.generate(
+        "a cat",
+        options={"size": "1024x1024", "output_format": "jpeg"},
+    )
+
+    assert result.images == (b"jpegbytes",)
+    assert result.media_type == "image/jpeg"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_rejects_empty_data_list() -> None:
+    """A 200 with no ``data`` array is a malformed OpenAI image response and
+    must surface as a ``ProviderError`` (retryable, since the same request
+    could succeed against a healthy gateway)."""
+
+    from core.providers.errors import ProviderError
+
+    respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1, "data": []})
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    with pytest.raises(ProviderError, match="no data"):
+        await client.generate("a cat", options={})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_image_generate_url_response_is_a_provider_error() -> None:
+    """When OpenAI returns ``url`` entries (response_format=url) the wire
+    layer raises a non-retryable error rather than silently dropping the
+    image. The Settings schema defaults ``response_format`` to ``b64_json``;
+    a user who explicitly chose ``url`` sees a clear actionable error."""
+
+    from core.providers.errors import ProviderError
+
+    respx.post("https://api.openai.com/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"url": "https://example.com/x.png"}]},
+        )
+    )
+    client = _openai_image_client("dall-e-3")
+
+    with pytest.raises(ProviderError, match="b64_json"):
+        await client.generate("a cat", options={"response_format": "url", "size": "1024x1024"})
+
+
+@pytest.mark.asyncio
+async def test_provider_image_client_rejects_unknown_provider() -> None:
+    """A provider other than OpenRouter / OpenAI surfaces an explicit
+    ``ProviderError`` so the caller (ImageService) can map it to an
+    ``ImageExecutionError``."""
+
+    from core.providers.errors import ProviderError
+
+    client = _openai_image_client("gpt-image-1")
+    # Swap the provider id to one we do not support.
+    client._provider = ProviderConfig(  # type: ignore[attr-defined]
+        id="anthropic",
+        name="Anthropic",
+        adapter="openai_compatible",
+        base_url="https://api.anthropic.com/v1",
+        connections=[],
+    )
+
+    with pytest.raises(ProviderError, match="anthropic"):
+        await client.generate("a cat", options={})

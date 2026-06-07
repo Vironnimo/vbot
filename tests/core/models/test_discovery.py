@@ -315,6 +315,72 @@ class TestApplyOverrides:
             "coral",
         ]
 
+    def test_openai_overrides_file_validates_and_exposes_expected_models(
+        self, tmp_path: Path
+    ) -> None:
+        """The shipped ``resources/models/openai.overrides.json`` is well-formed,
+        registers exactly the Phase-5 image/TTS/STT models, and is consumable by
+        ``apply_overrides`` end-to-end. The file lives in the resources tree so
+        we resolve it from the repo root rather than relying on a relative
+        path that may break when the test runner changes working directory."""
+
+        overrides_path = (
+            Path(__file__).resolve().parents[3] / "resources" / "models" / "openai.overrides.json"
+        )
+        assert overrides_path.exists(), f"Expected Phase-5 overrides at {overrides_path}"
+
+        merged = apply_overrides({}, overrides_path)
+
+        # TTS models carry supported_voices so the per-model TTS schema can
+        # populate a select widget. The list matches the live OpenAI docs.
+        expected_voices = {
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "fable",
+            "nova",
+            "onyx",
+            "sage",
+            "shimmer",
+            "verse",
+        }
+        for tts_model in ("tts-1", "tts-1-hd", "gpt-4o-mini-tts"):
+            assert tts_model in merged, f"Missing OpenAI TTS model '{tts_model}'"
+            capabilities = merged[tts_model]["capabilities"]
+            assert capabilities["supported_voices"] == sorted(expected_voices)
+            assert "text_to_speech" in capabilities["task_types"]
+
+        # GPT-4o Mini TTS is the only one advertising ``instructions``.
+        gpt4o = merged["gpt-4o-mini-tts"]["capabilities"]
+        assert "instructions" in gpt4o["supported_parameters"]
+        assert "instructions" not in merged["tts-1"]["capabilities"]["supported_parameters"]
+        assert "instructions" not in merged["tts-1-hd"]["capabilities"]["supported_parameters"]
+
+        # STT models are tagged with ``speech_to_text`` and ``transcription``
+        # output so ``ModelQuery`` finds them.
+        for stt_model in ("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"):
+            assert stt_model in merged, f"Missing OpenAI STT model '{stt_model}'"
+            capabilities = merged[stt_model]["capabilities"]
+            assert "speech_to_text" in capabilities["task_types"]
+            assert "transcription" in capabilities["output_modalities"]
+            assert "response_format" in capabilities["supported_parameters"]
+
+        # Image models cover both generations and the right supported
+        # parameters.
+        gpt_image = merged["gpt-image-1"]["capabilities"]
+        assert gpt_image["output_modalities"] == ["image"]
+        assert "image_generation" in gpt_image["task_types"]
+        assert {"size", "quality", "background", "n", "output_format"} <= set(
+            gpt_image["supported_parameters"]
+        )
+
+        dall_e = merged["dall-e-3"]["capabilities"]
+        assert "image_generation" in dall_e["task_types"]
+        assert "style" in dall_e["supported_parameters"]
+        assert "size" in dall_e["supported_parameters"]
+
     def test_model_to_data_round_trips_supported_voices(self) -> None:
         """The ``_model_to_data`` write path keeps ``supported_voices`` stable so a
         normalized OpenRouter TTS entry survives serialize → ``ModelRegistry.load``."""

@@ -209,10 +209,12 @@ def test_option_schema_for_tts_uses_supported_voices_from_model() -> None:
     assert voice_field.name == "voice"
     assert voice_field.required is True
     assert [choice.value for choice in voice_field.options] == list(voices)
-    # The TTS schema also includes response_format, speed, instructions
-    # regardless of the voice list source.
+    # The TTS schema also includes response_format and speed regardless of
+    # the voice list source. ``instructions`` is model-specific (Phase 5)
+    # and only appears when the model advertises support for it.
     field_names = {field.name for field in schema.fields}
-    assert {"response_format", "speed", "instructions"} <= field_names
+    assert {"response_format", "speed"} <= field_names
+    assert "instructions" not in field_names
 
 
 def test_option_schema_for_tts_falls_back_to_openai_voices_for_openai_provider() -> None:
@@ -400,13 +402,31 @@ def test_option_schema_for_stt_response_format_field_type() -> None:
     assert response_format.default == "json"
 
 
-def test_option_schema_for_non_openrouter_provider_returns_empty_image_schema() -> None:
-    """Image option schemas for non-OpenRouter providers stay empty in
-    Phase 3. The OpenAI native path is Phase 5 — the seam here returns
-    an empty tuple so execution domains see no misleading options and
-    no fall-through to OpenRouter-only fields."""
+def test_option_schema_for_non_openai_non_openrouter_provider_returns_empty_image_schema() -> None:
+    """Image option schemas for unknown providers (neither OpenAI nor
+    OpenRouter) stay empty. The OpenAI branch is the second native
+    profile; everything else is out of scope for the model-aware schema
+    builders."""
 
-    model = _make_model("gpt-image-1", supported_parameters=("seed",))
+    schema = option_schema_for(
+        TASK_IMAGE_GENERATION,
+        "some-other-provider",
+        "some-other-provider/gpt-image-1::api-key",
+        model=None,
+    )
+
+    assert schema.fields == ()
+
+
+def test_option_schema_for_openai_image_gpt_image_1_exposes_expected_fields() -> None:
+    """The OpenAI gpt-image-1 native profile exposes the size, quality,
+    background, n, and output_format fields. ``style`` and
+    ``response_format`` are dall-e-3-only and must NOT appear here."""
+
+    model = _make_model(
+        "gpt-image-1",
+        supported_parameters=("size", "quality", "background", "n", "output_format"),
+    )
 
     schema = option_schema_for(
         TASK_IMAGE_GENERATION,
@@ -415,7 +435,110 @@ def test_option_schema_for_non_openrouter_provider_returns_empty_image_schema() 
         model=model,
     )
 
-    assert schema.fields == ()
+    field_names = {field.name for field in schema.fields}
+    assert {"size", "quality", "background", "n", "output_format"} <= field_names
+    assert "style" not in field_names
+    assert "response_format" not in field_names
+
+    # gpt-image-1 quality defaults to "auto"; n is 1-10.
+    quality = next(field for field in schema.fields if field.name == "quality")
+    assert quality.default == "auto"
+    n = next(field for field in schema.fields if field.name == "n")
+    assert n.max_value == 10
+    assert n.min_value == 1
+
+
+def test_option_schema_for_openai_image_dall_e_3_exposes_expected_fields() -> None:
+    """The OpenAI dall-e-3 native profile exposes size, quality, style,
+    n, and response_format. ``background`` and ``output_format`` are
+    gpt-image-1-only and must NOT appear here. ``n`` is restricted to 1."""
+
+    model = _make_model(
+        "dall-e-3",
+        supported_parameters=("size", "quality", "style", "n", "response_format"),
+    )
+
+    schema = option_schema_for(
+        TASK_IMAGE_GENERATION,
+        "openai",
+        "openai/dall-e-3::api-key",
+        model=model,
+    )
+
+    field_names = {field.name for field in schema.fields}
+    assert {"size", "quality", "style", "n", "response_format"} <= field_names
+    assert "background" not in field_names
+    assert "output_format" not in field_names
+
+    n = next(field for field in schema.fields if field.name == "n")
+    assert n.max_value == 1
+    quality = next(field for field in schema.fields if field.name == "quality")
+    assert quality.default == "standard"
+    style = next(field for field in schema.fields if field.name == "style")
+    assert style.default == "vivid"
+
+
+def test_option_schema_for_openai_image_without_model_exposes_union_of_fields() -> None:
+    """When the registry has no model yet (e.g. before the first catalog
+    refresh) the OpenAI image profile exposes the union of supported
+    fields so the user can still configure the target. The wire layer
+    decides which subset to send to the selected model."""
+
+    schema = option_schema_for(
+        TASK_IMAGE_GENERATION,
+        "openai",
+        "openai/gpt-image-1::api-key",
+        model=None,
+    )
+
+    field_names = {field.name for field in schema.fields}
+    assert {
+        "size",
+        "quality",
+        "background",
+        "n",
+        "output_format",
+        "style",
+        "response_format",
+    } <= field_names
+
+
+def test_option_schema_for_openai_tts_instructions_only_for_gpt4o_mini() -> None:
+    """The ``instructions`` field is model-specific: it is exposed only
+    for OpenAI models that advertise support (gpt-4o-mini-tts). tts-1 and
+    tts-1-hd never expose the field. The OpenAI TTS voice list is the
+    canonical fallback when the model is unknown."""
+
+    gpt4o = _make_model(
+        "gpt-4o-mini-tts",
+        supported_parameters=("voice", "response_format", "speed", "instructions"),
+    )
+    tts1 = _make_model(
+        "tts-1",
+        supported_parameters=("voice", "response_format", "speed"),
+    )
+
+    gpt4o_schema = option_schema_for(
+        TASK_TEXT_TO_SPEECH,
+        "openai",
+        "openai/gpt-4o-mini-tts::api-key",
+        model=gpt4o,
+    )
+    tts1_schema = option_schema_for(
+        TASK_TEXT_TO_SPEECH,
+        "openai",
+        "openai/tts-1::api-key",
+        model=tts1,
+    )
+
+    gpt4o_names = {field.name for field in gpt4o_schema.fields}
+    tts1_names = {field.name for field in tts1_schema.fields}
+
+    assert "instructions" in gpt4o_names
+    assert "instructions" not in tts1_names
+    # The voice/format/speed trio is always present.
+    for schema_names in (gpt4o_names, tts1_names):
+        assert {"voice", "response_format", "speed"} <= schema_names
 
 
 def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None:

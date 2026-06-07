@@ -1,0 +1,203 @@
+{
+  "provider_id": "openai",
+  "models": {
+    "tts-1": {
+      "name": "TTS-1",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["text"],
+        "output_modalities": ["speech"],
+        "supported_parameters": ["voice", "response_format", "speed"],
+        "supported_voices": [
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "fable",
+          "nova",
+          "onyx",
+          "sage",
+          "shimmer",
+          "verse"
+        ],
+        "task_types": ["text_to_speech", "audio_generation"]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "tts-1-hd": {
+      "name": "TTS-1 HD",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["text"],
+        "output_modalities": ["speech"],
+        "supported_parameters": ["voice", "response_format", "speed"],
+        "supported_voices": [
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "fable",
+          "nova",
+          "onyx",
+          "sage",
+          "shimmer",
+          "verse"
+        ],
+        "task_types": ["text_to_speech", "audio_generation"]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "gpt-4o-mini-tts": {
+      "name": "GPT-4o Mini TTS",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["text"],
+        "output_modalities": ["speech"],
+        "supported_parameters": ["voice", "response_format", "speed", "instructions"],
+        "supported_voices": [
+          "alloy",
+          "ash",
+          "ballad",
+          "coral",
+          "echo",
+          "fable",
+          "nova",
+          "onyx",
+          "sage",
+          "shimmer",
+          "verse"
+        ],
+        "task_types": ["text_to_speech", "audio_generation"]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "whisper-1": {
+      "name": "Whisper 1",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["audio", "text"],
+        "output_modalities": ["transcription"],
+        "supported_parameters": [
+          "language",
+          "prompt",
+          "response_format",
+          "temperature"
+        ],
+        "task_types": [
+          "audio_input",
+          "speech_to_text",
+          "text_output"
+        ]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "gpt-4o-transcribe": {
+      "name": "GPT-4o Transcribe",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["audio", "text"],
+        "output_modalities": ["transcription"],
+        "supported_parameters": [
+          "language",
+          "prompt",
+          "response_format",
+          "temperature"
+        ],
+        "task_types": [
+          "audio_input",
+          "speech_to_text",
+          "text_output"
+        ]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "gpt-4o-mini-transcribe": {
+      "name": "GPT-4o Mini Transcribe",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["audio", "text"],
+        "output_modalities": ["transcription"],
+        "supported_parameters": [
+          "language",
+          "prompt",
+          "response_format",
+          "temperature"
+        ],
+        "task_types": [
+          "audio_input",
+          "speech_to_text",
+          "text_output"
+        ]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "gpt-image-1": {
+      "name": "GPT Image 1",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["text"],
+        "output_modalities": ["image"],
+        "supported_parameters": [
+          "size",
+          "quality",
+          "background",
+          "n",
+          "output_format"
+        ],
+        "task_types": ["image_generation"]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    },
+    "dall-e-3": {
+      "name": "DALL-E 3",
+      "capabilities": {
+        "vision": false,
+        "tools": false,
+        "json_mode": false,
+        "reasoning": {"supported": false},
+        "input_modalities": ["text"],
+        "output_modalities": ["image"],
+        "supported_parameters": [
+          "size",
+          "quality",
+          "style",
+          "n",
+          "response_format"
+        ],
+        "task_types": ["image_generation"]
+      },
+      "context_window": 4096,
+      "max_output_tokens": 4096
+    }
+  }
+}

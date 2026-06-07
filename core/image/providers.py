@@ -15,6 +15,7 @@ from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
 _CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+_OPENAI_IMAGES_GENERATIONS_ENDPOINT = "/images/generations"
 _DEFAULT_IMAGE_TIMEOUT = 120.0
 _BASE64_DATA_URL_PATTERN = re.compile(r"^data:([^;]+);base64,(.+)$", re.ASCII)
 _LOGGER = get_logger("image.providers")
@@ -38,6 +39,19 @@ _IMAGE_CONFIG_KEYS: tuple[str, ...] = (
     "scoring_rubric",
     "background_mode",
     "background_hex_color",
+)
+
+# OpenAI ``/v1/images/generations`` option keys. The wire layer sends each
+# key only when the model advertises support and the user has supplied a
+# value. ``model`` and ``prompt`` are always sent.
+_OPENAI_IMAGE_KEYS: tuple[str, ...] = (
+    "n",
+    "size",
+    "quality",
+    "background",
+    "output_format",
+    "style",
+    "response_format",
 )
 
 
@@ -85,6 +99,8 @@ class ProviderImageClient:
 
         if self._provider.id == "openrouter":
             return await self._generate_openrouter(prompt, options=options)
+        if self._provider.id == "openai":
+            return await self._generate_openai(prompt, options=options)
         raise ProviderError(
             f"Image generation not supported for provider '{self._provider.id}'",
             retryable=False,
@@ -120,6 +136,44 @@ class ProviderImageClient:
                     raise wrap_network_error(exc) from exc
                 _classify_image_response(response)
                 return _parse_image_response(response.json(), model=self._model_id)
+
+        return await retry_async(_do_request)
+
+    async def _generate_openai(
+        self,
+        prompt: str,
+        *,
+        options: JsonObject,
+    ) -> ImageGenerationResult:
+        payload = _build_openai_image_payload(self._model_id, prompt, options)
+        requested_output_format = options.get("output_format")
+
+        _LOGGER.debug(
+            "Image generation request: url=%s%s model=%s",
+            self._base_url,
+            _OPENAI_IMAGES_GENERATIONS_ENDPOINT,
+            self._model_id,
+        )
+
+        async def _do_request() -> ImageGenerationResult:
+            async with httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=_DEFAULT_IMAGE_TIMEOUT,
+            ) as client:
+                try:
+                    response = await client.post(
+                        _OPENAI_IMAGES_GENERATIONS_ENDPOINT,
+                        json=payload,
+                        headers=self._headers(),
+                    )
+                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                    raise wrap_network_error(exc) from exc
+                _classify_image_response(response)
+                return _parse_openai_image_response(
+                    response.json(),
+                    model=self._model_id,
+                    requested_output_format=requested_output_format,
+                )
 
         return await retry_async(_do_request)
 
@@ -160,6 +214,29 @@ def _build_openrouter_image_payload(
         payload["image_config"] = image_config
     if "seed" in options:
         payload["seed"] = options["seed"]
+    return payload
+
+
+def _build_openai_image_payload(
+    model_id: str,
+    prompt: str,
+    options: JsonObject,
+) -> JsonObject:
+    """Build the OpenAI ``/v1/images/generations`` request payload.
+
+    Only fields that are present in *options* are included; no defaults are
+    invented. ``n > 1`` is honored: the response ``data`` array is mapped to
+    one image per element downstream, and ``ImageService.generate_artifacts``
+    already loops over the result to persist one artifact per image.
+    """
+
+    payload: JsonObject = {
+        "model": model_id,
+        "prompt": prompt,
+    }
+    for key in _OPENAI_IMAGE_KEYS:
+        if key in options:
+            payload[key] = options[key]
     return payload
 
 
@@ -230,5 +307,71 @@ def _parse_image_response(payload: JsonObject, *, model: str) -> ImageGeneration
         media_type=detected_media_type,
         model=model,
         usage=usage if isinstance(usage, dict) else None,
+        raw=payload,
+    )
+
+
+def _parse_openai_image_response(
+    payload: JsonObject,
+    *,
+    model: str,
+    requested_output_format: Any = None,
+) -> ImageGenerationResult:
+    """Extract images from an OpenAI ``/v1/images/generations`` response.
+
+    The response shape is ``{"created": <int>, "data": [<entry>, ...]}``
+    where each entry has either ``b64_json`` (the default ``b64_json``
+    ``response_format``) or ``url`` (``response_format="url"``). The wire
+    layer only decodes ``b64_json`` entries because URL responses would
+    require an additional HTTP fetch and the Settings schema defaults to
+    ``b64_json``. ``n > 1`` is honored: every ``b64_json`` entry becomes
+    one element in the returned ``images`` tuple.
+    """
+
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        raise ProviderError(
+            "Image generation response contains no data",
+            retryable=True,
+        )
+
+    image_bytes_list: list[bytes] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        b64_json = entry.get("b64_json")
+        if isinstance(b64_json, str) and b64_json:
+            image_bytes_list.append(base64.b64decode(b64_json))
+        elif isinstance(entry.get("url"), str):
+            # URL responses require an extra fetch; we surface a clear
+            # error rather than silently dropping the image so the caller
+            # can switch to ``response_format="b64_json"``.
+            raise ProviderError(
+                "OpenAI image returned a URL but the wire layer only "
+                "decodes b64_json; set response_format='b64_json' in the "
+                "task-model options to receive inline bytes.",
+                retryable=False,
+            )
+
+    if not image_bytes_list:
+        raise ProviderError(
+            "Image generation response images could not be decoded",
+            retryable=True,
+        )
+
+    # gpt-image-1 returns the bytes verbatim; the format is determined by
+    # the request's ``output_format`` (default ``png``). The response
+    # body does not echo the format, so we record the value the caller
+    # asked for. The artifact layer falls back to ``image/png`` when no
+    # format was requested.
+    if isinstance(requested_output_format, str) and requested_output_format:
+        media_type = "image/" + requested_output_format
+    else:
+        media_type = "image/png"
+
+    return ImageGenerationResult(
+        images=tuple(image_bytes_list),
+        media_type=media_type,
+        model=model,
         raw=payload,
     )
