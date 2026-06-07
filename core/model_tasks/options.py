@@ -138,6 +138,75 @@ MAI_IMAGE_2_5_MODEL_ID = "microsoft/mai-image-2.5"
 GEMINI_3_1_FLASH_IMAGE_MODEL_ID = "google/gemini-3.1-flash-image-preview"
 
 # ---------------------------------------------------------------------------
+# OpenAI image option profiles
+#
+# OpenAI's ``/v1/images/generations`` endpoint accepts a different set of
+# fields than OpenRouter's chat/completions path. The fields are the union
+# of what ``gpt-image-1`` and ``dall-e-3`` accept; each model's
+# ``supported_parameters`` decides which subset is actually exposed.
+# ---------------------------------------------------------------------------
+
+# gpt-image-1 size choices (square + portrait + landscape + auto).
+GPT_IMAGE_SIZE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("1024x1024", "1024×1024 (square)"),
+    ("1024x1536", "1024×1536 (portrait)"),
+    ("1536x1024", "1536×1024 (landscape)"),
+    ("auto", "Auto"),
+)
+
+# dall-e-3 size choices.
+DALL_E_3_SIZE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("1024x1024", "1024×1024 (square)"),
+    ("1792x1024", "1792×1024 (landscape)"),
+    ("1024x1792", "1024×1792 (portrait)"),
+)
+
+# gpt-image-1 quality choices.
+GPT_IMAGE_QUALITY_CHOICES: tuple[tuple[str, str], ...] = (
+    ("auto", "Auto"),
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+)
+
+# dall-e-3 quality choices.
+DALL_E_3_QUALITY_CHOICES: tuple[tuple[str, str], ...] = (
+    ("standard", "Standard"),
+    ("hd", "HD"),
+)
+
+# gpt-image-1 background choices.
+GPT_IMAGE_BACKGROUND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("opaque", "Opaque"),
+    ("transparent", "Transparent"),
+    ("auto", "Auto"),
+)
+
+# gpt-image-1 output_format choices.
+GPT_IMAGE_OUTPUT_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("png", "PNG"),
+    ("jpeg", "JPEG"),
+    ("webp", "WebP"),
+)
+
+# dall-e-3 style choices.
+DALL_E_3_STYLE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("vivid", "Vivid"),
+    ("natural", "Natural"),
+)
+
+# dall-e-3 response_format choices.
+OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES: tuple[tuple[str, str], ...] = (
+    ("b64_json", "Base64 JSON"),
+    ("url", "URL"),
+)
+
+# Model-id prefixes that mark a model as an OpenAI gpt-image or dall-e-3
+# variant — used to disambiguate option shapes within the OpenAI branch.
+GPT_IMAGE_MODEL_PREFIX = "gpt-image-"
+DALL_E_3_MODEL_PREFIX = "dall-e-"
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
 
@@ -277,7 +346,7 @@ def _text_to_speech_fields(
     format_choices = (
         OPENAI_TTS_FORMAT_CHOICES if provider_id == "openai" else OPENROUTER_TTS_FORMAT_CHOICES
     )
-    return (
+    fields: list[TaskModelOptionField] = [
         _tts_voice_field(model, provider_id),
         TaskModelOptionField(
             name="response_format",
@@ -295,14 +364,21 @@ def _text_to_speech_fields(
             max_value=4.0,
             step=0.05,
         ),
-        TaskModelOptionField(
-            name="instructions",
-            type="textarea",
-            label="Instructions",
-            default="",
-            description="Optional speaking style instructions when the selected model supports it.",
-        ),
-    )
+    ]
+    # ``instructions`` is model-specific — only OpenAI's ``gpt-4o-mini-tts``
+    # advertises support for it. The override file (Phase 5) flags it in
+    # ``supported_parameters``; we surface it exactly when present.
+    if model is not None and "instructions" in model.capabilities.supported_parameters:
+        fields.append(
+            TaskModelOptionField(
+                name="instructions",
+                type="textarea",
+                label="Instructions",
+                default="",
+                description="Optional speaking style instructions for the selected model.",
+            )
+        )
+    return tuple(fields)
 
 
 def _tts_voice_field(model: Model | None, provider_id: str) -> TaskModelOptionField:
@@ -413,11 +489,13 @@ def _image_generation_fields(
     provider_id: str,
     model: Model | None,
 ) -> tuple[TaskModelOptionField, ...]:
+    if provider_id == "openai":
+        return _openai_image_fields(model)
     if provider_id != "openrouter":
-        # OpenAI image options (size, quality, background, n, output_format,
-        # style) land in Phase 5. For unknown providers we return an empty
-        # schema — the conservative behavior — and Phase 5 will fill in
-        # the OpenAI branch without touching the OpenRouter tree.
+        # Non-OpenAI, non-OpenAI-native providers have no image option
+        # profile authored here. Execution domains that know how to talk
+        # to those providers map their own fields; we keep the schema
+        # empty so the UI does not invent unsupported inputs.
         return ()
 
     fields: list[TaskModelOptionField] = [
@@ -479,6 +557,144 @@ def _seed_field() -> TaskModelOptionField:
         default=None,
         step=1,
         description="Reproducible generation seed. Provider-specific support.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI image profile
+# ---------------------------------------------------------------------------
+
+
+def _openai_image_fields(model: Model | None) -> tuple[TaskModelOptionField, ...]:
+    """OpenAI native image options.
+
+    The OpenAI ``/v1/images/generations`` endpoint accepts a union of
+    fields across ``gpt-image-1`` (size / quality / background / n /
+    output_format) and ``dall-e-3`` (size / quality / style / n /
+    response_format). Each model's ``supported_parameters`` decides which
+    fields are exposed in the Settings UI.
+
+    If *model* is ``None`` (catalog not refreshed yet) every field that
+    belongs to the union is exposed so the user can still configure the
+    target. The wire layer is responsible for sending only the fields the
+    selected model accepts.
+    """
+
+    supported: frozenset[str] | None = (
+        frozenset(model.capabilities.supported_parameters) if model is not None else None
+    )
+    is_gpt_image = model is not None and model.model_id.startswith(GPT_IMAGE_MODEL_PREFIX)
+    is_dall_e = model is not None and model.model_id.startswith(DALL_E_3_MODEL_PREFIX)
+
+    def has(field_name: str) -> bool:
+        return supported is None or field_name in supported
+
+    fields: list[TaskModelOptionField] = []
+    if has("size"):
+        fields.append(_openai_size_field(is_gpt_image, is_dall_e))
+    if has("quality"):
+        fields.append(_openai_quality_field(is_gpt_image, is_dall_e))
+    if has("background"):
+        fields.append(_openai_background_field())
+    if has("n"):
+        fields.append(_openai_n_field(is_dall_e))
+    if has("output_format"):
+        fields.append(_openai_output_format_field())
+    if has("style"):
+        fields.append(_openai_style_field())
+    if has("response_format"):
+        fields.append(_openai_response_format_field())
+    return tuple(fields)
+
+
+def _openai_size_field(is_gpt_image: bool, is_dall_e: bool) -> TaskModelOptionField:
+    # When both flags are True the model is ambiguous — gpt-image-1's set
+    # is the safer default because gpt-image-1 is the newer model and its
+    # size set covers ``auto``. The model=None case also lands here.
+    choices = DALL_E_3_SIZE_CHOICES if is_dall_e and not is_gpt_image else GPT_IMAGE_SIZE_CHOICES
+    return TaskModelOptionField(
+        name="size",
+        type="select",
+        label="Size",
+        default="1024x1024",
+        options=_to_choices(choices),
+        description="Image dimensions; provider-specific choices.",
+    )
+
+
+def _openai_quality_field(is_gpt_image: bool, is_dall_e: bool) -> TaskModelOptionField:
+    if is_dall_e and not is_gpt_image:
+        choices = DALL_E_3_QUALITY_CHOICES
+        default = "standard"
+    else:
+        choices = GPT_IMAGE_QUALITY_CHOICES
+        default = "auto"
+    return TaskModelOptionField(
+        name="quality",
+        type="select",
+        label="Quality",
+        default=default,
+        options=_to_choices(choices),
+        description="Render quality; provider-specific choices.",
+    )
+
+
+def _openai_background_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="background",
+        type="select",
+        label="Background",
+        default="opaque",
+        options=_to_choices(GPT_IMAGE_BACKGROUND_CHOICES),
+        description="Background transparency (gpt-image-1).",
+    )
+
+
+def _openai_n_field(is_dall_e: bool) -> TaskModelOptionField:
+    # dall-e-3 only supports n=1 per OpenAI docs.
+    max_value = 1.0 if is_dall_e else 10.0
+    return TaskModelOptionField(
+        name="n",
+        type="number",
+        label="Number of images",
+        default=1,
+        min_value=1,
+        max_value=max_value,
+        step=1,
+        description="How many images to generate. dall-e-3 supports n=1 only.",
+    )
+
+
+def _openai_output_format_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="output_format",
+        type="select",
+        label="Output format",
+        default="png",
+        options=_to_choices(GPT_IMAGE_OUTPUT_FORMAT_CHOICES),
+        description="Image file format (gpt-image-1).",
+    )
+
+
+def _openai_style_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="style",
+        type="select",
+        label="Style",
+        default="vivid",
+        options=_to_choices(DALL_E_3_STYLE_CHOICES),
+        description="Visual style (dall-e-3).",
+    )
+
+
+def _openai_response_format_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="response_format",
+        type="select",
+        label="Response format",
+        default="b64_json",
+        options=_to_choices(OPENAI_IMAGE_RESPONSE_FORMAT_CHOICES),
+        description="How OpenAI returns the generated image (dall-e-3).",
     )
 
 
