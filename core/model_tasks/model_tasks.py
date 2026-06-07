@@ -197,12 +197,25 @@ class TaskModelService:
         return sorted(targets, key=lambda target: (target.kind, target.label.lower(), target.id))
 
     def options(self, task_type: str, target: str) -> TaskModelOptionSchema:
-        """Return the backend-owned option schema for a target."""
+        """Return the backend-owned option schema for a target.
+
+        Provider targets get their option schema from the task/provider
+        defaults in :mod:`core.model_tasks.options`. Local targets get
+        the schema declared by the registered descriptor — future
+        user-configured local engines advertise their own fields through
+        ``LocalTaskTargetDescriptor.option_fields`` so the Settings UI
+        can render them generically.
+        """
 
         normalized_task_type = validate_task_type(task_type)
         target_ref = parse_task_model_target_id(target)
         if target_ref.kind == "local":
-            return TaskModelOptionSchema(task_type=normalized_task_type, target=target_ref.target)
+            descriptor = self._local_targets.get(target_ref.local_id)
+            return TaskModelOptionSchema(
+                task_type=normalized_task_type,
+                target=target_ref.target,
+                fields=descriptor.option_fields,
+            )
         return option_schema_for(
             normalized_task_type,
             target_ref.provider_id,
