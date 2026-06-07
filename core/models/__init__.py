@@ -7,10 +7,12 @@ from core.models.models import (
     ReasoningCapabilities,
     derive_model_task_types,
 )
+from core.models.query import ModelQuery
 
 __all__ = [
     "Capabilities",
     "Model",
+    "ModelQuery",
     "ModelRegistry",
     "ReasoningCapabilities",
     "derive_model_task_types",
