@@ -13,6 +13,7 @@ The model registry loads sanitized JSON catalogs from `resources/models/` and in
 - `Model.metadata` is optional sanitized runtime data for provider adapters. It must stay small, immutable after load, and limited to provider runtime facts the adapter policy needs. Do not store raw provider payloads, provider policy text, credentials, or secrets there.
 - `ModelRegistry.load(resources_dir)` reads `resources/models/*.json`, skips `*.raw.json` and `*.overrides.json`, and caches by resolved `resources_dir`.
 - `ModelRegistry.get(provider_id, model_id)` raises `KeyError` when the exact provider/model pair is missing. `list_for_provider(provider_id)` returns models sorted by `model_id` and returns an empty list for unknown providers.
+- `ModelRegistry.query(model_query: ModelQuery) -> list[tuple[str, Model]]` is the filtered read path. It evaluates capability, task, modality, and context-window filters against every model in the registry, returning matching `(provider_id, model)` tuples sorted by `(provider_id, model_id)`. The query is pure — no credential awareness — and lives in `core/models/query.py`. Callers that need credential gating (e.g. RPC `model.list`, `core/model_tasks/` target discovery) apply it outside the query.
 - `ModelRegistry.invalidate(resources_dir)` clears the cached registry for that resource path after refresh.
 - `Runtime.models` and `Runtime.get_model(provider_id, model_id)` are available only after `Runtime.start()`; before startup they raise `RuntimeError`. `Runtime.get_model()` delegates to the registry.
 
@@ -53,11 +54,17 @@ Capabilities are facts about one model through one provider. The same underlying
 
 `input_modalities`, `output_modalities`, `supported_parameters`, and `task_types` preserve sanitized provider-catalog facts when available. `task_types` is a coarse filtering and routing projection used by accessors and task-model discovery; it is not provider request shaping. The authoritative task ordering and derivation logic live in `core/models/models.py`, and task-model bindings must stay aligned with `.vorch/specs/model_tasks.md`.
 
-Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, and `video_generation`. Do not invent `image_edit` catalog tasks until `core/models/` and `core/model_tasks/` both accept that workflow.
+Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, and `video_generation`.
 
 Sparse catalogs remain usable. Missing modality data defaults to text-in/text-out, and local or OpenAI-compatible providers with conservative optional facts should not disappear from model selection merely because fields such as `tools` or large `context_window` are missing.
 
 Speech/audio modality aliases are intentionally strict: `transcription` output counts as text output and enables STT filtering; `speech` output enables TTS and audio-generation filtering; generic `audio` output enables `audio_generation` only and does not imply `text_to_speech`.
+
+### ModelQuery — the shared capability/task filter
+
+`core/models/query.py` owns the reusable `ModelQuery` dataclass and its `from_filters` builder. It is the single place where model capability, task type, modality, and context-window matching happens. Every caller that needs to filter models by these criteria routes through `ModelRegistry.query()` — including the RPC `model.list` handler and `core/model_tasks/` provider target discovery. The query is pure: it takes no credentials or runtime state, only filter criteria.
+
+`ModelQuery.from_filters(raw_params)` normalizes raw filter values (lowercase, trim, dedupe, expand alias field names such as `task`/`task_type`) into a frozen query object. Callers that need credential gating, connection expansion, or response shaping apply those outside the query. This layering keeps the core reusable without coupling it to server or credentials concerns.
 
 ## Discovery & Refresh
 
