@@ -78,21 +78,34 @@ class SummarizationStrategy:
         storage: Any,
         settings: CompactionSettings,
     ) -> ChatMessage:
-        """Summarize pre-tail history and return a compaction checkpoint."""
+        """Summarize pre-tail history and return a compaction checkpoint.
+
+        Compaction is incremental: when the history already contains a previous
+        compaction checkpoint, only the messages added since that checkpoint's
+        preserved tail boundary are summarized, and the previous summary is
+        folded back in as seed context. This keeps each run proportional to the
+        newly added history instead of re-summarizing the whole session every
+        time (which would grow the summary prompt without bound and eventually
+        overflow the summary model's own context window).
+        """
         del agent
 
         if not messages:
             raise CompactionError("Cannot compact an empty message list")
 
-        boundary_id = find_tail_boundary(messages, settings.tail_tokens)
-        boundary_index = _find_boundary_index(messages, boundary_id)
-        pre_tail_messages = messages[:boundary_index]
+        previous_summary, uncompacted_messages, previous_token_count = (
+            _split_at_previous_checkpoint(messages)
+        )
+
+        boundary_id = find_tail_boundary(uncompacted_messages, settings.tail_tokens)
+        boundary_index = _find_boundary_index(uncompacted_messages, boundary_id)
+        pre_tail_messages = uncompacted_messages[:boundary_index]
 
         history_text = _render_history_for_prompt(pre_tail_messages)
         prompt_fragment = storage.read_prompt_fragment("compaction.md")
-        prompt_text = _build_compaction_prompt(prompt_fragment, history_text)
+        prompt_text = _build_compaction_prompt(prompt_fragment, history_text, previous_summary)
 
-        compacted_token_count = _estimate_token_span(pre_tail_messages)
+        compacted_token_count = previous_token_count + _estimate_token_span(pre_tail_messages)
         response = await summary_adapter.send(
             [{"role": "user", "content": prompt_text}],
             model_id=summary_model_id,
@@ -189,8 +202,56 @@ def _find_boundary_index(messages: list[ChatMessage], boundary_id: str) -> int:
     raise CompactionError(f"Tail boundary id was not found in messages: {boundary_id}")
 
 
-def _build_compaction_prompt(prompt_fragment: str, history_text: str) -> str:
-    return f"{prompt_fragment.strip()}\n\n<history>\n{history_text}\n</history>"
+def _split_at_previous_checkpoint(
+    messages: list[ChatMessage],
+) -> tuple[str | None, list[ChatMessage], int]:
+    """Split history at the most recent compaction checkpoint.
+
+    Returns ``(previous_summary, uncompacted_messages, previous_token_count)``.
+    Everything up to the previous checkpoint's preserved tail boundary is already
+    represented by that checkpoint's summary, so only the messages from the
+    boundary onward (with checkpoint markers removed) are candidates for a new
+    summary. Without a previous checkpoint the entire history is uncompacted.
+    """
+    checkpoint = _latest_checkpoint(messages)
+    if checkpoint is None or checkpoint.tail_boundary_id is None:
+        return None, messages, 0
+
+    boundary_index = _find_boundary_index(messages, checkpoint.tail_boundary_id)
+    uncompacted_messages = [
+        message for message in messages[boundary_index:] if message.role != "compaction_checkpoint"
+    ]
+    previous_summary = checkpoint.content if isinstance(checkpoint.content, str) else None
+    return previous_summary, uncompacted_messages, _previous_compacted_token_count(checkpoint)
+
+
+def _latest_checkpoint(messages: list[ChatMessage]) -> ChatMessage | None:
+    for message in reversed(messages):
+        if message.role == "compaction_checkpoint":
+            return message
+    return None
+
+
+def _previous_compacted_token_count(checkpoint: ChatMessage) -> int:
+    usage = checkpoint.usage
+    if not isinstance(usage, dict):
+        return 0
+    count = usage.get("compacted_token_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return 0
+    return count
+
+
+def _build_compaction_prompt(
+    prompt_fragment: str,
+    history_text: str,
+    previous_summary: str | None = None,
+) -> str:
+    sections = [prompt_fragment.strip()]
+    if previous_summary and previous_summary.strip():
+        sections.append(f"<previous_summary>\n{previous_summary.strip()}\n</previous_summary>")
+    sections.append(f"<history>\n{history_text}\n</history>")
+    return "\n\n".join(sections)
 
 
 def _render_history_for_prompt(messages: list[ChatMessage]) -> str:
