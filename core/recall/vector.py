@@ -289,7 +289,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             text = build_session_search_text(messages)
             if not text:
                 continue
-            text = self._truncate_to_input_limit(text)
+            text = self._truncate_to_input_limit(text, header)
             anchor_id, snippet = representative_window(messages, text)
             text_inputs.append((summary, mtime_ns, size_bytes, text, anchor_id, snippet))
         if not text_inputs:
@@ -323,17 +323,18 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self.store.upsert_many_sessions(header=resolved_header, records=records)
         self._resolved_header = resolved_header
 
-    def _truncate_to_input_limit(self, text: str) -> str:
-        if (
-            self.model_registry is None
-            or self._resolved_header is None
-            or self._resolved_header.dimension <= 0
-        ):
+    def _truncate_to_input_limit(self, text: str, header: VectorHeader | None = None) -> str:
+        # On the first backfill ``_resolved_header`` is still unset — the
+        # dimension is only observed after the first embed — so fall back to the
+        # binding *header*, which already carries the (provider, model) pair we
+        # need to look up the model's context window before any embed runs.
+        # Without this, the first run truncated against the unknown-window
+        # default, which overflowed bge-m3's 8192-token cap on German sessions.
+        resolved = header or self._resolved_header
+        if self.model_registry is None or resolved is None:
             return VectorStore.truncate_to_input_limit(text, context_window=None)
         try:
-            model = self.model_registry.get(
-                self._resolved_header.provider_id, self._resolved_header.model_id
-            )
+            model = self.model_registry.get(resolved.provider_id, resolved.model_id)
         except KeyError:
             return VectorStore.truncate_to_input_limit(text, context_window=None)
         return VectorStore.truncate_to_input_limit(text, context_window=model.context_window)

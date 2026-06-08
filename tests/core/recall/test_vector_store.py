@@ -230,11 +230,24 @@ def test_vector_store_returns_empty_when_metadata_table_missing(tmp_path: Path) 
 def test_vector_store_truncate_to_input_limit_uses_context_window(tmp_path: Path) -> None:
     text = "lorem ipsum " * 200
     truncated = VectorStore.truncate_to_input_limit(text, context_window=40)
-    # 40 tokens // 4 chars/token → at most 10 chars
-    assert len(truncated) == 10
+    # int(40 * 0.9) * 3 chars/token → 108 chars
+    assert len(truncated) == 108
 
 
 def test_vector_store_truncate_to_input_limit_falls_back_to_default(tmp_path: Path) -> None:
     long = "x" * 50_000
     truncated = VectorStore.truncate_to_input_limit(long, context_window=None)
-    assert len(truncated) == 32_000
+    # Unknown window assumes the 8192-token floor: int(8192 * 0.9) * 3 = 22116
+    assert len(truncated) == 22_116
+
+
+def test_vector_store_truncate_keeps_dense_text_under_token_window(tmp_path: Path) -> None:
+    """The character budget must stay under the model's token cap even for
+    dense text near 3 chars/token — the bge-m3 8192 overflow on German
+    sessions that motivated the conservative heuristic.
+    """
+
+    window = 8192
+    truncated = VectorStore.truncate_to_input_limit("x" * 1_000_000, context_window=window)
+    # Even at a worst-case dense 3 chars/token, the result stays under the cap.
+    assert len(truncated) / 3 < window

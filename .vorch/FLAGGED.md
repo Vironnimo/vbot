@@ -222,3 +222,13 @@ The `core/embeddings/` domain is provider-agnostic by design, but only the OpenR
 ### 6. Asymmetric `input_type` query/document embedding
 
 The OpenRouter embeddings API supports `input_type` hints (e.g. `"query"` vs. `"document"`) for models that optimize embeddings differently per task. Currently ignored — both queries and sessions are embedded symmetrically. Fine for general-purpose models, but some specialized embedding models (e.g. Cohere) produce better results with the hint.
+
+---
+
+## 2026-06-08 — Embedding input truncation is a character heuristic, not tokenizer-accurate
+
+Found while debugging a real bge-m3 failure: a German+English session embedded to **8193 tokens** against the model's 8192 cap (OpenRouter returned the upstream `BadRequestError` as a 200-wrapped `error` object; the recall backend then fell back to JSONL scan). Root cause: `VectorStore.truncate_to_input_limit` (`core/recall/vector_store.py`) caps by **characters** using an assumed chars-per-token ratio, and the old default budget (32_000 chars ≈ 4.0 chars/token, no margin) overflowed because mixed German text tokenizes denser (~3.9 chars/token observed; compounds/umlauts/code can go lower). Also, the first-run backfill passed `context_window=None` because `_truncate_to_input_limit` gated on `_resolved_header` (only set *after* the first embed) instead of the already-available binding header.
+
+**Fixed the same day** (commit `fix(recall): keep embedding input under the token cap for dense/German text`): assume a conservative `_CHARS_PER_TOKEN = 3` with `_INPUT_TOKEN_SAFETY = 0.9` headroom, default to the 8192-token floor when the window is unknown, and resolve the context window from the binding header on the first backfill.
+
+**Residual risk (deliberately left):** a character heuristic can never *guarantee* staying under the tokenizer's count. The conservative 3-chars/token assumption with 10% headroom covers natural-language German+English chat comfortably (would need content denser than ~2.7 chars/token to overflow), but pathological input (very compound-heavy German, dense code, CJK) could still exceed the cap. The bulletproof fixes are **(a)** a tokenizer-aware budget (e.g. `tiktoken`/model tokenizer to count real tokens), or **(b)** catch the provider's context-length rejection in `_run_embed` and retry the offending input at half length (bounded). Not built — proportionality vs. the heuristic was judged sufficient for chat-session content. Revisit if context-length 400s reappear in the logs.
