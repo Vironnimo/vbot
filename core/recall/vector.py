@@ -1,4 +1,4 @@
-"""Vector recall backend — per-session semantic search over a sqlite-vec store.
+"""Vector recall backend — per-chunk semantic search over a sqlite-vec store.
 
 The backend inherits the canonical browse/scroll implementation from
 :class:`JsonlSessionRecallBackend` and only overrides search. The
@@ -8,13 +8,21 @@ search path:
    :class:`core.embeddings.EmbeddingService`; if no binding is
    configured the backend logs a warning and falls back to the JSONL
    scanner for that call.
-2. Ensures every JSONL session for the requested agent has a fresh
-   vector in the sqlite-vec store (eager on-search backfill — see
-   the plan's Decisions).
+2. Ensures every JSONL session for the requested agent has fresh
+   **chunk** vectors in the sqlite-vec store (eager on-search backfill).
+   Each session's searchable text is split into one or more
+   ``Chunk`` windows of consecutive messages, each capped around
+   ``_CHUNK_TARGET_CHARS`` characters with ``_CHUNK_OVERLAP_MESSAGES``
+   carried into the next chunk. Chunk anchors pick the first
+   non-skill-context, non-note message so the matched region is the
+   part of the session the user actually asked about, not the session
+   opener.
 3. Embeds the query with the same binding, then runs a cosine KNN
-   over the session vectors.
-4. Hydrates a representative window per nearest session from
-   canonical JSONL and applies **structural** filters only
+   over the chunk vectors.
+4. Dedups the KNN hits to the **nearest** chunk per session, drops
+   anything beyond ``_MAX_DISTANCE``, and hydrates a representative
+   window per surviving session from canonical JSONL, anchored at the
+   matching chunk's anchor message. Only **structural** filters apply
    (agent/time/skill-note); ranking stays by vector distance because
    semantic match has no literal query term to re-validate.
 
@@ -29,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any, cast
 
 from core.embeddings import (
@@ -53,7 +62,34 @@ from core.recall.vector_store import (
     VectorStoreError,
     format_started_at,
 )
+from core.sessions import is_skill_context_note
 
+# Target size of an embedded chunk in characters. ~500 tokens for the
+# common English case; small chunks give the KNN finer-grained matches
+# (the user's "fruit" mention is its own chunk, not buried in a 5k-char
+# session blob).
+_CHUNK_TARGET_CHARS = 1500
+# How many trailing messages of the previous chunk to prepend into the
+# next chunk. Carries a sliver of boundary context so a message that
+# straddles the chunk boundary still has nearby signal.
+_CHUNK_OVERLAP_MESSAGES = 1
+# Per-message character cap before packing into a chunk. A single
+# pathological user message longer than ``_CHUNK_TARGET_CHARS`` is
+# truncated before packing so it does not blow out the chunk budget.
+_PER_MESSAGE_CHAR_CAP = 2000
+# Maximum number of texts embedded in one provider call. The provider
+# contract has no hard limit, but splitting keeps the per-request
+# payload predictable and the shrink-retry path bounded per batch.
+_EMBED_BATCH_SIZE = 64
+# Cosine-distance cutoff. Distances run 0 (identical) to 2 (opposite);
+# 0.7 keeps anything that the embedding model considered meaningfully
+# related to the query and drops the long tail of weak hits.
+_MAX_DISTANCE = 0.7
+# Over-fetch multiplier for KNN before chunk→session dedup. The
+# recall backend requests ``limit * multiplier + KNN margin`` chunks so
+# the per-session nearest-chunk selection still leaves ``limit``
+# distinct sessions after the cutoff and structural filters.
+_CHUNK_FETCH_MULTIPLIER = 8
 # Margin to over-fetch from KNN so structural filters still leave ``limit`` hits.
 _KNN_FETCH_MARGIN = 4
 # How many times to halve an over-long embedding input before giving up. The
@@ -64,8 +100,28 @@ _KNN_FETCH_MARGIN = 4
 _EMBED_OVERFLOW_RETRIES = 6
 
 
+@dataclass(frozen=True)
+class Chunk:
+    """One packed, embeddable window of a session's messages.
+
+    ``anchor_message_id`` is the message the chunk is centered on for
+    result hydration — by default the first non-skill-context, non-note
+    message in the chunk, falling back to the chunk's first message.
+    ``start_message_id`` / ``end_message_id`` bound the chunk's message
+    span and ``text`` is the concatenated, capped, joined message
+    search-text that gets embedded. ``snippet`` is the compact
+    headline rendered to the user when this chunk wins the KNN.
+    """
+
+    anchor_message_id: str
+    start_message_id: str
+    end_message_id: str
+    text: str
+    snippet: str
+
+
 class VectorRecallBackend(JsonlSessionRecallBackend):
-    """Recall backend backed by sqlite-vec per-session vectors."""
+    """Recall backend backed by sqlite-vec per-chunk vectors."""
 
     def __init__(self, context: RecallBackendContext) -> None:
         super().__init__(context.sessions)
@@ -125,7 +181,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         candidates = self.store.knn_search(
             header=pinned_header,
             query_vector=query_vector,
-            limit=request.limit + _KNN_FETCH_MARGIN,
+            limit=request.limit * _CHUNK_FETCH_MULTIPLIER + _KNN_FETCH_MARGIN,
         )
         if not candidates:
             return self._message_result(
@@ -137,15 +193,28 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
         rowid_to_record = self.store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
 
-        matches: list[JsonObject] = []
+        # Walk candidates in distance order; keep the first (nearest) chunk
+        # seen for each session so a single session cannot dominate the
+        # results with several of its own chunks. Then drop everything
+        # past the relevance cutoff and hydrate the survivors.
+        nearest_by_session: dict[str, tuple[ChunkVectorRecord, float]] = {}
         for rowid, distance in candidates:
+            if distance > _MAX_DISTANCE:
+                continue
             record = rowid_to_record.get(rowid)
             if record is None:
                 continue
-            summary = self._summary_by_session_id(summaries, record.session_id)
+            session_id = record.session_id
+            if session_id in nearest_by_session:
+                continue
+            nearest_by_session[session_id] = (record, distance)
+
+        matches: list[JsonObject] = []
+        for session_id, (record, distance) in nearest_by_session.items():
+            summary = self._summary_by_session_id(summaries, session_id)
             if summary is None:
                 continue
-            session_match = self._hydrate_session(request, summary, record, distance)
+            session_match = self._hydrate_chunk(request, summary, record, distance)
             if session_match is None:
                 continue
             matches.append(session_match)
@@ -157,7 +226,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             matches,
             searched_sessions=len(summaries),
             total_candidates=len(summaries),
-            truncated=len(matches) >= request.limit,
+            truncated=len(nearest_by_session) > request.limit and len(matches) >= request.limit,
         )
 
     # ------------------------------------------------------------------
@@ -217,8 +286,8 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         )
         return list(result.vectors[0])
 
-    def _embed_sessions(self, texts: list[str]) -> tuple[list[list[float]], VectorHeader]:
-        """Embed a batch of session texts and return vectors with the resolved header."""
+    def _embed_chunks(self, texts: list[str]) -> tuple[list[list[float]], VectorHeader]:
+        """Embed a batch of chunk texts and return vectors with the resolved header."""
 
         result = self._run_embed(texts)
         header = VectorHeader(
@@ -230,12 +299,76 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         return [list(vector) for vector in result.vectors], header
 
     def _run_embed(self, texts: list[str]) -> EmbeddingResult:
+        """Embed *texts*, batching into ``_EMBED_BATCH_SIZE`` groups.
+
+        Each batch is sent through the shrink-retry path independently so
+        a context-overflow on one batch does not affect the others, and
+        single-text callers naturally fall through the ``len == 1`` path
+        without any splitting. Vectors are concatenated in input order
+        and the response's ``provider_id``/``model_id``/``dimension`` is
+        asserted consistent across batches — a binding switch mid-batch
+        is an error, not a silent mix.
+        """
+
         if self.embeddings is None:
             raise EmbeddingError("embedding service is not configured")
-        current = list(texts)
+        if not texts:
+            raise EmbeddingError("embedding input is empty")
+        if len(texts) == 1:
+            # Fast path: a single query is one batch with no concatenation.
+            return self._run_embed_batch(texts[0])
+
+        combined_vectors: list[list[float]] = []
+        combined_provider: str | None = None
+        combined_model: str | None = None
+        combined_dimension: int | None = None
+        for start in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[start : start + _EMBED_BATCH_SIZE]
+            result = self._run_embed_batch(batch)
+            if combined_provider is None:
+                combined_provider = result.provider_id
+                combined_model = result.model_id
+                combined_dimension = result.dimension
+            else:
+                if result.provider_id != combined_provider:
+                    raise EmbeddingError(
+                        f"embedding provider changed mid-batch: "
+                        f"{combined_provider} → {result.provider_id}"
+                    )
+                if result.model_id != combined_model:
+                    raise EmbeddingError(
+                        f"embedding model changed mid-batch: {combined_model} → {result.model_id}"
+                    )
+                if result.dimension != combined_dimension:
+                    raise EmbeddingError(
+                        f"embedding dimension changed mid-batch: "
+                        f"{combined_dimension} → {result.dimension}"
+                    )
+            combined_vectors.extend(list(vector) for vector in result.vectors)
+        assert combined_provider is not None
+        assert combined_model is not None
+        assert combined_dimension is not None
+        return EmbeddingResult(
+            vectors=tuple(combined_vectors),
+            model_id=combined_model,
+            provider_id=combined_provider,
+            dimension=combined_dimension,
+        )
+
+    def _run_embed_batch(self, batch: str | list[str]) -> EmbeddingResult:
+        """Embed one batch (single string or list) with the shrink-retry loop."""
+
+        # ``_run_embed`` is the only caller and it raises when the
+        # embedding service is missing; the cast keeps mypy happy
+        # without re-checking the same condition on every retry.
+        embeddings = cast(EmbeddingService, self.embeddings)
+        if isinstance(batch, str):
+            current: list[str] = [batch]
+        else:
+            current = list(batch)
         for attempt in range(_EMBED_OVERFLOW_RETRIES + 1):
             try:
-                result = self._run_async(self.embeddings.embed, current)
+                result = self._run_async(embeddings.embed, current)
                 return cast(EmbeddingResult, result)
             except EmbeddingError as error:
                 # Only the provider's context-length rejection is recoverable by
@@ -289,7 +422,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         summaries: list[JsonObject],
         header: VectorHeader,
     ) -> None:
-        """Make sure every JSONL session for this agent has a fresh vector."""
+        """Make sure every JSONL session for this agent has fresh chunk vectors."""
 
         active = {str(summary["id"]): summary for summary in summaries}
         indexed = self.store.list_indexed_sessions(agent_id)
@@ -299,41 +432,48 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         if stale_to_remove:
             self.store.drop_indexed_sessions(agent_id, stale_to_remove)
 
-        stale_or_missing: list[tuple[JsonObject, int, int]] = []
+        # Collect every (session summary, mtime, size) that's missing or
+        # whose JSONL changed since the last backfill. Sessions whose
+        # mtime/size already match are skipped.
+        stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
         for session_id, summary in active.items():
             session = self.sessions.get(agent_id, session_id)
             stat = session.path.stat()
             cached = indexed.get(session_id)
             if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
                 continue
-            stale_or_missing.append((summary, stat.st_mtime_ns, stat.st_size))
+            messages = session.load()
+            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, messages))
 
-        if not stale_or_missing:
+        if not stale_sessions:
             return
 
-        text_inputs: list[tuple[JsonObject, int, int, str, str, str]] = []
-        for summary, mtime_ns, size_bytes in stale_or_missing:
-            session_id = str(summary["id"])
-            messages = self.sessions.get(agent_id, session_id).load()
-            text = build_session_search_text(messages)
-            if not text:
-                continue
-            text = self._truncate_to_input_limit(text, header)
-            anchor_id, snippet = representative_window(messages, text)
-            text_inputs.append((summary, mtime_ns, size_bytes, text, anchor_id, snippet))
-        if not text_inputs:
+        # Pack all stale sessions into chunks up front. Any session that
+        # yields zero indexable chunks (e.g. a session of pure notes) is
+        # skipped — its prior rows were already wiped in
+        # ``upsert_many_chunks`` and there is nothing to add.
+        all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
+        for summary, mtime_ns, size_bytes, messages in stale_sessions:
+            for chunk in build_session_chunks(messages):
+                all_chunks.append((summary, mtime_ns, size_bytes, chunk))
+        if not all_chunks:
             return
 
-        texts = [text for *_, text, _, _ in text_inputs]
-        vectors, resolved_header = self._embed_sessions(texts)
+        texts = [chunk.text for _, _, _, chunk in all_chunks]
+        vectors, resolved_header = self._embed_chunks(texts)
         if resolved_header.dimension <= 0:
             raise VectorStoreError("embedding provider returned no vectors")
 
+        # Per-session running counter: chunk_index must be unique within
+        # ``(agent_id, session_id)`` and start at 0 — the store's
+        # ``UNIQUE(agent_id, session_id, chunk_index)`` constraint will
+        # reject duplicates, so a stable, ordered counter is required.
         records: list[tuple[ChunkVectorRecord, list[float]]] = []
-        for (summary, mtime_ns, size_bytes, _text, anchor_id, snippet), vector in zip(
-            text_inputs, vectors, strict=True
-        ):
+        per_session_index: dict[str, int] = {}
+        for (summary, mtime_ns, size_bytes, chunk), vector in zip(all_chunks, vectors, strict=True):
             session_id = str(summary["id"])
+            index = per_session_index.get(session_id, 0)
+            per_session_index[session_id] = index + 1
             records.append(
                 (
                     ChunkVectorRecord(
@@ -342,11 +482,11 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         started_at=format_started_at(summary.get("created_at")),
                         mtime_ns=mtime_ns,
                         size_bytes=size_bytes,
-                        anchor_message_id=anchor_id,
-                        snippet=snippet,
-                        chunk_index=0,
-                        start_message_id=anchor_id,
-                        end_message_id=anchor_id,
+                        anchor_message_id=chunk.anchor_message_id,
+                        snippet=chunk.snippet,
+                        chunk_index=index,
+                        start_message_id=chunk.start_message_id,
+                        end_message_id=chunk.end_message_id,
                     ),
                     vector,
                 )
@@ -354,22 +494,6 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
         self.store.upsert_many_chunks(header=resolved_header, records=records)
         self._resolved_header = resolved_header
-
-    def _truncate_to_input_limit(self, text: str, header: VectorHeader | None = None) -> str:
-        # On the first backfill ``_resolved_header`` is still unset — the
-        # dimension is only observed after the first embed — so fall back to the
-        # binding *header*, which already carries the (provider, model) pair we
-        # need to look up the model's context window before any embed runs.
-        # Without this, the first run truncated against the unknown-window
-        # default, which overflowed bge-m3's 8192-token cap on German sessions.
-        resolved = header or self._resolved_header
-        if self.model_registry is None or resolved is None:
-            return VectorStore.truncate_to_input_limit(text, context_window=None)
-        try:
-            model = self.model_registry.get(resolved.provider_id, resolved.model_id)
-        except KeyError:
-            return VectorStore.truncate_to_input_limit(text, context_window=None)
-        return VectorStore.truncate_to_input_limit(text, context_window=model.context_window)
 
     # ------------------------------------------------------------------
     # Hydration
@@ -385,13 +509,15 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 return summary
         return None
 
-    def _hydrate_session(
+    def _hydrate_chunk(
         self,
         request: RecallRequest,
         summary: JsonObject,
         record: ChunkVectorRecord,
         distance: float,
     ) -> JsonObject | None:
+        """Hydrate a per-chunk result anchored at the chunk's anchor message."""
+
         messages = self.sessions.get(request.agent_id, record.session_id).load()
         if not messages:
             return None
@@ -410,7 +536,12 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             text,
         )
         match["distance"] = distance
+        # ``snippet`` is the chunk's matched-region headline (the region
+        # the embedding model actually scored); it replaces the
+        # anchor-message's own search-text snippet from the JSONL
+        # backend's ``message_match_payload`` call.
         match["snippet"] = record.snippet
+        match["chunk_index"] = record.chunk_index
         return match
 
     @staticmethod
@@ -437,7 +568,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
 
 # ---------------------------------------------------------------------------
-# Free functions (mirror the JSONL backend's module-level helpers)
+# Free functions (chunking policy + module-level helpers)
 # ---------------------------------------------------------------------------
 
 
@@ -459,42 +590,120 @@ def _is_context_overflow(error: Exception) -> bool:
     )
 
 
-def build_session_search_text(messages: Iterable[Any]) -> str:
-    """Concatenate the per-message search text from a session's messages."""
+def _is_skippable_for_anchor(message: Any) -> bool:
+    """True when a message is not a good anchor — system noise, not user content."""
 
-    parts: list[str] = []
-    for message in messages:
-        text = message_search_text(message)
-        if text:
-            parts.append(text)
-    return compact_text("\n".join(parts))
+    if getattr(message, "role", "") == "note":
+        return True
+    return bool(is_skill_context_note(message))
 
 
-def representative_window(messages: list[Any], full_text: str) -> tuple[str, str]:
-    """Pick a representative anchor message and a session-level snippet.
+def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
+    """Pack a session's messages into one or more embeddable chunks.
 
-    For now we pick the first non-skill-context, non-note message as the
-    anchor — the agent receives the window around the anchor plus
-    bookends, and the snippet is a compact headline of the concatenated
-    text. Future iterations could pick the message closest to the
-    centroid or the most recent user message; the spec keeps this minimal.
+    The chunker walks the messages in order, collecting each message's
+    search-text (capped at ``_PER_MESSAGE_CHAR_CAP``) into a running
+    buffer. When adding the next message would push the buffer past
+    ``_CHUNK_TARGET_CHARS``, the chunk is sealed and a new buffer is
+    started with the last ``_CHUNK_OVERLAP_MESSAGES`` messages carried
+    over for boundary context. A single message longer than
+    ``_CHUNK_TARGET_CHARS`` is hard-capped via
+    :meth:`VectorStore.truncate_to_input_limit` so the model never
+    receives a request above the input budget.
+
+    The anchor for each chunk is the first non-note, non-skill-context
+    message in the chunk (or the chunk's first message if every
+    message is a note). The ``start_message_id`` / ``end_message_id``
+    bound the chunk's actual message span regardless of which messages
+    contributed text.
     """
 
-    anchor_id = ""
+    chunks: list[Chunk] = []
+    current_messages: list[Any] = []
+    current_texts: list[str] = []
+    current_chars = 0
+
+    def _seal() -> None:
+        if not current_messages:
+            return
+        # Anchor: first non-skippable message; fall back to the chunk's
+        # first message so we never hand back an empty anchor id.
+        anchor_id = ""
+        for message in current_messages:
+            if not _is_skippable_for_anchor(message):
+                anchor_id = getattr(message, "id", "") or anchor_id
+                if anchor_id:
+                    break
+        if not anchor_id:
+            anchor_id = getattr(current_messages[0], "id", "")
+        text = "\n".join(current_texts)
+        start_id = getattr(current_messages[0], "id", "")
+        end_id = getattr(current_messages[-1], "id", "")
+        chunks.append(
+            Chunk(
+                anchor_message_id=anchor_id,
+                start_message_id=start_id,
+                end_message_id=end_id,
+                text=text,
+                snippet=build_snippet(text),
+            )
+        )
+
     for message in messages:
-        role = getattr(message, "role", "")
-        if role in {"skill_context_note", "note"}:
+        raw_text = message_search_text(message)
+        if not raw_text:
+            # Empty search-text messages still count toward the chunk's
+            # message span (and may be the anchor), so we track them in
+            # ``current_messages`` but contribute nothing to the text
+            # budget.
+            current_messages.append(message)
             continue
-        anchor_id = getattr(message, "id", "") or anchor_id
-        if anchor_id:
-            break
-    if not anchor_id and messages:
-        anchor_id = getattr(messages[0], "id", "")
-    return anchor_id, build_snippet(full_text)
+        text = raw_text[:_PER_MESSAGE_CHAR_CAP]
+        if len(text) > _CHUNK_TARGET_CHARS:
+            # Single message would still overflow the chunk budget even
+            # after the per-message cap — seal what we have (so the
+            # giant message gets its own clean chunk), then write a
+            # hard-capped chunk for this message.
+            _seal()
+            oversized = VectorStore.truncate_to_input_limit(text, context_window=None)
+            chunks.append(
+                Chunk(
+                    anchor_message_id=getattr(message, "id", ""),
+                    start_message_id=getattr(message, "id", ""),
+                    end_message_id=getattr(message, "id", ""),
+                    text=oversized,
+                    snippet=build_snippet(oversized),
+                )
+            )
+            current_messages = []
+            current_texts = []
+            current_chars = 0
+            continue
+        projected = current_chars + len(text) + (1 if current_texts else 0)
+        if projected > _CHUNK_TARGET_CHARS and current_texts:
+            # Seal the current chunk and carry the last N messages into
+            # the next one for boundary context.
+            _seal()
+            overlap_messages = current_messages[-_CHUNK_OVERLAP_MESSAGES:]
+            overlap_texts: list[str] = []
+            for overlap_message in overlap_messages:
+                overlap_text = message_search_text(overlap_message)
+                if overlap_text:
+                    overlap_texts.append(overlap_text[:_PER_MESSAGE_CHAR_CAP])
+            current_messages = list(overlap_messages)
+            current_texts = overlap_texts
+            current_chars = sum(len(part) for part in current_texts) + max(
+                len(current_texts) - 1, 0
+            )
+        current_messages.append(message)
+        current_texts.append(text)
+        current_chars += len(text) + (1 if len(current_texts) > 1 else 0)
+    _seal()
+    return chunks
 
 
 def build_snippet(text: str, limit: int = 320) -> str:
-    """Return a compact headline snippet for the indexed session."""
+    """Return a compact headline snippet for the indexed chunk."""
 
     compact = compact_text(text)
     if not compact:
@@ -526,9 +735,11 @@ def render_vector_matches(
     for index, match in enumerate(matches, start=1):
         distance = match.get("distance")
         distance_str = f"{distance:.4f}" if isinstance(distance, (int, float)) else "n/a"
+        chunk_index = match.get("chunk_index")
+        chunk_suffix = f" chunk={chunk_index}" if chunk_index is not None else ""
         lines.append(
             f"[{index}] session={match['session_id']} distance={distance_str} "
-            f"anchor={match['message_id']}"
+            f"anchor={match['message_id']}{chunk_suffix}"
         )
         snippet_text = match.get("snippet") or ""
         if snippet_text:
@@ -539,9 +750,9 @@ def render_vector_matches(
 
 
 __all__ = [
+    "Chunk",
     "VectorRecallBackend",
-    "build_session_search_text",
+    "build_session_chunks",
     "build_snippet",
-    "representative_window",
     "render_vector_matches",
 ]
