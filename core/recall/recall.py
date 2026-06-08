@@ -17,12 +17,14 @@ RecallSortMode = Literal["newest", "oldest"]
 RECALL_BACKEND_JSONL_SCAN = "jsonl_scan"
 RECALL_BACKEND_SQLITE_FTS = "sqlite_fts"
 RECALL_BACKEND_VECTOR = "vector"
+RECALL_BACKEND_HYBRID = "hybrid"
 DEFAULT_RECALL_BACKEND = RECALL_BACKEND_JSONL_SCAN
 FIRST_PARTY_RECALL_BACKENDS = frozenset(
     {
         RECALL_BACKEND_JSONL_SCAN,
         RECALL_BACKEND_SQLITE_FTS,
         RECALL_BACKEND_VECTOR,
+        RECALL_BACKEND_HYBRID,
     }
 )
 
@@ -77,6 +79,7 @@ class RecallBackendRegistry:
 
     @classmethod
     def with_builtins(cls) -> RecallBackendRegistry:
+        from core.recall.hybrid import HybridRecallBackend
         from core.recall.jsonl import JsonlSessionRecallBackend
         from core.recall.sqlite_fts import SqliteFtsRecallBackend
         from core.recall.vector import VectorRecallBackend
@@ -88,6 +91,7 @@ class RecallBackendRegistry:
         )
         registry.register(RECALL_BACKEND_SQLITE_FTS, SqliteFtsRecallBackend)
         registry.register(RECALL_BACKEND_VECTOR, VectorRecallBackend)
+        registry.register(RECALL_BACKEND_HYBRID, HybridRecallBackend)
         return registry
 
     def register(self, name: str, factory: RecallBackendFactory) -> None:
