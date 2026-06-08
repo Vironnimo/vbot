@@ -10,6 +10,7 @@ from core.recall import (
     RECALL_BACKEND_JSONL_SCAN,
     RECALL_BACKEND_SQLITE_FTS,
     RECALL_BACKEND_VECTOR,
+    HybridRecallBackend,
     JsonlSessionRecallBackend,
     RecallBackendContext,
     RecallBackendRegistry,
@@ -64,6 +65,7 @@ def test_registry_create_returns_expected_backend_type(
     )
     assert isinstance(registry.create(RECALL_BACKEND_SQLITE_FTS, context), SqliteFtsRecallBackend)
     assert isinstance(registry.create(RECALL_BACKEND_VECTOR, context), VectorRecallBackend)
+    assert isinstance(registry.create(RECALL_BACKEND_HYBRID, context), HybridRecallBackend)
 
 
 def test_registry_create_unknown_backend_raises_key_error(

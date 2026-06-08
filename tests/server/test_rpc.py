@@ -1171,7 +1171,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
         },
         "recall": {
             "backend": "jsonl_scan",
-            "available_backends": ["jsonl_scan", "sqlite_fts", "vector"],
+            "available_backends": ["hybrid", "jsonl_scan", "sqlite_fts", "vector"],
         },
         "web_search": {
             "provider": "brave",
@@ -2497,7 +2497,7 @@ async def test_settings_update_persists_recall_backend_and_reloads_runtime(
     assert state.runtime.recall_reload_count == 1
     assert response["result"]["recall"] == {
         "backend": "sqlite_fts",
-        "available_backends": ["jsonl_scan", "sqlite_fts", "vector"],
+        "available_backends": ["hybrid", "jsonl_scan", "sqlite_fts", "vector"],
     }
 
 

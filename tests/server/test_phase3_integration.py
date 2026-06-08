@@ -434,7 +434,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
             },
             "recall": {
                 "backend": "jsonl_scan",
-                "available_backends": ["jsonl_scan", "sqlite_fts", "vector"],
+                "available_backends": ["hybrid", "jsonl_scan", "sqlite_fts", "vector"],
             },
             "web_search": {
                 "provider": "brave",
