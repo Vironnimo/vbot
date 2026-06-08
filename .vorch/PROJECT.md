@@ -46,7 +46,7 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | `.vorch/specs/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
 | `.vorch/specs/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
 | `.vorch/specs/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
-| `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index |
+| `.vorch/specs/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
 | `.vorch/specs/memory.md` | `core/memory/` | Pinned memory service, workspace memory files, backend boundary |
 | `.vorch/specs/settings.md` | `core/settings/` | Public settings update schemas, validation, parser errors |
 | `.vorch/specs/prompts.md` | `core/prompts/` | System Prompt assembly, editable fragments, prompt variables |

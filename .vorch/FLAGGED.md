@@ -213,9 +213,11 @@ The `vector` backend ranks purely by cosine distance — semantic only. A hybrid
 
 The store uses eager-on-search backfill: the first `search` after enabling `vector` embeds all missing/stale sessions, and every subsequent search diffs freshness incrementally. A background indexer or write-hook in `core/sessions/` would eliminate the latency spike of first-search backfill for large session histories.
 
-### 4. Per-session chunking for very long sessions
+### 4. Per-session chunking for very long sessions ✅
 
-Sessions longer than the embedding model's `context_length` are truncated to fit. Per-session chunking (split a session into multiple vectors, merge results) is deferred until session lengths actually exceed typical embedding model context windows (commonly 8k–32k tokens).
+**Done** in commit `feat(recall): per-session chunking with batched embedding and ranked hydration` (2026-06-08). Sessions are now split into message-window chunks (target 1500 chars, 1-message overlap, per-message cap 2000 chars), each embedded separately, with KNN dedup to the best chunk per session and a `_MAX_DISTANCE` relevance cutoff. The snippet and hydration window now reflect the matched region, not the session opener.
+
+~~Sessions longer than the embedding model's `context_length` are truncated to fit. Per-session chunking (split a session into multiple vectors, merge results) is deferred until session lengths actually exceed typical embedding model context windows (commonly 8k–32k tokens).~~
 
 ### 5. Embedding providers other than OpenRouter
 
