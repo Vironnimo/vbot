@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import partial
 from importlib import import_module
@@ -37,6 +39,9 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("channels.telegram")
 
 TELEGRAM_MESSAGE_LIMIT = 4096
+# Telegram chat actions expire after ~5 s, so the indicator is refreshed on a shorter cycle.
+_TYPING_ACTION = "typing"
+_TYPING_REFRESH_SECONDS = 4.0
 _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
@@ -678,10 +683,11 @@ class TelegramChannelAdapter(ChannelAdapter):
         match command_action.name:
             case "compact":
                 try:
-                    reply = await self._trigger_service.compact_session(
-                        route.agent_id,
-                        route.session_id,
-                    )
+                    async with self._typing_indicator(reply_plan.platform_target):
+                        reply = await self._trigger_service.compact_session(
+                            route.agent_id,
+                            route.session_id,
+                        )
                 except Exception as error:
                     self._log_command_action_failure(command_action.name, route, reply_plan, error)
                     reply = _format_failed_reply()
@@ -724,25 +730,65 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _relay_run_events(self, run: Run, platform_target: str) -> None:
         assistant_text: str | None = None
+        reply: str | None = None
 
-        async for event in run.subscribe():
-            if event.type == ASSISTANT_OUTPUT_EVENT:
-                extracted = _extract_assistant_output(event)
-                if extracted is not None:
-                    assistant_text = extracted
-                continue
+        async with self._typing_indicator(platform_target):
+            async for event in run.subscribe():
+                if event.type == ASSISTANT_OUTPUT_EVENT:
+                    extracted = _extract_assistant_output(event)
+                    if extracted is not None:
+                        assistant_text = extracted
+                    continue
 
-            if event.type == RUN_COMPLETED_EVENT:
-                await self.send(assistant_text or _EMPTY_ASSISTANT_REPLY, platform_target)
+                if event.type == RUN_COMPLETED_EVENT:
+                    reply = assistant_text or _EMPTY_ASSISTANT_REPLY
+                    break
+
+                if event.type == RUN_FAILED_EVENT:
+                    reply = _format_failed_reply()
+                    break
+
+                if event.type == RUN_CANCELLED_EVENT:
+                    reply = _CANCELLED_REPLY
+                    break
+
+        if reply is not None:
+            await self.send(reply, platform_target)
+
+    @contextlib.asynccontextmanager
+    async def _typing_indicator(self, platform_target: str) -> AsyncIterator[None]:
+        """Show Telegram's "typing" indicator for the chat until the block exits."""
+        task = asyncio.create_task(
+            self._keep_typing(platform_target),
+            name=f"telegram:{self._config.id}:typing:{platform_target}",
+        )
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def _keep_typing(self, platform_target: str) -> None:
+        try:
+            bot = self._require_bot()
+            chat_id = _parse_platform_target(platform_target)
+        except (ChannelError, ChannelConfigError):
+            return
+
+        while True:
+            try:
+                await bot.send_chat_action(chat_id=chat_id, action=_TYPING_ACTION)
+            except Exception as error:
+                # Best-effort cosmetic indicator: stop quietly if the API call fails.
+                _LOGGER.debug(
+                    "Telegram typing indicator stopped (channel=%s target=%s): %s",
+                    self._config.id,
+                    platform_target,
+                    error,
+                )
                 return
-
-            if event.type == RUN_FAILED_EVENT:
-                await self.send(_format_failed_reply(), platform_target)
-                return
-
-            if event.type == RUN_CANCELLED_EVENT:
-                await self.send(_CANCELLED_REPLY, platform_target)
-                return
+            await asyncio.sleep(_TYPING_REFRESH_SECONDS)
 
     async def _stop_chat_workers(self) -> None:
         workers = list(self._chat_workers.values())

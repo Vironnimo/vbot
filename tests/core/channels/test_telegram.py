@@ -162,6 +162,7 @@ def make_adapter(
         send_photo=AsyncMock(),
         send_document=AsyncMock(),
         send_media_group=AsyncMock(),
+        send_chat_action=AsyncMock(),
         get_file=AsyncMock(),
     )
     adapter._application = SimpleNamespace(
@@ -349,6 +350,29 @@ async def test_completed_run_forwards_final_assistant_output(
     await drain_chat_queue(adapter, 12345)
 
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="final reply")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_typing_indicator_refreshes_chat_action_and_stops_after_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    async with adapter._typing_indicator("12345"):
+        await asyncio.sleep(0.05)
+
+    bot.send_chat_action.assert_awaited_with(chat_id=12345, action="typing")
+    awaited_during_block = bot.send_chat_action.await_count
+    assert awaited_during_block >= 1
+
+    await asyncio.sleep(0.05)
+    assert bot.send_chat_action.await_count == awaited_during_block
     await adapter.stop()
 
 
