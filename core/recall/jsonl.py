@@ -39,6 +39,17 @@ SESSION_RECALL_SORT_MODES = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
 SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 
+# Backend-specific guidance appended to the session_search tool description so the
+# agent knows how queries behave for the active backend. Each backend returns its
+# own fragment from ``describe_search``; this is the literal-substring default
+# shared by the JSONL scan and the FTS backend (both match case-insensitive
+# substrings). The vector and hybrid backends override it.
+SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
+    "This backend matches literal case-insensitive substrings — choose distinctive "
+    "keywords from text you remember. It does not match by meaning, so synonyms or "
+    "paraphrases will not match."
+)
+
 # Name of the built-in recall tool whose results are persisted into sessions
 # as ``role="tool"`` messages. Indexing or returning those results creates a
 # feedback loop where every search matches its own prior output, so they are
@@ -68,6 +79,16 @@ class JsonlSessionRecallBackend:
     def scroll(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.anchored_view_result(request, summaries)
+
+    def describe_search(self) -> str:
+        """Backend-specific guidance for the session_search tool description.
+
+        Appended to the generic tool description so the agent knows how queries
+        behave for the active backend. The JSONL scan matches literal substrings;
+        the FTS backend inherits this fragment, and the vector/hybrid backends
+        override it.
+        """
+        return SESSION_RECALL_LITERAL_SEARCH_GUIDANCE
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
         summaries = [

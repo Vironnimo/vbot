@@ -25,6 +25,7 @@ from core.recall.hybrid import (
     HybridRecallBackend,
     render_hybrid_matches,
 )
+from core.recall.vector import _SEMANTIC_UNAVAILABLE_NOTICE
 from core.sessions import ChatSessionManager
 
 
@@ -230,6 +231,8 @@ def test_hybrid_backend_tags_session_in_both_arms_as_both(tmp_path: Path) -> Non
     # exact term the user typed — and the distance is attached.
     assert "vehicle" in match["snippet"].lower()
     assert match["distance"] == pytest.approx(0.0, abs=1e-5)
+    # A healthy search (both arms ran) carries no degradation notice.
+    assert "notice" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +261,28 @@ def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
     assert [match["session_id"] for match in data["matches"]] == ["beta", "alpha"]
     assert all(match["source"] == "literal" for match in data["matches"])
     assert all("distance" not in match for match in data["matches"])
+
+
+def test_hybrid_backend_surfaces_semantic_unavailable_notice(tmp_path: Path) -> None:
+    """When the vector arm cannot run, the fused result re-surfaces the reason.
+
+    Literal matches still come back, but the agent must know the semantic half
+    was skipped rather than assume the result reflects full coverage.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="alpha").append(
+        ChatMessage.user("vehicle here", timestamp=timestamp(1))
+    )
+
+    data = backend(tmp_path, sessions, embeddings=None).search(request(query="vehicle", limit=2))
+
+    # The hybrid frames its own notice and embeds the vector arm's reason.
+    assert "Semantic augmentation unavailable" in data["notice"]
+    assert _SEMANTIC_UNAVAILABLE_NOTICE in data["notice"]
+    assert data["content"].startswith("Semantic augmentation unavailable")
+    # Literal results are still present.
+    assert [match["session_id"] for match in data["matches"]] == ["alpha"]
 
 
 # ---------------------------------------------------------------------------

@@ -102,6 +102,29 @@ _KNN_FETCH_MARGIN = 4
 # fits. 6 halvings take any realistic session text down to a few hundred chars.
 _EMBED_OVERFLOW_RETRIES = 6
 
+# Guidance appended to the session_search tool description when this backend is
+# active (see ``describe_search``). Static: it describes the capability, not the
+# current availability — actual availability is surfaced per-call in the result
+# (the degradation notices below).
+_SEMANTIC_SEARCH_GUIDANCE = (
+    "This backend matches by meaning rather than literal words — describe the concept "
+    "or topic in a short phrase. A single bare keyword anchors poorly; prefer a "
+    "descriptive phrase. It will not reliably surface every literal occurrence of a word."
+)
+# Notice attached to a degraded result when semantic search could not run. The
+# config case is actionable (configure a model); the transient case is operational.
+# Prepended to ``content`` (the model-facing tool output) and also exposed as a
+# structured ``notice`` field so a composing backend (hybrid) can re-surface it.
+_SEMANTIC_UNAVAILABLE_NOTICE = (
+    "Semantic search is unavailable: no embedding model is configured. Configure a "
+    "text_embedding model in Settings to enable meaning-based recall. Showing literal "
+    "keyword matches instead."
+)
+_SEMANTIC_FAILED_NOTICE = (
+    "Semantic search failed for this query and fell back to literal keyword matching. "
+    "Results may miss meaning-related sessions; retry, or check the embedding provider."
+)
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -139,6 +162,9 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # in sync with the on-disk header after the first successful embed.
         self._resolved_header: VectorHeader | None = None
 
+    def describe_search(self) -> str:
+        return _SEMANTIC_SEARCH_GUIDANCE
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
@@ -156,7 +182,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             return self._search_with_vector_store(request, summaries)
         except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
             self._warning("Vector recall failed; falling back to JSONL scan: %s", error)
-            return self._fallback.search(request)
+            return self._degraded_result(self._fallback.search(request), _SEMANTIC_FAILED_NOTICE)
 
     def _search_with_vector_store(
         self,
@@ -166,7 +192,9 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         binding_header = self._resolve_header()
         if binding_header is None:
             self._warning("Vector recall has no embedding binding; falling back to JSONL scan")
-            return self._fallback.search(request)
+            return self._degraded_result(
+                self._fallback.search(request), _SEMANTIC_UNAVAILABLE_NOTICE
+            )
 
         self._ensure_fresh_index(request.agent_id, summaries, binding_header)
 
@@ -599,6 +627,20 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             "total_candidate_sessions": total_candidates,
             "request": request_payload(request),
         }
+
+    @staticmethod
+    def _degraded_result(base_result: JsonObject, notice: str) -> JsonObject:
+        """Wrap a JSONL fallback result with a notice that semantic search did not run.
+
+        The notice is prepended to ``content`` (the model-facing tool output) so the
+        agent knows the results are literal-only, and exposed as a structured
+        ``notice`` field so a composing backend (hybrid) can detect the degradation
+        and re-surface it.
+        """
+
+        content = base_result.get("content", "")
+        decorated = f"{notice}\n\n{content}" if content else notice
+        return {**base_result, "content": decorated, "notice": notice}
 
     def _warning(self, message: str, *args: object) -> None:
         if self.logger is not None and hasattr(self.logger, "warning"):

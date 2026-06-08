@@ -21,6 +21,8 @@ from core.recall.vector import (
     _EMBED_BATCH_SIZE,
     _MAX_DISTANCE,
     _PER_MESSAGE_CHAR_CAP,
+    _SEMANTIC_FAILED_NOTICE,
+    _SEMANTIC_UNAVAILABLE_NOTICE,
     Chunk,
     build_session_chunks,
 )
@@ -275,6 +277,10 @@ def test_vector_backend_falls_back_to_jsonl_when_no_embedding_binding(
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
     # JSONL fallback does not produce a ``distance`` field.
     assert all("distance" not in match for match in data["matches"])
+    # The degraded result tells the agent semantic search was unavailable, and
+    # the notice is prepended to the model-facing content.
+    assert data["notice"] == _SEMANTIC_UNAVAILABLE_NOTICE
+    assert data["content"].startswith(_SEMANTIC_UNAVAILABLE_NOTICE)
 
 
 def test_vector_backend_falls_back_to_jsonl_when_binding_raises(
@@ -288,6 +294,8 @@ def test_vector_backend_falls_back_to_jsonl_when_binding_raises(
     data = backend(tmp_path, sessions, embeddings=_NullEmbeddings()).search(request(query="carrot"))
 
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
+    # A binding-resolution failure is the "not configured" case → unavailable notice.
+    assert data["notice"] == _SEMANTIC_UNAVAILABLE_NOTICE
 
 
 def test_vector_backend_search_without_query_returns_session_summaries(
@@ -442,6 +450,10 @@ def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
 
     # Falls back to JSONL substring match on "carrot".
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
+    # A transient embed failure (binding resolves, embed raises) → failed notice,
+    # distinct from the "not configured" case.
+    assert data["notice"] == _SEMANTIC_FAILED_NOTICE
+    assert data["content"].startswith(_SEMANTIC_FAILED_NOTICE)
 
 
 def test_run_embed_shrinks_input_until_under_context_window(tmp_path: Path) -> None:
