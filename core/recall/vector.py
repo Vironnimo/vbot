@@ -47,7 +47,7 @@ from core.recall.jsonl import (
 )
 from core.recall.recall import JsonObject, RecallBackendContext, RecallRequest
 from core.recall.vector_store import (
-    SessionVectorRecord,
+    ChunkVectorRecord,
     VectorHeader,
     VectorStore,
     VectorStoreError,
@@ -135,7 +135,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 total_candidates=len(summaries),
             )
 
-        rowid_to_record = self.store.get_sessions_by_rowids([rowid for rowid, _ in candidates])
+        rowid_to_record = self.store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
 
         matches: list[JsonObject] = []
         for rowid, distance in candidates:
@@ -329,14 +329,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         if resolved_header.dimension <= 0:
             raise VectorStoreError("embedding provider returned no vectors")
 
-        records: list[tuple[SessionVectorRecord, list[float]]] = []
+        records: list[tuple[ChunkVectorRecord, list[float]]] = []
         for (summary, mtime_ns, size_bytes, _text, anchor_id, snippet), vector in zip(
             text_inputs, vectors, strict=True
         ):
             session_id = str(summary["id"])
             records.append(
                 (
-                    SessionVectorRecord(
+                    ChunkVectorRecord(
                         session_id=session_id,
                         agent_id=agent_id,
                         started_at=format_started_at(summary.get("created_at")),
@@ -344,12 +344,15 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         size_bytes=size_bytes,
                         anchor_message_id=anchor_id,
                         snippet=snippet,
+                        chunk_index=0,
+                        start_message_id=anchor_id,
+                        end_message_id=anchor_id,
                     ),
                     vector,
                 )
             )
 
-        self.store.upsert_many_sessions(header=resolved_header, records=records)
+        self.store.upsert_many_chunks(header=resolved_header, records=records)
         self._resolved_header = resolved_header
 
     def _truncate_to_input_limit(self, text: str, header: VectorHeader | None = None) -> str:
@@ -386,7 +389,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self,
         request: RecallRequest,
         summary: JsonObject,
-        record: SessionVectorRecord,
+        record: ChunkVectorRecord,
         distance: float,
     ) -> JsonObject | None:
         messages = self.sessions.get(request.agent_id, record.session_id).load()
