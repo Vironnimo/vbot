@@ -56,6 +56,12 @@ from core.recall.vector_store import (
 
 # Margin to over-fetch from KNN so structural filters still leave ``limit`` hits.
 _KNN_FETCH_MARGIN = 4
+# How many times to halve an over-long embedding input before giving up. The
+# character-budget truncation is a heuristic and cannot guarantee staying under
+# the model's *token* cap for dense text (German compounds, code, CJK); when the
+# provider rejects the input for context length, we shrink and retry until it
+# fits. 6 halvings take any realistic session text down to a few hundred chars.
+_EMBED_OVERFLOW_RETRIES = 6
 
 
 class VectorRecallBackend(JsonlSessionRecallBackend):
@@ -226,8 +232,31 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     def _run_embed(self, texts: list[str]) -> EmbeddingResult:
         if self.embeddings is None:
             raise EmbeddingError("embedding service is not configured")
-        result = self._run_async(self.embeddings.embed, list(texts))
-        return cast(EmbeddingResult, result)
+        current = list(texts)
+        for attempt in range(_EMBED_OVERFLOW_RETRIES + 1):
+            try:
+                result = self._run_async(self.embeddings.embed, current)
+                return cast(EmbeddingResult, result)
+            except EmbeddingError as error:
+                # Only the provider's context-length rejection is recoverable by
+                # shrinking — every other embedding error (auth, network, no
+                # binding) re-raises immediately and the caller falls back.
+                if attempt >= _EMBED_OVERFLOW_RETRIES or not _is_context_overflow(error):
+                    raise
+                cap = max((len(text) for text in current), default=0) // 2
+                if cap <= 0:
+                    raise
+                current = [text[:cap] if len(text) > cap else text for text in current]
+                self._warning(
+                    "Embedding input exceeded the model context window; "
+                    "shrinking to <=%d chars and retrying (attempt %d/%d)",
+                    cap,
+                    attempt + 1,
+                    _EMBED_OVERFLOW_RETRIES,
+                )
+        # The loop either returns a result or re-raises inside the body; this is
+        # only reached if the retry budget is exhausted by repeated overflows.
+        raise EmbeddingError("embedding input still exceeded the context window after retries")
 
     def _run_async(self, awaitable_func: Any, *args: Any) -> Any:
         """Drive an async coroutine from a sync backend call.
@@ -407,6 +436,24 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 # ---------------------------------------------------------------------------
 # Free functions (mirror the JSONL backend's module-level helpers)
 # ---------------------------------------------------------------------------
+
+
+def _is_context_overflow(error: Exception) -> bool:
+    """True when an embedding error is the provider's context-length rejection.
+
+    The provider's 4xx body reaches us through ``EmbeddingExecutionError``'s
+    message (the recall backend never sees the raw response). OpenRouter wraps
+    the upstream ``BadRequestError`` text verbatim, so we match the stable
+    phrases that identify a token-window overflow across providers.
+    """
+
+    message = str(error).lower()
+    return (
+        "context length" in message
+        or "maximum context" in message
+        or "context_length_exceeded" in message
+        or "input_tokens" in message
+    )
 
 
 def build_session_search_text(messages: Iterable[Any]) -> str:
