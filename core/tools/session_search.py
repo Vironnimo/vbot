@@ -81,8 +81,9 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
             "type": "array",
             "items": {"type": "string", "enum": list(SESSION_SEARCH_SUPPORTED_ROLES)},
             "description": (
-                "Message roles to search. Defaults to visible history plus compaction checkpoints; "
-                "include 'note' explicitly for kernel notes."
+                "Message roles to search. Defaults to conversation: user, assistant, errors, and "
+                "compaction checkpoints. Tool results are opt-in — include 'tool' explicitly to "
+                "search them; include 'note' explicitly for kernel notes."
             ),
         },
         "match": {
