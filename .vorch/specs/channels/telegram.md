@@ -31,6 +31,7 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 - Per-chat queues serialize normal inbound messages for a Telegram chat. Eager text command dispatch still lets recognized commands such as cancellation be handled while a previous queued message is waiting on a Run.
 - Non-text content is never slash-command-dispatched, even if a `TextBlock` contains slash-looking text.
 - Run relay keeps the latest assistant-output event text and sends it only after `run_completed`. Failed runs and trigger/command exceptions send generic user-facing failure text; cancelled runs send a generic cancellation reply; completed runs with no assistant text send a generic empty-output reply.
+- While a Run is relayed (and while a `/compact` action runs) the adapter shows Telegram's `typing` chat action, refreshed every `_TYPING_REFRESH_SECONDS` (4 s, since Telegram expires the action after ~5 s) by a background task scoped to an async context manager. The indicator is best-effort and cosmetic: `send_chat_action` failures stop it quietly (debug log) without affecting the reply, and it is always cancelled when the relay/compact block exits.
 
 ## External Dependencies
 
