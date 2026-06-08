@@ -106,3 +106,89 @@ it's *probably* fine — but it has not been explicitly verified for the summary
 injection path against every adapter. If an adapter ever rejects consecutive
 user turns, this is where it would surface. Worth a one-time check against the
 Anthropic adapter rather than a fix.
+
+---
+
+## 2026-06-08 — Memory/recall: semantic layer wanted + review findings
+
+Found during a review of the `memory` tool (`core/memory/`, `core/tools/memory.py`)
+and `session_search` (`core/recall/`, `core/tools/session_search.py`). One bug was
+fixed the same day: `sqlite_fts` matched whole words only (`unicode61`), so `gpt`
+never found `gpt4o` — switched to the `trigram` tokenizer for substring matching
+(commit `fix(recall): match substrings in sqlite search via trigram tokenizer`).
+The items below were deliberately **not** done and are recorded here.
+
+### 1. Semantic / "finds similar" recall is the actually-wanted feature, still unbuilt
+
+**What we want:** a real long-term memory where the agent finds *related* past
+sessions even when the words differ ("car" surfaces "vehicle"). That is
+**meaning-based search via embeddings/vectors**, a different mechanism from the
+current keyword search. The keyword index (`sqlite_fts`) can never do this no
+matter how it's tuned — even after the trigram fix it's still substring/keyword.
+
+**Where it fits (already designed for):** the original design
+(`stuff/researches/hermes-memory-system-research.md`, derived from Nous' Hermes
+agent) is layered: (1) pinned memory, (2) searchable JSONL sessions, (3) optional
+SQLite keyword index for speed, (4) **semantic/provider layer** — explicitly the
+*last* phase ("Later" → `VectorRecallBackend` / memory providers). Layers 1-3 are
+built; layer 4 was never started. That is the source of the "what do we even have"
+confusion: the SQLite piece is the keyword speed-index from the plan, not the
+semantic layer.
+
+**Good news on effort:** the recall layer was built swappable on purpose.
+`RecallBackend` (Protocol) + `RecallBackendRegistry` in `core/recall/recall.py`
+register backends by name (`jsonl_scan`, `sqlite_fts` today) and the active one is
+chosen via `settings.json` `recall.backend` with hot-reload. A `vector`/`semantic`
+backend slots in alongside the existing two — it's an addition, not a rewrite.
+
+**Open questions to settle when we plan it:** local embedding model vs. a cloud
+provider (vBot already has providers wired, no embedding capability yet — grep for
+`embedding`/`vector` returns nothing in `core/`); whether to store vectors in
+SQLite (e.g. `sqlite-vec`) or elsewhere; and whether to do hybrid keyword+semantic
+(usually best) rather than semantic-only. Not planned in detail yet.
+
+### 2. Memory tool has an unguarded read-modify-write race (silent lost updates)
+
+Tool calls within one assistant turn run **concurrently** (`asyncio.gather`,
+per-run limit `DEFAULT_TOOL_CONCURRENCY_LIMIT = 50` in `core/tools/tools.py`). The
+memory handler runs its work in a thread (`asyncio.to_thread`, `core/tools/memory.py`)
+and `FilePinnedMemoryBackend` does an unlocked read-modify-write
+(`add_entry`/`replace_entry`/`remove_entry` in `core/memory/memory.py`): read all
+entries → mutate list → atomic file replace. If the model issues two memory
+mutations in the same turn, both read the same starting list and the last writer
+wins — **one entry is silently lost**, while both tool calls report success. The
+atomic `os.replace` only prevents half-written files, not lost updates.
+
+**Fix direction:** a per-workspace-file lock (or an async lock keyed by file path)
+around the read-modify-write, so concurrent mutations serialize. Hermes guards the
+equivalent path with file locks + reload-under-lock; we have neither.
+
+### 3. `sqlite_fts` still diverges from JSONL in ordering & truncation (left on purpose)
+
+The substring fix made *what matches* agree between the two backends, but not
+*which/how many/what order*. JSONL collects matches grouped by session recency
+then in-file order, scanning until it has `limit` real hits
+(`message_search_result` in `core/recall/jsonl.py`). SQLite orders globally by
+message timestamp and fetches `limit + 1` candidates before re-validation
+(`_query_matches` / `_search_with_sqlite` in `core/recall/sqlite_fts.py`), so it
+can return fewer than `limit` and mislabel `truncated` when re-validation drops
+candidates, and its "top N" differs. The user explicitly does **not** require
+backend parity, so this is intentionally left. Also minor: the `trigram` tokenizer's
+case folding isn't identical to Python `.casefold()` for exotic cases (e.g. `ß`↔`ss`);
+since re-validation only *removes* candidates, this can cause rare false negatives
+in `sqlite_fts` that the JSONL scan would find. Acceptable.
+
+### 4. Memory file: asymmetric dash escaping + non-bullet lines dropped
+
+In `core/memory/memory.py` the read path unescapes `\-`→`-` (`_unescape_entry_line`)
+but the write path never produces `\-` (`_escape_entry_content` only collapses
+newlines). Consequences: (a) the documented leading-dash protection doesn't actually
+happen — it round-trips only incidentally because the bullet prefix is `"- "` with a
+space; (b) an entry whose content contains the literal substring `\-` is silently
+corrupted to `-` on read. Either add the escape on write or drop the dead unescape
+(and fix `memory.md`, which still claims `\-` is written).
+
+Separately, any non-bullet prose a user hand-writes *inside* the `## Entries` section
+is silently dropped on the next tool mutation (`_parse_memory_text` keeps only bullet
+lines). Mostly by-design ("the tool only curates bullets") but a data-loss footgun
+worth a doc note or guard.
