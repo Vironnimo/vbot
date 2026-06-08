@@ -148,3 +148,36 @@ def test_sqlite_search_text_matches_jsonl_scanner_sources(tmp_path: Path) -> Non
     assert block_data["matches"][0]["session_id"] == "sources-session"
     assert reasoning_data["matches"][0]["role"] == "assistant"
     assert tool_call_data["matches"][0]["role"] == "assistant"
+
+
+def test_sqlite_fts_finds_substring_within_token(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="substring-session")
+    session.append(ChatMessage.user("Switched the agent to gpt4o today", timestamp=timestamp(1)))
+    recall = backend(tmp_path, sessions)
+
+    data = recall.search(request(query="gpt"))
+
+    assert data["matches"][0]["session_id"] == "substring-session"
+
+
+def test_sqlite_fts_case_insensitive_substring(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="case-session")
+    session.append(ChatMessage.user("Running GPT4O benchmark", timestamp=timestamp(1)))
+    recall = backend(tmp_path, sessions)
+
+    data = recall.search(request(query="gpt4o"))
+
+    assert data["matches"][0]["session_id"] == "case-session"
+
+
+def test_sqlite_fts_short_query_falls_back_to_jsonl_substring(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="short-session")
+    session.append(ChatMessage.user("Go fast", timestamp=timestamp(1)))
+    recall = backend(tmp_path, sessions)
+
+    data = recall.search(request(query="go"))
+
+    assert data["matches"][0]["session_id"] == "short-session"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections.abc import Iterable
 from contextlib import closing
@@ -12,10 +11,12 @@ from typing import Any
 
 from core.recall.jsonl import (
     JsonlSessionRecallBackend,
+    compact_text,
     message_index_by_id,
     message_match_payload,
     message_matches_request,
     message_search_text,
+    query_terms,
     render_message_matches,
     request_payload,
     text_matches_query,
@@ -26,7 +27,10 @@ from core.sessions import is_skill_context_note
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_index.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
-_FTS_TOKEN_PATTERN = re.compile(r"[\w]+", re.UNICODE)
+# Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
+_SCHEMA_VERSION = 1
+# FTS5 trigram needs at least three characters; shorter queries fall back to the JSONL scan.
+_TRIGRAM_MIN_CHARS = 3
 
 
 class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
@@ -98,6 +102,15 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
 
     @staticmethod
     def _initialize_schema(connection: sqlite3.Connection) -> None:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version != _SCHEMA_VERSION:
+            connection.executescript(
+                """
+                DROP TABLE IF EXISTS messages_fts;
+                DROP TABLE IF EXISTS messages;
+                DROP TABLE IF EXISTS indexed_sessions;
+                """
+            )
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS indexed_sessions (
@@ -132,10 +145,12 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
               search_text,
               content='messages',
               content_rowid='row_id',
-              tokenize='unicode61'
+              tokenize='trigram'
             );
             """
         )
+        if version != _SCHEMA_VERSION:
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
     def _cleanup_missing_sessions(
         self,
@@ -203,7 +218,7 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             for message_index, message in enumerate(messages):
                 if is_skill_context_note(message):
                     continue
-                search_text = message_search_text(message)
+                search_text = compact_text(message_search_text(message))
                 cursor = connection.execute(
                     """
                     INSERT INTO messages (
@@ -386,23 +401,21 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
 
 
 def _fts_expression(request: RecallRequest) -> str | None:
+    # Trigram MATCH does substring lookup, mirroring the JSONL scanner's `term in haystack`.
+    # Terms are split the same way as the JSONL backend so both backends agree on what a term is.
     if request.query is None:
         return None
     if request.match_mode == "phrase":
-        phrase = " ".join(_safe_terms(request.query))
-        if not phrase:
+        phrase = compact_text(request.query).casefold()
+        if len(phrase) < _TRIGRAM_MIN_CHARS:
             return None
         return _quote_fts_value(phrase)
 
-    terms = [_quote_fts_value(term) for term in _safe_terms(request.query)]
-    if not terms:
+    terms = query_terms(request.query)
+    if not terms or any(len(term) < _TRIGRAM_MIN_CHARS for term in terms):
         return None
     operator = " OR " if request.match_mode == "any_term" else " AND "
-    return operator.join(terms)
-
-
-def _safe_terms(query: str) -> list[str]:
-    return [match.group(0).casefold() for match in _FTS_TOKEN_PATTERN.finditer(query)]
+    return operator.join(_quote_fts_value(term) for term in terms)
 
 
 def _quote_fts_value(value: str) -> str:

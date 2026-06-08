@@ -41,11 +41,13 @@ Rules:
 `SqliteFtsRecallBackend` is a disposable index, not Session storage.
 
 - The DB lives at `<data_dir>/recall/session_index.sqlite`.
-- Schema initialization uses stdlib `sqlite3`, attempts WAL and normal synchronous mode, and sets a short busy timeout.
+- Schema initialization uses stdlib `sqlite3`, attempts WAL and normal synchronous mode, and sets a short busy timeout. The schema is versioned via `PRAGMA user_version` (`_SCHEMA_VERSION`); a mismatched on-disk index is dropped and rebuilt, so the disposable index needs no migrations.
+- The FTS5 table uses the `trigram` tokenizer, so `MATCH` does case-insensitive **substring** lookup that mirrors the JSONL scanner's `term in haystack` (e.g. `gpt` matches `gpt4o`). Indexed `search_text` is whitespace-compacted at index time so it aligns with the compacted haystack used during re-validation.
+- Query terms are split the same way as the JSONL backend (whitespace), not on word boundaries, so both backends agree on what a term is.
 - Index freshness is checked lazily per candidate Session by JSONL file mtime and size.
 - Missing or stale Sessions are reindexed by loading canonical messages through `ChatSessionManager`, deleting prior rows, inserting searchable text, and updating `indexed_sessions` in one transaction.
 - Browse and anchored scroll use the JSONL behavior; SQLite is used only for query candidate lookup.
-- An empty or punctuation-only query produces no FTS expression and falls back to JSONL scan for that call.
+- Trigram needs ≥3 characters: an empty/punctuation-only query, or any query whose terms (or phrase) are shorter than 3 characters, produces no FTS expression and falls back to JSONL scan for that call (where short substrings still match correctly).
 - SQLite is only a candidate filter: every FTS hit is re-validated during JSONL hydration through `message_matches_request` + `text_matches_query`, so role/time/skill-note filtering and final matching never trust the index alone. Result windows/bookends are always hydrated from canonical JSONL after FTS candidate lookup.
 - If the index file is missing, it is rebuilt lazily. If SQLite operations fail, the backend deletes the index and retries once, then falls back to JSONL scan for that call.
 
