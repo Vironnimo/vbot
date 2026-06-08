@@ -22,10 +22,18 @@ OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhi
 # by their output capability.  The default ``/models`` call returns only
 # text-output models, so every non-text-output catalog family needs its own
 # supplementary fetch: ``transcription`` (STT), ``speech`` (TTS), ``image``
-# (image generation), ``audio`` (generic audio generation), and ``video``
-# (video generation).  Without ``video`` the ``video_generation`` task type
-# stays empty even though OpenRouter publishes those models.
-SUPPLEMENTARY_OUTPUT_MODALITIES = ("transcription", "speech", "image", "audio", "video")
+# (image generation), ``audio`` (generic audio generation), ``video`` (video
+# generation), and ``embeddings`` (text embedding).  Without these filters
+# the corresponding task types (``video_generation``, ``text_embedding``,
+# etc.) stay empty even though OpenRouter publishes those models.
+SUPPLEMENTARY_OUTPUT_MODALITIES = (
+    "transcription",
+    "speech",
+    "image",
+    "audio",
+    "video",
+    "embeddings",
+)
 
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
@@ -36,10 +44,11 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         """Return query-parameter dicts for supplementary model fetches.
 
         The OpenRouter ``/models`` endpoint defaults to returning only
-        text-output models.  Dedicated STT, TTS, image-, audio-, and
-        video-generation models are excluded unless the
+        text-output models.  Dedicated STT, TTS, image-, audio-, video-,
+        and text-embedding-generation models are excluded unless the
         ``output_modalities`` query parameter is set to ``transcription``,
-        ``speech``, ``image``, ``audio``, or ``video`` respectively.
+        ``speech``, ``image``, ``audio``, ``video``, or ``embeddings``
+        respectively.
 
         Each dict returned here is appended as query parameters to the
         models endpoint URL during discovery, and the resulting models
