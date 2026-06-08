@@ -50,8 +50,10 @@ from core.models.models import ModelRegistry
 from core.recall.jsonl import (
     JsonlSessionRecallBackend,
     compact_text,
+    is_context_message,
     message_index_by_id,
     message_match_payload,
+    message_matches_request,
     message_search_text,
     request_payload,
 )
@@ -63,7 +65,6 @@ from core.recall.vector_store import (
     VectorStoreError,
     format_started_at,
 )
-from core.sessions import is_skill_context_note
 
 # Target size of an embedded chunk in characters. ~500 tokens for the
 # common English case; small chunks give the KNN finer-grained matches
@@ -522,14 +523,12 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         record: ChunkVectorRecord,
         distance: float,
     ) -> JsonObject | None:
-        """Hydrate a per-chunk result anchored at the chunk's anchor message."""
+        """Hydrate a per-chunk result anchored at a request-eligible message."""
 
         messages = self.sessions.get(request.agent_id, record.session_id).load()
         if not messages:
             return None
-        anchor_index = message_index_by_id(messages, record.anchor_message_id)
-        if anchor_index is None:
-            anchor_index = _first_indexable_message(messages)
+        anchor_index = self._resolve_request_anchor(messages, record, request)
         if anchor_index is None:
             return None
         anchor_message = messages[anchor_index]
@@ -549,6 +548,36 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         match["snippet"] = record.snippet
         match["chunk_index"] = record.chunk_index
         return match
+
+    @staticmethod
+    def _resolve_request_anchor(
+        messages: list[Any],
+        record: ChunkVectorRecord,
+        request: RecallRequest,
+    ) -> int | None:
+        """Pick a chunk anchor that satisfies the request's structural filters.
+
+        Prefer the chunk's recorded anchor. If it is filtered out — a role the
+        caller did not ask for (e.g. ``run_summary``, never a recall role), a
+        skill-context note, or a message outside the time window — re-anchor to
+        the first message inside the chunk's ``[start, end]`` span that does
+        match. Returns ``None`` when no message in the span is eligible, so the
+        whole chunk is dropped rather than surfacing a non-requested role.
+        """
+
+        anchor_index = message_index_by_id(messages, record.anchor_message_id)
+        if anchor_index is not None and message_matches_request(messages[anchor_index], request):
+            return anchor_index
+        start = message_index_by_id(messages, record.start_message_id)
+        end = message_index_by_id(messages, record.end_message_id)
+        if start is None:
+            start = 0
+        if end is None or end < start:
+            end = len(messages) - 1
+        for index in range(start, end + 1):
+            if message_matches_request(messages[index], request):
+                return index
+        return None
 
     @staticmethod
     def _message_result(
@@ -597,11 +626,16 @@ def _is_context_overflow(error: Exception) -> bool:
 
 
 def _is_skippable_for_anchor(message: Any) -> bool:
-    """True when a message is not a good anchor — system noise, not user content."""
+    """True when a message is a poor chunk anchor — not user-facing content.
 
-    if getattr(message, "role", "") == "note":
-        return True
-    return bool(is_skill_context_note(message))
+    A good anchor is a recall-eligible conversation message
+    (``is_context_message``: user/assistant/tool/error/compaction_checkpoint,
+    minus skill-context notes). Kernel-internal annotations — plain notes and
+    ``run_summary`` records — are skipped so a chunk that mixes them with a
+    real message anchors on the real message, not the annotation.
+    """
+
+    return not is_context_message(message)
 
 
 def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
@@ -632,6 +666,13 @@ def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
     def _seal() -> None:
         if not current_messages:
             return
+        text = "\n".join(current_texts)
+        # Skip chunks with no embeddable text. A window of only run_summary
+        # records (which carry no searchable content) joins to an empty
+        # string, and an empty string embeds to a constant vector that
+        # pollutes every query with identical-distance, empty-snippet noise.
+        if not compact_text(text):
+            return
         # Anchor: first non-skippable message; fall back to the chunk's
         # first message so we never hand back an empty anchor id.
         anchor_id = ""
@@ -642,7 +683,6 @@ def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
                     break
         if not anchor_id:
             anchor_id = getattr(current_messages[0], "id", "")
-        text = "\n".join(current_texts)
         start_id = getattr(current_messages[0], "id", "")
         end_id = getattr(current_messages[-1], "id", "")
         chunks.append(
@@ -722,13 +762,6 @@ def build_snippet(text: str, limit: int = 320) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: max(limit - 3, 0)] + "..."
-
-
-def _first_indexable_message(messages: list[Any]) -> int | None:
-    for index, message in enumerate(messages):
-        if getattr(message, "role", "") in {"user", "assistant", "tool", "error"}:
-            return index
-    return None
 
 
 def render_vector_matches(
