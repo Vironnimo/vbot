@@ -30,7 +30,7 @@ SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 # excluded from recall (the JSONL scan, context/bookends, and the semantic
 # index). This duplicates ``core.tools.session_search.SESSION_SEARCH_TOOL_NAME``
 # because recall is a lower layer than tools and cannot import it without an
-# import cycle; ``test_recall`` asserts the two stay in sync.
+# import cycle; a test in ``test_session_search`` asserts the two stay in sync.
 RECALL_TOOL_RESULT_NAME = "session_search"
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")

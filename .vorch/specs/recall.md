@@ -35,6 +35,7 @@ Rules:
 
 - It uses `ChatSessionManager.list_with_metadata()` and `ChatSessionManager.get(...).load()`; it must not construct Session file paths.
 - Skill-context notes are excluded from search and context windows even when `note` is requested.
+- `session_search` tool-result messages (the recall tool's own persisted output, identified by `is_recall_artifact_message`: `role="tool"` + `name == RECALL_TOOL_RESULT_NAME`) are excluded from matches, context windows, and bookends — indexing or returning them makes a search match its own prior results. `RECALL_TOOL_RESULT_NAME` duplicates `core.tools.session_search.SESSION_SEARCH_TOOL_NAME` (recall is below tools, no import; a `test_session_search` test asserts they match). The vector backend also drops their text from chunk embeddings.
 - Search text includes textual content, text content blocks, file/media filename and media type, assistant reasoning, tool names, error kind, and assistant tool call names plus JSON arguments.
 
 ## SQLite FTS Backend
