@@ -1,17 +1,22 @@
-"""SQLite-vec vector store for per-session semantic recall.
+"""SQLite-vec vector store for per-chunk semantic recall.
 
 The store is a **disposable derived index** — canonical Session storage
 stays in JSONL under ``<data_dir>/agents/<agent-id>/sessions/``. This
 module is responsible for opening the connection, observing the embedding
 dimension lazily, pinning ``(provider_id, model_id, dimension)`` in a
-header, and exposing vector upsert/lookup primitives that the recall
-backend (``core/recall/vector.py``) builds on top of.
+header, and exposing chunk-level vector upsert/lookup primitives that the
+recall backend (``core/recall/vector.py``) builds on top of.
 
-The on-disk file lives at ``<data_dir>/recall/session_vectors.sqlite``;
-the ``sqlite-vec`` extension is loaded via the same enable/disable dance
-as the rest of the project's SQLite work, and the index is
-schema-versioned through ``PRAGMA user_version`` so a mismatched index
-is dropped and rebuilt on the next open.
+A session's searchable text is split into one or more **chunks**
+(message-aware windows with overlap — see ``core/recall/vector.py`` for
+the chunking policy). Each chunk is its own row in the metadata table
+and its own row in the ``vec0`` virtual table, keyed by the chunk's
+``(agent_id, session_id, chunk_index)`` tuple. The on-disk file lives at
+``<data_dir>/recall/session_vectors.sqlite``; the ``sqlite-vec``
+extension is loaded via the same enable/disable dance as the rest of
+the project's SQLite work, and the index is schema-versioned through
+``PRAGMA user_version`` so a mismatched index is dropped and rebuilt
+on the next open.
 """
 
 from __future__ import annotations
@@ -30,9 +35,10 @@ _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_vectors.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
 # Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
-_SCHEMA_VERSION = 1
+# v2 → chunk-keyed metadata (one row per chunk, not per session).
+_SCHEMA_VERSION = 2
 _VECTOR_TABLE_NAME = "session_vectors"
-_METADATA_TABLE_NAME = "sessions"
+_CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
 # Character-budget heuristic for capping a session's text before embedding.
 # Embedding models bill ~1 token per N characters; English averages ~4, but
@@ -52,6 +58,7 @@ _DEFAULT_CONTEXT_WINDOW = 8192
 # Cosine distance range — distances are 0 (identical direction) to 2 (opposite).
 # ``overshoot`` is the additional candidate count we ask sqlite-vec for so
 # structural filters applied after KNN still leave us with ``limit`` hits.
+# The recall backend over-fetches further for chunk→session dedup.
 _KNN_OVERSHOOT = 4
 
 
@@ -69,8 +76,14 @@ class VectorHeader:
 
 
 @dataclass(frozen=True)
-class SessionVectorRecord:
-    """One indexed session row — anchor metadata and the live mtime/size it was indexed at."""
+class ChunkVectorRecord:
+    """One indexed chunk row — anchor metadata and the live mtime/size it was indexed at.
+
+    The metadata describes a *chunk* of a session (a window of consecutive
+    messages), not the session as a whole. ``mtime_ns`` and ``size_bytes``
+    are still the session's, copied onto every chunk row so the freshness
+    diff (``list_indexed_sessions``) stays a session-level check.
+    """
 
     session_id: str
     agent_id: str
@@ -79,10 +92,13 @@ class SessionVectorRecord:
     size_bytes: int
     anchor_message_id: str
     snippet: str
+    chunk_index: int
+    start_message_id: str
+    end_message_id: str
 
 
 class VectorStore:
-    """sqlite-vec backed store keyed by session rowid."""
+    """sqlite-vec backed store keyed by chunk rowid."""
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -117,6 +133,41 @@ class VectorStore:
             raise VectorStoreError(f"could not enable WAL for vector store: {error}") from error
         return connection
 
+    def _chunk_table_ddl(self) -> str:
+        return f"""
+            CREATE TABLE IF NOT EXISTS {_CHUNK_TABLE_NAME} (
+              rowid INTEGER PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              agent_id TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              mtime_ns INTEGER NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              anchor_message_id TEXT NOT NULL,
+              snippet TEXT NOT NULL,
+              chunk_index INTEGER NOT NULL,
+              start_message_id TEXT NOT NULL,
+              end_message_id TEXT NOT NULL,
+              UNIQUE (agent_id, session_id, chunk_index)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chunks_agent
+              ON {_CHUNK_TABLE_NAME}(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_chunks_agent_session
+              ON {_CHUNK_TABLE_NAME}(agent_id, session_id);
+            """
+
+    @staticmethod
+    def _header_table_ddl() -> str:
+        return f"""
+            CREATE TABLE IF NOT EXISTS {_HEADER_TABLE_NAME} (
+              provider_id TEXT NOT NULL,
+              model_id TEXT NOT NULL,
+              dimension INTEGER NOT NULL,
+              schema_version INTEGER NOT NULL,
+              PRIMARY KEY (provider_id, model_id)
+            );
+            """
+
     def _initialize_schema(
         self,
         connection: sqlite3.Connection,
@@ -128,36 +179,12 @@ class VectorStore:
             connection.executescript(
                 f"""
                 DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_METADATA_TABLE_NAME};
+                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
                 DROP TABLE IF EXISTS {_HEADER_TABLE_NAME};
                 """
             )
-        connection.executescript(
-            f"""
-            CREATE TABLE IF NOT EXISTS {_HEADER_TABLE_NAME} (
-              provider_id TEXT NOT NULL,
-              model_id TEXT NOT NULL,
-              dimension INTEGER NOT NULL,
-              schema_version INTEGER NOT NULL,
-              PRIMARY KEY (provider_id, model_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS {_METADATA_TABLE_NAME} (
-              rowid INTEGER PRIMARY KEY,
-              session_id TEXT NOT NULL,
-              agent_id TEXT NOT NULL,
-              started_at TEXT NOT NULL,
-              mtime_ns INTEGER NOT NULL,
-              size_bytes INTEGER NOT NULL,
-              anchor_message_id TEXT NOT NULL,
-              snippet TEXT NOT NULL,
-              UNIQUE (agent_id, session_id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_sessions_agent
-              ON {_METADATA_TABLE_NAME}(agent_id);
-            """
-        )
+        connection.executescript(self._chunk_table_ddl())
+        connection.executescript(self._header_table_ddl())
         if version != _SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -179,27 +206,12 @@ class VectorStore:
             connection.executescript(
                 f"""
                 DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_METADATA_TABLE_NAME};
+                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
                 DELETE FROM {_HEADER_TABLE_NAME};
                 """
             )
-            connection.executescript(
-                f"""
-                CREATE TABLE {_METADATA_TABLE_NAME} (
-                  rowid INTEGER PRIMARY KEY,
-                  session_id TEXT NOT NULL,
-                  agent_id TEXT NOT NULL,
-                  started_at TEXT NOT NULL,
-                  mtime_ns INTEGER NOT NULL,
-                  size_bytes INTEGER NOT NULL,
-                  anchor_message_id TEXT NOT NULL,
-                  snippet TEXT NOT NULL,
-                  UNIQUE (agent_id, session_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_sessions_agent
-                  ON {_METADATA_TABLE_NAME}(agent_id);
-                """
-            )
+            connection.executescript(self._chunk_table_ddl())
+            connection.executescript(self._header_table_ddl())
         self._create_vector_table(connection, expected_header.dimension)
         connection.execute(
             f"""
@@ -262,87 +274,76 @@ class VectorStore:
         )
 
     # ------------------------------------------------------------------
-    # Session upsert / delete
+    # Chunk upsert / delete
     # ------------------------------------------------------------------
 
     def upsert_session(
         self,
         *,
         header: VectorHeader,
-        record: SessionVectorRecord,
+        record: ChunkVectorRecord,
         vector: Sequence[float],
     ) -> None:
-        """Insert or replace one session row + its vector."""
+        """Insert or replace a single chunk row + its vector.
 
-        if len(vector) != header.dimension:
-            raise VectorStoreError(
-                f"vector length {len(vector)} does not match pinned dimension "
-                f"{header.dimension} for model {header.provider_id}/{header.model_id}"
-            )
-        vector_json = json.dumps([float(value) for value in vector])
-        with closing(self._connect()) as connection:
-            self._initialize_schema(connection, expected_header=header)
-            with connection:
-                self._delete_session_rows(connection, record.agent_id, record.session_id)
-                cursor = connection.execute(
-                    f"""
-                    INSERT INTO {_METADATA_TABLE_NAME} (
-                      session_id, agent_id, started_at, mtime_ns, size_bytes,
-                      anchor_message_id, snippet
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        record.session_id,
-                        record.agent_id,
-                        record.started_at,
-                        record.mtime_ns,
-                        record.size_bytes,
-                        record.anchor_message_id,
-                        record.snippet,
-                    ),
-                )
-                row_id = cursor.lastrowid
-                if row_id is None:
-                    raise VectorStoreError(
-                        f"failed to insert metadata for session {record.session_id}"
-                    )
-                connection.execute(
-                    f"INSERT INTO {_VECTOR_TABLE_NAME}(rowid, embedding) VALUES (?, vec_f32(?))",
-                    (row_id, vector_json),
-                )
+        Thin convenience wrapper around :meth:`upsert_many_chunks` —
+        useful for tests and one-chunk-at-a-time callers. Production
+        indexing should batch chunks via ``upsert_many_chunks`` directly.
+        """
+
+        self.upsert_many_chunks(header=header, records=[(record, vector)])
 
     def delete_session(self, agent_id: str, session_id: str) -> None:
-        """Remove a session row and its vector (used for staleness cleanup)."""
+        """Remove all chunk rows for an agent+session (used for staleness cleanup)."""
 
         with closing(self._connect()) as connection, connection:
             self._delete_session_rows(connection, agent_id, session_id)
 
-    def upsert_many_sessions(
+    def upsert_many_chunks(
         self,
         *,
         header: VectorHeader,
-        records: Iterable[tuple[SessionVectorRecord, Sequence[float]]],
+        records: Iterable[tuple[ChunkVectorRecord, Sequence[float]]],
     ) -> int:
-        """Bulk-upsert sessions; returns the number of rows written."""
+        """Bulk-upsert chunks; replaces all chunks of any touched session.
 
+        Each distinct ``(agent_id, session_id)`` seen in *records* has its
+        existing chunk rows deleted **once** before the new chunks are
+        inserted. Per-row delete is unsafe here: deleting chunk 1 between
+        inserting chunk 0 and chunk 2 would clobber chunk 0 via the
+        session-wide delete. We collect the distinct session set up front
+        so every session is wiped exactly once, then insert the new
+        chunks in a single pass. Returns the number of chunk rows
+        written.
+        """
+
+        materialized = [(record, vector) for record, vector in records]
+        if not materialized:
+            return 0
         count = 0
         with closing(self._connect()) as connection:
             self._initialize_schema(connection, expected_header=header)
             with connection:
-                for record, vector in records:
+                # Delete each session's existing chunks exactly once.
+                distinct_sessions = {
+                    (record.agent_id, record.session_id) for record, _ in materialized
+                }
+                for agent_id, session_id in distinct_sessions:
+                    self._delete_session_rows(connection, agent_id, session_id)
+                for record, vector in materialized:
                     if len(vector) != header.dimension:
                         raise VectorStoreError(
                             f"vector length {len(vector)} does not match pinned dimension "
                             f"{header.dimension} for model "
                             f"{header.provider_id}/{header.model_id}"
                         )
-                    self._delete_session_rows(connection, record.agent_id, record.session_id)
                     cursor = connection.execute(
                         f"""
-                        INSERT INTO {_METADATA_TABLE_NAME} (
+                        INSERT INTO {_CHUNK_TABLE_NAME} (
                           session_id, agent_id, started_at, mtime_ns, size_bytes,
-                          anchor_message_id, snippet
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                          anchor_message_id, snippet, chunk_index,
+                          start_message_id, end_message_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.session_id,
@@ -352,12 +353,16 @@ class VectorStore:
                             record.size_bytes,
                             record.anchor_message_id,
                             record.snippet,
+                            record.chunk_index,
+                            record.start_message_id,
+                            record.end_message_id,
                         ),
                     )
                     row_id = cursor.lastrowid
                     if row_id is None:
                         raise VectorStoreError(
-                            f"failed to insert metadata for session {record.session_id}"
+                            f"failed to insert chunk for session {record.session_id} "
+                            f"chunk_index {record.chunk_index}"
                         )
                     connection.execute(
                         "INSERT INTO "
@@ -373,10 +378,14 @@ class VectorStore:
         agent_id: str,
         session_id: str,
     ) -> None:
+        # Deletes *all* chunk rows for an (agent, session) — re-used for
+        # re-indexing, staleness drops, and the pre-insert wipe in
+        # ``upsert_many_chunks``. Any matching vec0 rowids are removed
+        # first so the vec0 table never dangles.
         rows = list(
             connection.execute(
                 f"""
-                SELECT rowid FROM {_METADATA_TABLE_NAME}
+                SELECT rowid FROM {_CHUNK_TABLE_NAME}
                 WHERE agent_id = ? AND session_id = ?
                 """,
                 (agent_id, session_id),
@@ -388,7 +397,7 @@ class VectorStore:
                 (int(row["rowid"]),),
             )
         connection.execute(
-            f"DELETE FROM {_METADATA_TABLE_NAME} WHERE agent_id = ? AND session_id = ?",
+            f"DELETE FROM {_CHUNK_TABLE_NAME} WHERE agent_id = ? AND session_id = ?",
             (agent_id, session_id),
         )
 
@@ -397,15 +406,21 @@ class VectorStore:
     # ------------------------------------------------------------------
 
     def list_indexed_sessions(self, agent_id: str) -> dict[str, tuple[int, int]]:
-        """Return ``{session_id: (mtime_ns, size_bytes)}`` for indexed sessions of one agent."""
+        """Return ``{session_id: (mtime_ns, size_bytes)}`` for indexed sessions of one agent.
+
+        With chunk-keyed storage, a session has one row per chunk; we
+        dedup to one entry per ``session_id`` (every chunk row of a
+        session shares the session's ``mtime_ns``/``size_bytes``).
+        """
 
         with closing(self._connect()) as connection:
-            if not self._has_metadata_table(connection):
+            if not self._has_chunk_table(connection):
                 return {}
             rows = connection.execute(
                 f"""
-                SELECT session_id, mtime_ns, size_bytes FROM {_METADATA_TABLE_NAME}
+                SELECT session_id, mtime_ns, size_bytes FROM {_CHUNK_TABLE_NAME}
                 WHERE agent_id = ?
+                GROUP BY session_id
                 """,
                 (agent_id,),
             ).fetchall()
@@ -421,7 +436,7 @@ class VectorStore:
             for session_id in sorted(set(session_ids)):
                 rows_before = connection.execute(
                     f"""
-                        SELECT rowid FROM {_METADATA_TABLE_NAME}
+                        SELECT rowid FROM {_CHUNK_TABLE_NAME}
                         WHERE agent_id = ? AND session_id = ?
                         """,
                     (agent_id, session_id),
@@ -435,7 +450,7 @@ class VectorStore:
                     )
                 connection.execute(
                     f"""
-                        DELETE FROM {_METADATA_TABLE_NAME}
+                        DELETE FROM {_CHUNK_TABLE_NAME}
                         WHERE agent_id = ? AND session_id = ?
                         """,
                     (agent_id, session_id),
@@ -474,27 +489,27 @@ class VectorStore:
             ).fetchall()
         return [(int(row["rowid"]), float(row["distance"])) for row in rows]
 
-    def get_sessions_by_rowids(self, row_ids: Iterable[int]) -> dict[int, SessionVectorRecord]:
-        """Hydrate metadata rows for the given vec0 rowids, keyed by rowid."""
+    def get_chunks_by_rowids(self, row_ids: Iterable[int]) -> dict[int, ChunkVectorRecord]:
+        """Hydrate chunk metadata rows for the given vec0 rowids, keyed by rowid."""
 
         ids = [int(value) for value in row_ids]
         if not ids:
             return {}
         placeholders = ", ".join("?" for _ in ids)
         with closing(self._connect()) as connection:
-            if not self._has_metadata_table(connection):
+            if not self._has_chunk_table(connection):
                 return {}
             rows = connection.execute(
                 f"""
                 SELECT rowid, session_id, agent_id, started_at, mtime_ns, size_bytes,
-                       anchor_message_id, snippet
-                FROM {_METADATA_TABLE_NAME}
+                       anchor_message_id, snippet, chunk_index, start_message_id, end_message_id
+                FROM {_CHUNK_TABLE_NAME}
                 WHERE rowid IN ({placeholders})
                 """,
                 ids,
             ).fetchall()
         return {
-            int(row["rowid"]): SessionVectorRecord(
+            int(row["rowid"]): ChunkVectorRecord(
                 session_id=str(row["session_id"]),
                 agent_id=str(row["agent_id"]),
                 started_at=str(row["started_at"]),
@@ -502,6 +517,9 @@ class VectorStore:
                 size_bytes=int(row["size_bytes"]),
                 anchor_message_id=str(row["anchor_message_id"]),
                 snippet=str(row["snippet"]),
+                chunk_index=int(row["chunk_index"]),
+                start_message_id=str(row["start_message_id"]),
+                end_message_id=str(row["end_message_id"]),
             )
             for row in rows
         }
@@ -525,7 +543,7 @@ class VectorStore:
             connection.executescript(
                 f"""
                 DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_METADATA_TABLE_NAME};
+                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
                 DROP TABLE IF EXISTS {_HEADER_TABLE_NAME};
                 """
             )
@@ -533,13 +551,13 @@ class VectorStore:
             connection.commit()
 
     @staticmethod
-    def _has_metadata_table(connection: sqlite3.Connection) -> bool:
-        """Whether the metadata table exists (helps the read path on a fresh DB)."""
+    def _has_chunk_table(connection: sqlite3.Connection) -> bool:
+        """Whether the chunk metadata table exists (helps the read path on a fresh DB)."""
 
         return (
             connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (_METADATA_TABLE_NAME,),
+                (_CHUNK_TABLE_NAME,),
             ).fetchone()
             is not None
         )
