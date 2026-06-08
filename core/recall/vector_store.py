@@ -34,11 +34,20 @@ _SCHEMA_VERSION = 1
 _VECTOR_TABLE_NAME = "session_vectors"
 _METADATA_TABLE_NAME = "sessions"
 _HEADER_TABLE_NAME = "store_header"
-# Reservation for safety so a session with N context_window tokens still leaves
-# room for model-specific tokenization overhead (system prompt wrappers, etc.).
-_CONTEXT_WINDOW_CHAR_RESERVE = 4
-# Conservative default when the bound model is not in the local registry.
-_DEFAULT_INPUT_CHARS = 32_000
+# Character-budget heuristic for capping a session's text before embedding.
+# Embedding models bill ~1 token per N characters; English averages ~4, but
+# German (compound words, umlauts) and code tokenize denser — observed ~3.9 and
+# as low as ~3 — so we assume 3 to stay safely under the model's token cap for
+# mixed-language sessions. A pure character heuristic cannot match the model's
+# tokenizer exactly; see FLAGGED.md for the residual overflow risk.
+_CHARS_PER_TOKEN = 3
+# Fraction of the token window we actually fill, leaving headroom for the
+# heuristic's error and any provider-side request wrapping.
+_INPUT_TOKEN_SAFETY = 0.9
+# Conservative default token window when the bound model is not in the local
+# registry. 8192 is the cap for bge-m3, the OpenAI embedding models, and most
+# OpenRouter embedding models, so we assume that floor.
+_DEFAULT_CONTEXT_WINDOW = 8192
 
 # Cosine distance range — distances are 0 (identical direction) to 2 (opposite).
 # ``overshoot`` is the additional candidate count we ask sqlite-vec for so
@@ -541,19 +550,20 @@ class VectorStore:
 
     @staticmethod
     def truncate_to_input_limit(text: str, *, context_window: int | None) -> str:
-        """Truncate text to ``context_window / _CONTEXT_WINDOW_CHAR_RESERVE`` characters.
+        """Cap *text* to a character budget safely under the model's token window.
 
-        Embedding models typically charge one token per ~4 characters of
-        English text, so the input character budget is ``context_window // 4``
-        — we divide by 4 to leave a safety margin for non-English text and
-        provider-side overhead. When the model is not in the registry, we
-        fall back to a conservative default character budget.
+        The budget is ``context_window * _INPUT_TOKEN_SAFETY * _CHARS_PER_TOKEN``
+        characters. ``_CHARS_PER_TOKEN`` is a conservative chars-per-token
+        estimate (German and code tokenize denser than English), and
+        ``_INPUT_TOKEN_SAFETY`` reserves headroom so the heuristic's error does
+        not push the request over the model's hard token cap. When the bound
+        model's window is unknown, ``_DEFAULT_CONTEXT_WINDOW`` is assumed.
         """
 
-        if context_window is None or context_window <= 0:
-            limit = _DEFAULT_INPUT_CHARS
-        else:
-            limit = max(1, context_window // _CONTEXT_WINDOW_CHAR_RESERVE)
+        window = (
+            context_window if context_window and context_window > 0 else _DEFAULT_CONTEXT_WINDOW
+        )
+        limit = max(1, int(window * _INPUT_TOKEN_SAFETY) * _CHARS_PER_TOKEN)
         if len(text) <= limit:
             return text
         return text[:limit]
