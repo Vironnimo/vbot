@@ -542,11 +542,13 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             text,
         )
         match["distance"] = distance
-        # ``snippet`` is the chunk's matched-region headline (the region
-        # the embedding model actually scored); it replaces the
-        # anchor-message's own search-text snippet from the JSONL
-        # backend's ``message_match_payload`` call.
-        match["snippet"] = record.snippet
+        # The snippet stays the anchor message's own search-text snippet from
+        # ``message_match_payload``. The chunk's stored ``record.snippet`` is the
+        # whole chunk's headline, which mixes in roles the caller did not ask for
+        # (a default search excludes ``tool``, but a chunk embeds every role) and
+        # would surface raw tool JSON as the result text. Anchoring already moved
+        # the result onto a request-eligible message, so its text is the honest,
+        # in-scope snippet to show.
         match["chunk_index"] = record.chunk_index
         return match
 

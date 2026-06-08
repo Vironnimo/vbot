@@ -11,14 +11,29 @@ from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.recall.recall import JsonObject, RecallRequest
 from core.sessions import ChatSessionManager, is_skill_context_note
 
-SESSION_RECALL_DEFAULT_ROLES = (
+# Roles that count as a real conversation message. Used for vector chunk
+# anchoring (which message to center a result on) and as the full set of roles
+# a caller is allowed to search. Request-independent: it does not shrink with
+# what a given search asked for.
+SESSION_RECALL_CONVERSATION_ROLES = (
     "user",
     "assistant",
     "tool",
     "error",
     "compaction_checkpoint",
 )
-SESSION_RECALL_SUPPORTED_ROLES = (*SESSION_RECALL_DEFAULT_ROLES, "note")
+# Roles a search matches when the caller does not pass ``roles``. Tool results
+# are opt-in: they embed poorly (ANSI dumps, JSON run envelopes, directory
+# listings) and drowned out conversation in results, so a search reaches them
+# only when the caller explicitly asks via ``roles: ["tool"]``. Errors stay in
+# the default — they are low-volume and occasionally the thing being looked for.
+SESSION_RECALL_DEFAULT_ROLES = (
+    "user",
+    "assistant",
+    "error",
+    "compaction_checkpoint",
+)
+SESSION_RECALL_SUPPORTED_ROLES = (*SESSION_RECALL_CONVERSATION_ROLES, "note")
 SESSION_RECALL_MATCH_MODES = ("all_terms", "any_term", "phrase")
 SESSION_RECALL_SORT_MODES = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
@@ -143,12 +158,13 @@ class JsonlSessionRecallBackend:
         if not message_matches_request(messages[anchor_index], request):
             return empty_anchored_view(request)
 
-        window = window_payload(messages, anchor_index, request.context_messages)
+        window = window_payload(messages, anchor_index, request.context_messages, request.roles)
         bookends = bookend_payload(
             messages,
             anchor_index,
             request.context_messages,
             request.bookend_messages,
+            request.roles,
         )
         return {
             "content": render_anchored_view(request, window, bookends),
@@ -239,8 +255,12 @@ def message_match_payload(
         "snippet": snippet(text, request, SESSION_RECALL_SNIPPET_CHARS),
     }
     if request.context_messages > 0:
-        payload["context"] = context_payload(messages, message_index, request.context_messages)
-    payload["window"] = window_payload(messages, message_index, request.context_messages)
+        payload["context"] = context_payload(
+            messages, message_index, request.context_messages, request.roles
+        )
+    payload["window"] = window_payload(
+        messages, message_index, request.context_messages, request.roles
+    )
     if request.bookend_messages > 0:
         payload.update(
             bookend_payload(
@@ -248,6 +268,7 @@ def message_match_payload(
                 message_index,
                 request.context_messages,
                 request.bookend_messages,
+                request.roles,
             )
         )
     return payload
@@ -257,10 +278,11 @@ def window_payload(
     messages: list[Any],
     message_index: int,
     context_messages: int,
+    roles: tuple[str, ...],
 ) -> list[JsonObject]:
     return [
         message_preview_payload(messages[index])
-        for index in window_indices(messages, message_index, context_messages)
+        for index in window_indices(messages, message_index, context_messages, roles)
     ]
 
 
@@ -269,23 +291,24 @@ def bookend_payload(
     message_index: int,
     context_messages: int,
     bookend_messages: int,
+    roles: tuple[str, ...],
 ) -> JsonObject:
     if bookend_messages <= 0:
         return {"bookend_start": [], "bookend_end": []}
 
-    window_indices_value = window_indices(messages, message_index, context_messages)
+    window_indices_value = window_indices(messages, message_index, context_messages, roles)
     window_start = min(window_indices_value) if window_indices_value else message_index
     window_end = max(window_indices_value) if window_indices_value else message_index
     start_items: list[JsonObject] = []
     for message in messages[:window_start]:
-        if is_context_message(message):
+        if is_eligible_context(message, roles):
             start_items.append(message_preview_payload(message))
             if len(start_items) >= bookend_messages:
                 break
 
     end_items: list[JsonObject] = []
     for message in reversed(messages[window_end + 1 :]):
-        if is_context_message(message):
+        if is_eligible_context(message, roles):
             end_items.append(message_preview_payload(message))
             if len(end_items) >= bookend_messages:
                 break
@@ -309,18 +332,24 @@ def window_indices(
     messages: list[Any],
     message_index: int,
     context_messages: int,
+    roles: tuple[str, ...],
 ) -> list[int]:
     return [
-        *neighbor_context_indices(messages, message_index, -1, context_messages),
+        *neighbor_context_indices(messages, message_index, -1, context_messages, roles),
         message_index,
-        *neighbor_context_indices(messages, message_index, 1, context_messages),
+        *neighbor_context_indices(messages, message_index, 1, context_messages, roles),
     ]
 
 
-def context_payload(messages: list[Any], message_index: int, context_messages: int) -> JsonObject:
+def context_payload(
+    messages: list[Any],
+    message_index: int,
+    context_messages: int,
+    roles: tuple[str, ...],
+) -> JsonObject:
     return {
-        "before": neighbor_context(messages, message_index, -1, context_messages),
-        "after": neighbor_context(messages, message_index, 1, context_messages),
+        "before": neighbor_context(messages, message_index, -1, context_messages, roles),
+        "after": neighbor_context(messages, message_index, 1, context_messages, roles),
     }
 
 
@@ -329,6 +358,7 @@ def neighbor_context(
     message_index: int,
     direction: int,
     context_messages: int,
+    roles: tuple[str, ...],
 ) -> list[JsonObject]:
     return [
         message_preview_payload(messages[index])
@@ -337,6 +367,7 @@ def neighbor_context(
             message_index,
             direction,
             context_messages,
+            roles,
         )
     ]
 
@@ -346,12 +377,13 @@ def neighbor_context_indices(
     message_index: int,
     direction: int,
     context_messages: int,
+    roles: tuple[str, ...],
 ) -> list[int]:
     neighbors: list[int] = []
     index = message_index + direction
     while 0 <= index < len(messages) and len(neighbors) < context_messages:
         message = messages[index]
-        if is_context_message(message):
+        if is_eligible_context(message, roles):
             neighbors.append(index)
         index += direction
     if direction < 0:
@@ -359,12 +391,31 @@ def neighbor_context_indices(
     return neighbors
 
 
-def is_context_message(message: Any) -> bool:
+def is_eligible_context(message: Any, roles: tuple[str, ...]) -> bool:
+    """True when *message* may appear as a neighbor/context for a search.
+
+    Eligibility follows the request: a message shows as surrounding context
+    only when its role is one the caller asked for (so a default search that
+    excludes ``tool`` never leaks a tool result in via a bookend), and never
+    when it is a skill-context note or the recall tool's own output.
+    """
+
     return (
-        message.role in SESSION_RECALL_DEFAULT_ROLES
+        message.role in roles
         and not is_skill_context_note(message)
         and not is_recall_artifact_message(message)
     )
+
+
+def is_context_message(message: Any) -> bool:
+    """True when *message* is a real conversation message, ignoring the request.
+
+    Used for vector chunk anchoring, where the question is "is this a real
+    message worth centering a result on" independent of any one search. Read-time
+    context eligibility uses :func:`is_eligible_context` with the request's roles.
+    """
+
+    return is_eligible_context(message, SESSION_RECALL_CONVERSATION_ROLES)
 
 
 def message_search_text(message: Any) -> str:

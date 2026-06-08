@@ -286,6 +286,72 @@ def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
     assert note_data["matches"][0]["role"] == "note"
 
 
+def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) -> None:
+    """Tool results are opt-in: a default search skips them; ``roles: ["tool"]`` finds them."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="tool-session")
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="c1",
+            name="bash",
+            content="checkout bug stack trace from the shell",
+            timestamp=timestamp(1),
+        )
+    )
+
+    default_result = session_search_handler(
+        make_context(tmp_path), {"query": "checkout bug"}, sessions
+    )
+    tool_result = session_search_handler(
+        make_context(tmp_path),
+        {"query": "checkout bug", "roles": ["tool"]},
+        sessions,
+    )
+
+    default_data = assert_success_envelope(default_result)
+    tool_data = assert_success_envelope(tool_result)
+    assert default_data["matches"] == []
+    assert len(tool_data["matches"]) == 1
+    assert tool_data["matches"][0]["role"] == "tool"
+
+
+def test_session_search_excludes_tool_results_from_context_until_requested(
+    tmp_path: Path,
+) -> None:
+    """A tool result next to a match is hidden from context by default, shown when requested."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="ctx-session")
+    session.append(ChatMessage.user("inspect the checkout bug", timestamp=timestamp(1)))
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="c1",
+            name="bash",
+            content="raw ansi terminal dump",
+            timestamp=timestamp(2),
+        )
+    )
+
+    default_result = session_search_handler(
+        make_context(tmp_path),
+        {"query": "checkout bug", "context": 1, "bookends": 0},
+        sessions,
+    )
+    tool_result = session_search_handler(
+        make_context(tmp_path),
+        {"query": "checkout bug", "roles": ["user", "tool"], "context": 1, "bookends": 0},
+        sessions,
+    )
+
+    default_data = assert_success_envelope(default_result)
+    tool_data = assert_success_envelope(tool_result)
+    # The adjacent tool result is not a neighbor of the match by default.
+    assert default_data["matches"][0]["context"]["after"] == []
+    # ...but it shows as context once the caller opts into tool results.
+    assert tool_data["matches"][0]["context"]["after"][0]["role"] == "tool"
+
+
 def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
     """A persisted session_search result is never returned as a match.
 

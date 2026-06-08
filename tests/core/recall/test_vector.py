@@ -1068,6 +1068,46 @@ def test_vector_backend_reanchors_to_requested_role_within_chunk(tmp_path: Path)
     assert data["matches"][0]["message_id"] == assistant_message.id
 
 
+def test_vector_backend_default_search_snippet_is_conversation_not_tool_headline(
+    tmp_path: Path,
+) -> None:
+    """A default (tool-excluded) search renders the conversation anchor, never tool JSON.
+
+    The chunk embeds every role, so a tool result's text is part of the chunk's
+    headline. When a default search surfaces such a chunk, hydration re-anchors
+    onto the request-eligible conversation message and the snippet must come from
+    that message — not the chunk headline, which would leak the raw tool output.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="mixed")
+    # Tool result first → it is the chunk's recorded anchor and the head of the
+    # chunk headline. Its text carries the "fruit" signal so the chunk matches.
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="c1",
+            name="bash",
+            content="banana fruit raw ansi terminal dump",
+            timestamp=timestamp(1),
+        )
+    )
+    session.append(ChatMessage.user("I love fruit too", timestamp=timestamp(2)))
+
+    conversation_only = ("user", "assistant", "error", "compaction_checkpoint")
+    data = backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+        request(query="fruit", roles=conversation_only, limit=5)
+    )
+
+    assert len(data["matches"]) == 1
+    match = data["matches"][0]
+    # Re-anchored onto the conversation message, not the tool result.
+    assert match["role"] == "user"
+    assert match["message_id"] == session.load()[-1].id
+    # The snippet is the conversation message, with no tool noise leaking in.
+    assert "fruit" in match["snippet"].lower()
+    assert "ansi" not in match["snippet"].lower()
+
+
 def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Path) -> None:
     """A session_search result is excluded from the index — no self-matching loop.
 
