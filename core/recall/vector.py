@@ -51,6 +51,7 @@ from core.recall.jsonl import (
     JsonlSessionRecallBackend,
     compact_text,
     is_context_message,
+    is_recall_artifact_message,
     message_index_by_id,
     message_match_payload,
     message_matches_request,
@@ -696,7 +697,11 @@ def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
         )
 
     for message in messages:
-        raw_text = message_search_text(message)
+        # A session_search result is the recall tool's own output; embedding it
+        # makes future searches match their own prior results. Treat it as
+        # empty text so it never contributes to a chunk's embedding (a chunk of
+        # only such messages collapses to empty text and is skipped in _seal).
+        raw_text = "" if is_recall_artifact_message(message) else message_search_text(message)
         if not raw_text:
             # Empty search-text messages still count toward the chunk's
             # message span (and may be the anchor), so we track them in
