@@ -244,6 +244,21 @@ def test_vector_store_returns_empty_when_chunk_table_missing(tmp_path: Path) -> 
     assert store.read_header() is None
 
 
+def test_vector_store_delete_session_is_noop_when_chunk_table_missing(tmp_path: Path) -> None:
+    # Regression: on a fresh index the chunk table does not exist yet. The
+    # vector backend deletes empty sessions during eager backfill before any
+    # upsert creates the schema; that must not raise ``no such table: chunks``.
+    store = VectorStore(tmp_path)
+    store.delete_session("coder", "never-indexed")  # must not raise
+
+
+def test_vector_store_drop_indexed_sessions_is_noop_when_chunk_table_missing(
+    tmp_path: Path,
+) -> None:
+    store = VectorStore(tmp_path)
+    assert store.drop_indexed_sessions("coder", ["a", "b"]) == 0  # must not raise
+
+
 def test_vector_store_truncate_to_input_limit_uses_context_window(tmp_path: Path) -> None:
     text = "lorem ipsum " * 200
     truncated = VectorStore.truncate_to_input_limit(text, context_window=40)
