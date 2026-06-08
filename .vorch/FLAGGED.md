@@ -192,3 +192,33 @@ Separately, any non-bullet prose a user hand-writes *inside* the `## Entries` se
 is silently dropped on the next tool mutation (`_parse_memory_text` keeps only bullet
 lines). Mostly by-design ("the tool only curates bullets") but a data-loss footgun
 worth a doc note or guard.
+
+---
+
+## 2026-06-08 — Semantic recall: deferred follow-up work
+
+The `vector` RecallBackend (sqlite-vec + OpenRouter embeddings) shipped in commit `merge: add vector recall backend with sqlite-vec semantic search`. The following were deliberately left for later:
+
+### 1. Local embedding engines
+
+The registry hook for local task targets is available and dependency-free (same pattern as local STT/TTS engines), but no local embedding engine is integrated. The `EmbeddingService` currently rejects local targets with `EmbeddingUnsupportedTargetError`.
+
+### 2. Hybrid keyword+semantic ranking
+
+The `vector` backend ranks purely by cosine distance — semantic only. A hybrid ranking that combines keyword matches (FTS) with semantic proximity would produce better results but requires its own ranking model and integration design.
+
+### 3. Background/write-time incremental indexing
+
+The store uses eager-on-search backfill: the first `search` after enabling `vector` embeds all missing/stale sessions, and every subsequent search diffs freshness incrementally. A background indexer or write-hook in `core/sessions/` would eliminate the latency spike of first-search backfill for large session histories.
+
+### 4. Per-session chunking for very long sessions
+
+Sessions longer than the embedding model's `context_length` are truncated to fit. Per-session chunking (split a session into multiple vectors, merge results) is deferred until session lengths actually exceed typical embedding model context windows (commonly 8k–32k tokens).
+
+### 5. Embedding providers other than OpenRouter
+
+The `core/embeddings/` domain is provider-agnostic by design, but only the OpenRouter discovery path and `/api/v1/embeddings` wire are implemented. Adding e.g. direct OpenAI, Anthropic, or local embedding providers requires supplementary discovery + provider-specific `ProviderEmbeddingClient` routing.
+
+### 6. Asymmetric `input_type` query/document embedding
+
+The OpenRouter embeddings API supports `input_type` hints (e.g. `"query"` vs. `"document"`) for models that optimize embeddings differently per task. Currently ignored — both queries and sessions are embedded symmetrically. Fine for general-purpose models, but some specialized embedding models (e.g. Cohere) produce better results with the hint.
