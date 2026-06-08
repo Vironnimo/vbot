@@ -1,9 +1,11 @@
 """Session recall read-model backends."""
 
+from core.recall.hybrid import HybridRecallBackend
 from core.recall.jsonl import JsonlSessionRecallBackend
 from core.recall.recall import (
     DEFAULT_RECALL_BACKEND,
     FIRST_PARTY_RECALL_BACKENDS,
+    RECALL_BACKEND_HYBRID,
     RECALL_BACKEND_JSONL_SCAN,
     RECALL_BACKEND_SQLITE_FTS,
     RECALL_BACKEND_VECTOR,
@@ -28,8 +30,10 @@ from core.recall.vector_store import (
 __all__ = [
     "DEFAULT_RECALL_BACKEND",
     "FIRST_PARTY_RECALL_BACKENDS",
+    "HybridRecallBackend",
     "JsonObject",
     "JsonlSessionRecallBackend",
+    "RECALL_BACKEND_HYBRID",
     "RECALL_BACKEND_JSONL_SCAN",
     "RECALL_BACKEND_SQLITE_FTS",
     "RECALL_BACKEND_VECTOR",

@@ -6,6 +6,7 @@ import pytest
 
 from core.recall import (
     FIRST_PARTY_RECALL_BACKENDS,
+    RECALL_BACKEND_HYBRID,
     RECALL_BACKEND_JSONL_SCAN,
     RECALL_BACKEND_SQLITE_FTS,
     RECALL_BACKEND_VECTOR,
@@ -36,12 +37,19 @@ def test_first_party_recall_backends_include_vector() -> None:
 
     assert RECALL_BACKEND_VECTOR in FIRST_PARTY_RECALL_BACKENDS
     assert (
-        frozenset({RECALL_BACKEND_JSONL_SCAN, RECALL_BACKEND_SQLITE_FTS, RECALL_BACKEND_VECTOR})
+        frozenset(
+            {
+                RECALL_BACKEND_JSONL_SCAN,
+                RECALL_BACKEND_SQLITE_FTS,
+                RECALL_BACKEND_VECTOR,
+                RECALL_BACKEND_HYBRID,
+            }
+        )
         == FIRST_PARTY_RECALL_BACKENDS
     )
 
 
-def test_registry_with_builtins_registers_all_three_backends(
+def test_registry_with_builtins_registers_all_backends(
     registry: RecallBackendRegistry,
 ) -> None:
     assert sorted(registry.names()) == sorted(FIRST_PARTY_RECALL_BACKENDS)
