@@ -34,9 +34,12 @@ import sqlite_vec  # type: ignore[import-untyped]
 _INDEX_DIR_NAME = "recall"
 _INDEX_FILE_NAME = "session_vectors.sqlite"
 _SQLITE_BUSY_TIMEOUT_MS = 1000
-# Bump when the on-disk index schema changes; mismatched indexes are dropped and rebuilt.
+# Bump when the on-disk index becomes invalid under a new build/index policy;
+# mismatched indexes are dropped and rebuilt (the index is disposable, no migration).
 # v2 → chunk-keyed metadata (one row per chunk, not per session).
-_SCHEMA_VERSION = 2
+# v3 → empty-text chunks (e.g. run_summary-only windows) are no longer indexed;
+#      older indexes hold constant-vector noise rows that must be purged.
+_SCHEMA_VERSION = 3
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
