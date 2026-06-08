@@ -16,11 +16,13 @@ RecallSortMode = Literal["newest", "oldest"]
 
 RECALL_BACKEND_JSONL_SCAN = "jsonl_scan"
 RECALL_BACKEND_SQLITE_FTS = "sqlite_fts"
+RECALL_BACKEND_VECTOR = "vector"
 DEFAULT_RECALL_BACKEND = RECALL_BACKEND_JSONL_SCAN
 FIRST_PARTY_RECALL_BACKENDS = frozenset(
     {
         RECALL_BACKEND_JSONL_SCAN,
         RECALL_BACKEND_SQLITE_FTS,
+        RECALL_BACKEND_VECTOR,
     }
 )
 
@@ -46,6 +48,11 @@ class RecallBackendContext:
     data_dir: Path
     sessions: ChatSessionManager
     logger: Any | None = None
+    # The vector recall backend uses these to resolve the embedding binding
+    # and look up the bound model's context window; both are optional so
+    # the JSONL/FTS backends keep working unchanged.
+    embeddings: Any | None = None
+    model_registry: Any | None = None
 
 
 class RecallBackend(Protocol):
@@ -72,6 +79,7 @@ class RecallBackendRegistry:
     def with_builtins(cls) -> RecallBackendRegistry:
         from core.recall.jsonl import JsonlSessionRecallBackend
         from core.recall.sqlite_fts import SqliteFtsRecallBackend
+        from core.recall.vector import VectorRecallBackend
 
         registry = cls()
         registry.register(
@@ -79,6 +87,7 @@ class RecallBackendRegistry:
             lambda context: JsonlSessionRecallBackend(context.sessions),
         )
         registry.register(RECALL_BACKEND_SQLITE_FTS, SqliteFtsRecallBackend)
+        registry.register(RECALL_BACKEND_VECTOR, VectorRecallBackend)
         return registry
 
     def register(self, name: str, factory: RecallBackendFactory) -> None:

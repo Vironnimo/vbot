@@ -18,6 +18,7 @@ Built-in backend names:
 
 - `jsonl_scan` - default backend. Scans canonical JSONL through `ChatSessionManager`.
 - `sqlite_fts` - optional derived SQLite FTS5 index under `<data_dir>/recall/session_index.sqlite`.
+- `vector` - optional derived sqlite-vec semantic index under `<data_dir>/recall/session_vectors.sqlite`.
 
 Backend selection:
 
@@ -50,6 +51,21 @@ Rules:
 - Trigram needs ≥3 characters: an empty/punctuation-only query, or any query whose terms (or phrase) are shorter than 3 characters, produces no FTS expression and falls back to JSONL scan for that call (where short substrings still match correctly).
 - SQLite is only a candidate filter: every FTS hit is re-validated during JSONL hydration through `message_matches_request` + `text_matches_query`, so role/time/skill-note filtering and final matching never trust the index alone. Result windows/bookends are always hydrated from canonical JSONL after FTS candidate lookup.
 - If the index file is missing, it is rebuilt lazily. If SQLite operations fail, the backend deletes the index and retries once, then falls back to JSONL scan for that call.
+
+## Vector Backend
+
+`VectorRecallBackend` is a disposable semantic index, not Session storage. It inherits from `JsonlSessionRecallBackend` so `browse` and `scroll` reuse the canonical JSONL implementation; only `search` is overridden.
+
+- The DB lives at `<data_dir>/recall/session_vectors.sqlite`.
+- Schema initialization uses `sqlite_vec.load()` with the `enable_load_extension` dance, WAL, normal synchronous mode, and a short busy timeout. The schema is versioned via `PRAGMA user_version`; a mismatched on-disk index is dropped and rebuilt, so the disposable index needs no migrations.
+- The store header pins `(embedding_provider_id, embedding_model_id, dimension, schema_version)`. On mismatch (different model, provider, dimension, or schema version) → drop and rebuild the entire store before any query.
+- The `vec0` virtual table uses `distance_metric=cosine` at a fixed dimension observed from the first embed response (never from the catalog). The dimension is stored in the header.
+- KNN query: `select rowid, distance from vectors where embedding match vec_f32(?) order by distance limit K`.
+- **Per-session granularity:** one vector per session. The session's concatenated searchable text (reusing the same search-text extraction the JSONL backend builds) is truncated to the bound model's `context_length` before embedding.
+- **Eager-on-search backfill:** the first `search` after enabling `vector` embeds all missing or stale sessions (batched, logged), then queries. Missing/stale detection diffs `ChatSessionManager.list_with_metadata()` against the stored `mtime`/`size` in the `sessions` metadata table.
+- **Semantic ranking only:** vector hits are ranked by cosine distance with no `text_matches_query` re-validation (semantic match has no literal term). Structural filters only (agent_id, time bounds, skill-note exclusion). Result windows/bookends are hydrated from canonical JSONL after KNN candidate lookup, anchored at the session's `anchor_message_id`.
+- **Graceful fallback:** empty query, no configured embedding binding, or any sqlite-vec/embed failure → log a warning and fall back to JSONL scan for that call (mirrors `sqlite_fts`'s delete-and-retry-then-fallback).
+- The backend requires `RecallBackendContext.embeddings` (the `EmbeddingService`) to be supplied; the context `model_registry` is used to look up model `context_window` for input truncation.
 
 ## Cross-Domain Rules
 

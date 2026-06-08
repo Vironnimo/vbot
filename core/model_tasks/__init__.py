@@ -5,6 +5,7 @@ from core.model_tasks.constants import (
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
     TASK_VIDEO_GENERATION,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "SUPPORTED_TASK_TYPES",
     "TASK_IMAGE_GENERATION",
     "TASK_SPEECH_TO_TEXT",
+    "TASK_TEXT_EMBEDDING",
     "TASK_TEXT_TO_SPEECH",
     "TASK_VIDEO_GENERATION",
     "TaskModelBinding",

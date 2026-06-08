@@ -143,6 +143,10 @@ class TestCapabilities:
             "audio_input",
             "speech_to_text",
         )
+        # Dedicated embedding models have "embeddings" in output_modalities.
+        # They are NOT tagged chat/text_output — their output is a vector,
+        # not text. Mirror of the "speech" → text_to_speech alias.
+        assert derive_model_task_types(("text",), ("embeddings",)) == ("text_embedding",)
 
     def test_frozen(self):
         reasoning = ReasoningCapabilities(supported=False)
@@ -255,6 +259,29 @@ class TestModel:
         )
         with pytest.raises(FrozenInstanceError):
             model.capabilities.reasoning.supported = False  # type: ignore[misc]
+
+    def test_embedding_model_derives_text_embedding_task_type(self):
+        """A Model with output_modalities=("embeddings",) and no explicit
+        task_types derives task_types=("text_embedding",). Mirrors the
+        speech → text_to_speech alias.
+        """
+
+        capabilities = Capabilities(
+            vision=False,
+            tools=False,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+            output_modalities=("embeddings",),
+        )
+        model = Model(
+            model_id="text-embedding-3-small",
+            name="Text Embedding 3 Small",
+            capabilities=capabilities,
+            context_window=8192,
+            max_output_tokens=None,
+        )
+
+        assert model.capabilities.task_types == ("text_embedding",)
 
 
 # ---------------------------------------------------------------------------

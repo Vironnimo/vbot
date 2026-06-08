@@ -208,8 +208,11 @@ describe('i18n t()', () => {
       'settings.recall.backendDescription',
       'settings.recall.backends.jsonl_scan',
       'settings.recall.backends.sqlite_fts',
+      'settings.recall.backends.vector',
       'settings.recall.save',
       'settings.recall.saveSuccess',
+      'settings.specializedModels.embeddingModel',
+      'settings.specializedModels.embeddingModelDescription',
       'settings.providers.title',
       'settings.providers.subtitle',
       'settings.providers.empty',
@@ -233,6 +236,13 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
+    expect(t('settings.recall.backends.vector')).toBe('Semantic (vector)');
+    expect(t('settings.specializedModels.embeddingModel')).toBe(
+      'Embedding model',
+    );
+    expect(t('settings.specializedModels.embeddingModelDescription')).toContain(
+      'semantic session recall',
+    );
     expect(englishCatalog['settings.placeholderNote']).toBeUndefined();
     expect(englishCatalog['settings.general.autoScroll']).toBeUndefined();
     expect(

@@ -7,6 +7,7 @@ import pytest
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
 )
 from core.model_tasks.options import (
@@ -555,3 +556,124 @@ def test_option_schema_for_unrecognized_task_type_returns_empty_schema() -> None
 
     assert schema.task_type == "future_task"
     assert schema.fields == ()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — text_embedding option schema
+#
+# The embedding task exposes the Matryoshka ``dimensions`` knob when
+# the resolved model advertises it in ``supported_parameters``. The
+# schema stays empty for models that do not list it (so the Settings
+# UI does not invent a knob the provider would reject), and the
+# ``dimensions`` field defaults to ``None`` — the wire layer drops
+# ``None`` so the request omits the field for non-Matryoshka models.
+# ---------------------------------------------------------------------------
+
+
+def test_option_schema_for_text_embedding_emits_dimensions_field() -> None:
+    """A text_embedding schema for an unknown model exposes the
+    ``dimensions`` field. The catalog may not be loaded yet — the
+    union of fields is shown so the user can still configure the
+    target, mirroring the OpenAI image profile behavior.
+    """
+
+    schema = option_schema_for(
+        TASK_TEXT_EMBEDDING,
+        "openrouter",
+        "openrouter/google/gemini-embedding-2::api-key",
+        model=None,
+    )
+
+    field_names = {field.name for field in schema.fields}
+    assert field_names == {"dimensions"}
+
+    dimensions = schema.fields[0]
+    assert dimensions.name == "dimensions"
+    assert dimensions.type == "number"
+    # The schema emits a None default; the wire layer drops None
+    # before sending, so the request omits ``dimensions`` by default.
+    assert dimensions.default is None
+    assert dimensions.min_value == 1
+    assert dimensions.step == 1
+
+
+def test_option_schema_for_text_embedding_with_model_advertising_dimensions() -> None:
+    """When the resolved model lists ``dimensions`` in
+    ``supported_parameters``, the schema still emits the field — the
+    wire layer is the source of truth for whether to forward it, and
+    the Settings UI surfaces the knob whenever the model could
+    accept it.
+    """
+
+    model = _make_model("google/gemini-embedding-2", supported_parameters=("dimensions",))
+
+    schema = option_schema_for(
+        TASK_TEXT_EMBEDDING,
+        "openrouter",
+        "openrouter/google/gemini-embedding-2::api-key",
+        model=model,
+    )
+
+    field_names = {field.name for field in schema.fields}
+    assert field_names == {"dimensions"}
+
+
+def test_option_schema_for_text_embedding_without_supported_dimensions() -> None:
+    """A model that does not list ``dimensions`` in
+    ``supported_parameters`` has an empty embedding schema — the
+    Settings UI does not invent a knob the provider would reject.
+    """
+
+    model = _make_model("some/embedding-model-v1", supported_parameters=())
+
+    schema = option_schema_for(
+        TASK_TEXT_EMBEDDING,
+        "openrouter",
+        "openrouter/some/embedding-model-v1::api-key",
+        model=model,
+    )
+
+    assert schema.fields == ()
+
+
+def test_option_schema_for_text_embedding_schema_default_options_is_empty() -> None:
+    """The embedding schema's default options are empty — the
+    ``dimensions`` field carries ``default=None`` and the schema
+    default-options helper only includes fields whose default is not
+    ``None``. The wire layer drops ``None`` anyway, so a binding with
+    no stored options produces a request without ``dimensions``.
+    """
+
+    schema = option_schema_for(
+        TASK_TEXT_EMBEDDING,
+        "openrouter",
+        "openrouter/google/gemini-embedding-2::api-key",
+        model=None,
+    )
+
+    assert schema.default_options() == {}
+
+
+def test_option_schema_for_text_embedding_to_dict_has_dimensions_field() -> None:
+    """The serialized form reaches the Settings UI as a ``number`` field
+    with min=1 and an explicit description of the Matryoshka
+    behavior.
+    """
+
+    schema = option_schema_for(
+        TASK_TEXT_EMBEDDING,
+        "openrouter",
+        "openrouter/google/gemini-embedding-2::api-key",
+        model=None,
+    )
+
+    rendered = schema.to_dict()
+    assert rendered["task_type"] == TASK_TEXT_EMBEDDING
+    assert rendered["target"] == "openrouter/google/gemini-embedding-2::api-key"
+    assert len(rendered["fields"]) == 1
+    field = rendered["fields"][0]
+    assert field["name"] == "dimensions"
+    assert field["type"] == "number"
+    assert field["default"] is None
+    assert field["min"] == 1
+    assert "Matryoshka" in field["description"]

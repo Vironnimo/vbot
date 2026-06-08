@@ -6,6 +6,7 @@ from core.recall.recall import (
     FIRST_PARTY_RECALL_BACKENDS,
     RECALL_BACKEND_JSONL_SCAN,
     RECALL_BACKEND_SQLITE_FTS,
+    RECALL_BACKEND_VECTOR,
     JsonObject,
     RecallBackend,
     RecallBackendContext,
@@ -16,6 +17,13 @@ from core.recall.recall import (
     RecallSortMode,
 )
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
+from core.recall.vector import VectorRecallBackend
+from core.recall.vector_store import (
+    SessionVectorRecord,
+    VectorHeader,
+    VectorStore,
+    VectorStoreError,
+)
 
 __all__ = [
     "DEFAULT_RECALL_BACKEND",
@@ -24,6 +32,7 @@ __all__ = [
     "JsonlSessionRecallBackend",
     "RECALL_BACKEND_JSONL_SCAN",
     "RECALL_BACKEND_SQLITE_FTS",
+    "RECALL_BACKEND_VECTOR",
     "RecallBackend",
     "RecallBackendContext",
     "RecallBackendFactory",
@@ -31,5 +40,10 @@ __all__ = [
     "RecallMatchMode",
     "RecallRequest",
     "RecallSortMode",
+    "SessionVectorRecord",
     "SqliteFtsRecallBackend",
+    "VectorHeader",
+    "VectorRecallBackend",
+    "VectorStore",
+    "VectorStoreError",
 ]
