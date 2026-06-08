@@ -682,6 +682,37 @@ def test_build_session_chunks_falls_back_to_first_message_when_only_notes() -> N
     assert chunks[0].anchor_message_id == messages[0].id
 
 
+def test_build_session_chunks_skips_chunks_with_no_embeddable_text() -> None:
+    """A window of only run_summary records (no searchable text) is not indexed.
+
+    Regression: run_summary annotations carry no content, so the chunk text
+    joins to an empty string. An empty string embeds to a constant vector that
+    surfaced in every query as identical-distance, empty-snippet noise.
+    """
+
+    messages = [
+        ChatMessage.run_summary(run_id="r1", status="completed", timing={}),
+        ChatMessage.run_summary(run_id="r2", status="completed", timing={}),
+    ]
+
+    assert build_session_chunks(messages) == []
+
+
+def test_build_session_chunks_anchors_on_context_message_not_run_summary() -> None:
+    """A chunk mixing a run_summary with a real message anchors on the real one."""
+
+    messages = [
+        ChatMessage.run_summary(run_id="r1", status="completed", timing={}),
+        ChatMessage.user("I love bananas and fruit", timestamp=timestamp(2)),
+    ]
+
+    chunks = build_session_chunks(messages)
+
+    assert len(chunks) == 1
+    # The user message is the anchor — never the kernel-internal run_summary.
+    assert chunks[0].anchor_message_id == messages[1].id
+
+
 # ---------------------------------------------------------------------------
 # Chunked indexing + search integration
 # ---------------------------------------------------------------------------
@@ -950,6 +981,59 @@ def test_vector_backend_search_succeeds_when_first_indexed_session_yields_no_chu
 
     assert data["matches"] == []
     assert data["searched_sessions"] == 1
+
+
+def test_vector_backend_never_surfaces_run_summary_as_a_match(tmp_path: Path) -> None:
+    """run_summary annotations must never appear as recall results.
+
+    Regression: run_summary is not a supported recall role, yet the vector
+    backend used to anchor chunks on it and return it (empty-snippet,
+    clustered-distance noise). The chunk must anchor on the real message and
+    the result role must be that message's role.
+    """
+
+    timing = {
+        "started_at": "2026-05-01T12:00:00+00:00",
+        "completed_at": "2026-05-01T12:00:01+00:00",
+        "duration_ms": 1000,
+    }
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="mixed")
+    session.append(ChatMessage.run_summary(run_id="r1", status="completed", timing=timing))
+    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+
+    data = backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+        request(query="fruit", limit=5)
+    )
+
+    assert [match["session_id"] for match in data["matches"]] == ["mixed"]
+    assert all(match["role"] != "run_summary" for match in data["matches"])
+    assert data["matches"][0]["role"] == "user"
+
+
+def test_vector_backend_reanchors_to_requested_role_within_chunk(tmp_path: Path) -> None:
+    """When the recorded anchor's role is not requested, hydration re-anchors.
+
+    A chunk spans a user message (the recorded anchor) and an assistant
+    message. A request for assistant-only must surface the assistant message
+    from inside the chunk's span, not drop the match or return the user role.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="s1")
+    session.append(ChatMessage.user("fruit question", timestamp=timestamp(1)))
+    assistant_message = ChatMessage.assistant(
+        model="m", content="fruit answer", timestamp=timestamp(2)
+    )
+    session.append(assistant_message)
+
+    data = backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(
+        request(query="fruit", roles=("assistant",), limit=5)
+    )
+
+    assert len(data["matches"]) == 1
+    assert data["matches"][0]["role"] == "assistant"
+    assert data["matches"][0]["message_id"] == assistant_message.id
 
 
 # ---------------------------------------------------------------------------
