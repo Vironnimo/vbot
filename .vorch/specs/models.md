@@ -54,7 +54,7 @@ Capabilities are facts about one model through one provider. The same underlying
 
 `input_modalities`, `output_modalities`, `supported_parameters`, `supported_voices`, and `task_types` preserve sanitized provider-catalog facts when available. `supported_voices` is a tuple of plain voice-id strings (e.g. `["af_alloy", "af_aoede", ...]`), read defensively from provider catalog responses. It is provider-specific — different providers expose different voice lists for the same underlying TTS model family. `task_types` is a coarse filtering and routing projection used by accessors and task-model discovery; it is not provider request shaping. The authoritative task ordering and derivation logic live in `core/models/models.py`, and task-model bindings must stay aligned with `.vorch/specs/model_tasks.md`.
 
-Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, and `video_generation`.
+Known `task_types` currently follow `MODEL_TASK_ORDER`: `chat`, `text_output`, `image_input`, `image_understanding`, `file_input`, `file_understanding`, `audio_input`, `speech_to_text`, `video_input`, `video_understanding`, `image_generation`, `audio_generation`, `text_to_speech`, `text_embedding`, and `video_generation`.
 
 Sparse catalogs remain usable. Missing modality data defaults to text-in/text-out, and local or OpenAI-compatible providers with conservative optional facts should not disappear from model selection merely because fields such as `tools` or large `context_window` are missing.
 

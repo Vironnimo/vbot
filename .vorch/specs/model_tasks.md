@@ -4,13 +4,13 @@ Central bindings from specialized task types to concrete provider or local targe
 
 ## Overview
 
-`core/model_tasks/` owns normalized task-model settings, task target ID parsing, credential-gated target discovery, local target descriptors, and backend-owned option schemas for the Settings UI. It is the shared binding layer behind specialized models such as speech-to-text, text-to-speech, image generation, and future video generation. It does not call provider media APIs, create artifacts, upload files, or decide provider wire payloads; execution services resolve a binding here and then route through their own domain.
+`core/model_tasks/` owns normalized task-model settings, task target ID parsing, credential-gated target discovery, local target descriptors, and backend-owned option schemas for the Settings UI. It is the shared binding layer behind specialized models such as speech-to-text, text-to-speech, image generation, text embedding, and future video generation. It does not call provider media APIs, create artifacts, upload files, or decide provider wire payloads; execution services resolve a binding here and then route through their own domain.
 
 Runtime wires `TaskModelService` after providers, models, credentials, and storage are available. Provider-backed target visibility delegates to `ModelRegistry.query()` (the shared capability/task filter in `core/models/query.py`) plus usable provider credentials. Local targets bypass provider catalogs and credentials, but must be registered explicitly with `LocalTaskTargetRegistry`.
 
 ## Data Model
 
-Supported binding task types are defined by `SUPPORTED_TASK_TYPES` in `core/model_tasks/constants.py`: `speech_to_text`, `text_to_speech`, `image_generation`, and `video_generation`.
+Supported binding task types are defined by `SUPPORTED_TASK_TYPES` in `core/model_tasks/constants.py`: `speech_to_text`, `text_to_speech`, `image_generation`, `text_embedding`, and `video_generation`.
 
 `settings.json` stores task-model bindings under `model_tasks`, keyed by supported task type. Each persisted binding has a non-empty `target` string and an `options` JSON object. Public settings updates are sparse: sending only `options` updates the existing target when one is already persisted, sending an empty `target` removes that task binding, and `StorageManager` removes the whole `model_tasks` section when no bindings remain.
 
@@ -47,7 +47,7 @@ Add a new specialized workflow in this order: add/confirm the task type in `core
 - `core/model_tasks/` must not execute media tasks. Speech execution belongs in `core/speech/`; image generation belongs in `core/image/`; future video or image-edit execution should get their own domains.
 - Provider-backed discovery is credential-gated and strictly filtered through `ModelRegistry.query()` by task type. If a target is missing from Settings, first check provider credentials and the generated model catalog before changing UI code.
 - Generated provider catalogs may be stale. If a newly released OpenRouter speech or image model is missing from the target list, refresh the model database after configuring the provider API key; do not hand-edit `resources/models/<provider>.json` as a durable fix.
-- The Settings UI currently renders rows for `speech_to_text`, `text_to_speech`, and `image_generation` only. `video_generation` is accepted by backend validation and discovery, but has no complete UI/execution workflow yet.
+- The Settings UI currently renders rows for `speech_to_text`, `text_to_speech`, `image_generation`, and `text_embedding`. `video_generation` is accepted by backend validation and discovery, but has no complete UI/execution workflow yet.
 - Local target hooks are intentionally dependency-free. Do not add Whisper, Piper, ffmpeg, or other engine dependencies without explicit approval.
 - `LocalTaskTargetDescriptor.option_fields` is a tuple of `TaskModelOptionField` values that the local target's option schema surfaces. Descriptors are currently registered with an empty fields tuple; future user-configured engines will construct descriptors with their own option fields from persisted settings. The registry itself stays empty until a user-config plan lands — no engine is pre-built here.
 - `audio_generation` is a model capability task type in `core/models/`, but not a configurable task-model binding. Generic audio output must not be routed as `text_to_speech` unless the model also advertises `speech` output and receives the `text_to_speech` task type.

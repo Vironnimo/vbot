@@ -21,7 +21,7 @@ cli/           ← CLI accessor. Server lifecycle locally; all other domains via
 desktop/       ← pywebview shell. Imports nothing from the project — HTTP only.
 ```
 
-**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, speech, image, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` owns specialized task-model bindings and target discovery; task-specific execution stays in domains such as `speech/`. Provider and automation internals live in their specs (`providers.md`, `automation.md`).
+**Core modules:** runtime, models, model_tasks, chat, runs, compaction, sessions, recall, memory, settings, prompts, attachments, extensions, agents, subagents, tools, providers, channels, speech, image, embeddings, skills, automation, storage, utils. Each is a folder with a main file as public API, soft limit 1000 lines per file. `model_tasks/` owns specialized task-model bindings and target discovery; task-specific execution stays in domains such as `speech/` and `embeddings/`. Provider and automation internals live in their specs (`providers.md`, `automation.md`).
 
 **Communication:** `POST /api/rpc` (method dispatcher) + `/ws` (event-bus push) + `/ws/logs` (selected log-file live tail) + SSE (streaming) + dedicated attachment HTTP endpoints (`POST /api/upload`, `GET /api/attachments/{id}`). No auth (single-user-local).
 
@@ -61,6 +61,7 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | `.vorch/specs/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, Telegram-first routing, metadata, outbound send |
 | `.vorch/specs/speech.md` | `core/speech/` | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
 | `.vorch/specs/image.md` | `core/image/` | Image generation execution, artifacts, provider wire behavior |
+| `.vorch/specs/embeddings.md` | `core/embeddings/` | Text-embedding execution, provider wire, vector output for recall |
 | `.vorch/specs/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
 | `.vorch/specs/cli.md` | `cli/` | Local server lifecycle commands, targeting rules, status/logging contract |
 | `.vorch/specs/desktop.md` | `desktop/` | pywebview thin-client contract, target URL, window lifecycle, local settings |
@@ -130,7 +131,7 @@ python desktop/main.py                # Desktop shell
 cd webui && npm install && npm run build   # Svelte → static JS/CSS
 ```
 
-**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/`, and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant specs.
+**Data directory:** `~/.vbot` — created on first run. Holds `.env`, `settings.json`, and all runtime data: `attachments/`, `logs/`, `oauth/`, `cron/jobs.json`, `speech/`, the disposable recall index under `recall/` (`session_index.sqlite` for FTS, `session_vectors.sqlite` for vector), and prompt overrides under `prompts/` and `agents/<agent-id>/prompts/`. Per-domain layout details live in the relevant specs.
 
 ## Testing
 

@@ -29,6 +29,10 @@
 Model data includes: name, capabilities (vision, tools, reasoning, etc.), context window, max output tokens. All of these are provider-specific facts about the model at that provider — not canonical claims that need overrides.
 **Not:** A Provider. The model is the cognitive endpoint; the provider is the service that routes the request to it. Not a canonical entity that exists independently of providers.
 
+## Embedding Model
+**Definition:** A specialized model that converts text into numerical vectors (embeddings) for semantic comparison. In vBot, this is a configurable `text_embedding` task-model binding used by the recall `vector` backend to find meaning-related past sessions (e.g. "car" and "vehicle" are nearby in embedding space).
+**Not:** A chat model, a TTS model, or an image generation model. The embedding model produces vectors, not text, speech, or images.
+
 ## Reasoning
 **Definition:** A model capability indicating whether the model can perform an internal reasoning step before producing its final answer. In the model data, this is a boolean: `reasoning.supported: true` or `false`. At runtime, the agent's `thinking_effort` field (`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`, or empty for provider default) controls how much reasoning the model does. Each adapter translates this into its provider's wire format.
 **Not:** Chain of Thought. Reasoning is the capability and its configuration; CoT is the opaque output that reasoning produces.
@@ -45,6 +49,10 @@ Model data includes: name, capabilities (vision, tools, reasoning, etc.), contex
 ## Memory
 **Definition:** Curated, durable facts stored in Workspace Markdown files and managed through the memory service/tool. User-scope memory lives in `USER.md`; agent-scope memory lives in `MEMORY.md`. An Agent's `memory_prompt_mode` decides which of those files, if any, become prompt-visible.
 **Not:** Session history, scratch notes, or a broad search index. Searchable conversation recall belongs to Sessions and recall tools such as `session_search`.
+
+## Semantic Recall
+**Definition:** Meaning-based session search using vector embeddings instead of keyword matching. A session about "vehicles" can match a query for "cars" because their vectors are nearby in embedding space, even though they share no literal words. Enabled by switching `recall.backend` to `vector` and configuring a `text_embedding` model.
+**Not:** Keyword search (substring or FTS — that's what `jsonl_scan` and `sqlite_fts` do). Not curated memory or session browsing. Semantic recall retrieves past sessions by meaning, not by exact terms.
 
 ## Run
 **Definition:** One active execution inside a Session: a user turn plus all model output, visible thinking blocks, tool calls, tool results, and follow-up assistant output until the work completes, fails, or is cancelled.
