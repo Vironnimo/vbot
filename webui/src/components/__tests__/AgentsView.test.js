@@ -1214,9 +1214,9 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
 
-    await waitForText('poem-writer');
+    await waitForText('sample-skill');
 
-    expect(document.body.textContent).toContain('Writes tiny poems.');
+    expect(document.body.textContent).toContain('A loadable sample skill.');
     expect(document.body.textContent).toContain('name differs from folder');
     expect(document.body.textContent).toContain('Unavailable skills');
     expect(document.body.textContent).toContain('broken-skill');
@@ -1244,7 +1244,7 @@ describe('AgentsView', () => {
     const updateCall = rpcMock.mock.calls.find(
       (call) => call[0] === 'agent.update',
     );
-    expect(updateCall[1].allowed_skills).toEqual(['poem-writer']);
+    expect(updateCall[1].allowed_skills).toEqual(['sample-skill']);
   });
 });
 
@@ -1528,8 +1528,8 @@ function skillCatalog() {
   return {
     skills: [
       {
-        name: 'poem-writer',
-        description: 'Writes tiny poems.',
+        name: 'sample-skill',
+        description: 'A loadable sample skill.',
         valid: true,
         warnings: [],
       },

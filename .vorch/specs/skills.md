@@ -26,8 +26,8 @@ Prompt-facing skill metadata is XML and follows the vBot agentskills.io-compatib
 ```xml
 <available_skills>
   <skill>
-    <name>poem-writer</name>
-    <description>Write a short, polished poem for a requested theme.</description>
+    <name>teach</name>
+    <description>Teach the user a topic so they actually understand it.</description>
   </skill>
 </available_skills>
 ```
