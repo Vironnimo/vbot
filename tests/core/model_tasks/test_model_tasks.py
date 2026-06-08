@@ -396,6 +396,18 @@ def test_validate_task_type_rejects_image_edit() -> None:
         validate_task_type("image_edit")
 
 
+def test_text_embedding_added_to_supported_task_types() -> None:
+    """``text_embedding`` is a first-class binding task type: exported as
+    ``TASK_TEXT_EMBEDDING`` on the constants module, present in
+    ``SUPPORTED_TASK_TYPES``, and accepted by ``validate_task_type``.
+    This is the vocabulary foundation that later phases (discovery,
+    ``core/embeddings/``, vector recall) build on."""
+
+    assert model_task_constants.TASK_TEXT_EMBEDDING == "text_embedding"
+    assert "text_embedding" in SUPPORTED_TASK_TYPES
+    assert validate_task_type("text_embedding") == "text_embedding"
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — model-aware option schemas
 # ---------------------------------------------------------------------------
