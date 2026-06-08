@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -396,3 +397,43 @@ def test_vector_backend_search_includes_per_match_distance_in_payload(
 
     distances = [match["distance"] for match in data["matches"]]
     assert distances == sorted(distances)
+
+
+@pytest.mark.timeout(10)
+def test_vector_backend_search_completes_when_called_from_running_event_loop(
+    tmp_path: Path,
+) -> None:
+    """Calling the sync backend from inside a running loop must not deadlock.
+
+    In production the recall backend is invoked from FastAPI handlers
+    that are themselves running on an asyncio event loop. The previous
+    implementation of ``_run_async`` used
+    ``asyncio.run_coroutine_threadsafe(..., loop).result()`` which
+    deadlocks: the calling thread blocks on ``result()`` while the
+    coroutine can only make progress on that same thread's loop.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="cars").append(
+        ChatMessage.user("My car broke down", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="vehicles").append(
+        ChatMessage.user("I was driving my vehicle", timestamp=timestamp(2))
+    )
+
+    async def drive() -> list[str]:
+        loop = asyncio.get_running_loop()
+        assert loop.is_running()
+        # ``run_in_executor`` returns a future that runs the callable
+        # on the default executor — equivalent to how a FastAPI sync
+        # handler would invoke the recall backend while the loop is
+        # active on the calling thread.
+        result = await loop.run_in_executor(
+            None,
+            backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search,
+            request(query="car", limit=2),
+        )
+        return [match["session_id"] for match in result["matches"]]
+
+    session_ids = asyncio.run(drive())
+    assert session_ids == ["cars", "vehicles"]

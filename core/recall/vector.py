@@ -27,6 +27,7 @@ call, mirroring the SQLite FTS backend's safety net.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from collections.abc import Iterable
 from typing import Any, cast
 
@@ -108,14 +109,10 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # dimension observed from the embedding provider. Use that for the
         # KNN call — the binding-resolution header only knows the (provider,
         # model) pair and is unaware of dimension until the first embed runs.
-        if request.query is None:
-            return self._message_result(
-                request,
-                [],
-                searched_sessions=len(summaries),
-                total_candidates=len(summaries),
-            )
-        query_vector = self._embed_query(binding_header, request.query)
+        # ``search()`` has already rejected ``None``/blank queries before
+        # calling us, so the cast is just narrowing for the type-checker.
+        query = cast(str, request.query)
+        query_vector = self._embed_query(binding_header, query)
         pinned_header = self._resolved_header
         if pinned_header is None or pinned_header.dimension <= 0:
             raise VectorStoreError("vector store header is not pinned after embed")
@@ -236,16 +233,22 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         """Drive an async coroutine from a sync backend call.
 
         The recall backend is invoked from sync tool code; the embed
-        service is async. When an event loop is already running we
-        schedule the work on it, otherwise we run it inline.
+        service is async. When no event loop is running we run it
+        inline via :func:`asyncio.run`. When a loop is already running
+        (production — FastAPI handlers) we cannot block on
+        ``run_coroutine_threadsafe(...).result()`` because the call
+        thread IS the loop thread, so the future can never make
+        progress. Instead we hand the coroutine to a worker thread
+        that runs its own loop via :func:`asyncio.run`.
         """
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.run(awaitable_func(*args))
-        future = asyncio.run_coroutine_threadsafe(awaitable_func(*args), loop)
-        return future.result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, awaitable_func(*args))
+            return future.result()
 
     # ------------------------------------------------------------------
     # Freshness + backfill
