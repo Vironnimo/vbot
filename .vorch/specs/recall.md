@@ -19,6 +19,7 @@ Built-in backend names:
 - `jsonl_scan` - default backend. Scans canonical JSONL through `ChatSessionManager`.
 - `sqlite_fts` - optional derived SQLite FTS5 index under `<data_dir>/recall/session_index.sqlite`.
 - `vector` - optional derived sqlite-vec semantic index under `<data_dir>/recall/session_vectors.sqlite`.
+- `hybrid` - opt-in backend that fuses `sqlite_fts` literal matches with `vector` semantic matches in a single search.
 
 Backend selection:
 
@@ -75,6 +76,23 @@ Rules:
 - **Result snippet is the anchor message's text**, taken from `message_match_payload`, not the chunk's stored `snippet` headline. The headline is built over the whole chunk, which embeds every role; rendering it would surface raw `tool` JSON for a default (conversation-only) search even after the anchor was moved onto a request-eligible message. The stored `chunks.snippet` column is retained (it costs nothing and avoids a reindex) but is no longer read at hydration.
 - **Graceful fallback:** empty query, no configured embedding binding, or any sqlite-vec/embed failure → log a warning and fall back to JSONL scan for that call (mirrors `sqlite_fts`'s delete-and-retry-then-fallback).
 - The backend requires `RecallBackendContext.embeddings` (the `EmbeddingService`) to be supplied; the context `model_registry` is wired but no longer used for truncation (per-chunk text sizes stay well under embedding model token caps).
+
+## Hybrid Backend
+
+`HybridRecallBackend` is not an index — it composes the existing FTS and vector backends and fuses their results in a single `search`. It inherits from `JsonlSessionRecallBackend`, so `browse` and `scroll` reuse the canonical JSONL implementation; only `search` is overridden.
+
+- In `__init__`, it builds `SqliteFtsRecallBackend(context)` as `_fts` and `VectorRecallBackend(context)` as `_vector`.
+- **Both arms are over-fetched** via `dataclasses.replace(request, limit=request.limit * _FETCH_MULTIPLIER + _FETCH_MARGIN)` (constants: 3× + 10) so a single noisy session with many literal hits cannot starve the literal group of other distinct sessions. Results are deduped to distinct sessions and truncated to `request.limit` at merge time.
+- **Source classification keys on `distance` presence**, not on which arm produced a match. A match carries `distance` iff it came from a real semantic KNN hit; FTS matches never carry `distance`, and the vector arm's JSONL fallback returns matches *without* `distance`. So: `distance` present → semantic; absent → literal.
+- **Dedup unit = session.** FTS is per-message (can repeat a session) — collapsed to the session's first match in FTS order. Vector is already per-session. Per session:
+  - session in FTS **and** vector(with distance) → `source: "both"`, keeps the literal (FTS) payload, attaches the vector's `distance`.
+  - session in FTS only → `source: "literal"`.
+  - session in vector(with distance) only → `source: "semantic"`, uses the vector match payload as-is.
+- **Ordering:** literal/both group first, respecting `request.sort` (FTS already orders candidates by timestamp); semantic-only group always distance-ascending. The merged list is truncated to `request.limit`.
+- **`_MAX_DISTANCE` unchanged** on the semantic arm (still 0.7 in `VectorRecallBackend`). The literal arm now covers exact keyword matches, so the floor needs no loosening.
+- **Graceful degradation:** when the vector arm has no embedding binding (or embed fails), it falls back to its own JSONL scanner — those matches carry no `distance` and classify as literal, so the hybrid output is effectively literal-only with no special-casing and no crash.
+- **`<3`-char queries** work unchanged: the FTS arm falls back to its own JSONL substring scan (trigram needs ≥3 chars), and the semantic arm still embeds the query. No hybrid-specific handling.
+- Registered in `FIRST_PARTY_RECALL_BACKENDS`; appears in the Settings Recall panel automatically. Default backend is unchanged (`jsonl_scan`).
 
 ## Cross-Domain Rules
 
