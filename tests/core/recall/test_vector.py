@@ -923,6 +923,35 @@ def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
     assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 0
 
 
+def test_vector_backend_search_succeeds_when_first_indexed_session_yields_no_chunks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A zero-chunk session on a brand-new index must not crash the search.
+
+    Regression for ``no such table: chunks``: on a fresh index the eager
+    backfill calls ``store.delete_session`` for any candidate session
+    whose ``build_session_chunks`` returns nothing — and that happens
+    *before* any upsert has created the chunk table. The delete must be
+    a no-op on a schema-less store rather than raising a bare
+    ``sqlite3.OperationalError`` that escapes the JSONL fallback.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="empty-ish").append(
+        ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
+    )
+    monkeypatch.setattr("core.recall.vector.build_session_chunks", lambda _messages: [])
+
+    # Must not raise. With nothing indexed the KNN has no candidates, so the
+    # semantic search returns zero matches gracefully (an empty index is a
+    # valid state, not an error — the bug was the bare ``no such table``).
+    data = backend(tmp_path, sessions, embeddings=_StubEmbeddings()).search(request(query="carrot"))
+
+    assert data["matches"] == []
+    assert data["searched_sessions"] == 1
+
+
 # ---------------------------------------------------------------------------
 # _run_embed batching
 # ---------------------------------------------------------------------------

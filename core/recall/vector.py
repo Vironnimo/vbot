@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -151,7 +152,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
         try:
             return self._search_with_vector_store(request, summaries)
-        except (VectorStoreError, EmbeddingError, OSError) as error:
+        except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
             self._warning("Vector recall failed; falling back to JSONL scan: %s", error)
             return self._fallback.search(request)
 

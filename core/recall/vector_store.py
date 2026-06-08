@@ -297,6 +297,10 @@ class VectorStore:
         """Remove all chunk rows for an agent+session (used for staleness cleanup)."""
 
         with closing(self._connect()) as connection, connection:
+            # On a fresh index the chunk table does not exist yet — there is
+            # nothing to delete, and querying it would raise ``no such table``.
+            if not self._has_chunk_table(connection):
+                return
             self._delete_session_rows(connection, agent_id, session_id)
 
     def upsert_many_chunks(
@@ -433,6 +437,8 @@ class VectorStore:
 
         removed = 0
         with closing(self._connect()) as connection, connection:
+            if not self._has_chunk_table(connection):
+                return 0
             for session_id in sorted(set(session_ids)):
                 rows_before = connection.execute(
                     f"""
