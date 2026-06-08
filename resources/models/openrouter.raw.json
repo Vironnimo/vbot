@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-06-07T17:39:43.906814+00:00",
+  "fetched_at": "2026-06-08T12:47:45.202299+00:00",
   "provider_id": "openrouter",
   "raw_response": {
     "data": [
@@ -1632,9 +1632,9 @@
         "name": "MoonshotAI Kimi Latest",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000342",
-          "input_cache_read": "0.000000144",
-          "prompt": "0.000000684"
+          "completion": "0.00000341",
+          "input_cache_read": "0.00000034",
+          "prompt": "0.00000068"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -1661,9 +1661,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 262144,
+          "context_length": 262142,
           "is_moderated": false,
-          "max_completion_tokens": 262144
+          "max_completion_tokens": 262142
         }
       },
       {
@@ -2952,9 +2952,9 @@
         "name": "MoonshotAI: Kimi K2.6",
         "per_request_limits": null,
         "pricing": {
-          "completion": "0.00000342",
-          "input_cache_read": "0.000000144",
-          "prompt": "0.000000684"
+          "completion": "0.00000341",
+          "input_cache_read": "0.00000034",
+          "prompt": "0.00000068"
         },
         "supported_parameters": [
           "frequency_penalty",
@@ -2981,9 +2981,9 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 262144,
+          "context_length": 262142,
           "is_moderated": false,
-          "max_completion_tokens": 262144
+          "max_completion_tokens": 262142
         }
       },
       {
@@ -20279,7 +20279,7 @@
           "tokenizer": "Other"
         },
         "canonical_slug": "sourceful/riverflow-v2.5-pro-20260605",
-        "context_length": 8192,
+        "context_length": 32768,
         "created": 1780584991,
         "default_parameters": {
           "frequency_penalty": null,
@@ -20309,7 +20309,7 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 8192,
+          "context_length": 32768,
           "is_moderated": false,
           "max_completion_tokens": null
         }
@@ -20328,7 +20328,7 @@
           "tokenizer": "Other"
         },
         "canonical_slug": "sourceful/riverflow-v2.5-fast-20260605",
-        "context_length": 8192,
+        "context_length": 32768,
         "created": 1780584983,
         "default_parameters": {
           "frequency_penalty": null,
@@ -20358,7 +20358,7 @@
         ],
         "supported_voices": null,
         "top_provider": {
-          "context_length": 8192,
+          "context_length": 32768,
           "is_moderated": false,
           "max_completion_tokens": null
         }
@@ -22056,6 +22056,1400 @@
         "supported_voices": null,
         "top_provider": {
           "context_length": 0,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file",
+            "audio",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-embedding-2",
+        "context_length": 8192,
+        "created": 1779290135,
+        "default_parameters": {},
+        "description": "Gemini Embedding 2 is Google's first multimodal embedding model. We currently support mapping text and images into a unified vector space for semantic search and retrieval-augmented generation (RAG). It supports...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/gemini-embedding-2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/gemini-embedding-2/endpoints"
+        },
+        "name": "Google: Gemini Embedding 2",
+        "per_request_limits": null,
+        "pricing": {
+          "audio": "0.0000065",
+          "completion": "0",
+          "image": "0.00000045",
+          "prompt": "0.0000002"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image",
+            "file",
+            "audio",
+            "video"
+          ],
+          "instruct_type": null,
+          "modality": "text+image+file+audio+video->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-embedding-2-preview",
+        "context_length": 8192,
+        "created": 1776436465,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "Gemini Embedding 2 Preview is Google's first multimodal embedding model. We currently support mapping text and images into a unified vector space for semantic search and retrieval-augmented generation (RAG). It...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "google/gemini-embedding-2-preview",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/gemini-embedding-2-preview/endpoints"
+        },
+        "name": "Google: Gemini Embedding 2 Preview",
+        "per_request_limits": null,
+        "pricing": {
+          "audio": "0.0000065",
+          "completion": "0",
+          "image": "0.00000045",
+          "prompt": "0.0000002"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "perplexity/pplx-embed-v1-4B",
+        "context_length": 32000,
+        "created": 1773625372,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "pplx-embed-v1 -4B is one of Perplexity's state-of-the-art text embedding models built for real-world, web-scale retrieval. pplx-embed-v1 is optimized for standard dense text retrieval with the 4B parameter model maximizing retrieval...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "perplexity/pplx-embed-v1-4b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/perplexity/pplx-embed-v1-4B/endpoints"
+        },
+        "name": "Perplexity: Embed V1 4B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000003"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "temperature",
+          "top_k",
+          "top_p",
+          "web_search_options"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 32000,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "perplexity/pplx-embed-v1-0.6B",
+        "context_length": 32000,
+        "created": 1773624868,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "presence_penalty": null,
+          "repetition_penalty": null,
+          "temperature": null,
+          "top_k": null,
+          "top_p": null
+        },
+        "description": "pplx-embed-v1-0.6B is one of Perplexity's state-of-the-art text embedding models built for real-world, web-scale retrieval. pplx-embed-v1 is optimized for standard dense text retrieval with the 0.6B parameter model targeting lightweight, low-latency...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "perplexity/pplx-embed-v1-0.6b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/perplexity/pplx-embed-v1-0.6B/endpoints"
+        },
+        "name": "Perplexity: Embed V1 0.6B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000004"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "temperature",
+          "top_k",
+          "top_p",
+          "web_search_options"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 32000,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "instruct_type": null,
+          "modality": "text+image->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "nvidia/llama-nemotron-embed-vl-1b-v2-20260224",
+        "context_length": 131072,
+        "created": 1772045017,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The Llama Nemotron Embed VL 1B V2 embedding model is optimized for multimodal question-answering retrieval. The model can embed 'documents' in the form of image, text, or image and text...",
+        "expiration_date": null,
+        "hugging_face_id": "nvidia/llama-nemotron-embed-vl-1b-v2",
+        "id": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/nvidia/llama-nemotron-embed-vl-1b-v2-20260224/endpoints"
+        },
+        "name": "NVIDIA: Llama Nemotron Embed VL 1B V2 (free)",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 131072,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "thenlper/gte-base-20251117",
+        "context_length": 8192,
+        "created": 1763433820,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The gte-base embedding model encodes English sentences and paragraphs into a 768-dimensional dense vector space, delivering efficient and effective semantic embeddings optimized for textual similarity, semantic search, and clustering applications.",
+        "expiration_date": null,
+        "hugging_face_id": "thenlper/gte-base",
+        "id": "thenlper/gte-base",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/thenlper/gte-base-20251117/endpoints"
+        },
+        "name": "Thenlper: GTE-Base",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "thenlper/gte-large-20251117",
+        "context_length": 8192,
+        "created": 1763433655,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The gte-large embedding model converts English sentences, paragraphs and moderate-length documents into a 1024-dimensional dense vector space, delivering high-quality semantic embeddings optimized for information retrieval, semantic textual similarity, reranking and...",
+        "expiration_date": null,
+        "hugging_face_id": "thenlper/gte-large",
+        "id": "thenlper/gte-large",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/thenlper/gte-large-20251117/endpoints"
+        },
+        "name": "Thenlper: GTE-Large",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "intfloat/e5-large-v2-20251117",
+        "context_length": 8192,
+        "created": 1763433432,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The e5-large-v2 embedding model maps English sentences, paragraphs, and documents into a 1024-dimensional dense vector space, delivering high-accuracy semantic embeddings optimized for retrieval, semantic search, reranking, and similarity-scoring tasks.",
+        "expiration_date": null,
+        "hugging_face_id": "intfloat/e5-large-v2",
+        "id": "intfloat/e5-large-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/intfloat/e5-large-v2-20251117/endpoints"
+        },
+        "name": "Intfloat: E5-Large-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "intfloat/e5-base-v2-20251117",
+        "context_length": 8192,
+        "created": 1763433192,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The e5-base-v2 embedding model encodes English sentences and paragraphs into a 768-dimensional dense vector space, producing efficient and high-quality semantic embeddings optimized for tasks such as semantic search, similarity scoring,...",
+        "expiration_date": null,
+        "hugging_face_id": "intfloat/e5-base-v2",
+        "id": "intfloat/e5-base-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/intfloat/e5-base-v2-20251117/endpoints"
+        },
+        "name": "Intfloat: E5-Base-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "intfloat/multilingual-e5-large-20251117",
+        "context_length": 8192,
+        "created": 1763433047,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The multilingual-e5-large embedding model encodes sentences, paragraphs, and documents across over 90 languages into a 1024-dimensional dense vector space, delivering robust semantic embeddings optimized for multilingual retrieval, cross-language similarity, and...",
+        "expiration_date": null,
+        "hugging_face_id": "intfloat/multilingual-e5-large",
+        "id": "intfloat/multilingual-e5-large",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/intfloat/multilingual-e5-large-20251117/endpoints"
+        },
+        "name": "Intfloat: Multilingual-E5-Large",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sentence-transformers/paraphrase-minilm-l6-v2-20251117",
+        "context_length": 8192,
+        "created": 1763432454,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The paraphrase-MiniLM-L6-v2 embedding model converts sentences and short paragraphs into a 384-dimensional dense vector space, producing high-quality semantic embeddings optimized for paraphrase detection, semantic similarity scoring, clustering, and lightweight retrieval...",
+        "expiration_date": null,
+        "hugging_face_id": "sentence-transformers/paraphrase-MiniLM-L6-v2",
+        "id": "sentence-transformers/paraphrase-minilm-l6-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sentence-transformers/paraphrase-minilm-l6-v2-20251117/endpoints"
+        },
+        "name": "Sentence Transformers: paraphrase-MiniLM-L6-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sentence-transformers/all-minilm-l12-v2-20251117",
+        "context_length": 8192,
+        "created": 1763432155,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The all-MiniLM-L12-v2 embedding model maps sentences and short paragraphs into a 384-dimensional dense vector space, producing efficient and high-quality semantic embeddings optimized for tasks such as semantic search, clustering, and...",
+        "expiration_date": null,
+        "hugging_face_id": "sentence-transformers/all-MiniLM-L12-v2",
+        "id": "sentence-transformers/all-minilm-l12-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sentence-transformers/all-minilm-l12-v2-20251117/endpoints"
+        },
+        "name": "Sentence Transformers: all-MiniLM-L12-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "baai/bge-base-en-v1.5-20251117",
+        "context_length": 8192,
+        "created": 1763431837,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The bge-base-en-v1.5 embedding model converts English sentences and paragraphs into 768-dimensional dense vectors, delivering efficient, high-quality semantic embeddings optimized for retrieval, semantic search, and document-matching workflows. This version (v1.5) features...",
+        "expiration_date": null,
+        "hugging_face_id": "BAAI/bge-base-en-v1.5",
+        "id": "baai/bge-base-en-v1.5",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/baai/bge-base-en-v1.5-20251117/endpoints"
+        },
+        "name": "BAAI: bge-base-en-v1.5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sentence-transformers/multi-qa-mpnet-base-dot-v1-20251117",
+        "context_length": 8192,
+        "created": 1763431339,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The multi-qa-mpnet-base-dot-v1 embedding model transforms sentences and short paragraphs into a 768-dimensional dense vector space, generating high-quality semantic embeddings optimized for question-and-answer retrieval, semantic search, and similarity-scoring across diverse content.",
+        "expiration_date": null,
+        "hugging_face_id": "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+        "id": "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sentence-transformers/multi-qa-mpnet-base-dot-v1-20251117/endpoints"
+        },
+        "name": "Sentence Transformers: multi-qa-mpnet-base-dot-v1",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "baai/bge-large-en-v1.5-20251117",
+        "context_length": 8192,
+        "created": 1763431087,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The bge-large-en-v1.5 embedding model maps English sentences, paragraphs, and documents into a 1024-dimensional dense vector space, delivering high-fidelity semantic embeddings optimized for semantic search, document retrieval, and downstream NLP tasks...",
+        "expiration_date": null,
+        "hugging_face_id": "BAAI/bge-large-en-v1.5",
+        "id": "baai/bge-large-en-v1.5",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/baai/bge-large-en-v1.5-20251117/endpoints"
+        },
+        "name": "BAAI: bge-large-en-v1.5",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "baai/bge-m3-20251117",
+        "context_length": 8192,
+        "created": 1763424372,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The bge-m3 embedding model encodes sentences, paragraphs, and long documents into a 1024-dimensional dense vector space, delivering high-quality semantic embeddings optimized for multilingual retrieval, semantic search, and large-context applications.",
+        "expiration_date": null,
+        "hugging_face_id": "BAAI/bge-m3",
+        "id": "baai/bge-m3",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/baai/bge-m3-20251117/endpoints"
+        },
+        "name": "BAAI: bge-m3",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sentence-transformers/all-mpnet-base-v2-20251117",
+        "context_length": 8192,
+        "created": 1763421830,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The all-mpnet-base-v2 embedding model encodes sentences and short paragraphs into a 768-dimensional dense vector space, providing high-fidelity semantic embeddings well suited for tasks like information retrieval, clustering, similarity scoring, and...",
+        "expiration_date": null,
+        "hugging_face_id": "sentence-transformers/all-mpnet-base-v2",
+        "id": "sentence-transformers/all-mpnet-base-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sentence-transformers/all-mpnet-base-v2-20251117/endpoints"
+        },
+        "name": "Sentence Transformers: all-mpnet-base-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "sentence-transformers/all-minilm-l6-v2-20251117",
+        "context_length": 8192,
+        "created": 1763421176,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The all-MiniLM-L6-v2 embedding model maps sentences and short paragraphs into a 384-dimensional dense vector space, enabling high-quality semantic representations that are ideal for downstream tasks such as information retrieval, clustering,...",
+        "expiration_date": null,
+        "hugging_face_id": "sentence-transformers/all-MiniLM-L6-v2",
+        "id": "sentence-transformers/all-minilm-l6-v2",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/sentence-transformers/all-minilm-l6-v2-20251117/endpoints"
+        },
+        "name": "Sentence Transformers: all-MiniLM-L6-v2",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.000000005"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 512,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/mistral-embed-2312",
+        "context_length": 8192,
+        "created": 1761944622,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Mistral Embed is a specialized embedding model for text data, optimized for semantic search and RAG applications. Developed by Mistral AI in late 2023, it produces 1024-dimensional vectors that effectively...",
+        "expiration_date": null,
+        "hugging_face_id": null,
+        "id": "mistralai/mistral-embed-2312",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/mistral-embed-2312/endpoints"
+        },
+        "name": "Mistral: Mistral Embed 2312",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Gemini"
+        },
+        "canonical_slug": "google/gemini-embedding-001",
+        "context_length": 20000,
+        "created": 1761943410,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "gemini-embedding-001 provides a unified cutting edge experience across domains, including science, legal, finance, and coding. This embedding model has consistently held a top spot on the Massive Text Embedding Benchmark...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "google/gemini-embedding-001",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/google/gemini-embedding-001/endpoints"
+        },
+        "name": "Google: Gemini Embedding 001",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000015"
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "response_format",
+          "seed",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 20000,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "openai/text-embedding-ada-002",
+        "context_length": 8192,
+        "created": 1761865798,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "text-embedding-ada-002 is OpenAI's legacy text embedding model.",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "openai/text-embedding-ada-002",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/text-embedding-ada-002/endpoints"
+        },
+        "name": "OpenAI: Text Embedding Ada 002",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.0000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Mistral"
+        },
+        "canonical_slug": "mistralai/codestral-embed-2505",
+        "context_length": 8192,
+        "created": 1761864460,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "Mistral Codestral Embed is specially designed for code, perfect for embedding code databases, repositories, and powering coding assistants with state-of-the-art retrieval.",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "mistralai/codestral-embed-2505",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/mistralai/codestral-embed-2505/endpoints"
+        },
+        "name": "Mistral: Codestral Embed 2505",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000015"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": false,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "openai/text-embedding-3-large",
+        "context_length": 8192,
+        "created": 1761862866,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "text-embedding-3-large is OpenAI's most capable embedding model for both english and non-english tasks. Embeddings are a numerical representation of text that can be used to measure the relatedness between two...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "openai/text-embedding-3-large",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/text-embedding-3-large/endpoints"
+        },
+        "name": "OpenAI: Text Embedding 3 Large",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000013"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "openai/text-embedding-3-small",
+        "context_length": 8192,
+        "created": 1761857455,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "text-embedding-3-small is OpenAI's improved, more performant version of the ada embedding model. Embeddings are a numerical representation of text that can be used to measure the relatedness between two pieces...",
+        "expiration_date": null,
+        "hugging_face_id": "",
+        "id": "openai/text-embedding-3-small",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/openai/text-embedding-3-small/endpoints"
+        },
+        "name": "OpenAI: Text Embedding 3 Small",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000002"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "presence_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 8192,
+          "is_moderated": true,
+          "max_completion_tokens": null
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "qwen/qwen3-embedding-8b",
+        "context_length": 32000,
+        "created": 1761680622,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. This series inherits the exceptional multilingual capabilities, long-text...",
+        "expiration_date": null,
+        "hugging_face_id": "Qwen/Qwen3-Embedding-8B",
+        "id": "qwen/qwen3-embedding-8b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/qwen/qwen3-embedding-8b/endpoints"
+        },
+        "name": "Qwen: Qwen3 Embedding 8B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000001"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "logit_bias",
+          "logprobs",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 32000,
+          "is_moderated": false,
+          "max_completion_tokens": 32000
+        }
+      },
+      {
+        "architecture": {
+          "input_modalities": [
+            "text"
+          ],
+          "instruct_type": null,
+          "modality": "text->embeddings",
+          "output_modalities": [
+            "embeddings"
+          ],
+          "tokenizer": "Other"
+        },
+        "canonical_slug": "qwen/qwen3-embedding-4b",
+        "context_length": 32768,
+        "created": 1761662922,
+        "default_parameters": {
+          "frequency_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "description": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. This series inherits the exceptional multilingual capabilities, long-text...",
+        "expiration_date": null,
+        "hugging_face_id": "Qwen/Qwen3-Embedding-4B",
+        "id": "qwen/qwen3-embedding-4b",
+        "knowledge_cutoff": null,
+        "links": {
+          "details": "/api/v1/models/qwen/qwen3-embedding-4b/endpoints"
+        },
+        "name": "Qwen: Qwen3 Embedding 4B",
+        "per_request_limits": null,
+        "pricing": {
+          "completion": "0",
+          "prompt": "0.00000002"
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "min_p",
+          "presence_penalty",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": null,
+        "top_provider": {
+          "context_length": 32768,
           "is_moderated": false,
           "max_completion_tokens": null
         }
