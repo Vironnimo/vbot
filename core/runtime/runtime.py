@@ -597,6 +597,8 @@ class Runtime:
             data_dir=self._storage.data_dir,
             sessions=self._chat_sessions,
             logger=self.logger,
+            embeddings=self._embeddings,
+            model_registry=self._models,
         )
         try:
             return registry.create(backend_name, context)
