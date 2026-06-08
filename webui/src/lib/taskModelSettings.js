@@ -1,6 +1,7 @@
 export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
 export const TASK_IMAGE_GENERATION = 'image_generation';
+export const TASK_TEXT_EMBEDDING = 'text_embedding';
 
 export const JSON_OPTION_TYPE = 'json';
 
@@ -64,9 +65,21 @@ const IMAGE_TASK_ROWS = Object.freeze([
   },
 ]);
 
+const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
+  {
+    taskType: TASK_TEXT_EMBEDDING,
+    titleKey: 'settings.specializedModels.embeddingModel',
+    titleFallback: 'Embedding model',
+    descriptionKey: 'settings.specializedModels.embeddingModelDescription',
+    descriptionFallback:
+      'Used for semantic session recall when the vector recall backend is enabled.',
+  },
+]);
+
 export const TASK_MODEL_ROWS = Object.freeze([
   ...SPEECH_TASK_ROWS,
   ...IMAGE_TASK_ROWS,
+  ...TEXT_EMBEDDING_TASK_ROWS,
 ]);
 
 export function normalizeTaskModelSettings(settings) {
