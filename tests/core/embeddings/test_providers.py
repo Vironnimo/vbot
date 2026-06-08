@@ -230,6 +230,40 @@ def test_parse_response_rejects_missing_data_key() -> None:
         _parse_embeddings_response({}, expected_count=2)
 
 
+def test_parse_response_surfaces_openrouter_error_object() -> None:
+    """A 200 carrying an OpenRouter ``error`` object surfaces its message
+    and is non-retryable.
+
+    OpenRouter reports routing/credit/availability failures as
+    ``{"error": {"message": ..., "code": ...}}`` with an HTTP 200, so
+    the ``data`` array is absent. The real reason must reach the log,
+    and retrying a definitive error only burns attempts.
+    """
+
+    from core.providers.errors import ProviderError
+
+    payload = {"error": {"message": "No endpoints found for baai/bge-m3.", "code": 404}}
+
+    with pytest.raises(ProviderError, match="No endpoints found for baai/bge-m3") as exc_info:
+        _parse_embeddings_response(payload, expected_count=1)
+
+    assert exc_info.value.retryable is False
+    assert "code=404" in str(exc_info.value)
+
+
+def test_parse_response_keeps_empty_data_retryable_without_error() -> None:
+    """An empty ``data`` array with no ``error`` object stays retryable —
+    it may be a transient blip rather than a definitive failure.
+    """
+
+    from core.providers.errors import ProviderError
+
+    with pytest.raises(ProviderError, match="no data") as exc_info:
+        _parse_embeddings_response({"data": []}, expected_count=2)
+
+    assert exc_info.value.retryable is True
+
+
 def test_parse_response_rejects_non_dict_payload() -> None:
     """A non-dict response (a bare array, a string) is rejected as a wire
     shape problem — non-retryable because the next attempt will
