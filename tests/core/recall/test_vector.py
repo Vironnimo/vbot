@@ -595,6 +595,42 @@ def test_build_session_chunks_carries_overlap_messages() -> None:
     assert "beta" in chunks[1].text or "gamma" in chunks[1].text
 
 
+def test_build_session_chunks_handles_zero_overlap_without_carrying_full_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_CHUNK_OVERLAP_MESSAGES = 0`` does not accidentally carry the whole prior tail.
+
+    Regression: ``current_messages[-0:]`` returns the full list because
+    ``-0 == 0``, so an unguarded slice would copy every accumulated
+    message into the next chunk. The guard must skip the slice
+    entirely when the constant is 0.
+    """
+
+    messages = [
+        ChatMessage.user("alpha " * 200, timestamp=timestamp(1)),
+        ChatMessage.user("beta " * 200, timestamp=timestamp(2)),
+        ChatMessage.user("gamma " * 200, timestamp=timestamp(3)),
+        ChatMessage.user("delta " * 200, timestamp=timestamp(4)),
+    ]
+
+    monkeypatch.setattr("core.recall.vector._CHUNK_OVERLAP_MESSAGES", 0)
+    chunks = build_session_chunks(messages)
+
+    assert len(chunks) >= 2
+    # Without overlap, each chunk's span must start *after* the prior
+    # chunk's last message — never reusing the tail as a fresh opener.
+    for index in range(len(chunks) - 1):
+        previous = chunks[index]
+        current = chunks[index + 1]
+        previous_end_index = next(
+            i for i, m in enumerate(messages) if m.id == previous.end_message_id
+        )
+        current_start_index = next(
+            i for i, m in enumerate(messages) if m.id == current.start_message_id
+        )
+        assert current_start_index > previous_end_index
+
+
 def test_build_session_chunks_handles_oversized_single_message() -> None:
     """A single message longer than the chunk budget becomes its own chunk, hard-capped."""
 
@@ -843,6 +879,48 @@ def test_vector_backend_chunk_count_resets_when_session_is_appended(
         connection.close()
     # At least one chunk's snippet must reference the new content.
     assert any("brand new" in snippet.lower() for snippet in chunk_texts)
+
+
+# ---------------------------------------------------------------------------
+# Staleness — sessions that stop producing chunks must drop their old rows
+# ---------------------------------------------------------------------------
+
+
+def test_vector_backend_drops_chunks_when_session_no_longer_produces_any(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session whose JSONL no longer yields chunks is purged from the index.
+
+    Regression: ``upsert_many_chunks`` only wipes sessions that appear in
+    its ``records`` parameter. If a stale session's
+    ``build_session_chunks`` call returns an empty list, the session is
+    not in ``records`` and its old rows survive a reindex, leaving
+    stale hits in subsequent searches. The fix calls
+    ``store.delete_session`` for any session with zero chunks.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="becomes-empty")
+    session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
+    embeddings = _StubEmbeddings()
+
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    first = recall.search(request(query="fruit", limit=2))
+    assert "becomes-empty" in [match["session_id"] for match in first["matches"]]
+    assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 1
+
+    # Simulate the JSONL changing such that ``build_session_chunks`` now
+    # yields nothing (e.g. the session turned into a stream of empty
+    # system-only messages). Append a real message so the session's
+    # mtime/size change and the staleness path is exercised.
+    session.append(ChatMessage.user("still here, but inert", timestamp=timestamp(2)))
+    monkeypatch.setattr("core.recall.vector.build_session_chunks", lambda _messages: [])
+
+    second = recall.search(request(query="fruit", limit=2))
+
+    assert "becomes-empty" not in [match["session_id"] for match in second["matches"]]
+    assert _count_vec_rows(recall.store.path, "coder", "becomes-empty") == 0
 
 
 # ---------------------------------------------------------------------------
