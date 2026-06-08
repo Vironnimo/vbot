@@ -18,6 +18,7 @@ network/HTTP errors follow the project retry policy.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -29,6 +30,7 @@ from core.utils.retry import retry_async
 JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
 DEFAULT_EMBEDDING_TIMEOUT = 60.0
+_PAYLOAD_DETAIL_LIMIT = 500
 
 
 class ProviderEmbeddingClient:
@@ -158,14 +160,21 @@ def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[lis
 
     if not isinstance(payload, dict):
         raise ProviderError(
-            "Embeddings response must be a JSON object",
+            f"Embeddings response must be a JSON object: {_describe_payload(payload)}",
             retryable=False,
         )
     data = payload.get("data")
     if not isinstance(data, list) or not data:
+        # OpenRouter reports routing/credit/availability failures as an
+        # ``error`` object with an HTTP 200, so a missing ``data`` array
+        # usually carries the real reason. Surface it instead of a bare
+        # "no data", and treat a definitive ``error`` as non-retryable —
+        # retrying returns the same error. A genuinely empty ``data: []``
+        # with no error may be a transient blip, so that stays retryable.
+        has_error = bool(payload.get("error"))
         raise ProviderError(
-            "Embeddings response contains no data",
-            retryable=True,
+            f"Embeddings response contains no data: {_describe_payload(payload)}",
+            retryable=not has_error,
         )
 
     indexed: list[tuple[int, list[float]]] = []
@@ -197,6 +206,40 @@ def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[lis
             retryable=True,
         )
     return vectors
+
+
+def _describe_payload(payload: Any) -> str:
+    """Summarize an unexpected embeddings payload for the error message.
+
+    A 200 with no usable ``data`` array is almost always an OpenRouter
+    ``error`` object (``{"error": {"message": ..., "code": ...}}``) —
+    routing, credit, or model-availability failures arrive this way. We
+    extract that message so the failure is diagnosable from the log
+    instead of a bare "no data". When there is no ``error`` object, we
+    fall back to a truncated JSON dump of whatever did arrive.
+    """
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            parts: list[str] = []
+            message = error.get("message")
+            if message:
+                parts.append(str(message))
+            code = error.get("code")
+            if code is not None:
+                parts.append(f"code={code}")
+            if parts:
+                return "; ".join(parts)
+        elif isinstance(error, str) and error:
+            return error
+    try:
+        rendered = json.dumps(payload, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        rendered = repr(payload)
+    if len(rendered) > _PAYLOAD_DETAIL_LIMIT:
+        rendered = rendered[:_PAYLOAD_DETAIL_LIMIT] + "…"
+    return rendered
 
 
 def _coerce_vector(raw: list[Any]) -> list[float]:
