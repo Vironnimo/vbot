@@ -20,6 +20,7 @@ from typing import Any
 from core.model_tasks.constants import (
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
 )
 from core.models import Model
@@ -331,6 +332,12 @@ def option_schema_for(
             target=target,
             fields=_image_generation_fields(provider_id, model),
         )
+    if task_type == TASK_TEXT_EMBEDDING:
+        return TaskModelOptionSchema(
+            task_type=task_type,
+            target=target,
+            fields=_text_embedding_fields(provider_id, model),
+        )
     return TaskModelOptionSchema(task_type=task_type, target=target)
 
 
@@ -557,6 +564,58 @@ def _seed_field() -> TaskModelOptionField:
         default=None,
         step=1,
         description="Reproducible generation seed. Provider-specific support.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Text embedding
+# ---------------------------------------------------------------------------
+
+
+def _text_embedding_fields(
+    provider_id: str,
+    model: Model | None,
+) -> tuple[TaskModelOptionField, ...]:
+    """Embedding task-model option schema.
+
+    The first iteration only ships ``dimensions`` — the Matryoshka
+    truncation knob for models that advertise it. The OpenRouter
+    `/api/v1/embeddings` endpoint accepts a single optional
+    ``dimensions`` integer; non-Matryoshka models reject it. The
+    backend emits an empty default for optional ``number`` fields, and
+    the wire layer drops empties — so this field is harmless for
+    models that ignore it. Future embedding fields (e.g. ``input_type``
+    for asymmetric query/document embedding) belong here too, gated
+    by ``model.capabilities.supported_parameters`` like the rest of
+    the model-aware schema builders.
+    """
+
+    supported: frozenset[str] | None = (
+        frozenset(model.capabilities.supported_parameters) if model is not None else None
+    )
+
+    def has(field_name: str) -> bool:
+        return supported is None or field_name in supported
+
+    fields: list[TaskModelOptionField] = []
+    if has("dimensions"):
+        fields.append(_dimensions_field())
+    return tuple(fields)
+
+
+def _dimensions_field() -> TaskModelOptionField:
+    return TaskModelOptionField(
+        name="dimensions",
+        type="number",
+        label="Output dimensions",
+        default=None,
+        min_value=1,
+        step=1,
+        description=(
+            "Matryoshka truncation. Optional — leave empty to use the "
+            "model's native dimension. Non-Matryoshka models reject this "
+            "value."
+        ),
     )
 
 

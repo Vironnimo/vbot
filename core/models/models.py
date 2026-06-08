@@ -36,6 +36,7 @@ MODEL_TASK_ORDER = (
     "image_generation",
     "audio_generation",
     "text_to_speech",
+    "text_embedding",
     "video_generation",
 )
 
@@ -99,6 +100,11 @@ def derive_model_task_types(
       or conversational audio).  Models with only ``"audio"`` are NOT tagged
       ``text_to_speech`` unless they also have ``"speech"`` in their output
       modalities.
+    * ``"embeddings"`` in output — dedicated text-embedding models (e.g.
+      ``openai/text-embedding-3-small`` via OpenRouter
+      ``?output_modalities=embeddings``). The model produces vectors, not
+      text, so it is NOT tagged ``chat`` or ``text_output``. Mirrors the
+      ``speech`` → ``text_to_speech`` alias.
     """
 
     inputs = set(_normalize_string_tuple(tuple(input_modalities)))
@@ -146,6 +152,10 @@ def derive_model_task_types(
         # Dedicated TTS models that output speech audio
         tasks.add("audio_generation")
         tasks.add("text_to_speech")
+    if "embeddings" in outputs:
+        # Dedicated embedding models: output is a vector, not text/chat.
+        # Mirror of the "speech" → text_to_speech alias.
+        tasks.add("text_embedding")
     if "video" in outputs:
         tasks.add("video_generation")
 

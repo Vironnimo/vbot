@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   JSON_OPTION_TYPE,
+  TASK_IMAGE_GENERATION,
   TASK_SPEECH_TO_TEXT,
+  TASK_TEXT_EMBEDDING,
+  TASK_TEXT_TO_SPEECH,
+  TASK_MODEL_ROWS,
   applyOptionDefaults,
   createTaskModelUpdatePayload,
   normalizeOptionSchema,
@@ -59,6 +63,50 @@ describe('taskModelSettings helpers', () => {
         { [TASK_SPEECH_TO_TEXT]: { target: '', options: {} } },
       ),
     ).toBe(true);
+  });
+
+  it('exposes the text_embedding row in TASK_MODEL_ROWS alongside the existing tasks', () => {
+    const taskTypes = TASK_MODEL_ROWS.map((row) => row.taskType);
+    expect(taskTypes).toEqual(
+      expect.arrayContaining([
+        TASK_SPEECH_TO_TEXT,
+        TASK_TEXT_TO_SPEECH,
+        TASK_IMAGE_GENERATION,
+        TASK_TEXT_EMBEDDING,
+      ]),
+    );
+    const embeddingRow = TASK_MODEL_ROWS.find(
+      (row) => row.taskType === TASK_TEXT_EMBEDDING,
+    );
+    expect(embeddingRow).toBeTruthy();
+    expect(embeddingRow.titleKey).toBe(
+      'settings.specializedModels.embeddingModel',
+    );
+    expect(embeddingRow.titleFallback).toBe('Embedding model');
+  });
+
+  it('normalizes an embedding binding and includes it in the update payload', () => {
+    const bindings = normalizeTaskModelSettings({
+      model_tasks: {
+        text_embedding: {
+          target: 'openrouter/google/gemini-embedding-2::api-key',
+          options: { dimensions: 768 },
+        },
+      },
+    });
+
+    expect(bindings[TASK_TEXT_EMBEDDING].target).toBe(
+      'openrouter/google/gemini-embedding-2::api-key',
+    );
+    const payload = createTaskModelUpdatePayload(bindings);
+    expect(payload[TASK_TEXT_EMBEDDING]).toEqual({
+      target: 'openrouter/google/gemini-embedding-2::api-key',
+      options: { dimensions: 768 },
+    });
+    // Other rows must still be present in the sparse payload so the
+    // server receives an explicit "not configured" for them.
+    expect(payload[TASK_SPEECH_TO_TEXT]).toEqual({ target: '', options: {} });
+    expect(payload[TASK_IMAGE_GENERATION]).toEqual({ target: '', options: {} });
   });
 });
 

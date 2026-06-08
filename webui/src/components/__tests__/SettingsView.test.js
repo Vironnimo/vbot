@@ -980,6 +980,128 @@ describe('SettingsView', () => {
     );
     expect(jsonTextarea.getAttribute('aria-invalid')).toBe('false');
   });
+
+  it('renders the Recall picker with the vector backend when available', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        settings: {
+          ...settingsPayload(),
+          recall: {
+            backend: 'jsonl_scan',
+            available_backends: ['jsonl_scan', 'sqlite_fts', 'vector'],
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openRecallPanel();
+
+    expect(document.body.textContent).toContain('Recall backend');
+    openSimpleDropdown('settings-recall-backend');
+    await waitForCondition(() => getSimpleList() !== null);
+    selectSimpleOption('settings-recall-backend', 'Semantic (vector)');
+
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      recall: {
+        backend: 'vector',
+      },
+    });
+  });
+
+  it('renders and saves the embedding model row in the Specialized Models panel', async () => {
+    const target = 'openrouter/google/gemini-embedding-2::api-key';
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        taskModelTargets: [
+          {
+            id: target,
+            kind: 'provider',
+            provider_id: 'openrouter',
+            model_id: 'google/gemini-embedding-2',
+            connection_id: 'openrouter:api-key',
+            connection_label: 'API Key',
+            label: 'Gemini Embedding 2',
+            task_types: ['text_embedding'],
+            usable: true,
+          },
+        ],
+        taskModelOptions: {
+          [target]: {
+            schema: {
+              task_type: 'text_embedding',
+              target,
+              fields: [],
+            },
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: {
+        targetPanelId: 'specialized_models',
+        targetPanelRequestId: 1,
+      },
+    });
+    flushSync();
+    await openSpecializedModelsPanel();
+
+    // The row title renders the i18n label, the panel called
+    // list_targets for text_embedding alongside the other task types,
+    // and the dropdown is in the DOM.
+    expect(document.body.textContent).toContain('Embedding model');
+    expect(document.body.textContent).toContain(
+      'Used for semantic session recall when the vector recall backend is enabled.',
+    );
+    expect(
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'task_model.list_targets' &&
+          call[1]?.task_type === 'text_embedding',
+      ),
+    ).toBe(true);
+
+    const embeddingTrigger = getSimpleTrigger(
+      'settings-specialized-text_embedding',
+    );
+    expect(embeddingTrigger).toBeTruthy();
+    expect(embeddingTrigger.textContent).toContain('Not configured');
+
+    openSimpleDropdown('settings-specialized-text_embedding');
+    await waitForCondition(() => getSimpleList() !== null);
+    selectSimpleOption(
+      'settings-specialized-text_embedding',
+      'Gemini Embedding 2',
+    );
+
+    // Manually click Save to bypass the auto-save debounce for a
+    // deterministic assertion on the exact persisted payload.
+    vi.useFakeTimers();
+    getButton('Save').click();
+    vi.advanceTimersByTime(1);
+    await flushAsyncUpdates();
+    vi.useRealTimers();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'task_model.update' &&
+          call[1]?.model_tasks?.text_embedding?.target === target,
+      ),
+    );
+
+    const updateCall = rpcMock.mock.calls
+      .filter((call) => call[0] === 'task_model.update')
+      .pop();
+    expect(updateCall[1].model_tasks.text_embedding.target).toBe(target);
+    expect(updateCall[1].model_tasks.text_embedding.options).toEqual({});
+  });
 });
 
 async function openProvidersPanel() {
