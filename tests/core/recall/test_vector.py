@@ -91,6 +91,55 @@ class _NullEmbeddings:
         raise EmbeddingError("no text_embedding binding configured")
 
 
+class _OverflowThenOkEmbeddings:
+    """Raises a context-length overflow until every input is short enough.
+
+    Mirrors the OpenRouter/bge-m3 failure: the provider rejects an input that
+    exceeds the model's token cap, and the character-budget truncation cannot
+    guarantee staying under it for dense text, so the backend must shrink and
+    retry until it fits.
+    """
+
+    def __init__(self, *, max_chars: int, dimension: int = 4) -> None:
+        self.max_chars = max_chars
+        self.dimension = dimension
+        self.provider_id = "openrouter"
+        self.model_id = "stub-embed"
+        self.embed_calls: list[list[str]] = []
+
+    def resolve_model_id(self) -> tuple[str, str]:
+        return (self.provider_id, self.model_id)
+
+    async def embed(self, texts: list[str]) -> EmbeddingResult:
+        self.embed_calls.append(list(texts))
+        if any(len(text) > self.max_chars for text in texts):
+            raise EmbeddingError(
+                "Embeddings response contains no data: HTTP 400: This model's "
+                "maximum context length is 8192 tokens. (parameter=input_tokens)"
+            )
+        vectors = tuple([1.0] + [0.0] * (self.dimension - 1) for _ in texts)
+        return EmbeddingResult(
+            vectors=vectors,
+            model_id=self.model_id,
+            provider_id=self.provider_id,
+            dimension=self.dimension,
+        )
+
+
+class _AuthErrorEmbeddings:
+    """Always raises a non-overflow embedding error (must not be retried)."""
+
+    def __init__(self) -> None:
+        self.embed_calls = 0
+
+    def resolve_model_id(self) -> tuple[str, str]:
+        return ("openrouter", "stub-embed")
+
+    async def embed(self, texts: list[str]) -> EmbeddingResult:
+        self.embed_calls += 1
+        raise EmbeddingError("401 Unauthorized: invalid API key")
+
+
 def backend(
     tmp_path: Path,
     sessions: ChatSessionManager,
@@ -380,6 +429,53 @@ def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
 
     # Falls back to JSONL substring match on "carrot".
     assert [match["session_id"] for match in data["matches"]] == ["carrots"]
+
+
+def test_run_embed_shrinks_input_until_under_context_window(tmp_path: Path) -> None:
+    """A context-length overflow is recovered by halving the input and retrying.
+
+    The character-budget truncation cannot guarantee a token count, so the
+    backend self-corrects against the provider's hard cap.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    embeddings = _OverflowThenOkEmbeddings(max_chars=100)
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+
+    result = recall._run_embed(["x" * 1000])
+
+    assert result.dimension == 4
+    assert len(embeddings.embed_calls) > 1  # at least one shrink retry happened
+    assert all(len(text) <= 100 for text in embeddings.embed_calls[-1])
+
+
+def test_run_embed_does_not_retry_non_overflow_errors(tmp_path: Path) -> None:
+    """Auth/network errors are not context-length overflows and must not be
+    retried by the shrink loop — they re-raise on the first attempt.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    embeddings = _AuthErrorEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+
+    with pytest.raises(EmbeddingError, match="Unauthorized"):
+        recall._run_embed(["x" * 1000])
+    assert embeddings.embed_calls == 1
+
+
+def test_run_embed_gives_up_after_retry_budget(tmp_path: Path) -> None:
+    """When the input can never satisfy the provider, the shrink loop stops
+    after its budget and re-raises so the caller falls back to JSONL.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    embeddings = _OverflowThenOkEmbeddings(max_chars=0)
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+
+    with pytest.raises(EmbeddingError):
+        recall._run_embed(["x" * 1000])
+    # 1 initial attempt + 6 retries = 7 embed calls before giving up.
+    assert len(embeddings.embed_calls) == 7
 
 
 def test_vector_backend_search_includes_per_match_distance_in_payload(
