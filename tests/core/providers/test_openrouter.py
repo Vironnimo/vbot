@@ -8,8 +8,12 @@ import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.openrouter import OpenRouterAdapter
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
+from core.models.query import ModelQuery
+from core.providers.openrouter import (
+    SUPPLEMENTARY_OUTPUT_MODALITIES,
+    OpenRouterAdapter,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 API_KEY = "test-openrouter-key"
@@ -321,3 +325,100 @@ def test_normalize_catalog_entry_ignores_malformed_supported_voices() -> None:
     model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
 
     assert model.capabilities.supported_voices == ()
+
+
+# ---------------------------------------------------------------------------
+# Embedding model discovery (text_embedding)
+# ---------------------------------------------------------------------------
+
+
+def test_supplementary_output_modalities_includes_embeddings() -> None:
+    """The ``embeddings`` modality is part of the supplementary fetch list so
+    OpenRouter's dedicated text-embedding models are discoverable.
+    """
+
+    assert "embeddings" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "transcription" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "speech" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "image" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "audio" in SUPPLEMENTARY_OUTPUT_MODALITIES
+    assert "video" in SUPPLEMENTARY_OUTPUT_MODALITIES
+
+
+def test_supplementary_discovery_params_includes_embeddings_query() -> None:
+    """``supplementary_discovery_params()`` emits the ``embeddings`` query param."""
+
+    params = OpenRouterAdapter.supplementary_discovery_params()
+
+    assert {"output_modalities": "embeddings"} in params
+    # All non-text modalities are present as separate fetches.
+    for modality in (
+        "transcription",
+        "speech",
+        "image",
+        "audio",
+        "video",
+        "embeddings",
+    ):
+        assert {"output_modalities": modality} in params
+
+
+def test_normalize_catalog_entry_tags_embedding_models_with_text_embedding_task() -> None:
+    """An entry with ``output_modalities=embeddings`` is tagged ``text_embedding``
+    and preserves context_length and supported_parameters.
+    """
+
+    raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["embeddings"],
+        supported_parameters=["response_format"],
+    )
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    assert model.capabilities.output_modalities == ("embeddings",)
+    assert model.capabilities.task_types == ("text_embedding",)
+    assert model.context_window == 128000
+    assert model.capabilities.supported_parameters == ("response_format",)
+    # Embedding models output vectors, not text/chat.
+    assert "chat" not in model.capabilities.task_types
+    assert "text_output" not in model.capabilities.task_types
+
+
+def test_registry_query_returns_embedding_models_for_text_embedding_task() -> None:
+    """A registry built from normalized embedding entries returns those entries
+    when queried with ``tasks=("text_embedding",)`` and excludes them from
+    chat-only queries.
+    """
+
+    embedding_raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["embeddings"],
+    )
+    # The helper defaults ``id``/``name``; override to the embedding example ids.
+    embedding_raw["id"] = "google/gemini-embedding-2"
+    embedding_raw["name"] = "Google: Gemini Embedding 2"
+
+    chat_raw = raw_openrouter_model(
+        input_modalities=["text"],
+        output_modalities=["text"],
+    )
+
+    embedding_model = OpenRouterAdapter.normalize_catalog_entry(embedding_raw, {})
+    chat_model = OpenRouterAdapter.normalize_catalog_entry(chat_raw, {})
+
+    registry = ModelRegistry(
+        {
+            ("openrouter", embedding_model.model_id): embedding_model,
+            ("openrouter", chat_model.model_id): chat_model,
+        }
+    )
+
+    embedding_matches = registry.query(ModelQuery(tasks=("text_embedding",)))
+    assert ("openrouter", embedding_model) in embedding_matches
+    # Chat-only model must not match the text_embedding filter.
+    assert ("openrouter", chat_model) not in embedding_matches
+
+    chat_matches = registry.query(ModelQuery(tasks=("chat",)))
+    assert ("openrouter", chat_model) in chat_matches
+    assert ("openrouter", embedding_model) not in chat_matches
