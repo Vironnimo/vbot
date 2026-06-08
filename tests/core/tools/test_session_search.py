@@ -7,11 +7,16 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
+from core.recall import RecallBackendContext
+from core.recall.hybrid import _HYBRID_SEARCH_GUIDANCE, HybridRecallBackend
+from core.recall.jsonl import SESSION_RECALL_LITERAL_SEARCH_GUIDANCE, JsonlSessionRecallBackend
+from core.recall.vector import _SEMANTIC_SEARCH_GUIDANCE, VectorRecallBackend
 from core.sessions import ChatSessionManager
 from core.tools.session_search import (
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
+    build_session_search_description,
     register_session_search_tool,
     session_search_handler,
 )
@@ -70,14 +75,17 @@ def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) ->
 
     tool = registry.get("session_search")
     assert tool.name == SESSION_SEARCH_TOOL_NAME == "session_search"
-    assert tool.description == SESSION_SEARCH_TOOL_DESCRIPTION
+    # A bare ChatSessionManager is wrapped in the JSONL backend, whose
+    # describe_search fragment (literal-substring guidance) is appended.
+    assert tool.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
+    assert SESSION_RECALL_LITERAL_SEARCH_GUIDANCE in tool.description
     assert tool.parameters == SESSION_SEARCH_TOOL_PARAMETERS
 
     definitions = registry.provider_definitions(["session_search"])
     assert len(definitions) == 1
     definition = definitions[0]
     assert definition["name"] == "session_search"
-    assert definition["description"] == SESSION_SEARCH_TOOL_DESCRIPTION
+    assert definition["description"].startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
@@ -96,6 +104,41 @@ def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) ->
         "sort",
         "until",
     }
+
+
+def test_build_session_search_description_appends_backend_guidance(tmp_path: Path) -> None:
+    """Each backend contributes its own how-to-query guidance to the description."""
+
+    sessions = ChatSessionManager(tmp_path)
+    context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
+
+    jsonl_description = build_session_search_description(JsonlSessionRecallBackend(sessions))
+    vector_description = build_session_search_description(VectorRecallBackend(context))
+    hybrid_description = build_session_search_description(HybridRecallBackend(context))
+
+    # JSONL/literal default.
+    assert jsonl_description == (
+        f"{SESSION_SEARCH_TOOL_DESCRIPTION} {SESSION_RECALL_LITERAL_SEARCH_GUIDANCE}"
+    )
+    # Vector and hybrid override with their own capability text.
+    assert vector_description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
+    assert _SEMANTIC_SEARCH_GUIDANCE in vector_description
+    assert SESSION_RECALL_LITERAL_SEARCH_GUIDANCE not in vector_description
+    assert hybrid_description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
+    assert _HYBRID_SEARCH_GUIDANCE in hybrid_description
+
+
+def test_build_session_search_description_falls_back_without_describe_search() -> None:
+    """A backend without describe_search (e.g. an extension) gets the generic base."""
+
+    class _BareBackend:
+        def browse(self, request: Any) -> Any: ...
+
+        def search(self, request: Any) -> Any: ...
+
+        def scroll(self, request: Any) -> Any: ...
+
+    assert build_session_search_description(_BareBackend()) == SESSION_SEARCH_TOOL_DESCRIPTION
 
 
 def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path) -> None:

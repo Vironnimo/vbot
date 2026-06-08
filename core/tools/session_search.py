@@ -33,7 +33,7 @@ from core.tools.tools import (
 
 SESSION_SEARCH_TOOL_NAME = "session_search"
 SESSION_SEARCH_TOOL_DESCRIPTION = (
-    "Search persisted chat sessions by keywords, time range, role, agent, or session. "
+    "Search persisted chat sessions by query, time range, role, agent, or session. "
     "Without a query, returns recent matching session summaries."
 )
 SESSION_SEARCH_DEFAULT_LIMIT = 20
@@ -52,7 +52,8 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "query": {
             "type": "string",
             "description": (
-                "Case-insensitive keywords or phrase to search for. Omit to list sessions."
+                "Text to search for — keywords, a phrase, or a concept, depending on the "
+                "active backend (see the tool description). Omit to list recent sessions."
             ),
         },
         "agent_id": {
@@ -369,11 +370,29 @@ def register_session_search_tool(
         recall_backend = JsonlSessionRecallBackend(recall_backend)
     registry.register(
         SESSION_SEARCH_TOOL_NAME,
-        SESSION_SEARCH_TOOL_DESCRIPTION,
+        build_session_search_description(recall_backend),
         SESSION_SEARCH_TOOL_PARAMETERS,
         make_session_search_handler(recall_backend),
         display=ToolDisplay(summary_fields=("query", "session_id")),
     )
+
+
+def build_session_search_description(recall_backend: RecallBackend) -> str:
+    """Assemble the tool description: generic base plus the backend's own guidance.
+
+    The active recall backend optionally contributes a ``describe_search`` fragment
+    explaining how queries behave (literal substrings, semantic meaning, or both),
+    so the agent knows how to drive whichever backend is configured. Backends that
+    do not implement ``describe_search`` (e.g. extension backends) contribute
+    nothing and fall back to the generic description.
+    """
+
+    describe = getattr(recall_backend, "describe_search", None)
+    if callable(describe):
+        fragment = describe()
+        if fragment:
+            return f"{SESSION_SEARCH_TOOL_DESCRIPTION} {fragment}"
+    return SESSION_SEARCH_TOOL_DESCRIPTION
 
 
 __all__ = [
@@ -389,6 +408,7 @@ __all__ = [
     "SESSION_SEARCH_TOOL_DESCRIPTION",
     "SESSION_SEARCH_TOOL_NAME",
     "SESSION_SEARCH_TOOL_PARAMETERS",
+    "build_session_search_description",
     "make_session_search_handler",
     "register_session_search_tool",
     "session_search_handler",

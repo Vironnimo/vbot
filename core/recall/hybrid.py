@@ -49,6 +49,16 @@ _FETCH_MULTIPLIER = 3
 # literal group of other distinct sessions.
 _FETCH_MARGIN = 10
 
+# Guidance appended to the session_search tool description when this backend is
+# active (see ``describe_search``). Static capability text — actual semantic
+# availability is surfaced per-call via the notice propagated from the vector arm.
+_HYBRID_SEARCH_GUIDANCE = (
+    "This backend combines literal keyword matching with semantic meaning-based "
+    "matching: a single keyword surfaces every exact occurrence, and a short "
+    "descriptive phrase additionally finds conceptually related sessions that share "
+    "no words. Use plain keywords to find exact mentions, or a phrase to search by topic."
+)
+
 
 class HybridRecallBackend(JsonlSessionRecallBackend):
     """Recall backend that fuses FTS literal matches with vector semantic matches."""
@@ -59,6 +69,9 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
         self.logger = context.logger
         self._fts = SqliteFtsRecallBackend(context)
         self._vector = VectorRecallBackend(context)
+
+    def describe_search(self) -> str:
+        return _HYBRID_SEARCH_GUIDANCE
 
     def search(self, request: RecallRequest) -> JsonObject:
         # ``browse`` and ``scroll`` keep the canonical JSONL behavior
@@ -93,7 +106,7 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
         )
         truncated = len(ordered) > request.limit
         limited = ordered[: request.limit]
-        return self._message_result(
+        result = self._message_result(
             request,
             limited,
             searched_sessions=max(
@@ -108,6 +121,14 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
             ),
             truncated=truncated,
         )
+        # The vector arm only sets ``notice`` when its semantic search could not
+        # run (no embedding model, or a transient embed failure) and it fell back
+        # to literal scanning. In that case the fused result is literal-only, so
+        # re-surface the reason — otherwise the agent assumes full coverage.
+        vector_notice = vector_result.get("notice")
+        if vector_notice:
+            result = _with_semantic_notice(result, str(vector_notice))
+        return result
 
     # ------------------------------------------------------------------
     # Match grouping
@@ -229,6 +250,20 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
             "total_candidate_sessions": total_candidates,
             "request": request_payload(request),
         }
+
+
+def _with_semantic_notice(result: JsonObject, vector_notice: str) -> JsonObject:
+    """Re-surface the vector arm's degradation notice on the fused result.
+
+    When the semantic arm could not run, the hybrid output is literal-only; the
+    agent must know the semantic half was skipped rather than assume full
+    coverage. The notice is prepended to ``content`` and exposed as ``notice``.
+    """
+
+    notice = f"Semantic augmentation unavailable for this search. {vector_notice}"
+    content = result.get("content", "")
+    decorated = f"{notice}\n\n{content}" if content else notice
+    return {**result, "content": decorated, "notice": notice}
 
 
 def _literal_sort_key(match: JsonObject, sort: str) -> str:
