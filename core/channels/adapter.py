@@ -75,3 +75,12 @@ class ChannelAdapter(ABC):
         files: list[FileData] | None = None,
     ) -> None:
         """Send one outbound message to a platform target."""
+
+    @abstractmethod
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        """Resolve and ensure the Session that mirrors an outbound target chat.
+
+        Proactive sends (e.g. the ``channel_send`` tool) record outbound context into the
+        target chat's Session. This resolves that Session, creating it with channel context
+        when it does not exist yet, so the model later sees what was sent proactively.
+        """

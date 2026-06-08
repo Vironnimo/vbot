@@ -16,6 +16,7 @@ Sends proactive outbound messages through configured channels.
 - At least one of `message` or `file_paths` is required. When both are present, `message` acts as caption/accompanying text.
 - The tool is registered only while the runtime has at least one active channel, and is re-synced (registered/unregistered) when channel configs change — so it can appear or disappear mid-session.
 - Success returns `{ channel_id, platform_target }` with the resolved target.
+- After a successful send, the tool records the outbound content as a system-reminder note in the *target* chat's Session (resolved via `ChannelService.ensure_outbound_session`, created with channel context if missing), so a later inbound reply in that chat has context for what was sent. The note names the sending agent (`by agent "<agent_id>"`, the calling `context.agent_id`) and includes the message text and/or attached file names. This recording is best-effort: a resolution/persistence failure is logged (`warn`) and never downgrades the already-completed send to a tool failure.
 
 ## Constraints & Gotchas
 

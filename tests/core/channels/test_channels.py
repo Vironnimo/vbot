@@ -21,7 +21,7 @@ from core.channels import (
     ChannelService,
     ChannelStorage,
 )
-from core.channels.adapter import FileData
+from core.channels.adapter import FileData, RouteFacts
 from core.channels.telegram import TelegramChannelAdapter
 from core.chat.commands import NotACommand
 
@@ -103,6 +103,9 @@ class BlockingAdapter(ChannelAdapter):
     ) -> None:
         self.sent_messages.append((message, platform_target))
 
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        return RouteFacts(agent_id="assistant", session_id=f"ch-blocking-{platform_target}")
+
 
 class FailingAdapter(ChannelAdapter):
     platform = "telegram"
@@ -129,6 +132,9 @@ class FailingAdapter(ChannelAdapter):
         files: list[FileData] | None = None,
     ) -> None:
         return
+
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        raise NotImplementedError
 
 
 class DelayedStopAdapter(ChannelAdapter):
@@ -166,6 +172,9 @@ class DelayedStopAdapter(ChannelAdapter):
         files: list[FileData] | None = None,
     ) -> None:
         return
+
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        raise NotImplementedError
 
 
 async def wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
@@ -327,6 +336,35 @@ async def test_channel_service_start_and_stop_manage_enabled_adapters(
     service.stop()
     await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_ensure_outbound_session_delegates_to_active_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    storage.save(make_config("tg-enabled", enabled=True))
+    service = make_service(tmp_path)
+    adapter = BlockingAdapter()
+    monkeypatch.setattr(service, "_create_adapter", lambda _config: adapter)
+
+    service.start()
+    await asyncio.wait_for(adapter.started.wait(), timeout=1)
+
+    route = service.ensure_outbound_session("tg-enabled", "12345")
+    assert route == RouteFacts(agent_id="assistant", session_id="ch-blocking-12345")
+
+    service.stop()
+    await asyncio.wait_for(adapter.stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+
+def test_ensure_outbound_session_raises_for_inactive_channel(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    with pytest.raises(ChannelNotFoundError, match="Channel not active: tg-enabled"):
+        service.ensure_outbound_session("tg-enabled", "12345")
 
 
 @pytest.mark.asyncio

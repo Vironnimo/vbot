@@ -377,6 +377,64 @@ async def test_typing_indicator_refreshes_chat_action_and_stops_after_block(
 
 
 @pytest.mark.asyncio
+async def test_ensure_outbound_session_creates_session_with_channel_reminder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    route = adapter.ensure_outbound_session("12345")
+
+    assert route.agent_id == "assistant"
+    assert route.session_id == "ch-tg-assistant-12345"
+    session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
+    notes = [message for message in session.load() if message.role == "note"]
+    assert len(notes) == 1
+    assert "Telegram" in (notes[0].content or "")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_ensure_outbound_session_reuses_existing_session_without_extra_reminder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    adapter.ensure_outbound_session("12345")
+    adapter.ensure_outbound_session("12345")
+
+    session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
+    notes = [message for message in session.load() if message.role == "note"]
+    assert len(notes) == 1
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_ensure_outbound_session_rejects_non_integer_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    with pytest.raises(ChannelConfigError, match="platform_target must be an integer chat id"):
+        adapter.ensure_outbound_session("not-a-chat-id")
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_plain_text_command_is_dispatched_before_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

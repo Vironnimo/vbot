@@ -18,8 +18,8 @@ Messaging-platform accessors for vBot. Owns channel configuration, adapter lifec
 
 ## Interfaces
 
-- `ChannelService` is the domain facade for config CRUD, lifecycle (`start`, `stop`, per-channel start/stop), active/failed health checks, and `send(channel_id, message, platform_target, files=...)`.
-- `ChannelAdapter` exposes `platform`, `start()`, `stop()`, and `send(message, platform_target, files=None)`. Platform-specific receiving, command dispatch, routing, and file-send details belong in child specs.
+- `ChannelService` is the domain facade for config CRUD, lifecycle (`start`, `stop`, per-channel start/stop), active/failed health checks, `send(channel_id, message, platform_target, files=...)`, and `ensure_outbound_session(channel_id, platform_target)` (delegates to the active adapter; raises `ChannelNotFoundError` when the channel is not active).
+- `ChannelAdapter` exposes `platform`, `start()`, `stop()`, `send(message, platform_target, files=None)`, and `ensure_outbound_session(platform_target) -> RouteFacts` (resolves and ensures the Session mirroring an outbound target chat, creating it with channel context when missing). Platform-specific receiving, command dispatch, routing, and file-send details belong in child specs.
 - Server RPCs live in `server/rpc/channel_methods.py`: `channel.list`, `channel.create`, `channel.update`, `channel.delete`, `channel.enable`, `channel.disable`, and `channel.status`. Mutation RPCs call `runtime.reload_channel_tool()` after changing channel state.
 - Retroactive channel linking lives in `session.link_channel` in `server/rpc/agent_methods.py`. It verifies the channel belongs to the Agent, writes the same session metadata keys used by adapters, and adds a channel system-reminder note to the Session.
 - `register_channel_send_tool(registry, channel_service, chat_sessions)` registers the proactive outbound `channel_send` tool when runtime has at least one active channel adapter.
@@ -38,6 +38,7 @@ Messaging-platform accessors for vBot. Owns channel configuration, adapter lifec
 - Public create/update/enable paths reject unknown Agent IDs before persisting or enabling a channel. Runtime startup degrades per channel: an enabled channel with invalid runtime dependencies is marked failed with a diagnostic reason and does not prevent the server from starting.
 - Missing or empty `allowed_chat_ids` means deny-all for inbound allowlisted platforms. It is not "allow everyone".
 - Session history remains the single source of truth. Channels add metadata and system-reminder notes; they do not fork chat history or maintain a parallel transcript.
+- Proactive outbound sends (`channel_send`) record the sent content as a system-reminder note in the target chat's Session via `ensure_outbound_session`, so inbound replies in that chat keep context. This is the only place outbound (non-reply) content enters a Session; it reuses the same get-or-create + channel-reminder path as inbound routing rather than forking history.
 
 ## Constraints & Gotchas
 
