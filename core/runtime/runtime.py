@@ -17,6 +17,7 @@ from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.debug import DebugTraceStore, ProviderDebugRecorder
+from core.embeddings import EmbeddingService
 from core.extensions import ExtensionRegistry
 from core.image import ImageService
 from core.memory import MemoryService
@@ -148,6 +149,7 @@ class Runtime:
         self._model_tasks: TaskModelService | None = None
         self._speech: SpeechService | None = None
         self._image: ImageService | None = None
+        self._embeddings: EmbeddingService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
         self._speech_upload_max_size_bytes = _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
@@ -230,6 +232,7 @@ class Runtime:
         )
         self._speech = SpeechService(self._model_tasks, self, self._storage.data_dir)
         self._image = ImageService(self._model_tasks, self, self._storage.data_dir)
+        self._embeddings = EmbeddingService(self._model_tasks, self)
         self._agents = AgentStore(
             self._storage.data_dir,
             template_dir=resources_path / "workspace-templates",
@@ -386,6 +389,7 @@ class Runtime:
         self._model_tasks = None
         self._speech = None
         self._image = None
+        self._embeddings = None
         self._storage = None
         self._attachment_store = None
         self._agents = None
@@ -722,6 +726,14 @@ class Runtime:
         if self._image is None:
             raise RuntimeError("Image service not available")
         return self._image
+
+    @property
+    def embeddings(self) -> EmbeddingService:
+        """Access to text-embedding execution for the ``text_embedding`` binding."""
+        self._ensure_started()
+        if self._embeddings is None:
+            raise RuntimeError("Embedding service not available")
+        return self._embeddings
 
     @property
     def token_store(self) -> TokenStore:
