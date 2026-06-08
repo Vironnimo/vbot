@@ -207,6 +207,8 @@ The registry hook for local task targets is available and dependency-free (same 
 
 The `vector` backend ranks purely by cosine distance — semantic only. A hybrid ranking that combines keyword matches (FTS) with semantic proximity would produce better results but requires its own ranking model and integration design.
 
+**Confirmed 2026-06-08:** a live single-word query (`Bild`) returned weak, undifferentiated matches — distances all bunched at 0.52–0.63 (cosine sim ~0.37–0.48), top hit unrelated ("mach mal das licht an"). For short keyword queries the existing `sqlite_fts` path is actually more precise; semantics only pays off when wording differs (the stated goal). Hybrid (FTS precision + vector synonym recall) is the right long-term ranking. **Deferred on purpose** behind per-session chunking (#4), which is being implemented first — much of the "Bild" weakness was the coarse one-vector-per-session granularity, not ranking. Revisit hybrid after chunking lands and re-evaluate whether it's still needed.
+
 ### 3. Background/write-time incremental indexing
 
 The store uses eager-on-search backfill: the first `search` after enabling `vector` embeds all missing/stale sessions, and every subsequent search diffs freshness incrementally. A background indexer or write-hook in `core/sessions/` would eliminate the latency spike of first-search backfill for large session histories.
