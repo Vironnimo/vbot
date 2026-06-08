@@ -24,6 +24,15 @@ SESSION_RECALL_SORT_MODES = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
 SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 
+# Name of the built-in recall tool whose results are persisted into sessions
+# as ``role="tool"`` messages. Indexing or returning those results creates a
+# feedback loop where every search matches its own prior output, so they are
+# excluded from recall (the JSONL scan, context/bookends, and the semantic
+# index). This duplicates ``core.tools.session_search.SESSION_SEARCH_TOOL_NAME``
+# because recall is a lower layer than tools and cannot import it without an
+# import cycle; ``test_recall`` asserts the two stay in sync.
+RECALL_TOOL_RESULT_NAME = "session_search"
+
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
@@ -185,10 +194,26 @@ def message_index_by_id(messages: list[Any], message_id: str) -> int | None:
     return None
 
 
+def is_recall_artifact_message(message: Any) -> bool:
+    """True for a persisted ``session_search`` result — the recall tool's own output.
+
+    Such a message is derived recall output, not conversation content. Indexing
+    or returning it makes a search match its own prior results, so it is
+    excluded from matches, context/bookends, and the semantic index.
+    """
+
+    return (
+        getattr(message, "role", "") == "tool"
+        and getattr(message, "name", None) == RECALL_TOOL_RESULT_NAME
+    )
+
+
 def message_matches_request(message: Any, request: RecallRequest) -> bool:
     if message.role not in request.roles:
         return False
     if is_skill_context_note(message):
+        return False
+    if is_recall_artifact_message(message):
         return False
 
     timestamp = parse_persisted_timestamp(message.timestamp)
@@ -335,7 +360,11 @@ def neighbor_context_indices(
 
 
 def is_context_message(message: Any) -> bool:
-    return message.role in SESSION_RECALL_DEFAULT_ROLES and not is_skill_context_note(message)
+    return (
+        message.role in SESSION_RECALL_DEFAULT_ROLES
+        and not is_skill_context_note(message)
+        and not is_recall_artifact_message(message)
+    )
 
 
 def message_search_text(message: Any) -> str:

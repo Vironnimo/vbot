@@ -286,6 +286,47 @@ def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
     assert note_data["matches"][0]["role"] == "note"
 
 
+def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
+    """A persisted session_search result is never returned as a match.
+
+    Its output is the recall tool's own derived content; returning it makes a
+    search match its previous results (a feedback loop). The real user message
+    in the same session still matches.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="loopy")
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="c1",
+            name="session_search",
+            content="Found 3 match(es) for query: needle",
+            timestamp=timestamp(1),
+        )
+    )
+    session.append(ChatMessage.user("the real needle is here", timestamp=timestamp(2)))
+
+    result = session_search_handler(make_context(tmp_path), {"query": "needle"}, sessions)
+
+    data = assert_success_envelope(result)
+    matches = data["matches"]
+    assert len(matches) == 1
+    assert matches[0]["role"] == "user"
+    assert matches[0]["snippet"] == "the real needle is here"
+
+
+def test_recall_tool_result_name_matches_session_search_tool_name() -> None:
+    """Drift guard: the recall layer's excluded-tool name must equal the tool's name.
+
+    ``core.recall`` cannot import ``core.tools`` (lower layer), so it keeps a
+    private copy of the tool name; this asserts the copy stays in sync.
+    """
+
+    from core.recall.jsonl import RECALL_TOOL_RESULT_NAME
+
+    assert RECALL_TOOL_RESULT_NAME == SESSION_SEARCH_TOOL_NAME
+
+
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [

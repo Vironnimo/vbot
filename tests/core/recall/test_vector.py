@@ -713,6 +713,38 @@ def test_build_session_chunks_anchors_on_context_message_not_run_summary() -> No
     assert chunks[0].anchor_message_id == messages[1].id
 
 
+def test_build_session_chunks_excludes_session_search_results_from_text() -> None:
+    """A persisted session_search result is not embedded — it is the tool's own output."""
+
+    artifact = ChatMessage.tool(
+        tool_call_id="c1",
+        name="session_search",
+        content="I love bananas and fruit",
+    )
+    user_message = ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
+
+    chunks = build_session_chunks([artifact, user_message])
+
+    assert len(chunks) == 1
+    # The session_search output text must not leak into the chunk's embedding,
+    # and the anchor is the real user message, not the tool artifact.
+    assert "fruit" not in chunks[0].text
+    assert chunks[0].text == "I bought some carrots"
+    assert chunks[0].anchor_message_id == user_message.id
+
+
+def test_build_session_chunks_skips_chunk_of_only_session_search_results() -> None:
+    """A window of only session_search results collapses to empty text → not indexed."""
+
+    artifact = ChatMessage.tool(
+        tool_call_id="c1",
+        name="session_search",
+        content="Found 20 semantic match(es) for query: Bild",
+    )
+
+    assert build_session_chunks([artifact]) == []
+
+
 # ---------------------------------------------------------------------------
 # Chunked indexing + search integration
 # ---------------------------------------------------------------------------
@@ -1034,6 +1066,37 @@ def test_vector_backend_reanchors_to_requested_role_within_chunk(tmp_path: Path)
     assert len(data["matches"]) == 1
     assert data["matches"][0]["role"] == "assistant"
     assert data["matches"][0]["message_id"] == assistant_message.id
+
+
+def test_vector_backend_does_not_match_its_own_search_output(tmp_path: Path) -> None:
+    """A session_search result is excluded from the index — no self-matching loop.
+
+    The session's only "fruit" text lives in a persisted session_search result;
+    searching "fruit" must not surface the session via that artifact. Searching
+    "carrot" (the real user message) still surfaces it, anchored on the user
+    message — proving the artifact text was dropped, not the whole session.
+    """
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="selfref")
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="c1",
+            name="session_search",
+            content="I love bananas and fruit",
+            timestamp=timestamp(1),
+        )
+    )
+    session.append(ChatMessage.user("I bought some carrots", timestamp=timestamp(2)))
+
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    fruit = recall.search(request(query="fruit", limit=5))
+    carrot = recall.search(request(query="carrot", limit=5))
+
+    assert "selfref" not in [match["session_id"] for match in fruit["matches"]]
+    carrot_matches = [match for match in carrot["matches"] if match["session_id"] == "selfref"]
+    assert len(carrot_matches) == 1
+    assert carrot_matches[0]["role"] == "user"
 
 
 # ---------------------------------------------------------------------------
