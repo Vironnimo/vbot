@@ -448,13 +448,18 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         if not stale_sessions:
             return
 
-        # Pack all stale sessions into chunks up front. Any session that
-        # yields zero indexable chunks (e.g. a session of pure notes) is
-        # skipped — its prior rows were already wiped in
-        # ``upsert_many_chunks`` and there is nothing to add.
+        # Pack all stale sessions into chunks up front. A session that
+        # yields zero indexable chunks is *not* covered by
+        # ``upsert_many_chunks`` (it only wipes sessions present in its
+        # ``records``), so its prior rows would silently survive a JSONL
+        # change to all-empty content. ``delete_session`` clears them.
         all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
         for summary, mtime_ns, size_bytes, messages in stale_sessions:
-            for chunk in build_session_chunks(messages):
+            chunks = build_session_chunks(messages)
+            if not chunks:
+                self.store.delete_session(agent_id, str(summary["id"]))
+                continue
+            for chunk in chunks:
                 all_chunks.append((summary, mtime_ns, size_bytes, chunk))
         if not all_chunks:
             return
@@ -684,7 +689,12 @@ def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:
             # Seal the current chunk and carry the last N messages into
             # the next one for boundary context.
             _seal()
-            overlap_messages = current_messages[-_CHUNK_OVERLAP_MESSAGES:]
+            if _CHUNK_OVERLAP_MESSAGES > 0:
+                overlap_messages = current_messages[-_CHUNK_OVERLAP_MESSAGES:]
+            else:
+                # ``list[:-0]`` returns the full list (because ``-0 == 0``),
+                # so a zero overlap must skip the slice entirely.
+                overlap_messages = []
             overlap_texts: list[str] = []
             for overlap_message in overlap_messages:
                 overlap_text = message_search_text(overlap_message)
