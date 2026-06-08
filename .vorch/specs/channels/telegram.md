@@ -20,6 +20,7 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 - `start()` builds a Telegram application, registers text and photo/document handlers, deletes the webhook with `drop_pending_updates=False`, starts polling, and waits until stopped.
 - `stop()` sets the stop event, cancels per-chat workers and album flush tasks, then stops the updater/application and shuts it down.
 - `send(message, platform_target, files=None)` sends text, files, or both to one Telegram chat id. Text is split with `split_telegram_message(message, TELEGRAM_MESSAGE_LIMIT)`.
+- `ensure_outbound_session(platform_target)` resolves the Session for a proactive send target and returns its `RouteFacts`, creating the Session (with the one-time channel reminder note) when it does not exist. It derives the session id from the chat id alone: Telegram private chats use `chat_id == user_id`, and group chats (negative ids) ignore `dm_scope`, so no separately-supplied user id is needed. Inbound routing and outbound resolution share the same `_ensure_channel_session` helper.
 - Inbound text uses `TriggerService.trigger_run(agent_id, text, session_id)` after command dispatch. Inbound media uses `TriggerService.trigger_run(agent_id, list[ContentBlock], session_id)`.
 
 ## Conventions

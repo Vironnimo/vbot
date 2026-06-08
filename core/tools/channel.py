@@ -21,10 +21,13 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.channels.channels import ChannelService
     from core.sessions import ChatSessionManager
+
+_LOGGER = get_logger("tools.channel")
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = "Send a proactive outbound message through a configured channel."
@@ -128,7 +131,58 @@ async def _handle_channel_send_tool(
     except ChannelError as error:
         return tool_failure("channel_error", str(error))
 
+    _record_outbound_message_note(
+        channel_service,
+        chat_sessions,
+        channel_id,
+        platform_target,
+        sender_agent_id=context.agent_id,
+        message=message,
+        files=files,
+    )
     return tool_success({"channel_id": channel_id, "platform_target": platform_target})
+
+
+def _record_outbound_message_note(
+    channel_service: ChannelService,
+    chat_sessions: ChatSessionManager,
+    channel_id: str,
+    platform_target: str,
+    *,
+    sender_agent_id: str,
+    message: str | None,
+    files: list[FileData],
+) -> None:
+    try:
+        route = channel_service.ensure_outbound_session(channel_id, platform_target)
+        session = chat_sessions.get_or_create(route.agent_id, route.session_id)
+        session.add_note(_outbound_message_note(sender_agent_id, message, files))
+    except Exception as error:
+        # The outbound message already went out; failing to record context into the target
+        # Session must not turn a successful send into a tool failure.
+        _LOGGER.warning(
+            "Could not record channel_send outbound note (channel=%s target=%s): %s",
+            channel_id,
+            platform_target,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+
+def _outbound_message_note(
+    sender_agent_id: str,
+    message: str | None,
+    files: list[FileData],
+) -> str:
+    parts = [
+        f'A message was sent to this chat via the channel_send tool by agent "{sender_agent_id}".'
+    ]
+    if message is not None:
+        parts.append(message)
+    if files:
+        names = ", ".join(file_data.filename for file_data in files)
+        parts.append(f"Attached file(s): {names}")
+    return "\n\n".join(parts)
 
 
 def _platform_target_from_arguments_or_context(

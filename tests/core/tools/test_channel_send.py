@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
-from core.channels.adapter import FileData
+from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import ChannelNotFoundError
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
@@ -95,6 +95,101 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
     )
     chat_sessions.get_metadata.assert_not_called()
     channel_service.list_channels.assert_called_once_with()
+
+
+def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    channel_service.ensure_outbound_session.return_value = RouteFacts(
+        agent_id="agent-1", session_id="ch-tg-assistant-12345"
+    )
+    chat_sessions = Mock()
+    session = Mock()
+    chat_sessions.get_or_create.return_value = session
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+            },
+        )
+    )
+
+    assert_success_envelope(result)
+    channel_service.ensure_outbound_session.assert_called_once_with("tg-assistant", "12345")
+    chat_sessions.get_or_create.assert_called_once_with("agent-1", "ch-tg-assistant-12345")
+    session.add_note.assert_called_once()
+    note = session.add_note.call_args.args[0]
+    assert "channel_send tool" in note
+    assert 'by agent "agent-1"' in note
+    assert "Task finished" in note
+
+
+def test_channel_send_outbound_note_lists_attached_file_names(tmp_path: Path) -> None:
+    attachment_path = tmp_path / "report.pdf"
+    attachment_path.write_bytes(b"%PDF-1.7\n")
+
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    channel_service.ensure_outbound_session.return_value = RouteFacts(
+        agent_id="agent-1", session_id="ch-tg-assistant-12345"
+    )
+    chat_sessions = Mock()
+    session = Mock()
+    chat_sessions.get_or_create.return_value = session
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "file_paths": [str(attachment_path)],
+            },
+        )
+    )
+
+    assert_success_envelope(result)
+    note = session.add_note.call_args.args[0]
+    assert "channel_send tool" in note
+    assert "Attached file(s): report.pdf" in note
+
+
+def test_channel_send_succeeds_even_when_note_recording_fails(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    channel_service.ensure_outbound_session.side_effect = RuntimeError("boom")
+    chat_sessions = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(registry, channel_service, chat_sessions)
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+            },
+        )
+    )
+
+    data = assert_success_envelope(result)
+    assert data == {"channel_id": "tg-assistant", "platform_target": "12345"}
+    channel_service.send.assert_awaited_once()
 
 
 def test_channel_send_resolves_platform_target_from_session_metadata(tmp_path: Path) -> None:

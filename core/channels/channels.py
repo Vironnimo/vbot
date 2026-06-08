@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from core.attachments import AttachmentStore
-from core.channels.adapter import ChannelAdapter, FileData
+from core.channels.adapter import ChannelAdapter, FileData, RouteFacts
 from core.settings import SettingsValidationError, load_validated_channel_json
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -447,6 +447,14 @@ class ChannelService:
             return
 
         await adapter.send(normalized_message, platform_target, files=normalized_files)
+
+    def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
+        """Ensure the Session mirroring an outbound target chat exists and return its route."""
+        normalized_id = _normalize_channel_id(channel_id)
+        if not isinstance(platform_target, str) or not platform_target:
+            raise ChannelConfigError("platform_target must be a non-empty string")
+        adapter = self._active_adapter(normalized_id)
+        return adapter.ensure_outbound_session(platform_target)
 
     def list_channels(self) -> list[ChannelConfig]:
         """Return all persisted channels, enabled and disabled."""

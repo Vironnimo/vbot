@@ -358,6 +358,19 @@ class TelegramChannelAdapter(ChannelAdapter):
         self,
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ReplyPlanFacts]:
+        route = self._ensure_channel_session(conversation)
+        reply_plan = ReplyPlanFacts(
+            channel_id=self._config.id,
+            platform_target=conversation.chat_id,
+        )
+        self._update_session_metadata(route, conversation, reply_plan)
+        return route, reply_plan
+
+    def ensure_outbound_session(self, platform_target: str) -> RouteFacts:
+        """Ensure the Session mirroring an outbound Telegram chat exists with channel context."""
+        return self._ensure_channel_session(self._conversation_facts_for_target(platform_target))
+
+    def _ensure_channel_session(self, conversation: ConversationFacts) -> RouteFacts:
         route = self._route_facts(conversation)
         is_new_session = not self._session_exists(route)
         session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
@@ -368,13 +381,19 @@ class TelegramChannelAdapter(ChannelAdapter):
                     chat_id=conversation.chat_id,
                 )
             )
+        return route
 
-        reply_plan = ReplyPlanFacts(
+    def _conversation_facts_for_target(self, platform_target: str) -> ConversationFacts:
+        chat_id = _parse_platform_target(platform_target)
+        # Telegram private chats use chat_id == user_id, and group chats (negative ids) ignore
+        # dm_scope, so the chat id alone determines the routed session for a proactive send.
+        return ConversationFacts(
+            platform=self.platform,
             channel_id=self._config.id,
-            platform_target=conversation.chat_id,
+            chat_id=str(chat_id),
+            user_id=str(chat_id),
+            thread_id=None,
         )
-        self._update_session_metadata(route, conversation, reply_plan)
-        return route, reply_plan
 
     async def _build_media_message_blocks(self, message: Any) -> list[ContentBlock]:
         blocks: list[ContentBlock] = []
