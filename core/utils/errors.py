@@ -30,3 +30,16 @@ class ProviderError(VBotError):
     def __init__(self, message: str = "", retryable: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+class EmbeddingError(VBotError):
+    """Base class for expected embedding errors.
+
+    Embedding execution sits between :class:`ImageError`-style provider
+    isolation and :class:`core.model_tasks.TaskModelError` binding
+    resolution: the binding lookup may be unconfigured, the parsed
+    target may be local-only, or the provider request may fail. The
+    :class:`EmbeddingService` raises domain-specific subclasses so
+    callers (the recall backend, settings RPC, future tooling) can map
+    them to the right error category without re-parsing the message.
+    """

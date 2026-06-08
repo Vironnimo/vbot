@@ -9,6 +9,7 @@ import os
 
 import pytest
 
+from core.embeddings import EmbeddingService
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -504,6 +505,52 @@ def test_get_adapter_before_start_raises_runtime_error(config: Config) -> None:
     # Act & Assert
     with pytest.raises(RuntimeError, match="not started"):
         runtime.get_adapter("openai", "openai:api-key")
+
+
+# ------------------------------------------------------------------
+# EmbeddingService wiring
+# ------------------------------------------------------------------
+
+
+def test_runtime_exposes_embedding_service_after_start(
+    runtime_with_openrouter_key: Runtime,
+) -> None:
+    """``runtime.embeddings`` returns an ``EmbeddingService`` instance
+    after ``start()``. The service is wired against the same
+    ``TaskModelService`` and runtime the rest of the specialized
+    execution services use.
+    """
+
+    service = runtime_with_openrouter_key.embeddings
+
+    assert isinstance(service, EmbeddingService)
+
+
+def test_runtime_embeddings_is_none_before_start(config: Config) -> None:
+    """The embedding service is ``None`` before ``start()`` and raises
+    :class:`RuntimeError` on access — same lifecycle as the other
+    specialized services.
+    """
+
+    runtime = Runtime(config)
+
+    assert runtime._embeddings is None  # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime.embeddings
+
+
+def test_runtime_embeddings_is_none_after_stop(
+    runtime_with_openrouter_key: Runtime,
+) -> None:
+    """Stopping the runtime clears the embedding service reference like
+    the other specialized services.
+    """
+
+    runtime_with_openrouter_key.stop()
+
+    assert runtime_with_openrouter_key._embeddings is None  # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = runtime_with_openrouter_key.embeddings
 
 
 def test_provider_credential_access_before_start_raises_runtime_error(config: Config) -> None:
