@@ -21,10 +21,10 @@ from server.rpc.provider_access import (
     _connection_response,
     _device_flow_active,
     _device_flow_engine,
-    _first_usable_provider_credential,
     _oauth_connection,
     _oauth_device_connection,
     _provider_has_credentials,
+    _runtime_provider_credential,
     _runtime_resources_dir,
     _runtime_token_store,
 )
@@ -259,25 +259,16 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
     refreshed_providers: list[JsonObject] = []
     for provider_id in runtime.providers.list_ids():
         provider = runtime.providers.get(provider_id)
-        if not getattr(provider, "models_endpoint", None):
+        if not _provider_supports_refresh(provider):
             continue
 
-        try:
-            credential_connection, credential_value = await _first_usable_provider_credential(
-                runtime,
-                provider_id,
-                provider,
-            )
-        except ConfigError:
-            continue
-
-        result = await refresh_models(
+        provider_results = await _refresh_provider_connections(
+            runtime,
+            provider_id,
             provider,
-            credential_value,
             resources_dir,
-            credential_connection=credential_connection,
         )
-        refreshed_providers.append(result)
+        refreshed_providers.extend(provider_results)
 
     _reload_runtime_model_registry(runtime, resources_dir)
     return {
@@ -293,25 +284,90 @@ async def _refresh_provider_model_db(
     resources_dir: Path,
 ) -> JsonObject:
     provider = runtime.providers.get(provider_id)
-    if not getattr(provider, "models_endpoint", None):
+    if not _provider_supports_refresh(provider):
         raise RpcError(
             RPC_ERROR_DOMAIN,
             f"provider '{provider_id}' does not support model refresh",
         )
 
-    credential_connection, credential_value = await _first_usable_provider_credential(
+    provider_results = await _refresh_provider_connections(
         runtime,
         provider_id,
         provider,
-    )
-    result = await refresh_models(
-        provider,
-        credential_value,
         resources_dir,
-        credential_connection=credential_connection,
     )
     _reload_runtime_model_registry(runtime, resources_dir)
-    return result
+    if not provider_results:
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            f"Provider credentials not found for provider '{provider_id}'",
+        )
+    return provider_results[0]
+
+
+def _provider_supports_refresh(provider: Any) -> bool:
+    """Return whether *provider* exposes a refreshable ``models_endpoint``.
+
+    A provider counts as refreshable when it has a provider-level
+    ``models_endpoint`` or at least one connection-level one. This guard is
+    separate from credential presence so the RPC layer can distinguish
+    "no refresh endpoint" from "no credentials".
+    """
+
+    if getattr(provider, "models_endpoint", None):
+        return True
+    return any(
+        getattr(connection, "models_endpoint", None)
+        for connection in getattr(provider, "connections", [])
+    )
+
+
+def _connection_effective_endpoint(connection: Any, provider: Any) -> str | None:
+    return getattr(connection, "models_endpoint", None) or getattr(
+        provider, "models_endpoint", None
+    )
+
+
+async def _refresh_provider_connections(
+    runtime: Any,
+    provider_id: str,
+    provider: Any,
+    resources_dir: Path,
+) -> list[JsonObject]:
+    """Refresh every connection on *provider* that supports it.
+
+    Connections without an effective ``models_endpoint`` or without
+    credentials are skipped. Successful refreshes accumulate into the
+    shared ``<provider>.json`` catalog via discovery's merge logic.
+    """
+
+    results: list[JsonObject] = []
+    for connection in getattr(provider, "connections", []):
+        if not _connection_effective_endpoint(connection, provider):
+            continue
+        connection_id = f"{provider_id}:{connection.id}"
+        if not runtime.provider_credentials.has_credentials(provider_id, connection_id):
+            continue
+        try:
+            credential_value = await _runtime_provider_credential(
+                runtime, provider_id, connection_id, connection
+            )
+        except (ConfigError, RpcError) as exc:
+            _LOGGER.warning(
+                "Skipping model refresh for provider '%s' connection '%s': %s",
+                provider_id,
+                connection.id,
+                exc,
+            )
+            continue
+        result = await refresh_models(
+            provider,
+            credential_value,
+            resources_dir,
+            credential_connection=connection,
+        )
+        results.append(result)
+    return results
 
 
 def _reload_runtime_model_registry(runtime: Any, resources_dir: Path) -> None:
