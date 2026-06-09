@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
@@ -170,6 +171,68 @@ class TestToolContext:
         context.add_note("reminder")
 
         assert context.note_hook is None
+
+
+class TestToolContextCancelHooks:
+    def test_on_cancel_invokes_registration_hook_with_callback(self) -> None:
+        registered: list[Callable[[], None]] = []
+
+        def registration_hook(callback: Callable[[], None]) -> None:
+            registered.append(callback)
+
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_call_index=0,
+            workspace=Path("workspace"),
+            app_root=Path("app"),
+            data_root=Path("data"),
+            cancel_registration_hook=registration_hook,
+        )
+
+        def cancel_callback() -> None:
+            pass
+
+        context.on_cancel(cancel_callback)
+
+        assert registered == [cancel_callback]
+
+    def test_on_cancel_without_hook_is_a_safe_noop(self) -> None:
+        context = make_context()
+
+        context.on_cancel(lambda: None)
+
+        assert context.cancel_registration_hook is None
+
+    def test_was_cancelled_by_user_returns_hook_result(self) -> None:
+        cancel_state = {"user_cancelled": True}
+        context = ToolContext(
+            agent_id="agent-1",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_call_index=0,
+            workspace=Path("workspace"),
+            app_root=Path("app"),
+            data_root=Path("data"),
+            cancel_check_hook=lambda: cancel_state["user_cancelled"],
+        )
+
+        assert context.was_cancelled_by_user() is True
+
+        cancel_state["user_cancelled"] = False
+
+        assert context.was_cancelled_by_user() is False
+
+    def test_was_cancelled_by_user_returns_false_without_hook(self) -> None:
+        context = make_context()
+
+        assert context.was_cancelled_by_user() is False
+        assert context.cancel_check_hook is None
 
 
 class TestToolEnvelope:
@@ -595,6 +658,86 @@ class TestToolExecutor:
 
         assert seen_depths == [3]
         assert results == [tool_success({"nesting_depth": 3})]
+
+    @pytest.mark.asyncio
+    async def test_cancel_hooks_flow_from_config_to_context_through_execute_one(self) -> None:
+        registry = ToolRegistry()
+        registered_callbacks: list[Callable[[], None]] = []
+        user_cancelled = False
+
+        def cancel_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            def cancel_callback() -> None:
+                nonlocal user_cancelled
+                user_cancelled = True
+
+            context.on_cancel(cancel_callback)
+            return tool_success({"was_cancelled": context.was_cancelled_by_user()})
+
+        registry.register(
+            "cancel_probe",
+            "Probe cancel hooks wired through ToolExecutionConfig.",
+            {"type": "object"},
+            cancel_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        def registration_hook(callback: Callable[[], None]) -> None:
+            registered_callbacks.append(callback)
+
+        cancel_check_calls = 0
+
+        def cancel_check_hook() -> bool:
+            nonlocal cancel_check_calls
+            cancel_check_calls += 1
+            return True
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="cancel_probe", arguments={})],
+            ToolExecutionConfig(
+                agent_id="agent-1",
+                session_id="session-1",
+                run_id="run-1",
+                workspace=Path("workspace"),
+                app_root=Path("app"),
+                data_root=Path("data"),
+                allowed_tools=["*"],
+                cancel_registration_hook=registration_hook,
+                cancel_check_hook=cancel_check_hook,
+            ),
+        )
+
+        assert len(registered_callbacks) == 1
+        assert cancel_check_calls == 1
+        assert results == [tool_success({"was_cancelled": True})]
+
+        registered_callbacks[0]()
+        assert user_cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_cancel_hooks_default_to_safe_noop_in_executor(self) -> None:
+        registry = ToolRegistry()
+        seen_values: dict[str, bool] = {}
+
+        def cancel_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            context.on_cancel(lambda: None)
+            seen_values["was_cancelled"] = context.was_cancelled_by_user()
+            return tool_success({"ok": True})
+
+        registry.register(
+            "cancel_default",
+            "Probe cancel hooks default to no-op when config has none.",
+            {"type": "object"},
+            cancel_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="cancel_default", arguments={})],
+            make_execution_config(allowed_tools=["*"]),
+        )
+
+        assert seen_values == {"was_cancelled": False}
+        assert results == [tool_success({"ok": True})]
 
     @pytest.mark.asyncio
     async def test_unknown_tool_becomes_failed_result(self) -> None:
