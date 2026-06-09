@@ -2,6 +2,8 @@
   import { onDestroy, onMount } from 'svelte';
 
   import {
+    cancelRun,
+    cancelToolCall,
     listQueue,
     removeFromQueue,
     rpc,
@@ -9,7 +11,10 @@
     updateQueueItem,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
-  import { subAgentResultTextFromMessages } from '$lib/chatTimelinePresentation.js';
+  import {
+    subAgentResultData,
+    subAgentResultTextFromMessages,
+  } from '$lib/chatTimelinePresentation.js';
 
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
@@ -561,11 +566,62 @@
     cancellingRun = true;
     actionError = '';
     try {
-      await rpc('chat.cancel', { run_id: runId });
+      await cancelRun(runId);
     } catch (error) {
       actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     } finally {
       cancellingRun = false;
+    }
+  };
+
+  // Per-tool-call cancel: cancel the bash without aborting the owning run.
+  const handleCancelToolCall = async ({ runId, toolCallId } = {}) => {
+    const agent = activeAgent;
+    if (!runId || !toolCallId) {
+      return;
+    }
+    actionError = '';
+    try {
+      await cancelToolCall({
+        agentId: agent?.id ?? '',
+        runId,
+        toolCallId,
+      });
+    } catch (error) {
+      actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
+    }
+  };
+
+  // Per-sub-agent cancel: a running sub-agent is itself a Run, so route through
+  // chat.cancel with reason="user". A queued sub-agent (no run_id yet) falls
+  // back to chat.queue_remove.
+  const handleCancelSubAgent = async ({ tool } = {}) => {
+    const sessionState = activeSessionState;
+    const agent = activeAgent;
+    if (!tool || !sessionState) {
+      return;
+    }
+    const data = subAgentResultData(tool);
+    const childRunId =
+      typeof data.run_id === 'string' ? data.run_id.trim() : '';
+    const childAgentId =
+      typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+    const childSessionId =
+      typeof data.session_id === 'string' ? data.session_id.trim() : '';
+    const queueItemId =
+      typeof data.queue_item_id === 'string' ? data.queue_item_id.trim() : '';
+
+    actionError = '';
+    try {
+      if (childRunId) {
+        await cancelRun(childRunId, { reason: 'user' });
+        return;
+      }
+      if (queueItemId && agent && childAgentId && childSessionId) {
+        await removeFromQueue(childAgentId, childSessionId, queueItemId);
+      }
+    } catch (error) {
+      actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     }
   };
 
@@ -741,6 +797,8 @@
             onNavigateToSubAgent={navigateToSubAgent}
             onRequestSubAgentResult={requestSubAgentResult}
             onRetry={handleRetry}
+            onCancelToolCall={handleCancelToolCall}
+            onCancelSubAgent={handleCancelSubAgent}
           />
         </div>
         <div class="chat-view__footer-stack">
