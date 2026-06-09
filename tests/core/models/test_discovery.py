@@ -142,28 +142,34 @@ def raw_openrouter_model(
 
 @pytest.fixture()
 def openai_subscription_config() -> ProviderConfig:
+    """Provider with one OAuth connection (subscription) for Codex discovery.
+
+    After the openai-provider merge there is a single ``openai`` provider
+    with two connections; for unit-testing the connection-aware discovery
+    pipeline we model that state with a connection-level
+    ``base_url``/``models_endpoint`` and the Codex adapter.
+    """
+
     return ProviderConfig(
-        id="openai-subscription",
-        name="OpenAI Subscription",
-        adapter="openai_subscription",
-        base_url="https://chatgpt.com/backend-api",
+        id="openai",
+        name="OpenAI",
+        adapter="openai",
+        base_url="https://api.openai.com/v1",
         connections=[
             ConnectionConfig(
-                id="oauth",
+                id="subscription",
                 type="oauth",
                 label="ChatGPT Plus/Pro",
+                base_url="https://chatgpt.com/backend-api",
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
                 ),
+                mode="codex_responses",
+                models_endpoint="/codex/models",
             )
         ],
         defaults={"max_tokens": 8192},
-        extra_headers={
-            "OpenAI-Beta": "responses=experimental",
-            "originator": "vbot",
-        },
-        models_endpoint="/codex/models",
     )
 
 
@@ -438,14 +444,23 @@ class TestPassthroughFilters:
 class TestRefreshModels:
     @respx.mock
     @pytest.mark.asyncio
-    async def test_refresh_models_supports_openai_subscription_discovery_headers(
+    async def test_refresh_models_tags_models_with_selected_connection_id(
         self,
         tmp_path: Path,
         openai_subscription_config: ProviderConfig,
     ):
+        """Refresh of a connection stamps every catalog entry with its local id.
+
+        The merged catalog is loaded through :class:`ModelRegistry` and the
+        per-model ``connections`` tuple must contain the connection that
+        produced the fetch. Other models on disk from a different
+        connection (if any) would be preserved — this is the no-existing
+        baseline.
+        """
+
         resources_dir = tmp_path / "resources"
         access_token = jwt_with_openai_account("acct_openai")
-        route = respx.get(f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.136.0").mock(
+        respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -470,25 +485,203 @@ class TestRefreshModels:
         )
 
         registry = ModelRegistry.load(resources_dir)
-        model = registry.get("openai-subscription", "gpt-5-codex")
-        request_headers = route.calls.last.request.headers
-        assert result["provider_id"] == "openai-subscription"
+        model = registry.get("openai", "gpt-5-codex")
+        catalog_data = json.loads(
+            (resources_dir / "models" / "openai.json").read_text(encoding="utf-8")
+        )
+        assert result["provider_id"] == "openai"
         assert result["model_count"] == 1
+        assert model.connections == ("subscription",)
         assert model.name == "GPT-5 Codex"
-        assert model.capabilities.tools is True
-        assert model.capabilities.json_mode is True
-        assert model.capabilities.reasoning.supported is True
-        assert set(model.capabilities.supported_parameters) == {
-            "tools",
-            "response_format",
-            "reasoning",
-            "parallel_tool_calls",
+        assert catalog_data["models"]["gpt-5-codex"]["connections"] == ["subscription"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_merges_models_from_other_connection(
+        self,
+        tmp_path: Path,
+        openai_subscription_config: ProviderConfig,
+    ):
+        """A second refresh of a different connection leaves earlier entries alone.
+
+        Existing entries tagged with the *other* connection are preserved
+        in the shared catalog; entries tagged with the refreshed
+        connection are replaced. The catalog is loaded end-to-end through
+        :class:`ModelRegistry` to confirm the per-model
+        ``connections`` tuple round-trips.
+        """
+
+        resources_dir = tmp_path / "resources"
+        catalog_path = resources_dir / "models" / "openai.json"
+        existing_data = {
+            "provider_id": "openai",
+            "source": "discovery",
+            "fetched_at": "2026-05-08T19:08:00+00:00",
+            "models": {
+                "gpt-5.2": {
+                    "name": "GPT-5.2",
+                    "capabilities": {
+                        "vision": True,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": True},
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": ["tools", "response_format", "reasoning"],
+                        "task_types": ["chat", "text_output"],
+                    },
+                    "context_window": 256000,
+                    "max_output_tokens": 32000,
+                    "connections": ["api-key"],
+                },
+                "stale-subscription-model": {
+                    "name": "Stale Subscription Model",
+                    "capabilities": {
+                        "vision": False,
+                        "tools": True,
+                        "json_mode": True,
+                        "reasoning": {"supported": True},
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "supported_parameters": ["tools"],
+                        "task_types": ["chat"],
+                    },
+                    "context_window": 128000,
+                    "max_output_tokens": 16000,
+                    "connections": ["subscription"],
+                },
+            },
         }
-        assert request_headers["Authorization"] == f"Bearer {access_token}"
-        assert request_headers["chatgpt-account-id"] == "acct_openai"
-        assert request_headers["OpenAI-Beta"] == "responses=experimental"
-        assert request_headers["originator"] == "vbot"
-        assert route.calls.last.request.url.params["client_version"] == "0.136.0"
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        catalog_path.write_text(json.dumps(existing_data, indent=2), encoding="utf-8")
+
+        access_token = jwt_with_openai_account("acct_openai")
+        respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "slug": "gpt-5.4",
+                            "display_name": "GPT-5.4",
+                            "input_modalities": ["text", "image"],
+                            "context_window": 256000,
+                            "supports_parallel_tool_calls": True,
+                        }
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(
+            openai_subscription_config,
+            access_token,
+            resources_dir,
+            credential_connection=openai_subscription_config.connections[0],
+        )
+
+        registry = ModelRegistry.load(resources_dir)
+        merged_data = json.loads(catalog_path.read_text(encoding="utf-8"))
+        assert result["provider_id"] == "openai"
+        assert result["model_count"] == 2
+
+        # The api-key entry is preserved untouched.
+        assert "gpt-5.2" in merged_data["models"]
+        assert merged_data["models"]["gpt-5.2"]["connections"] == ["api-key"]
+        api_key_model = registry.get("openai", "gpt-5.2")
+        assert api_key_model.connections == ("api-key",)
+
+        # The stale subscription entry is replaced by the fresh fetch.
+        assert "stale-subscription-model" not in merged_data["models"]
+        assert "gpt-5.4" in merged_data["models"]
+        assert merged_data["models"]["gpt-5.4"]["connections"] == ["subscription"]
+        fresh_model = registry.get("openai", "gpt-5.4")
+        assert fresh_model.connections == ("subscription",)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_uses_connection_endpoint_and_base_url(
+        self,
+        tmp_path: Path,
+        openai_subscription_config: ProviderConfig,
+    ):
+        """The connection's ``base_url`` + ``models_endpoint`` drive the fetch URL.
+
+        The provider-level defaults would point at the platform endpoint
+        (a totally different host); refresh must combine the connection
+        values into the request URL and target Codex's ``/codex/models``.
+        """
+
+        resources_dir = tmp_path / "resources"
+        access_token = jwt_with_openai_account("acct_openai")
+        expected_url = f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.136.0"
+        route = respx.get(expected_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "slug": "gpt-5-codex",
+                            "display_name": "GPT-5 Codex",
+                            "input_modalities": ["text", "image"],
+                            "context_window": 272000,
+                            "supports_parallel_tool_calls": True,
+                        }
+                    ]
+                },
+            )
+        )
+
+        await refresh_models(
+            openai_subscription_config,
+            access_token,
+            resources_dir,
+            credential_connection=openai_subscription_config.connections[0],
+        )
+
+        request = route.calls.last.request
+        assert str(request.url).split("?")[0] == OPENAI_SUBSCRIPTION_MODELS_URL
+        assert request.url.params["client_version"] == "0.136.0"
+        assert request.headers["Authorization"] == f"Bearer {access_token}"
+        assert request.headers["chatgpt-account-id"] == "acct_openai"
+        assert request.headers["OpenAI-Beta"] == "responses=experimental"
+        assert request.headers["originator"] == "vbot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_without_endpoint_raises_value_error(
+        self,
+        tmp_path: Path,
+    ):
+        """A connection with no effective ``models_endpoint`` is rejected loudly."""
+
+        config = ProviderConfig(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            connections=[
+                ConnectionConfig(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    auth=AuthConfig(
+                        header="Authorization",
+                        prefix="Bearer ",
+                        credential_key="OPENAI_API_KEY",
+                    ),
+                )
+            ],
+            defaults={"max_tokens": 8192},
+        )
+
+        with pytest.raises(ValueError, match="does not define a models_endpoint"):
+            await refresh_models(
+                config,
+                "sk-test",
+                tmp_path / "resources",
+                credential_connection=config.connections[0],
+            )
 
     @respx.mock
     @pytest.mark.asyncio

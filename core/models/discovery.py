@@ -72,10 +72,21 @@ async def refresh_models(
     model_filter: ModelFilter | None = None,
     credential_connection: ConnectionConfig | None = None,
 ) -> dict[str, Any]:
-    """Fetch, normalize, override-merge, write, and invalidate one provider catalog."""
+    """Fetch, normalize, override-merge, write, and invalidate one provider catalog.
 
-    if not provider_config.models_endpoint:
-        raise ValueError(f"Provider '{provider_config.id}' does not define a models_endpoint")
+    Discovery targets the selected connection: the connection's
+    ``models_endpoint``/``base_url`` override the provider-level values, and
+    written models are tagged with the connection's local id so future
+    refreshes of other connections can replace only their own entries.
+    """
+
+    base_url, models_endpoint = _resolve_discovery_target(provider_config, credential_connection)
+    if not models_endpoint:
+        raise ValueError(
+            f"Provider '{provider_config.id}' connection "
+            f"'{credential_connection.id if credential_connection else None}' "
+            "does not define a models_endpoint"
+        )
 
     raw_filter = raw_filter or PassthroughRawFilter()
     model_filter = model_filter or PassthroughModelFilter()
@@ -84,7 +95,7 @@ async def refresh_models(
     try:
         adapter_class = _adapter_class_for_discovery(provider_config.adapter)
         url = _append_query_params(
-            _join_url(provider_config.base_url, provider_config.models_endpoint),
+            _join_url(base_url, models_endpoint),
             _get_discovery_params(adapter_class),
         )
 
@@ -163,11 +174,15 @@ async def refresh_models(
         merged_models = apply_overrides(normalized_models, overrides_path)
 
         output_path = models_dir / f"{provider_config.id}.json"
+        existing_models = _read_existing_provider_models(output_path)
+        connection_id = credential_connection.id if credential_connection is not None else None
+        tagged_fresh = _tag_fresh_models(merged_models, connection_id)
+        final_models = _merge_models_by_connection(existing_models, tagged_fresh, connection_id)
         output_data = {
             "provider_id": provider_config.id,
             "source": "discovery",
             "fetched_at": fetched_at,
-            "models": merged_models,
+            "models": final_models,
         }
         output_path.write_text(
             json.dumps(output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -181,7 +196,7 @@ async def refresh_models(
 
     return {
         "provider_id": provider_config.id,
-        "model_count": len(merged_models),
+        "model_count": len(final_models),
         "fetched_at": fetched_at,
     }
 
@@ -271,6 +286,107 @@ def _join_url(base_url: str, endpoint: str) -> str:
     return f"{base_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
 
+def _resolve_discovery_target(
+    provider_config: ProviderConfig,
+    credential_connection: ConnectionConfig | None,
+) -> tuple[str, str | None]:
+    """Return the ``(base_url, models_endpoint)`` pair for the selected connection.
+
+    Connection-level ``base_url`` and ``models_endpoint`` override the
+    provider-level values so per-connection wire variants (e.g. Codex's
+    ``chatgpt.com/backend-api``) feed discovery. Falls back to provider-level
+    settings when the connection does not declare its own.
+    """
+
+    base_url = provider_config.base_url
+    models_endpoint = provider_config.models_endpoint
+    if credential_connection is not None:
+        if credential_connection.base_url:
+            base_url = credential_connection.base_url
+        if credential_connection.models_endpoint:
+            models_endpoint = credential_connection.models_endpoint
+    return base_url, models_endpoint
+
+
+def _read_existing_provider_models(output_path: Path) -> dict[str, dict[str, Any]]:
+    """Return the existing ``<provider>.json`` ``models`` mapping, or empty.
+
+    A missing file, an unreadable payload, or an entry that is not a mapping
+    is treated as "no existing models" so a single bad write never blocks a
+    future merge.
+    """
+
+    if not output_path.exists():
+        return {}
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOGGER.warning(
+            "Could not read existing provider catalog %s for merge: %s",
+            output_path,
+            exc,
+        )
+        return {}
+    models = payload.get("models") if isinstance(payload, Mapping) else None
+    if not isinstance(models, dict):
+        return {}
+    return {
+        model_id: dict(model_data)
+        for model_id, model_data in models.items()
+        if isinstance(model_data, Mapping)
+    }
+
+
+def _merge_models_by_connection(
+    existing_models: Mapping[str, dict[str, Any]],
+    fresh_models: Mapping[str, dict[str, Any]],
+    connection_id: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Combine fresh discovery output with existing catalog models.
+
+    Models are partitioned by the ``connections`` allowlist. Models tagged
+    with ``connection_id`` are replaced by the fresh fetch; models tagged
+    with any other connection are kept untouched. Passing
+    ``connection_id=None`` (no selected connection) falls back to a full
+    overwrite for backward compatibility with non-connection-aware callers.
+    """
+
+    merged: dict[str, dict[str, Any]] = {}
+    if connection_id is None:
+        merged.update(fresh_models)
+        return merged
+
+    for model_id, model_data in existing_models.items():
+        model_connections = model_data.get("connections")
+        if not isinstance(model_connections, list) or connection_id not in model_connections:
+            merged[model_id] = model_data
+    merged.update(fresh_models)
+    return merged
+
+
+def _tag_fresh_models(
+    fresh_models: Mapping[str, dict[str, Any]],
+    connection_id: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Stamp every fresh model dict with ``connections: [connection_id]``.
+
+    Each refreshed entry is scoped to the connection that produced it so a
+    later refresh of a *different* connection can replace only its own
+    entries. When no connection is selected (``connection_id=None``) the
+    fresh models are returned untouched, which keeps the merge step a
+    full overwrite in that case.
+    """
+
+    if connection_id is None:
+        return dict(fresh_models)
+    tagged: dict[str, dict[str, Any]] = {}
+    for model_id, model_data in fresh_models.items():
+        data = dict(model_data)
+        data["connections"] = [connection_id]
+        tagged[model_id] = data
+    return tagged
+
+
 def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(model, Model):
         data = {
@@ -289,11 +405,19 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
             "context_window": model.context_window,
             "max_output_tokens": model.max_output_tokens,
         }
+        if model.connections:
+            data["connections"] = list(model.connections)
         metadata = _plain_data(model.metadata)
         if metadata:
             data["metadata"] = metadata
         return data
-    return dict(model)
+    data = dict(model)
+    connections = data.get("connections")
+    if connections is not None and not isinstance(connections, list):
+        raise ValueError("connections must be a list when set")
+    if isinstance(connections, list) and not connections:
+        data.pop("connections", None)
+    return data
 
 
 def _plain_data(value: Any) -> Any:
