@@ -3579,6 +3579,88 @@ describe('ChatTimeline', () => {
     expect(subagentLine?.querySelector('.te-dot.running')).toBeNull();
   });
 
+  function mountCompletedNonBlockingSubAgent(props = {}) {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-subagent-result-fetch',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-subagent-result-fetch',
+      sequence: 1,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'beta',
+            blocking: false,
+            content: 'Inspect in the background',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-subagent-result-fetch',
+      sequence: 2,
+      payload: {
+        tool_call: { id: 'call-subagent', index: 0, name: 'subagent' },
+        result: {
+          ok: true,
+          data: {
+            agent_id: 'beta',
+            session_id: 'sub-session-running',
+            run_id: 'sub-run-completed',
+            status: 'running',
+          },
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+        subAgentStatuses: { 'run:sub-run-completed': 'completed' },
+        ...props,
+      },
+    });
+    flushSync();
+  }
+
+  it('requests the final result when a non-blocking sub-agent run completes', () => {
+    const onRequestSubAgentResult = vi.fn();
+
+    mountCompletedNonBlockingSubAgent({ onRequestSubAgentResult });
+
+    expect(onRequestSubAgentResult).toHaveBeenCalledWith(
+      'beta',
+      'sub-session-running',
+    );
+  });
+
+  it('renders a fetched non-blocking sub-agent result in the tool body', () => {
+    mountCompletedNonBlockingSubAgent({
+      subAgentResults: {
+        'beta::sub-session-running': {
+          loading: false,
+          result: 'Investigation complete.',
+        },
+      },
+    });
+
+    const body = document.querySelector(
+      '.subagent-tool-event .tool-event-body',
+    );
+
+    expect(body?.textContent).toContain('Investigation complete.');
+  });
+
   it('calls the sub-agent navigation callback with a spawned session target', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = ensureSessionState(

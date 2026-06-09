@@ -144,6 +144,7 @@ export const englishCatalog = Object.freeze({
   'chat.tokenBadgeNoUsage': '— / {context} tok',
   'chat.subagent.label': 'Sub-agent',
   'chat.subagent.starting': 'starting',
+  'chat.subagent.loadingResult': 'loading result…',
   'chat.subagent.viewSession': 'view session',
   'chat.subagentSessionNotice': 'Viewing a sub-agent session',
   'chat.subagentSessionHint':

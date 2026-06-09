@@ -336,18 +336,25 @@ describe('App', () => {
 
     await waitForAssertion(() => {
       expect(document.body.textContent).toContain('Inspect again');
-      expect(document.body.textContent).not.toContain('Sub-agent response');
+      // Back in the parent session: the sub-agent session notice is gone. The
+      // child's response now also surfaces in the parent tool block, so its
+      // presence no longer signals which session is displayed.
+      expect(returnToCurrentSessionButton()).toBeFalsy();
     });
 
     viewSessionButton()?.click();
     flushSync();
 
     await waitForAssertion(() => {
+      // Two navigation loads (limit 100). The one-off result fetch (limit 20)
+      // that surfaces the response in the parent tool block is deduped and
+      // excluded here.
       expect(
         rpcMock.mock.calls.filter(
           ([method, params]) =>
             method === 'chat.history' &&
-            params?.session_id === 'sub-session-repeat',
+            params?.session_id === 'sub-session-repeat' &&
+            params?.limit === 100,
         ),
       ).toHaveLength(2);
       expect(document.body.textContent).toContain('Sub-agent response');

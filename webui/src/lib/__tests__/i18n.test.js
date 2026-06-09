@@ -91,6 +91,7 @@ describe('i18n t()', () => {
       'chat.toolArgumentsHidden',
       'chat.subagent.label',
       'chat.subagent.starting',
+      'chat.subagent.loadingResult',
       'chat.subagent.viewSession',
       'chat.subagentSessionNotice',
       'chat.subagentSessionHint',

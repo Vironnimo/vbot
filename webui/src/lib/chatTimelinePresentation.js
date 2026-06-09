@@ -346,6 +346,84 @@ export const subAgentNavigationTarget = (tool) => {
   return { agentId, sessionId };
 };
 
+export const subAgentResultKey = (tool) => {
+  const target = subAgentNavigationTarget(tool);
+  return target ? `${target.agentId}::${target.sessionId}` : '';
+};
+
+// A non-blocking spawn returns a "running" descriptor as its tool result, so the
+// final output never lands in tool.result. Blocking spawns already carry it as
+// data.result. When the child run has finished and no inline result exists, the
+// child session's last assistant message must be fetched to show the response.
+export const subAgentShouldFetchResult = (tool, dotStatus) => {
+  if (toolNameForRunTool(tool) !== 'subagent') {
+    return false;
+  }
+  if (dotStatus !== 'success') {
+    return false;
+  }
+  if (trimmedString(subAgentResultData(tool).result)) {
+    return false;
+  }
+  return Boolean(subAgentNavigationTarget(tool));
+};
+
+// Returns the value to render in the tool's Result row. With a fetched result it
+// rebuilds the same tool_success envelope a blocking spawn produces, so the
+// fetched output renders identically; otherwise the original tool.result stands.
+export const subAgentDisplayResult = (tool, fetchedResult = null) => {
+  const resultText = trimmedString(fetchedResult?.result);
+  if (!resultText) {
+    return tool.result;
+  }
+  const target = subAgentNavigationTarget(tool) ?? {};
+  const data = subAgentResultData(tool);
+  const payload = {
+    agent_id: target.agentId ?? trimmedString(data.agent_id),
+    session_id: target.sessionId ?? subAgentSessionId(tool),
+    run_id: trimmedString(data.run_id) || null,
+    status: 'completed',
+    result: resultText,
+  };
+  if (fetchedResult?.usage) {
+    payload.usage = fetchedResult.usage;
+  }
+  return { ok: true, error: null, data: payload, artifacts: [] };
+};
+
+// Extracts a sub-agent session's final response: the last assistant message with
+// text content. Handles both string content and text content-block arrays.
+export const subAgentResultTextFromMessages = (messages) => {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isPlainObject(message) || message.role !== 'assistant') {
+      continue;
+    }
+    const text = assistantMessageText(message.content);
+    if (text) {
+      return text;
+    }
+  }
+  return '';
+};
+
+function assistantMessageText(content) {
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+  if (Array.isArray(content)) {
+    return content
+      .filter((block) => isTextContentBlock(block))
+      .map((block) => block.text.trim())
+      .join('\n\n')
+      .trim();
+  }
+  return '';
+}
+
 export const toolResultValueForEvent = (event) =>
   event.payload?.result ??
   event.payload?.error ??
