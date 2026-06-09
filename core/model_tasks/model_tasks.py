@@ -283,6 +283,8 @@ class TaskModelService:
                 ModelQuery(provider_id=provider_id, tasks=(task_type,))
             ):
                 for connection in usable_connections:
+                    if model.connections and connection.id not in model.connections:
+                        continue
                     connection_label = getattr(connection, "label", connection.id)
                     label = f"{provider.name} / {model.name}"
                     if multiple_connections:

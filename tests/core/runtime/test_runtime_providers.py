@@ -16,8 +16,8 @@ from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.github_copilot_policy import RESPONSES_ENDPOINT
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.runtime.runtime import Runtime
@@ -51,7 +51,6 @@ def test_runtime_providers_populated(runtime: Runtime) -> None:
     # Assert
     ids = runtime.providers.list_ids()
     assert "openai" in ids
-    assert "openai-subscription" in ids
     assert "anthropic" in ids
     assert "openrouter" in ids
     assert "minimax" in ids
@@ -61,7 +60,6 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     """Provider configs have the expected field values."""
     # Act
     openai_config = runtime.providers.get("openai")
-    openai_subscription_config = runtime.providers.get("openai-subscription")
     openrouter_config = runtime.providers.get("openrouter")
     github_copilot_config = runtime.providers.get("github-copilot")
     minimax_config = runtime.providers.get("minimax")
@@ -69,19 +67,18 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     # Assert
     assert openai_config.id == "openai"
     assert openai_config.name == "OpenAI"
-    assert openai_config.adapter == "openai_compatible"
+    assert openai_config.adapter == "openai"
     assert openai_config.base_url == "https://api.openai.com/v1"
     assert [connection.id for connection in openai_config.connections] == [
-        "oauth",
         "api-key",
+        "subscription",
     ]
     assert openai_config.get_connection("api-key").auth.credential_key == "OPENAI_API_KEY"
-    assert openai_subscription_config.adapter == "openai_subscription"
-    assert openai_subscription_config.base_url == "https://chatgpt.com/backend-api"
-    assert openai_subscription_config.models_endpoint == "/codex/models"
-    openai_subscription_oauth = openai_subscription_config.get_connection("oauth").oauth
-    assert openai_subscription_oauth is not None
-    assert openai_subscription_oauth.device_flow == "openai_codex"
+    codex_connection = openai_config.get_connection("subscription")
+    assert codex_connection.mode == "codex_responses"
+    codex_oauth = codex_connection.oauth
+    assert codex_oauth is not None
+    assert codex_oauth.device_flow == "openai_codex"
     assert openrouter_config.adapter == "openrouter"
     assert github_copilot_config.adapter == "github_copilot"
     assert minimax_config.adapter == "minimax"
@@ -169,14 +166,14 @@ def test_provider_credential_resolver_provider_level_delegates_to_first_usable(
     resolver = ProviderCredentialResolver(
         runtime.providers,
         process_env={
-            "OPENAI_OAUTH_TOKEN": "oauth-token",
             "OPENAI_API_KEY": "api-key",
+            "GITHUB_COPILOT_TOKEN": "copilot-token",
         },
     )
 
     # Act / Assert
     assert resolver.has_credentials("openai") is True
-    assert resolver.get_credentials("openai") == "oauth-token"
+    assert resolver.get_credentials("openai") == "api-key"
 
 
 def test_provider_credential_resolver_provider_level_skips_unusable_connection(
@@ -337,42 +334,80 @@ def test_runtime_wires_openai_compatible_adapter_with_model_lookup(runtime: Runt
     assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
-def test_runtime_wires_openai_subscription_adapter_with_model_lookup(runtime: Runtime) -> None:
-    """OpenAI Subscription provider configs resolve to the Responses adapter."""
+def test_runtime_openai_codex_connection_uses_codex_responses_mode(
+    runtime: Runtime,
+) -> None:
+    """``openai:subscription`` resolves to OpenAIAdapter with codex_responses mode."""
     # Arrange
     provider_config = ProviderConfig(
-        id="openai-subscription",
-        name="OpenAI Subscription",
-        adapter="openai_subscription",
+        id="openai",
+        name="OpenAI",
+        adapter="openai",
         base_url="https://chatgpt.com/backend-api",
         connections=[
             ConnectionConfig(
-                id="api-key",
+                id="subscription",
                 type="api_key",
-                label="Test Token",
+                label="ChatGPT Plus/Pro (test token)",
                 auth=AuthConfig(
                     header="Authorization",
                     prefix="Bearer ",
-                    credential_key="OPENAI_SUBSCRIPTION_TEST_TOKEN",
+                    credential_key="OPENAI_CODEX_TEST_TOKEN",
                 ),
+                mode=CODEX_RESPONSES_MODE,
             )
         ],
     )
-    runtime._providers = ProviderRegistry({"openai-subscription": provider_config})  # type: ignore[attr-defined]
+    runtime._providers = ProviderRegistry({"openai": provider_config})  # type: ignore[attr-defined]
     runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
         runtime.providers,
-        process_env={"OPENAI_SUBSCRIPTION_TEST_TOKEN": "header.payload.signature"},
+        process_env={"OPENAI_CODEX_TEST_TOKEN": "header.payload.signature"},
     )
     runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
 
     # Act
-    adapter = runtime.get_adapter(
-        "openai-subscription",
-        "openai-subscription:api-key",
-    )
+    adapter = runtime.get_adapter("openai", "openai:subscription")
 
     # Assert
-    assert isinstance(adapter, OpenAISubscriptionAdapter)
+    assert isinstance(adapter, OpenAIAdapter)
+    assert adapter._connection_mode == CODEX_RESPONSES_MODE  # type: ignore[attr-defined]
+    assert adapter._model_lookup is not None  # type: ignore[attr-defined]
+
+
+def test_runtime_openai_api_key_connection_uses_default_mode(runtime: Runtime) -> None:
+    """``openai:api-key`` resolves to OpenAIAdapter with no connection mode set."""
+    # Arrange
+    provider_config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai",
+        base_url="https://api.openai.com/v1",
+        connections=[
+            ConnectionConfig(
+                id="api-key",
+                type="api_key",
+                label="API Key",
+                auth=AuthConfig(
+                    header="Authorization",
+                    prefix="Bearer ",
+                    credential_key="OPENAI_API_KEY",
+                ),
+            )
+        ],
+    )
+    runtime._providers = ProviderRegistry({"openai": provider_config})  # type: ignore[attr-defined]
+    runtime._provider_credentials = ProviderCredentialResolver(  # type: ignore[attr-defined]
+        runtime.providers,
+        process_env={"OPENAI_API_KEY": "sk-test"},
+    )
+    runtime._models = ModelRegistry({})  # type: ignore[attr-defined]
+
+    # Act
+    adapter = runtime.get_adapter("openai", "openai:api-key")
+
+    # Assert
+    assert isinstance(adapter, OpenAIAdapter)
+    assert adapter._connection_mode is None  # type: ignore[attr-defined]
     assert adapter._model_lookup is not None  # type: ignore[attr-defined]
 
 
