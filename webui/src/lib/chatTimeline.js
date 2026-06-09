@@ -75,7 +75,11 @@ function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
   } = options;
 
   const historyItems = historyTimelineItems(sessionState.messages);
-  const liveItems = liveTimelineItems(runEvents);
+  const liveItems = dropPersistedInactiveLiveRuns(
+    liveTimelineItems(runEvents),
+    sessionState.messages,
+    sessionState.currentRun?.runId ?? null,
+  );
   const reconciledItems = shouldSelectTrackedRunSource(sessionState, runEvents)
     ? selectTrackedRunTimelineSource(
         sessionState,
@@ -408,6 +412,50 @@ function liveRunOutputPersistedInHistory(liveAssistantRun, messages) {
     }
   }
   return true;
+}
+
+// On refresh the app WebSocket replays its retained lifecycle buffer from
+// sequence 0, so run_started/run_output events for runs that already completed
+// before the page loaded get re-injected into this session's runEvents — most
+// visibly the parent run that spawned a non-blocking sub-agent, replayed
+// alongside the still-active follow-up run it triggered. liveTimelineItems then
+// builds a live block (plus user_message_persisted item) for every run_id, but
+// selectTrackedRunTimelineSource only reconciles the single active run against
+// history; every other replayed run leaks in as a duplicate of its
+// already-persisted turn. Drop the live items of any non-active run whose output
+// is fully persisted in history. The active run is left untouched because it may
+// still be streaming output that is not persisted yet; its own splice/anchor
+// handling deduplicates it.
+function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
+  const persistedRunIds = new Set();
+  for (const item of liveItems) {
+    if (item.type !== 'assistant_run') {
+      continue;
+    }
+    const runId = item.runId ?? item.run_id;
+    if (!runId || runId === activeRunId) {
+      continue;
+    }
+    if (liveRunOutputPersistedInHistory(item, messages)) {
+      persistedRunIds.add(runId);
+    }
+  }
+  if (persistedRunIds.size === 0) {
+    return liveItems;
+  }
+  return liveItems.filter(
+    (item) => !liveItemBelongsToRuns(item, persistedRunIds),
+  );
+}
+
+function liveItemBelongsToRuns(item, runIds) {
+  if (item?.type === 'assistant_run') {
+    return runIds.has(item.runId ?? item.run_id);
+  }
+  if (item?.type === 'event') {
+    return runIds.has(item.event?.run_id);
+  }
+  return false;
 }
 
 function splitHistoryAroundActiveUser(messages, activeUserIndex) {
