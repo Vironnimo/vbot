@@ -122,6 +122,13 @@ class _LaggedRunSubscriberSentinel:
 _LAGGED_RUN_SUBSCRIBER = _LaggedRunSubscriberSentinel()
 
 
+class _CancelledToolCallSentinel:
+    """Internal marker that a per-tool-call cancel was already invoked."""
+
+
+_CANCELLED_TOOL_CALL = _CancelledToolCallSentinel()
+
+
 @dataclass
 class _RunSubscriber:
     queue: asyncio.Queue[RunEvent | _LaggedRunSubscriberSentinel]
@@ -153,6 +160,7 @@ class Run:
         self.result: Any | None = None
         self.error: BaseException | None = None
         self.cancel_requested = False
+        self.cancel_reason: str | None = None
         self._events: deque[RunEvent] = deque(maxlen=event_retention_limit)
         self._next_sequence = 1
         self._subscribers: list[_RunSubscriber] = []
@@ -160,6 +168,7 @@ class Run:
         self._done = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._cancel_callbacks: list[CancelCallback] = []
+        self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
 
     @property
     def events(self) -> list[RunEvent]:
@@ -177,15 +186,37 @@ class Run:
             return
         self._cancel_callbacks.append(callback)
 
-    def request_cancel(self) -> None:
+    def request_cancel(self, reason: str | None = None) -> None:
         """Request best-effort cancellation of this run."""
         if self.status != RunStatus.RUNNING or self.cancel_requested:
             return
+        self.cancel_reason = reason
         self.cancel_requested = True
         for callback in list(self._cancel_callbacks):
             _schedule_callback(callback)
         if self._task is not None:
             self._task.cancel()
+
+    def register_tool_cancel(self, tool_call_id: str, callback: CancelCallback) -> None:
+        """Register a per-tool-call cancel callback without cancelling the run."""
+        self._tool_cancel_callbacks[tool_call_id] = callback
+
+    def cancel_tool_call(self, tool_call_id: str) -> bool:
+        """Cancel a specific tool call without cancelling the run itself."""
+        entry = self._tool_cancel_callbacks.get(tool_call_id)
+        if entry is None or entry is _CANCELLED_TOOL_CALL:
+            return False
+        self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
+        _schedule_callback(cast(CancelCallback, entry))
+        return True
+
+    def tool_call_cancelled(self, tool_call_id: str) -> bool:
+        """Return whether a tool call was user-cancelled."""
+        return self._tool_cancel_callbacks.get(tool_call_id) is _CANCELLED_TOOL_CALL
+
+    def clear_tool_cancel(self, tool_call_id: str) -> None:
+        """Remove the per-tool-call cancel registry entry."""
+        self._tool_cancel_callbacks.pop(tool_call_id, None)
 
     def raise_if_cancelled(self) -> None:
         """Stop executor progress once cancellation has been requested."""
@@ -313,6 +344,8 @@ class Run:
             return
         self.status = RunStatus.CANCELLED
         payload: JsonObject = {"status": self.status.value}
+        if self.cancel_reason is not None:
+            payload["reason"] = self.cancel_reason
         if payload_extras:
             payload.update(payload_extras)
         self.emit(RUN_CANCELLED_EVENT, payload)

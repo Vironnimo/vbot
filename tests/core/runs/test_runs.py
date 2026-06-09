@@ -850,3 +850,190 @@ async def test_run_completed_omits_usage_when_usage_is_none() -> None:
     assert_timing_payload(completed_events[0].payload)
     assert completed_events[0].payload["status"] == "completed"
     assert "usage" not in completed_events[0].payload
+
+
+async def test_request_cancel_stores_reason_and_surfaces_in_terminal_payload() -> None:
+    """A cancel reason survives into the run_cancelled event payload."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await asyncio.sleep(0)
+    run.request_cancel(reason="user")
+    release.set()
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    assert run.cancel_reason == "user"
+    cancelled_events = [event for event in run.events if event.type == "run_cancelled"]
+    assert len(cancelled_events) == 1
+    assert cancelled_events[0].payload["reason"] == "user"
+    assert_timing_payload(cancelled_events[0].payload)
+
+
+async def test_request_cancel_omits_reason_from_payload_when_not_provided() -> None:
+    """Default cancel (no reason) produces a run_cancelled payload without a 'reason' key."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(run: Run) -> str:
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await asyncio.sleep(0)
+    run.request_cancel()
+    release.set()
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    assert run.cancel_reason is None
+    cancelled_events = [event for event in run.events if event.type == "run_cancelled"]
+    assert len(cancelled_events) == 1
+    assert "reason" not in cancelled_events[0].payload
+    assert_timing_payload(cancelled_events[0].payload)
+
+
+async def test_cancel_tool_call_fires_callback_and_flips_state_without_cancelling_run() -> None:
+    """cancel_tool_call must fire the callback, mark cancelled, and leave the run alive."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+
+    def abort() -> None:
+        invocations.append("aborted")
+
+    run.register_tool_cancel("tool-1", abort)
+
+    cancelled = run.cancel_tool_call("tool-1")
+
+    assert cancelled is True
+    assert invocations == ["aborted"]
+    assert run.tool_call_cancelled("tool-1") is True
+    assert run.cancel_requested is False
+    assert run.status == RunStatus.RUNNING
+
+
+async def test_cancel_tool_call_with_unknown_id_returns_false() -> None:
+    """cancel_tool_call must be a no-op for an id that was never registered."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+
+    def abort() -> None:
+        invocations.append("aborted")
+
+    run.register_tool_cancel("tool-1", abort)
+
+    cancelled = run.cancel_tool_call("tool-missing")
+
+    assert cancelled is False
+    assert invocations == []
+    assert run.tool_call_cancelled("tool-missing") is False
+    assert run.tool_call_cancelled("tool-1") is False
+    assert run.cancel_requested is False
+
+
+async def test_cancel_tool_call_after_clear_returns_false() -> None:
+    """clear_tool_cancel drops the entry; subsequent cancel_tool_call returns False."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+
+    def abort() -> None:
+        invocations.append("aborted")
+
+    run.register_tool_cancel("tool-1", abort)
+    run.clear_tool_cancel("tool-1")
+
+    cancelled = run.cancel_tool_call("tool-1")
+
+    assert cancelled is False
+    assert invocations == []
+    assert run.tool_call_cancelled("tool-1") is False
+    assert run.cancel_requested is False
+
+
+async def test_clear_tool_cancel_resets_cancelled_state() -> None:
+    """clear_tool_cancel removes a cancelled entry so tool_call_cancelled returns False."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    def abort() -> None:
+        return None
+
+    run.register_tool_cancel("tool-1", abort)
+    assert run.cancel_tool_call("tool-1") is True
+    assert run.tool_call_cancelled("tool-1") is True
+
+    run.clear_tool_cancel("tool-1")
+
+    assert run.tool_call_cancelled("tool-1") is False
+    assert run.cancel_tool_call("tool-1") is False
+
+
+async def test_tool_call_cancel_does_not_invoke_run_cancel_callbacks_or_cancel_task() -> None:
+    """Per-tool-call cancel must not touch run-level cancel callbacks or the executor task."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+    run_callback_invocations: list[str] = []
+    tool_invocations: list[str] = []
+
+    async def execute(run: Run) -> str:
+        run.add_cancel_callback(lambda: run_callback_invocations.append("run-cancel"))
+        await release.wait()
+        run.raise_if_cancelled()
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    await asyncio.sleep(0)
+    run.register_tool_cancel("tool-1", lambda: tool_invocations.append("tool-abort"))
+
+    cancelled = run.cancel_tool_call("tool-1")
+    assert cancelled is True
+    assert tool_invocations == ["tool-abort"]
+    assert run_callback_invocations == []
+    assert run.cancel_requested is False
+    assert run._task is not None and not run._task.done()  # noqa: SLF001 - task must stay alive.
+
+    release.set()
+    assert await run.wait() == "done"
+    assert run.status == RunStatus.COMPLETED
+
+
+async def test_tool_call_cancel_supports_async_callback() -> None:
+    """Per-tool-call cancel can dispatch async callbacks via the existing scheduler."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+
+    async def abort() -> None:
+        invocations.append("async-abort")
+
+    run.register_tool_cancel("tool-1", abort)
+
+    assert run.cancel_tool_call("tool-1") is True
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert invocations == ["async-abort"]
+
+
+async def test_tool_call_cancel_isolates_state_between_tool_call_ids() -> None:
+    """Cancelling one tool call must not flip tool_call_cancelled for a different id."""
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+
+    def abort() -> None:
+        return None
+
+    run.register_tool_cancel("tool-1", abort)
+    run.register_tool_cancel("tool-2", abort)
+
+    assert run.cancel_tool_call("tool-1") is True
+
+    assert run.tool_call_cancelled("tool-1") is True
+    assert run.tool_call_cancelled("tool-2") is False
+    assert run.cancel_tool_call("tool-2") is True
+    assert run.tool_call_cancelled("tool-2") is True
