@@ -40,6 +40,27 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 MAX_CHAT_HISTORY_LIMIT = 500
 
+# Instruction sent to the current agent to write the handoff. Plain text, not
+# i18n: it is delivered as an internal note to the model and never shown to the
+# user. The wording is deliberate — do not paraphrase.
+HANDOFF_INSTRUCTION = (
+    "You are handing off this conversation to another agent who will continue it in a "
+    "fresh session with none of its context. Write a handoff so they can carry on "
+    "seamlessly, as if they had been here the whole time.\n"
+    "\n"
+    "Capture whatever actually matters in this conversation so far — what it has been "
+    "about, what has been said, established, or decided, and where things currently "
+    "stand. What that includes depends entirely on the conversation: it might be a "
+    "task in progress, a discussion, a decision being worked through, or anything "
+    "else. Include only what is genuinely relevant here and leave out the rest; do not "
+    "force it into a fixed structure or invent things that are not there.\n"
+    "\n"
+    "Write it entirely from this conversation — do not use tools or go check anything. "
+    "Write it as a briefing to the next agent, in the language of this conversation, "
+    "and output only the handoff itself, with no preamble and no sign-off, because "
+    "your reply becomes their first message."
+)
+
 
 def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {"agent_id", "session_id", "limit", "before"}
@@ -169,6 +190,10 @@ async def _handle_command_action(
     match command_action.name:
         case "compact":
             return await _handle_compact_command(state, agent_id, session_id)
+        case "handoff":
+            return await _handle_handoff_command(
+                state, agent_id, session_id, command_action.argument
+            )
         case "new_session":
             return _handle_new_session_command(state, agent_id, session_id)
         case "retry_last_turn":
@@ -198,6 +223,81 @@ def _handle_new_session_command(state: Any, agent_id: str, session_id: str) -> J
             data={"command": "new", "session_id": new_session_id},
         )
     )
+
+
+async def _handle_handoff_command(
+    state: Any,
+    agent_id: str,
+    session_id: str,
+    target_agent_id: str | None,
+) -> JsonObject:
+    try:
+        active_run = _state_chat_runs(state).active_run(agent_id=agent_id, session_id=session_id)
+        if active_run is not None:
+            return _command_handled_response(
+                "A handoff can be started after the current run finishes.",
+            )
+
+        target = (target_agent_id or "").strip() or agent_id
+        if target != agent_id:
+            try:
+                state.runtime.agents.get(target)
+            except KeyError:
+                return _command_handled_response(
+                    f"Cannot handoff to unknown agent: {target}",
+                )
+
+        handoff_run = await state.runtime.trigger_service.trigger_run(
+            agent_id,
+            HANDOFF_INSTRUCTION,
+            session_id=session_id,
+            internal=True,
+        )
+        handoff_message = await handoff_run.wait()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    handoff_text = _extract_handoff_text(handoff_message.content)
+    if not handoff_text:
+        return _command_handled_response("Handoff could not be generated.")
+
+    try:
+        response = _create_session(
+            state,
+            {"agent_id": target, "make_current": True},
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    new_session_id = _required_string(response, "session_id")
+
+    try:
+        run = await state.runtime.trigger_service.trigger_run(
+            target,
+            handoff_text,
+            session_id=new_session_id,
+        )
+        _bridge_run_to_event_bus(state, run)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return _command_handled_response(
+        CommandHandled(
+            reply=f"Handoff sent to {target}, session {new_session_id}.",
+            data={
+                "command": "handoff",
+                "session_id": new_session_id,
+                "agent_id": target,
+            },
+        )
+    )
+
+
+def _extract_handoff_text(content: str | list[ContentBlock] | None) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return "\n".join(block.text for block in content if isinstance(block, TextBlock)).strip()
+    return ""
 
 
 async def _send_chat(state: Any, params: JsonObject) -> JsonObject:

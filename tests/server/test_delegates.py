@@ -305,6 +305,13 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "type": "command",
                 },
                 {
+                    "name": "handoff",
+                    "description": (
+                        "Write a handoff and start a new session (optionally for another agent)."
+                    ),
+                    "type": "command",
+                },
+                {
                     "name": "help",
                     "description": "Show available built-in slash commands.",
                     "type": "command",
