@@ -246,6 +246,7 @@ async def _watch_background_process(
 
     if user_cancelled:
         message = f"{BACKGROUND_USER_CANCELLED_MESSAGE}\nCommand: {command}\nOutput:\n{output}"
+        _user_cancelled_session_ids.discard(process_session_id)
     else:
         message = (
             "Background process completed.\n"
