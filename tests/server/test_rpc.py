@@ -3744,7 +3744,7 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
     command_names = [
         item["name"] for item in response["result"]["items"] if item.get("type") == "command"
     ]
-    assert command_names == ["compact", "help", "new", "retry", "status", "stop"]
+    assert command_names == ["compact", "handoff", "help", "new", "retry", "status", "stop"]
     assert all(not name.startswith("/") for name in command_names)
 
 
@@ -5207,3 +5207,190 @@ async def test_prompt_preview_rejects_missing_agent_id(tmp_path: Path) -> None:
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_handoff_command_for_same_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    bridged_runs: list[Any] = []
+    monkeypatch.setattr(
+        delegates,
+        "_bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "/handoff",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["command_handled"] is True
+    assert result["reply"] == f"Handoff sent to coder, session {result['data']['session_id']}."
+    assert result["data"]["command"] == "handoff"
+    assert result["data"]["agent_id"] == "coder"
+    new_session_id = result["data"]["session_id"]
+    assert isinstance(new_session_id, str)
+    assert new_session_id != "session-one"
+    assert state.runtime.agents.get("coder").current_session_id == new_session_id
+    # The injected run was started (and bridged) in the new session.
+    assert len(bridged_runs) == 1
+    assert bridged_runs[0].agent_id == "coder"
+    assert bridged_runs[0].session_id == new_session_id
+    # Wait for the receiving run to write its user message and finish.
+    await bridged_runs[0].wait()
+    new_session = state.runtime.chat_sessions.get("coder", new_session_id)
+    new_history = new_session.load()
+    user_messages = [message for message in new_history if message.role == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0].content == "OK"
+    # The handoff-writing run used a system-reminder note on the source session.
+    source_history = state.runtime.chat_sessions.get("coder", "session-one").load()
+    assert any(message.role == "note" for message in source_history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_handoff_command_for_other_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("reviewer", name="Reviewer")
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    bridged_runs: list[Any] = []
+    monkeypatch.setattr(
+        delegates,
+        "_bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "/handoff reviewer",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["command_handled"] is True
+    assert result["data"]["command"] == "handoff"
+    assert result["data"]["agent_id"] == "reviewer"
+    new_session_id = result["data"]["session_id"]
+    assert state.runtime.agents.get("reviewer").current_session_id == new_session_id
+    assert len(bridged_runs) == 1
+    assert bridged_runs[0].agent_id == "reviewer"
+    assert bridged_runs[0].session_id == new_session_id
+    await bridged_runs[0].wait()
+    new_session = state.runtime.chat_sessions.get("reviewer", new_session_id)
+    new_history = new_session.load()
+    user_messages = [message for message in new_history if message.role == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0].content == "OK"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_handle_handoff_command_with_missing_target_agent(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+    state.runtime.agents.update("coder", current_session_id="session-one")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": method,
+            "params": {
+                "agent_id": "coder",
+                "session_id": "session-one",
+                "content": "/handoff ghost",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["command_handled"] is True
+    assert "ghost" in result["reply"]
+    assert "data" not in result
+    # No new session was created and the source session remains current.
+    sessions = state.runtime.chat_sessions.list_with_metadata("coder")
+    assert [session["id"] for session in sessions] == ["session-one"]
+    assert state.runtime.agents.get("coder").current_session_id == "session-one"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["chat.send", "chat.stream"])
+async def test_chat_methods_reject_handoff_command_while_session_run_is_active(
+    tmp_path: Path,
+    method: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.chat_sessions.create("coder", session_id="session-one")
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_run_executor(_run: Any) -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    active_run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=_blocking_run_executor,
+    )
+    await started.wait()
+
+    try:
+        response = await dispatch_rpc(
+            state,
+            {
+                "method": method,
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": "session-one",
+                    "content": "/handoff",
+                },
+            },
+        )
+    finally:
+        release.set()
+        await active_run.wait()
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "A handoff can be started after the current run finishes.",
+        },
+    }
+    sessions = state.runtime.chat_sessions.list_with_metadata("coder")
+    assert [session["id"] for session in sessions] == ["session-one"]
