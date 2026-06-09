@@ -1091,6 +1091,161 @@ describe('chat state helpers', () => {
     expect(occurrences).toBe(1);
   });
 
+  it('drops a completed prior run the WebSocket replays alongside the active run on refresh', () => {
+    // On refresh the app WebSocket replays its retained lifecycle buffer from
+    // sequence 0, re-injecting the already-completed parent run (the one that
+    // spawned a non-blocking sub-agent) into runEvents next to the still-active
+    // note-triggered follow-up run. The parent run carries its own
+    // user_message_persisted plus assistant output, all already in history.
+    // selectTrackedRunTimelineSource only reconciles the active run, so without
+    // the inactive-run drop the parent turn (user message + first assistant
+    // block) renders a second time from the replayed live events.
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-ws-replay',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
+      {
+        id: 'assistant-spawn',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: { agent_id: 'tester', blocking: false },
+          },
+        ],
+      },
+      {
+        id: 'tool-subagent',
+        role: 'tool',
+        tool_call_id: 'call-subagent',
+        name: 'subagent',
+        content: '{"ok":true}',
+      },
+      {
+        id: 'assistant-started',
+        role: 'assistant',
+        content: 'The worker is running.',
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+        timing: { duration_ms: 10 },
+      },
+      {
+        id: 'assistant-result',
+        role: 'assistant',
+        content: 'The worker finished: the answer is 42.',
+      },
+    ]);
+
+    // chat.history reports the still-running follow-up run as the active run.
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/api/runs/run-two/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    // The WebSocket replays the completed parent run (run-one) in sequence order:
+    // its user message, tool result, assistant output, and terminal event.
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-one',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Run a non-blocking worker',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-one',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-subagent', name: 'subagent' },
+        result: '{"ok":true}',
+        message: { id: 'tool-subagent', role: 'tool', content: '{"ok":true}' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-one',
+      sequence: 4,
+      payload: {
+        message: {
+          id: 'assistant-started',
+          role: 'assistant',
+          content: 'The worker is running.',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 5,
+      payload: { status: 'completed', timing: { duration_ms: 10 } },
+    });
+    // Then it replays the active follow-up run (run-two), restoring it as current.
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-two',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-result',
+          role: 'assistant',
+          content: 'The worker finished: the answer is 42.',
+        },
+      },
+    });
+
+    const timelineItems = visibleTimelineItems(sessionState);
+
+    // The parent run's first assistant block must not render twice.
+    expect(
+      countTimelineTextOccurrences(timelineItems, 'The worker is running.'),
+    ).toBe(1);
+    // Its user message must not be re-rendered as a live user_message_persisted item.
+    expect(
+      timelineItems.filter(
+        (item) =>
+          item.type === 'event' &&
+          item.event?.type === 'user_message_persisted' &&
+          item.event?.run_id === 'run-one',
+      ),
+    ).toHaveLength(0);
+    // No live block survives for the completed parent run.
+    expect(
+      timelineItems.filter(
+        (item) =>
+          item.type === 'assistant_run' &&
+          item.source === 'live' &&
+          (item.runId ?? item.run_id) === 'run-one',
+      ),
+    ).toHaveLength(0);
+  });
+
   it('preserves active streaming items when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
