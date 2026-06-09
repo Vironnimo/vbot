@@ -18,6 +18,10 @@ DEFAULT_TOOL_CONCURRENCY_LIMIT = 50
 JsonObject = dict[str, Any]
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
 ToolCancellationHook = Callable[[], bool]
+ToolCancelRegistrationHook = Callable[[Callable[[], None]], None]
+ToolCancelCheckHook = Callable[[], bool]
+ToolCallCancelRegistrar = Callable[[str, Callable[[], None]], None]
+ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
 ToolSkillActivationHook = Callable[[str, JsonObject], JsonObject]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
@@ -107,6 +111,8 @@ class ToolContext:
     data_root: Path
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
+    cancel_registration_hook: ToolCancelRegistrationHook | None = None
+    cancel_check_hook: ToolCancelCheckHook | None = None
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
@@ -127,6 +133,20 @@ class ToolContext:
             return False
 
         return self.cancellation_hook()
+
+    def on_cancel(self, callback: Callable[[], None]) -> None:
+        """Register a cancel callback for this call when the runtime exposes a hook."""
+        if self.cancel_registration_hook is None:
+            return
+
+        self.cancel_registration_hook(callback)
+
+    def was_cancelled_by_user(self) -> bool:
+        """Return whether this call was cancelled by the user, when the hook is wired."""
+        if self.cancel_check_hook is None:
+            return False
+
+        return self.cancel_check_hook()
 
     def add_note(self, content: str) -> None:
         """Add a kernel-internal note through the runtime hook, when present."""
@@ -165,6 +185,10 @@ class ToolExecutionConfig:
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
+    cancel_registration_hook: ToolCancelRegistrationHook | None = None
+    cancel_check_hook: ToolCancelCheckHook | None = None
+    tool_call_cancel_registrar: ToolCallCancelRegistrar | None = None
+    tool_call_cancel_check: ToolCallCancelCheck | None = None
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
@@ -439,6 +463,11 @@ class ToolExecutor:
         per_run_semaphore: asyncio.Semaphore,
     ) -> JsonObject:
         async with per_run_semaphore, self._get_global_semaphore():
+            # Per-call cancel hooks close over tool_call.id so concurrent sibling
+            # tool calls in one execution group each register/inspect their own id.
+            cancel_registration_hook, cancel_check_hook = _build_per_call_cancel_hooks(
+                config, tool_call.id
+            )
             context = ToolContext(
                 agent_id=config.agent_id,
                 session_id=config.session_id,
@@ -451,6 +480,8 @@ class ToolExecutor:
                 data_root=config.data_root,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
+                cancel_registration_hook=cancel_registration_hook,
+                cancel_check_hook=cancel_check_hook,
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
                 allowed_skills=config.allowed_skills,
@@ -485,6 +516,39 @@ class ToolExecutor:
             )
         except Exception as error:
             return tool_failure("tool_execution_error", str(error))
+
+
+def _build_per_call_cancel_hooks(
+    config: ToolExecutionConfig, tool_call_id: str
+) -> tuple[ToolCancelRegistrationHook | None, ToolCancelCheckHook | None]:
+    """Return per-call cancel hooks that close over *tool_call_id*.
+
+    When the config carries a registrar/check that takes a tool call id, this
+    binds the per-call id so concurrent sibling tool calls each see their own
+    registry entry. Falls back to the group-wide hooks when the per-call fields
+    are absent (e.g., executor tests that wire hooks directly).
+    """
+    registration_hook: ToolCancelRegistrationHook | None
+    if config.tool_call_cancel_registrar is not None:
+        registrar = config.tool_call_cancel_registrar
+
+        def registration_hook(callback: Callable[[], None]) -> None:
+            registrar(tool_call_id, callback)
+
+    else:
+        registration_hook = config.cancel_registration_hook
+
+    check_hook: ToolCancelCheckHook | None
+    if config.tool_call_cancel_check is not None:
+        check = config.tool_call_cancel_check
+
+        def check_hook() -> bool:
+            return check(tool_call_id)
+
+    else:
+        check_hook = config.cancel_check_hook
+
+    return registration_hook, check_hook
 
 
 def _copy_artifacts(artifacts: list[JsonObject] | None) -> list[JsonObject]:
@@ -532,6 +596,8 @@ __all__ = [
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",
+    "ToolCancelCheckHook",
+    "ToolCancelRegistrationHook",
     "ToolCancellationHook",
     "ToolContext",
     "ToolEmitHook",

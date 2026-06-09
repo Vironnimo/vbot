@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,8 @@ def make_context(
     *,
     emit_hook: Any = None,
     cancellation_hook: Any = None,
+    cancel_registration_hook: Any = None,
+    cancel_check_hook: Any = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=AGENT_ID,
@@ -52,6 +54,8 @@ def make_context(
         data_root=tmp_path,
         emit_hook=emit_hook,
         cancellation_hook=cancellation_hook,
+        cancel_registration_hook=cancel_registration_hook,
+        cancel_check_hook=cancel_check_hook,
     )
 
 
@@ -571,3 +575,210 @@ def test_register_bash_tool() -> None:
     tool = registry.get("bash")
     assert tool.parameters == BASH_TOOL_PARAMETERS
     assert tool.parameters["additionalProperties"] is False
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-cancel kills the process and returns a ``cancelled_by_user`` envelope."""
+    user_cancelled = False
+    kill_calls: list[tuple[str, str]] = []
+    kill_event = asyncio.Event()
+    registered_callbacks: list[Callable[[], None]] = []
+    cancelled_sessions: set[str] = set()
+
+    monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
+
+    def cancel_check_hook() -> bool:
+        return user_cancelled
+
+    def cancel_registration_hook(callback: Callable[[], None]) -> None:
+        registered_callbacks.append(callback)
+        # Simulate the runtime marking the call as user-cancelled and
+        # firing the cancel callback (which schedules the kill).
+        nonlocal user_cancelled
+        user_cancelled = True
+        callback()
+
+    original_kill = manager.kill
+
+    async def tracking_kill(session_id: str, agent_id: str) -> None:
+        kill_calls.append((session_id, agent_id))
+        try:
+            await original_kill(session_id, agent_id)
+        finally:
+            kill_event.set()
+
+    monkeypatch.setattr(manager, "kill", tracking_kill)
+
+    context = make_context(
+        tmp_path,
+        cancel_registration_hook=cancel_registration_hook,
+        cancel_check_hook=cancel_check_hook,
+    )
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)"},
+        manager,
+    )
+
+    await asyncio.wait_for(kill_event.wait(), timeout=2)
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "cancelled_by_user"
+    assert "aborted" in result["error"]["message"].lower()
+    assert kill_calls, "process_manager.kill should have been called"
+    session_id_used, agent_id_used = kill_calls[0]
+    assert agent_id_used == AGENT_ID
+    assert isinstance(session_id_used, str) and session_id_used
+    assert cancelled_sessions == {session_id_used}
+    assert len(registered_callbacks) == 1
+
+
+@pytest.mark.asyncio
+async def test_foreground_completion_unaffected_when_user_cancel_check_is_false(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The new check is a no-op when ``was_cancelled_by_user`` returns False."""
+    user_cancelled = False
+    registered_callbacks: list[Callable[[], None]] = []
+
+    def cancel_check_hook() -> bool:
+        return user_cancelled
+
+    def cancel_registration_hook(callback: Callable[[], None]) -> None:
+        registered_callbacks.append(callback)
+
+    context = make_context(
+        tmp_path,
+        cancel_registration_hook=cancel_registration_hook,
+        cancel_check_hook=cancel_check_hook,
+    )
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+
+    result = await bash_handler(
+        context,
+        {"command": "import sys; print('keep-going')"},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 0
+    assert "keep-going" in result["data"]["output"]
+    # The cancel callback was registered but never fired.
+    assert len(registered_callbacks) == 1
+
+
+@pytest.mark.asyncio
+async def test_background_watcher_reports_aborted_by_user_when_session_is_user_cancelled(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The watcher uses 'aborted by the user' wording for user-killed sessions."""
+    messages: list[str] = []
+    trigger_called = asyncio.Event()
+    cancelled_sessions: set[str] = set()
+    monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            messages.append(message)
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    data = result["data"]
+    assert isinstance(data, dict)
+    session_id = data["session_id"]
+    assert isinstance(session_id, str) and session_id
+
+    # Simulate the runtime firing the user-cancel callback for this tool call.
+    cancelled_sessions.add(session_id)
+    await manager.kill(session_id, AGENT_ID)
+
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(messages) == 1
+    message = messages[0]
+    assert "aborted by the user" in message
+    assert "Background process completed." not in message
+    assert "Exit code:" not in message
+    assert session_id not in message  # we don't include the raw id, but ensure the marker is there
+
+
+@pytest.mark.asyncio
+async def test_background_watcher_keeps_completion_wording_for_natural_exit(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Natural completion keeps the original 'Background process completed' wording."""
+    messages: list[str] = []
+    trigger_called = asyncio.Event()
+    cancelled_sessions: set[str] = set()
+    monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            messages.append(message)
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    command = "import sys; print('done'); sys.exit(0)"
+    result = await bash_handler(
+        context,
+        {"command": command, "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    assert len(messages) == 1
+    message = messages[0]
+    assert "Background process completed." in message
+    assert "aborted by the user" not in message
+    assert "Exit code: 0" in message
+    assert "done" in message
