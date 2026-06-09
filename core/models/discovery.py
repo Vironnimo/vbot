@@ -20,8 +20,8 @@ from core.providers.errors import CatalogEntrySkipped
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
@@ -427,10 +427,10 @@ def _read_string_list(data: Mapping[str, Any], key: str) -> list[str]:
 
 _DISCOVERY_ADAPTER_MAP = {
     "openai_compatible": OpenAICompatibleAdapter,
+    "openai": OpenAIAdapter,
     "opencode_go": OpenCodeGoAdapter,
     "openrouter": OpenRouterAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
     "github_copilot": GitHubCopilotAdapter,
-    "openai_subscription": OpenAISubscriptionAdapter,
 }

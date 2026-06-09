@@ -176,6 +176,7 @@ class Model:
     context_window: int
     max_output_tokens: int | None
     metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    connections: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _freeze_metadata_value(self.metadata))
@@ -241,6 +242,7 @@ class ModelRegistry:
                     context_window=model_data["context_window"],
                     max_output_tokens=model_data["max_output_tokens"],
                     metadata=model_data.get("metadata", {}),
+                    connections=tuple(model_data.get("connections", ())),
                 )
                 models[(provider_id, model_id)] = model
 

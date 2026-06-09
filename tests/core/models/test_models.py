@@ -581,6 +581,113 @@ class TestModelRegistryLoad:
 
 
 # ---------------------------------------------------------------------------
+# Model.connections parsing
+# ---------------------------------------------------------------------------
+
+
+class TestModelConnectionsParsing:
+    def test_connections_defaults_to_empty_tuple_when_field_missing(self):
+        """A model entry without a ``connections`` key in the catalog loads
+        with ``connections == ()`` — valid for every connection of the
+        provider."""
+
+        capabilities = Capabilities(
+            vision=False,
+            tools=True,
+            json_mode=False,
+            reasoning=ReasoningCapabilities(supported=False),
+        )
+        model = Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=capabilities,
+            context_window=128000,
+            max_output_tokens=16000,
+        )
+
+        assert model.connections == ()
+
+    def test_registry_loads_connections_allowlist_from_json(self, tmp_path: Path):
+        """A catalog entry that declares ``connections`` is loaded with the
+        tuple preserved exactly — this is the field that downstream
+        target-expansion and ``model.list`` consume."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("openai.json").write_text(
+            """
+            {
+              "provider_id": "openai",
+              "models": {
+                "gpt-5.2": {
+                  "name": "GPT-5.2",
+                  "capabilities": {
+                    "vision": true,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 128000,
+                  "max_output_tokens": 16000,
+                  "connections": ["api-key"]
+                },
+                "gpt-5.5": {
+                  "name": "GPT-5.5",
+                  "capabilities": {
+                    "vision": true,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 256000,
+                  "max_output_tokens": 32000,
+                  "connections": ["subscription"]
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("openai", "gpt-5.2").connections == ("api-key",)
+        assert registry.get("openai", "gpt-5.5").connections == ("subscription",)
+
+    def test_registry_loads_empty_connections_for_models_without_field(self, tmp_path: Path):
+        """A model entry that omits the ``connections`` key loads with an
+        empty tuple, preserving the "valid for every connection" semantic."""
+
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("openai.json").write_text(
+            """
+            {
+              "provider_id": "openai",
+              "models": {
+                "gpt-5.2": {
+                  "name": "GPT-5.2",
+                  "capabilities": {
+                    "vision": true,
+                    "tools": true,
+                    "json_mode": true,
+                    "reasoning": {"supported": true}
+                  },
+                  "context_window": 128000,
+                  "max_output_tokens": 16000
+                }
+              }
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        registry = ModelRegistry.load(tmp_path)
+
+        assert registry.get("openai", "gpt-5.2").connections == ()
+
+
+# ---------------------------------------------------------------------------
 # ModelRegistry — get()
 # ---------------------------------------------------------------------------
 
