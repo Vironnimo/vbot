@@ -6,7 +6,9 @@ import {
   subAgentDotStatus,
   subAgentResultKey,
   subAgentResultTextFromMessages,
+  subAgentRunDurationMs,
   subAgentShouldFetchResult,
+  subAgentToolStatusLabel,
   toolArgumentSummary,
 } from '../chatTimelinePresentation.js';
 import { init } from '../i18n.js';
@@ -162,6 +164,59 @@ describe('chatTimelinePresentation', () => {
     ];
 
     expect(subAgentResultTextFromMessages(messages)).toBe('All done.');
+  });
+
+  it('resolves the child run duration by run id, then session', () => {
+    const tool = runningSubAgentTool();
+    expect(subAgentRunDurationMs(tool, { 'runDuration:run-child': 4200 })).toBe(
+      4200,
+    );
+    expect(
+      subAgentRunDurationMs(tool, {
+        'sessionDuration:worker::session-child': 8700,
+      }),
+    ).toBe(8700);
+    expect(subAgentRunDurationMs(tool, {})).toBeNull();
+  });
+
+  it('labels a non-blocking spawn with the child run runtime, not the spawn call', () => {
+    const tool = runningSubAgentTool();
+    expect(
+      subAgentToolStatusLabel(tool, 'success', {
+        'runDuration:run-child': 4200,
+      }),
+    ).toBe('4.2s');
+  });
+
+  it('shows no time for a finished non-blocking spawn without a tracked runtime', () => {
+    const tool = runningSubAgentTool();
+    expect(subAgentToolStatusLabel(tool, 'success', {})).toBe('');
+  });
+
+  it('reports cancelled and running sub-agent states without a duration', () => {
+    const tool = runningSubAgentTool();
+    expect(subAgentToolStatusLabel(tool, 'cancelled', {})).toBe('cancelled');
+    expect(subAgentToolStatusLabel(tool, 'running', {})).toBe('');
+  });
+
+  it('falls back to the spawn-call duration for a blocking spawn that carries a result', () => {
+    const blockingTool = runningSubAgentTool({
+      durationMs: 1500,
+      result: {
+        ok: true,
+        error: null,
+        data: {
+          agent_id: 'worker',
+          session_id: 'session-child',
+          run_id: 'run-child',
+          status: 'completed',
+          result: 'Final answer from the worker.',
+        },
+        artifacts: [],
+      },
+    });
+
+    expect(subAgentToolStatusLabel(blockingTool, 'success', {})).toBe('1.5s');
   });
 
   it('extracts text from assistant content blocks and ignores empty input', () => {
