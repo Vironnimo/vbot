@@ -294,6 +294,8 @@ def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
 
 def _entry_status(entry: _SubAgentEntry) -> str:
     if entry.result is not None:
+        if entry.result.get("cancelled_by_user"):
+            return "cancelled by user"
         status = entry.result.get("status")
         if isinstance(status, str) and status:
             return status
@@ -303,6 +305,11 @@ def _entry_status(entry: _SubAgentEntry) -> str:
 def _entry_result_text(entry: _SubAgentEntry) -> str:
     if entry.result is None:
         return "(no output)"
+    if entry.result.get("cancelled_by_user"):
+        result = entry.result.get("result")
+        if isinstance(result, str) and result:
+            return result
+        return "Cancelled by the user"
     result = entry.result.get("result")
     if isinstance(result, str) and result:
         return result
