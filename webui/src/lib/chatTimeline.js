@@ -300,7 +300,13 @@ function selectTrackedRunTimelineSource(
 
   const activeUserEvent = activeRunUserEvent(runEvents, activeRunId);
   if (!activeUserEvent?.payload?.message) {
-    return [...historyItems, ...liveItems];
+    return trackedRunSourceWithoutUserAnchor(
+      historyItems,
+      liveItems,
+      liveAssistantRun,
+      activeRunId,
+      sessionState.messages,
+    );
   }
 
   const currentUserIndex = findMatchingHistoryUserIndex(
@@ -308,7 +314,13 @@ function selectTrackedRunTimelineSource(
     activeUserEvent.payload.message,
   );
   if (currentUserIndex < 0) {
-    return [...historyItems, ...liveItems];
+    return trackedRunSourceWithoutUserAnchor(
+      historyItems,
+      liveItems,
+      liveAssistantRun,
+      activeRunId,
+      sessionState.messages,
+    );
   }
 
   const { prefixMessages, currentTurnMessages, trailingMessages } =
@@ -337,6 +349,65 @@ function selectTrackedRunTimelineSource(
     ...trailingHistoryItems,
     ...remainingLiveItems,
   ];
+}
+
+// An active run without a user_message_persisted event cannot be spliced into
+// history by its user message. This happens for internal/automation runs — most
+// notably the follow-up run a non-blocking sub-agent completion spawns, whose
+// trigger is a hidden note, not a user message. When every assistant/tool
+// message the live run produced is already persisted in history, the persisted
+// copy is authoritative, so we drop the replayed live run to avoid rendering the
+// same turn twice (the bug seen when refreshing while such a run is still
+// running). When the live run carries output that is not yet persisted (e.g. a
+// fresh run whose turn is not on the loaded history page), we keep it.
+function trackedRunSourceWithoutUserAnchor(
+  historyItems,
+  liveItems,
+  liveAssistantRun,
+  activeRunId,
+  messages,
+) {
+  if (!liveRunOutputPersistedInHistory(liveAssistantRun, messages)) {
+    return [...historyItems, ...liveItems];
+  }
+  const remainingLiveItems = liveItems.filter(
+    (item) => !matchesActiveRunTimelineItem(item, activeRunId),
+  );
+  return [...historyItems, ...remainingLiveItems];
+}
+
+function liveRunOutputPersistedInHistory(liveAssistantRun, messages) {
+  const liveMessageIds = new Set();
+  for (const event of liveAssistantRun?.events ?? []) {
+    if (
+      event?.type !== 'assistant_output' &&
+      event?.type !== 'tool_call_result'
+    ) {
+      continue;
+    }
+    const messageId = event.payload?.message?.id;
+    if (messageId) {
+      liveMessageIds.add(messageId);
+    }
+  }
+  if (liveMessageIds.size === 0) {
+    return false;
+  }
+
+  const persistedIds = new Set(
+    (messages ?? [])
+      .filter(
+        (message) => message?.role === 'assistant' || message?.role === 'tool',
+      )
+      .map((message) => message?.id)
+      .filter(Boolean),
+  );
+  for (const messageId of liveMessageIds) {
+    if (!persistedIds.has(messageId)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function splitHistoryAroundActiveUser(messages, activeUserIndex) {
