@@ -3661,6 +3661,31 @@ describe('ChatTimeline', () => {
     expect(body?.textContent).toContain('Investigation complete.');
   });
 
+  it('shows the child run runtime on a completed non-blocking sub-agent', () => {
+    mountCompletedNonBlockingSubAgent({
+      subAgentStatuses: {
+        'run:sub-run-completed': 'completed',
+        'runDuration:sub-run-completed': 4200,
+      },
+    });
+
+    const timeLabel = document.querySelector(
+      '.subagent-tool-event .subagent-line .te-time',
+    );
+
+    expect(timeLabel?.textContent).toContain('4.2s');
+  });
+
+  it('shows no time on a completed non-blocking sub-agent without a tracked runtime', () => {
+    mountCompletedNonBlockingSubAgent();
+
+    const timeLabel = document.querySelector(
+      '.subagent-tool-event .subagent-line .te-time',
+    );
+
+    expect(timeLabel).toBeNull();
+  });
+
   it('calls the sub-agent navigation callback with a spawned session target', () => {
     const onNavigateToSubAgent = vi.fn();
     const sessionState = ensureSessionState(

@@ -242,6 +242,64 @@ export const toolStatusLabel = (tool) => {
   return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
 };
 
+// Real wall-clock runtime of the child run a sub-agent tool refers to, captured
+// from the child run's terminal lifecycle event (run_id first, then session).
+// Returns null when no child duration was tracked yet.
+export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
+  const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
+  if (runId) {
+    const durationMs = subAgentStatuses[`runDuration:${runId}`];
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      return durationMs;
+    }
+  }
+
+  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const sessionId = subAgentSessionId(tool);
+  if (agentId && sessionId) {
+    const durationMs =
+      subAgentStatuses[`sessionDuration:${agentId}::${sessionId}`];
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      return durationMs;
+    }
+  }
+
+  return null;
+};
+
+// Status label for a sub-agent tool row. Prefers the child run's real runtime
+// over the spawn tool's own call duration, which is ~0s for a non-blocking spawn
+// that returns the moment the child run starts.
+export const subAgentToolStatusLabel = (
+  tool,
+  dotStatus,
+  subAgentStatuses = {},
+) => {
+  if (dotStatus === 'cancelled') {
+    return t('chat.toolCancelled', 'cancelled');
+  }
+  if (dotStatus === 'running') {
+    return '';
+  }
+
+  const childDurationMs = subAgentRunDurationMs(tool, subAgentStatuses);
+  if (childDurationMs !== null) {
+    return formatDurationMs(childDurationMs, 'chat.toolDurationSeconds');
+  }
+
+  // A non-blocking spawn carries no inline result, so its own duration is just
+  // the spawn-call time; show nothing rather than a misleading near-zero.
+  if (
+    toolNameForRunTool(tool) === 'subagent' &&
+    !trimmedString(subAgentResultData(tool).result)
+  ) {
+    return '';
+  }
+  return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
+};
+
 export const toolArguments = (tool) =>
   tool.arguments ?? tool.toolCall?.arguments;
 
