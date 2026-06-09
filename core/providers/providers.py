@@ -73,6 +73,12 @@ class ConnectionConfig:
         label: Human-readable display label.
         auth: Authentication configuration for this connection.
         base_url: Optional provider base URL override for this connection.
+        mode: Optional wire-variant selector freely interpreted by the
+            provider adapter (e.g. ``"codex_responses"``). Per-connection;
+            provider-level has no equivalent.
+        models_endpoint: Optional per-connection discovery endpoint path
+            (e.g. ``"/codex/models"``). Overrides the provider-level
+            ``models_endpoint`` when set.
     """
 
     id: str
@@ -81,6 +87,8 @@ class ConnectionConfig:
     auth: AuthConfig
     base_url: str | None = None
     oauth: OAuthConfig | None = None
+    mode: str | None = None
+    models_endpoint: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +288,21 @@ class ProviderRegistry:
                 credential_key=credential_key,
             )
             oauth = ProviderRegistry._parse_oauth_config(provider_id, local_id, connection_data)
+
+            mode = connection_data.get("mode")
+            if mode is not None and not isinstance(mode, str):
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection '{local_id}' mode "
+                    f"must be a string when set, got {type(mode).__name__}"
+                )
+
+            models_endpoint = connection_data.get("models_endpoint")
+            if models_endpoint is not None and not isinstance(models_endpoint, str):
+                raise ConfigError(
+                    f"Provider '{provider_id}' connection '{local_id}' models_endpoint "
+                    f"must be a string when set, got {type(models_endpoint).__name__}"
+                )
+
             connections.append(
                 ConnectionConfig(
                     id=local_id,
@@ -288,6 +311,8 @@ class ProviderRegistry:
                     auth=auth,
                     base_url=connection_data.get("base_url"),
                     oauth=oauth,
+                    mode=mode,
+                    models_endpoint=models_endpoint,
                 )
             )
 
