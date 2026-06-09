@@ -134,6 +134,8 @@ def test_build_session_search_description_falls_back_without_describe_search() -
     class _BareBackend:
         def browse(self, request: Any) -> Any: ...
 
+        def overview(self, request: Any) -> Any: ...
+
         def search(self, request: Any) -> Any: ...
 
         def scroll(self, request: Any) -> Any: ...
@@ -293,6 +295,102 @@ def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> 
     assert data["bookend_start"][0]["snippet"] == "Session goal is memory planning"
     assert data["bookend_end"] == []
     assert "Anchored view" in data["content"]
+
+
+def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: Path) -> None:
+    """session_id without a query returns that session's overview, not just metadata."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="overview-session")
+    session.append(ChatMessage.user("first request about caching", timestamp=timestamp(2, 8)))
+    session.append(
+        ChatMessage.assistant(model="openai/gpt-5", content="middle one", timestamp=timestamp(2, 9))
+    )
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5", content="middle two", timestamp=timestamp(2, 10)
+        )
+    )
+    session.append(ChatMessage.user("final wrap-up question", timestamp=timestamp(2, 11)))
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"session_id": "overview-session", "bookends": 1},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["session"]["session_id"] == "overview-session"
+    assert data["total_messages"] == 4
+    assert [item["snippet"] for item in data["bookend_start"]] == ["first request about caching"]
+    assert [item["snippet"] for item in data["bookend_end"]] == ["final wrap-up question"]
+    assert data["truncated"] is True
+    assert "2 message(s) omitted" in data["content"]
+
+
+def test_session_overview_returns_all_messages_when_bookends_cover_session(tmp_path: Path) -> None:
+    """A short session shows every message once, with no overlap and nothing omitted."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="small-session")
+    session.append(ChatMessage.user("only question", timestamp=timestamp(2, 8)))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5", content="only answer", timestamp=timestamp(2, 9)
+        )
+    )
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"session_id": "small-session", "bookends": 3},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["total_messages"] == 2
+    assert [item["snippet"] for item in data["bookend_start"]] == ["only question", "only answer"]
+    assert data["bookend_end"] == []
+    assert data["truncated"] is False
+
+
+def test_session_overview_reports_missing_session(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"session_id": "does-not-exist"},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["session"] is None
+    assert data["total_messages"] == 0
+    assert "No session found" in data["content"]
+
+
+def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path) -> None:
+    """An explicit anchor id surfaces the message even when its role is filtered out."""
+
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="tool-anchor-session")
+    session.append(ChatMessage.user("run the build", timestamp=timestamp(2, 8)))
+    tool_message = ChatMessage.tool(
+        tool_call_id="c1",
+        name="bash",
+        content="build output dump",
+        timestamp=timestamp(2, 9),
+    )
+    session.append(tool_message)
+
+    result = session_search_handler(
+        make_context(tmp_path),
+        {"session_id": "tool-anchor-session", "around_message_id": tool_message.id},
+        sessions,
+    )
+
+    data = assert_success_envelope(result)
+    assert data["around_message_id"] == tool_message.id
+    assert any(item["message_id"] == tool_message.id for item in data["window"])
 
 
 def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> None:
