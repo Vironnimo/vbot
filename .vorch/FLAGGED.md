@@ -236,3 +236,34 @@ Found while debugging a real bge-m3 failure: a German+English session embedded t
 **Fixed the same day** (commit `fix(recall): keep embedding input under the token cap for dense/German text`): assume a conservative `_CHARS_PER_TOKEN = 3` with `_INPUT_TOKEN_SAFETY = 0.9` headroom, default to the 8192-token floor when the window is unknown, and resolve the context window from the binding header on the first backfill.
 
 **Update (same day): the heuristic alone was not enough.** After the conservative heuristic shipped, the same session still overflowed (the provider reports "at least 8193" — it stops counting at cap+1, so the number never reflects the real size and gave a false "no change" signal). Fix **(b)** was then implemented (commit `fix(recall): retry embedding at half length on context-length overflow`): `_run_embed` in `core/recall/vector.py` catches the provider's context-length rejection (`_is_context_overflow`) and halves the over-long inputs, retrying up to `_EMBED_OVERFLOW_RETRIES` (6) times until they fit. This is tokenizer- and language-independent and self-correcting; the character heuristic now just minimizes how often the shrink loop is needed. **Remaining (still deferred):** option **(a)** a tokenizer-aware budget (e.g. `tiktoken`) to avoid the occasional wasted first request entirely, and the existing per-session chunking item (#4 above) so very long sessions are not represented by their head alone. Neither is worth building yet.
+
+## 2026-06-09 — OpenAI provider merge: cosmetic test-fixture debt
+
+The `openai-subscription` provider was collapsed into the existing `openai` provider as a second `subscription` connection (commit `merge: collapse openai-subscription into single openai provider`). All quality gates green (3114 backend + 585 frontend). The items below are **purely cosmetic test-fixture debt** flagged during the review and intentionally not fixed in the same change.
+
+### 1. `OPENAI_DATA` fixture in `tests/core/providers/test_providers.py` still describes the pre-merge shape
+
+`OPENAI_DATA` (line 30) and `OPENROUTER_DATA` (line 60) are pre-merge-era test fixtures used by generic parser tests (validation of `_parse_config`, OAuth device flow parsing, etc.). `OPENAI_DATA` still uses `adapter: "openai_compatible"` and the old `oauth` placeholder connector with `credential_key: "OPENAI_OAUTH_TOKEN"`. The new `resources/providers/openai.json` no longer has either; they were removed in Phase 5.
+
+**Why it still passes:** these fixtures test the *generic* parser, not the real provider config. They construct arbitrary valid config dicts in memory and assert that the parser turns them into the right dataclass. The test at `test_connection_without_mode_or_models_endpoint_remains_none` (line ~860) calls `config.get_connection("oauth")` and `config.get_connection("api-key")` against this fixture — so the test still works as long as the fixture has both connections.
+
+**Why deferred:** cleaning it up means rewriting the fixture, then chasing every test that depends on its specific shape (the `oauth` / `api-key` connection ids, the `OPENAI_OAUTH_TOKEN` env var, etc.). Pure test refactor, no production behavior. Out of scope for the merge, and the merge is a feature change, not a test-hygiene drive. Do it in a focused follow-up PR.
+
+### 2. Test function and fixture names still carry the old `subscription` / `codex` / `oauth` substrings
+
+Several test names and fixture names from earlier in the project still reference the pre-merge terminology. Functionally correct (they exercise the new code path), but reads weird next to the merged provider:
+
+- `tests/core/models/test_discovery.py:144` — fixture function `openai_subscription_config()` now builds a merged `openai` provider with a `subscription` connection. The name is misleading; the function itself is fine.
+- `tests/core/providers/test_providers.py:312` — `test_openai_subscription_oauth_device_flow_fields_parse` constructs a temp config with `id: "openai-subscription"` / `adapter: "openai_subscription"` and asserts generic OAuth device-flow parsing. The parser is provider-agnostic, so the test is valid; the name is the only thing that no longer reflects reality.
+- `tests/core/providers/test_providers.py:814` — `test_openai_subscription_connection_parses_mode_and_models_endpoint` now tests `id: "openai"` (correct, post-merge) but the function name still says `subscription` (technically accurate — the connection *id* is `subscription` — but easy to misread as the old provider id).
+- `webui/src/components/__tests__/DebugView.test.js:93,108` — literal string `openai-subscription-with-a-very-long-name` is a length-testing fixture, not a provider id; left alone on purpose.
+
+**Why deferred:** same as #1 — cosmetic, low risk of confusion in practice (the function body is what matters), and a follow-up rename touches many call sites that would each need re-verification. Not blocking.
+
+### 3. `OpenAIAdapter._build_codex_headers` still defensively merges `self._config.extra_headers`
+
+`core/providers/openai.py:173-174` merges `self._config.extra_headers` into the Codex request headers in addition to the adapter-owned `CODEX_EXTRA_HEADERS`. The spec (`openai.md`) forbids provider-level `extra_headers` for the OpenAI provider, and the new `resources/providers/openai.json` no longer has the field. The merge is defensive belt-and-suspenders code.
+
+**Why it can be removed safely:** with `extra_headers` gone from the JSON, the merge is a no-op. If a future contributor adds `extra_headers` back to the provider config, the merge would silently re-introduce the leak that Phase 5 was designed to prevent. The current implementation is correct but offers a backdoor.
+
+**Why deferred:** removing it is a one-line change, but it changes behavior under a (currently unused) configuration shape. A test would have to assert that adding `extra_headers` to the provider JSON does *not* cause Codex headers to appear on the wire in the default mode — which is already tested by `test_default_mode_send_targets_chat_completions_endpoint`. Likely safe to remove; better as a deliberate follow-up.
