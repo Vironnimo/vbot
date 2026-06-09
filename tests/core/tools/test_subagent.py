@@ -767,7 +767,7 @@ async def test_subagent_tool_counts_queued_run_against_per_turn_limit(
         await asyncio.sleep(0)
 
 
-async def test_parent_cancellation_removes_queued_subagent(tmp_path: Path) -> None:
+async def test_parent_cancellation_removes_blocking_queued_subagent(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     manager.hold_enqueued_starts = True
@@ -783,9 +783,52 @@ async def test_parent_cancellation_removes_queued_subagent(tmp_path: Path) -> No
     )
 
     # Act
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {
+                "content": "spawn",
+                "session_id": "cancel-sub-session",
+                "blocking": True,
+            },
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    manager.parent_run.request_cancel()
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+    # Assert
+    assert task.done() is True
+    assert manager.enqueued == []
+    assert tracker.spawn_count(parent_key) == 0
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_parent_cancellation_does_not_remove_non_blocking_queued_subagent(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    runtime.chat_sessions.create(context.agent_id, session_id="survive-sub-session")
+    manager.busy_sessions[(context.agent_id, "survive-sub-session")] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id="survive-sub-session",
+    )
+
+    # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "cancel-sub-session"},
+        {"content": "spawn", "session_id": "survive-sub-session"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -796,8 +839,11 @@ async def test_parent_cancellation_removes_queued_subagent(tmp_path: Path) -> No
     # Assert
     assert result["ok"] is True
     assert result["data"]["status"] == "queued"
-    assert manager.enqueued == []
-    assert tracker.spawn_count(parent_key) == 0
+    assert len(manager.enqueued) == 1
+    assert tracker.spawn_count(parent_key) == 1
+    manager.remove_queued("parent", "survive-sub-session", "queued-item-1")
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
 
 
 async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
@@ -981,7 +1027,42 @@ async def test_subagent_completion_tracker_logs_unexpected_failures(
     assert str(log_calls[0][2]) == "boom"
 
 
-async def test_subagent_tool_propagates_parent_cancellation(tmp_path: Path) -> None:
+async def test_subagent_tool_propagates_parent_cancellation_for_blocking(tmp_path: Path) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    # Act
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "do work", "agent_id": "worker", "blocking": True},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    sub_run = manager.started[0][3]
+    manager.parent_run.request_cancel(reason="user")
+    sub_run.mark_cancelled()
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+    # Assert
+    assert sub_run.cancel_requested is True
+    assert sub_run.cancel_reason == "user"
+    assert task.done() is True
+    result = await task
+    assert result["ok"] is True
+    assert result["data"]["status"] == "cancelled"
+    assert result["data"]["cancelled_by_user"] is True
+
+
+async def test_subagent_tool_does_not_propagate_parent_cancellation_for_non_blocking(
+    tmp_path: Path,
+) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -997,11 +1078,13 @@ async def test_subagent_tool_propagates_parent_cancellation(tmp_path: Path) -> N
     )
     sub_run = manager.started[0][3]
     manager.parent_run.request_cancel()
-    await asyncio.sleep(0)
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
 
     # Assert
     assert result["ok"] is True
-    assert sub_run.cancel_requested is True
+    assert sub_run.cancel_requested is False
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
 
 
 async def test_subagent_tool_blocking_waits_for_full_result(tmp_path: Path) -> None:
@@ -1096,6 +1179,104 @@ async def test_wait_for_subagent_result_does_not_swallow_waiter_cancellation() -
     # Assert
     with pytest.raises(asyncio.CancelledError):
         await waiter
+
+
+async def test_wait_for_subagent_result_marks_user_cancelled_run() -> None:
+    """A child run cancelled with reason='user' surfaces 'cancelled by user'."""
+    # Arrange
+    run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
+    run.request_cancel(reason="user")
+    run.mark_cancelled()
+
+    # Act
+    result = await _wait_for_subagent_result(run)
+
+    # Assert
+    assert result["status"] == "cancelled"
+    assert result["cancelled_by_user"] is True
+    assert result["result"] == subagent_module.SUBAGENT_USER_CANCEL_MESSAGE
+
+
+async def test_wait_for_subagent_result_marks_generic_cancellation_without_user_flag() -> None:
+    """A child run cancelled without a reason does not get the user-cancel flag."""
+    # Arrange
+    run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
+    run.request_cancel()
+    run.mark_cancelled()
+
+    # Act
+    result = await _wait_for_subagent_result(run)
+
+    # Assert
+    assert result["status"] == "cancelled"
+    assert "cancelled_by_user" not in result
+    assert result["result"] is None
+
+
+async def test_subagent_tool_blocking_user_cancelled_result_includes_cancelled_by_user(
+    tmp_path: Path,
+) -> None:
+    """A blocking sub-agent that the user cancels returns 'cancelled by user'."""
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "do work", "agent_id": "worker", "blocking": True},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    sub_run = manager.started[0][3]
+    manager.parent_run.request_cancel(reason="user")
+    sub_run.mark_cancelled()
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+    # Act
+    result = await task
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "cancelled"
+    assert result["data"]["cancelled_by_user"] is True
+    assert result["data"]["result"] == "Cancelled by the user"
+    assert tracker.spawn_count(parent_key) == 0
+
+
+async def test_subagent_result_reflects_user_cancelled_child(tmp_path: Path) -> None:
+    """subagent_result on a user-cancelled child reports cancelled_by_user."""
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
+    sub_run.request_cancel(reason="user")
+    sub_run.mark_cancelled()
+    manager.runs[sub_run.id] = sub_run
+    tracker.register(parent_key, "worker", "sub-session", sub_run.id)
+
+    # Act
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session", "run_id": sub_run.id},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "cancelled"
+    assert result["data"]["cancelled_by_user"] is True
+    assert result["data"]["result"] == "Cancelled by the user"
 
 
 async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path: Path) -> None:

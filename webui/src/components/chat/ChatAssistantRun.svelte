@@ -5,6 +5,7 @@
     avatarForItem,
     compactToolValue,
     formatTime,
+    isRowCancellable,
     isStartingBlockingSubAgent,
     isSubAgentTool,
     isTextToSpeechTool,
@@ -37,6 +38,8 @@
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
     onRetry = () => {},
+    onCancelToolCall = () => {},
+    onCancelSubAgent = () => {},
     showRetry = false,
   } = $props();
 
@@ -48,6 +51,27 @@
     if (target) {
       onNavigateToSubAgent(target);
     }
+  }
+
+  function handleCancelToolCall(event, tool) {
+    // The cancel button lives inside <details><summary> — keep the disclosure
+    // closed/toggled state untouched so the rest of the row keeps its layout.
+    event.preventDefault();
+    event.stopPropagation();
+
+    const runId = item?.runId ?? '';
+    const toolCallId = tool?.toolCallId ?? '';
+    if (!runId || !toolCallId) {
+      return;
+    }
+    onCancelToolCall({ runId, toolCallId });
+  }
+
+  function handleCancelSubAgent(event, tool) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    onCancelSubAgent({ tool });
   }
 
   // Once a non-blocking sub-agent run finishes (dot flips to success) and we have
@@ -210,6 +234,20 @@
                   {subAgentTimeLabel}
                 </span>
               {/if}
+              {#if isRowCancellable({ kind: 'sub_agent', dotStatus })}
+                <button
+                  type="button"
+                  class="row-cancel"
+                  data-cancel="subagent"
+                  onclick={(event) => handleCancelSubAgent(event, child)}
+                  aria-label={t(
+                    'chat.cancelSubAgentAria',
+                    'Cancel running sub-agent',
+                  )}
+                >
+                  {t('chat.cancelSubAgent', 'Cancel')}
+                </button>
+              {/if}
             </summary>
             <div class="tool-event-body">
               {@render toolDetailSection(
@@ -244,6 +282,11 @@
             </div>
           </details>
         {:else}
+          {@const isToolCancellable = isRowCancellable({
+            kind: 'tool_call',
+            toolName: toolNameForRunTool(child),
+            toolStatus: toolStatus(child),
+          })}
           <details class="tool-event run-tool-event">
             <summary class="tool-event-line">
               <span
@@ -264,6 +307,20 @@
                 >
                   {toolStatusLabel(child)}
                 </span>
+              {/if}
+              {#if isToolCancellable}
+                <button
+                  type="button"
+                  class="row-cancel"
+                  data-cancel="tool"
+                  onclick={(event) => handleCancelToolCall(event, child)}
+                  aria-label={t(
+                    'chat.cancelToolCallAria',
+                    'Cancel running tool call',
+                  )}
+                >
+                  {t('chat.cancelToolCall', 'Cancel')}
+                </button>
               {/if}
             </summary>
             <div class="tool-event-body">

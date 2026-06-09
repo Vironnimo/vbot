@@ -28,6 +28,8 @@
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
     onRetry = () => {},
+    onCancelToolCall = () => {},
+    onCancelSubAgent = () => {},
     hasOlderHistory = false,
     loadingOlderHistory = false,
     onLoadOlder = async () => false,
@@ -367,6 +369,8 @@
             {onNavigateToSubAgent}
             {onRequestSubAgentResult}
             {onRetry}
+            {onCancelToolCall}
+            {onCancelSubAgent}
             showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
         {:else}

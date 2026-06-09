@@ -10,7 +10,12 @@ from core.runs import ActiveRunError, ChatRunManager
 from server.rpc.agent_methods import _create_session
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
-from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RPC_ERROR_QUEUE_ITEM_NOT_FOUND, RpcError
+from server.rpc.errors import (
+    RPC_ERROR_INVALID_REQUEST,
+    RPC_ERROR_QUEUE_ITEM_NOT_FOUND,
+    RPC_ERROR_RUN_NOT_FOUND,
+    RpcError,
+)
 from server.rpc.event_bridge import _bridge_queued_item_to_event_bus, _bridge_run_to_event_bus
 from server.rpc.payloads import (
     _is_visible_history_message,
@@ -350,12 +355,43 @@ async def _retry_chat_for_ids(
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"run_id", "reason"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.cancel fields: {', '.join(unsupported_fields)}",
+        )
+
     run_id = _required_string(params, "run_id")
+    reason = _optional_string(params, "reason")
     try:
-        run = await state.chat_runs.cancel(run_id)
+        run = await state.chat_runs.cancel(run_id, reason=reason)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run)
+
+
+async def _cancel_tool_call_chat(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"agent_id", "run_id", "tool_call_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported chat.cancel_tool_call fields: {', '.join(unsupported_fields)}",
+        )
+
+    run_id = _required_string(params, "run_id")
+    tool_call_id = _required_string(params, "tool_call_id")
+    try:
+        run = state.chat_runs.get(run_id)
+        cancelled = run.cancel_tool_call(tool_call_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if not cancelled:
+        raise RpcError(
+            RPC_ERROR_RUN_NOT_FOUND,
+            f"tool call not found: {tool_call_id}",
+        )
+    return {"ok": True}
 
 
 def _chat_queue_list(state: Any, params: JsonObject) -> JsonObject:
@@ -485,6 +521,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.stream": _stream_chat,
         "chat.retry_last_turn": _retry_chat,
         "chat.cancel": _cancel_chat,
+        "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.queue_list": _chat_queue_list,
         "chat.queue_remove": _chat_queue_remove,
         "chat.queue_update": _chat_queue_update,

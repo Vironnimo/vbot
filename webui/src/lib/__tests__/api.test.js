@@ -14,6 +14,8 @@ import {
   RUN_EVENT_TOOL_CALL_STDOUT,
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
+  cancelRun,
+  cancelToolCall,
   createRpcEnvelope,
   getTaskModelOptions,
   listTaskModelTargets,
@@ -282,6 +284,91 @@ describe('rpc()', () => {
         content: 'Updated content',
       },
     });
+  });
+});
+
+describe('cancelRun()', () => {
+  it('cancels a run through chat.cancel with a user reason', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await expect(
+      cancelRun('run-1', { reason: 'user' }, { fetch: fetchFunction }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.cancel',
+      params: { run_id: 'run-1', reason: 'user' },
+    });
+  });
+
+  it('omits reason when none is provided', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await cancelRun('run-2', undefined, { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.cancel',
+      params: { run_id: 'run-2' },
+    });
+  });
+
+  it('rejects an empty run id before sending', () => {
+    expect(() => cancelRun('', { reason: 'user' })).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+  });
+});
+
+describe('cancelToolCall()', () => {
+  it('cancels a tool call through chat.cancel_tool_call', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await expect(
+      cancelToolCall(
+        { agentId: 'alpha', runId: 'run-1', toolCallId: 'call-1' },
+        { fetch: fetchFunction },
+      ),
+    ).resolves.toEqual({ ok: true });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.cancel_tool_call',
+      params: {
+        agent_id: 'alpha',
+        run_id: 'run-1',
+        tool_call_id: 'call-1',
+      },
+    });
+  });
+
+  it('omits agent_id when not provided', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await cancelToolCall(
+      { runId: 'run-1', toolCallId: 'call-1' },
+      { fetch: fetchFunction },
+    );
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'chat.cancel_tool_call',
+      params: { run_id: 'run-1', tool_call_id: 'call-1' },
+    });
+  });
+
+  it('rejects a missing run id or tool call id before sending', () => {
+    expect(() => cancelToolCall({ toolCallId: 'call-1' })).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
+    expect(() => cancelToolCall({ runId: 'run-1' })).toThrow(
+      expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
+    );
   });
 });
 
