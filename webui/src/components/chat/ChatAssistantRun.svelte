@@ -17,6 +17,7 @@
     subAgentPreview,
     subAgentResultKey,
     subAgentShouldFetchResult,
+    subAgentToolStatusLabel,
     timestampForItem,
     toolArgumentSummary,
     toolArguments,
@@ -158,6 +159,11 @@
         {#if isSubAgentTool(child)}
           {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
           {@const subAgentResult = subAgentResults[subAgentResultKey(child)]}
+          {@const subAgentTimeLabel = subAgentToolStatusLabel(
+            child,
+            dotStatus,
+            subAgentStatuses,
+          )}
           <details class="tool-event run-tool-event subagent-tool-event">
             <summary class="tool-event-line subagent-line">
               <span
@@ -196,12 +202,12 @@
                   {t('chat.subagent.loadingResult', 'loading result…')}
                 </span>
               {/if}
-              {#if toolStatusLabel(child)}
+              {#if subAgentTimeLabel}
                 <span
                   class="te-time"
-                  class:cancelled={toolStatus(child) === 'cancelled'}
+                  class:cancelled={dotStatus === 'cancelled'}
                 >
-                  {toolStatusLabel(child)}
+                  {subAgentTimeLabel}
                 </span>
               {/if}
             </summary>

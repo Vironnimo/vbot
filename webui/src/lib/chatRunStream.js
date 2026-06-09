@@ -194,9 +194,29 @@ export function createChatRunStream({
     if (event.agent_id && event.session_id) {
       updates[`session:${event.agent_id}::${event.session_id}`] = status;
     }
+
+    // Terminal events carry the run's real wall-clock duration. A non-blocking
+    // sub-agent spawn returns immediately, so the parent's spawn tool call has a
+    // ~0s duration; the child run's duration is the meaningful runtime to show.
+    const durationMs = runEventDurationMs(event);
+    if (durationMs !== null) {
+      if (event.run_id) {
+        updates[`runDuration:${event.run_id}`] = durationMs;
+      }
+      if (event.agent_id && event.session_id) {
+        updates[`sessionDuration:${event.agent_id}::${event.session_id}`] =
+          durationMs;
+      }
+    }
+
     if (Object.keys(updates).length > 0) {
       updateSubAgentRunStatuses(updates);
     }
+  }
+
+  function runEventDurationMs(event) {
+    const durationMs = event?.payload?.timing?.duration_ms;
+    return Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : null;
   }
 
   function statusFromRunEvent(event) {
@@ -321,6 +341,9 @@ export function createChatRunStream({
     }
     if (payload.usage) {
       runPayload.usage = payload.usage;
+    }
+    if (payload.timing) {
+      runPayload.timing = payload.timing;
     }
 
     return {
