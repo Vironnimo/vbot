@@ -158,15 +158,21 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_oauth_token_getter_refreshes_expired_openai_subscription_token(
+async def test_oauth_token_getter_refreshes_expired_openai_codex_token(
     tmp_path: Path,
 ) -> None:
-    """Expired OpenAI Subscription tokens refresh through the OAuth refresh_token grant."""
+    """Expired OpenAI Codex OAuth tokens refresh through the refresh_token grant.
+
+    The Codex (ChatGPT subscription) connection is provider ``openai`` with
+    local connection id ``subscription``; the token-store key is therefore
+    ``openai`` + ``-`` + ``subscription`` + ``.json`` (per the
+    ``<provider>-<connection>`` rule).
+    """
 
     token_store = TokenStore(tmp_path)
     token_store.save(
-        "openai-subscription",
-        CONNECTION_ID,
+        "openai",
+        "subscription",
         OAuthToken(
             access_token=_jwt_with_account("acct_old"),
             refresh_token="refresh-secret",
@@ -187,8 +193,8 @@ async def test_oauth_token_getter_refreshes_expired_openai_subscription_token(
     )
     getter = OAuthTokenGetter(
         token_store,
-        "openai-subscription",
-        CONNECTION_ID,
+        "openai",
+        "subscription",
         _openai_oauth_config(),
     )
 
@@ -202,7 +208,7 @@ async def test_oauth_token_getter_refreshes_expired_openai_subscription_token(
         "refresh_token": ["refresh-secret"],
         "client_id": ["openai-client-id"],
     }
-    stored = token_store.load("openai-subscription", CONNECTION_ID)
+    stored = token_store.load("openai", "subscription")
     assert stored is not None
     assert stored.access_token == refreshed_access_token
     assert stored.refresh_token == "new-refresh-secret"
