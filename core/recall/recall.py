@@ -61,6 +61,9 @@ class RecallBackend(Protocol):
     def browse(self, request: RecallRequest) -> JsonObject:
         """Return session summaries for a recall request."""
 
+    def overview(self, request: RecallRequest) -> JsonObject:
+        """Return one session's overview: start/end messages and a total count."""
+
     def search(self, request: RecallRequest) -> JsonObject:
         """Return query matches for a recall request."""
 

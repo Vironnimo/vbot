@@ -72,6 +72,10 @@ class JsonlSessionRecallBackend:
         summaries = self.candidate_session_summaries(request)
         return self.session_summary_result(request, summaries)
 
+    def overview(self, request: RecallRequest) -> JsonObject:
+        summaries = self.candidate_session_summaries(request)
+        return self.session_overview_result(request, summaries)
+
     def search(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.message_search_result(request, summaries)
@@ -117,6 +121,38 @@ class JsonlSessionRecallBackend:
             "sessions": sessions_payload,
             "truncated": truncated,
             "total_candidates": len(summaries),
+            "request": request_payload(request),
+        }
+
+    def session_overview_result(
+        self,
+        request: RecallRequest,
+        summaries: list[JsonObject],
+    ) -> JsonObject:
+        summary = summaries[0] if summaries else None
+        if summary is None or request.session_id is None:
+            return empty_session_overview(request)
+
+        messages = self.sessions.get(request.agent_id, request.session_id).load()
+        eligible_indices = [
+            index
+            for index, message in enumerate(messages)
+            if is_eligible_context(message, request.roles)
+        ]
+        start_indices, end_indices = overview_bookend_indices(
+            eligible_indices, request.bookend_messages
+        )
+        bookend_start = [message_preview_payload(messages[index]) for index in start_indices]
+        bookend_end = [message_preview_payload(messages[index]) for index in end_indices]
+        total = len(eligible_indices)
+        omitted = total - len(start_indices) - len(end_indices)
+        return {
+            "content": render_session_overview(request, bookend_start, bookend_end, total, omitted),
+            "session": session_payload(request.agent_id, summary),
+            "bookend_start": bookend_start,
+            "bookend_end": bookend_end,
+            "total_messages": total,
+            "truncated": omitted > 0,
             "request": request_payload(request),
         }
 
@@ -176,7 +212,11 @@ class JsonlSessionRecallBackend:
         anchor_index = message_index_by_id(messages, request.around_message_id)
         if anchor_index is None:
             return empty_anchored_view(request)
-        if not message_matches_request(messages[anchor_index], request):
+        # The anchor was requested by explicit id, so surface it regardless of the
+        # request's role/time filters (those still gate the neighbours and bookends
+        # via is_eligible_context). Only the never-surfaced categories are excluded.
+        anchor = messages[anchor_index]
+        if is_skill_context_note(anchor) or is_recall_artifact_message(anchor):
             return empty_anchored_view(request)
 
         window = window_payload(messages, anchor_index, request.context_messages, request.roles)
@@ -222,6 +262,38 @@ def empty_anchored_view(request: RecallRequest) -> JsonObject:
         "truncated": False,
         "request": request_payload(request),
     }
+
+
+def empty_session_overview(request: RecallRequest) -> JsonObject:
+    return {
+        "content": f"No session found: {request.session_id}",
+        "session": None,
+        "bookend_start": [],
+        "bookend_end": [],
+        "total_messages": 0,
+        "truncated": False,
+        "request": request_payload(request),
+    }
+
+
+def overview_bookend_indices(
+    eligible_indices: list[int],
+    bookend_messages: int,
+) -> tuple[list[int], list[int]]:
+    """Split a session's eligible message indices into start and end bookends.
+
+    Returns the first ``bookend_messages`` indices and the last ``bookend_messages``
+    indices, with any overlap removed so a short session never reports the same
+    message in both halves (e.g. four messages with ``bookends=3`` yields a
+    three-message start and a one-message end, not a duplicated middle).
+    """
+
+    if bookend_messages <= 0:
+        return [], []
+    start = eligible_indices[:bookend_messages]
+    start_set = set(start)
+    end = [index for index in eligible_indices[-bookend_messages:] if index not in start_set]
+    return start, end
 
 
 def message_index_by_id(messages: list[Any], message_id: str) -> int | None:
@@ -622,6 +694,26 @@ def render_anchored_view(
     for item in window:
         lines.append(f"window: {item['timestamp']} {item['role']} {item['snippet']}")
     for item in bookends.get("bookend_end", []):
+        lines.append(f"end: {item['timestamp']} {item['role']} {item['snippet']}")
+    return "\n".join(lines)
+
+
+def render_session_overview(
+    request: RecallRequest,
+    bookend_start: list[JsonObject],
+    bookend_end: list[JsonObject],
+    total: int,
+    omitted: int,
+) -> str:
+    lines = [f"Session {request.session_id} for agent {request.agent_id}: {total} message(s)."]
+    if total == 0:
+        lines.append("No messages match the requested roles.")
+        return "\n".join(lines)
+    for item in bookend_start:
+        lines.append(f"start: {item['timestamp']} {item['role']} {item['snippet']}")
+    if omitted > 0:
+        lines.append(f"... {omitted} message(s) omitted ...")
+    for item in bookend_end:
         lines.append(f"end: {item['timestamp']} {item['role']} {item['snippet']}")
     return "\n".join(lines)
 

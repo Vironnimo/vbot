@@ -33,8 +33,12 @@ from core.tools.tools import (
 
 SESSION_SEARCH_TOOL_NAME = "session_search"
 SESSION_SEARCH_TOOL_DESCRIPTION = (
-    "Search persisted chat sessions by query, time range, role, agent, or session. "
-    "Without a query, returns recent matching session summaries."
+    "Search and read persisted chat sessions. Four modes, chosen by which arguments you pass: "
+    "(1) query -> matching messages (narrow with session_id, roles, or a time range); "
+    "(2) session_id alone (no query) -> that session's overview: its first and last messages "
+    "(bookends) plus a total message count; "
+    "(3) session_id + around_message_id -> an anchored window of messages around that message; "
+    "(4) no query and no session_id -> recent session summaries for the agent."
 )
 SESSION_SEARCH_DEFAULT_LIMIT = 20
 SESSION_SEARCH_MAX_LIMIT = 100
@@ -62,7 +66,10 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
         },
         "session_id": {
             "type": "string",
-            "description": "Restrict search to one session id.",
+            "description": (
+                "Restrict to one session id. With a query it narrows the search; alone "
+                "(no query, no around_message_id) it returns that session's overview."
+            ),
         },
         "around_message_id": {
             "type": "string",
@@ -94,16 +101,23 @@ SESSION_SEARCH_TOOL_PARAMETERS: JsonObject = {
         },
         "limit": {
             "type": "number",
-            "description": "Maximum matches or session summaries to return (default 20, max 100).",
+            "description": (
+                "Maximum matches or session summaries to return (default 20, max 100). "
+                "Does not apply to a single-session overview — use bookends there."
+            ),
         },
         "context": {
             "type": "number",
-            "description": "Messages before and after each match to include (default 0, max 2).",
+            "description": (
+                "Messages before and after each match or anchor to include "
+                "(default 0, anchored views 2, max 2). Not used by the session overview."
+            ),
         },
         "bookends": {
             "type": "number",
             "description": (
-                "Session start/end messages to include for orientation (default 2, max 5)."
+                "Start/end messages to include for orientation (default 2, max 5). Drives the "
+                "single-session overview, and adds session edges to matches and anchored views."
             ),
         },
         "sort": {
@@ -183,6 +197,8 @@ def session_search_handler(
         if request.around_message_id is not None:
             return tool_success(recall_backend.scroll(request))
         if request.query is None:
+            if request.session_id is not None:
+                return tool_success(recall_backend.overview(request))
             return tool_success(recall_backend.browse(request))
         return tool_success(recall_backend.search(request))
     except ChatSessionError as error:
