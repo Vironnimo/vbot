@@ -23,7 +23,7 @@ else:
     ChatSessionManager = Any
     ModelRegistry = Any
 
-CommandActionName = Literal["compact", "new_session", "retry_last_turn"]
+CommandActionName = Literal["compact", "handoff", "new_session", "retry_last_turn"]
 StatusActivityName = Literal["idle", "running"]
 
 CommandHandler = Callable[[str, str], "CommandHandled | CommandAction"]
@@ -51,6 +51,10 @@ class CommandAction:
     """Result indicating a recognized command needs accessor-level execution."""
 
     name: CommandActionName
+    # Optional command argument. For ``handoff`` this is the target agent id,
+    # or ``None`` to hand off to the current agent. Kept generic so the
+    # dataclass stays reusable for future argument-bearing commands.
+    argument: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,7 @@ class CommandDispatcher:
 
     BUILT_IN_COMMANDS: dict[str, str] = {
         "compact": "Compact the current session's context immediately.",
+        "handoff": "Write a handoff and start a new session (optionally for another agent).",
         "help": "Show available built-in slash commands.",
         "new": "Start a new session for the current agent.",
         "retry": "Retry the last user turn in this session.",
@@ -107,7 +112,17 @@ class CommandDispatcher:
 
     def dispatch(self, agent_id: str, session_id: str, message_text: str) -> DispatchResult:
         """Dispatch one message as a built-in slash command when recognized."""
-        normalized_text = message_text.strip().lower()
+        stripped_text = message_text.strip()
+        first_token, _, remainder = stripped_text.partition(" ")
+        if first_token.lower() == "/handoff":
+            trailing = remainder.strip()
+            if trailing:
+                tokens = trailing.split()
+                if len(tokens) != 1:
+                    return NotACommand()
+                return CommandAction(name="handoff", argument=tokens[0])
+            return CommandAction(name="handoff", argument=None)
+        normalized_text = stripped_text.lower()
         handler = self._commands.get(normalized_text)
         if handler is None:
             return NotACommand()
