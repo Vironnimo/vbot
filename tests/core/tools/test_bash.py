@@ -782,3 +782,54 @@ async def test_background_watcher_keeps_completion_wording_for_natural_exit(
     assert "aborted by the user" not in message
     assert "Exit code: 0" in message
     assert "done" in message
+
+
+@pytest.mark.asyncio
+async def test_background_watcher_discards_user_cancelled_session_id_after_consuming(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The watcher removes the session id from `_user_cancelled_session_ids` once consumed."""
+    trigger_called = asyncio.Event()
+    cancelled_sessions: set[str] = set()
+    monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
+
+    class MockTriggerService:
+        async def trigger_run(
+            self,
+            _agent_id: str,
+            _message: str,
+            *,
+            session_id: str,
+            internal: bool,
+        ) -> None:
+            assert session_id
+            assert internal is True
+            trigger_called.set()
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "background": True},
+        manager,
+        trigger_service=MockTriggerService(),
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    data = result["data"]
+    assert isinstance(data, dict)
+    session_id = data["session_id"]
+    assert isinstance(session_id, str) and session_id
+
+    # Simulate the runtime firing the user-cancel callback for this tool call.
+    cancelled_sessions.add(session_id)
+    await manager.kill(session_id, AGENT_ID)
+
+    await asyncio.wait_for(trigger_called.wait(), timeout=2)
+
+    # The watcher must have consumed and discarded the entry, so the set no longer holds it.
+    assert session_id not in bash_module._user_cancelled_session_ids
