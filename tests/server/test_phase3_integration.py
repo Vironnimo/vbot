@@ -65,16 +65,16 @@ class IntegrationProviders:
                 base_url="https://api.openai.com/v1",
                 connections=[
                     IntegrationConnection(
-                        id="oauth",
-                        type="oauth",
-                        label="OAuth",
-                        auth=IntegrationAuth(credential_key="OPENAI_OAUTH_TOKEN"),
-                    ),
-                    IntegrationConnection(
                         id="api-key",
                         type="api_key",
                         label="API Key",
                         auth=IntegrationAuth(credential_key="OPENAI_API_KEY"),
+                    ),
+                    IntegrationConnection(
+                        id="subscription",
+                        type="oauth",
+                        label="ChatGPT Plus/Pro",
+                        auth=IntegrationAuth(credential_key="OPENAI_OAUTH_TOKEN"),
                     ),
                 ],
             ),
@@ -139,6 +139,7 @@ class IntegrationModels:
                     ),
                     context_window=256000,
                     max_output_tokens=32000,
+                    connections=("api-key",),
                 )
             ],
         }
@@ -355,6 +356,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
+                    "connections": ["api-key"],
                 }
             ]
         },
@@ -398,17 +400,17 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "models_endpoint": None,
                         "connections": [
                             {
-                                "id": "openai:oauth",
-                                "type": "oauth",
-                                "label": "OAuth",
-                                "configured": True,
-                                "connectable": False,
-                            },
-                            {
                                 "id": "openai:api-key",
                                 "type": "api_key",
                                 "label": "API Key",
                                 "configured": True,
+                            },
+                            {
+                                "id": "openai:subscription",
+                                "type": "oauth",
+                                "label": "ChatGPT Plus/Pro",
+                                "configured": True,
+                                "connectable": False,
                             },
                         ],
                         "credentials_configured": True,

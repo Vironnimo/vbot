@@ -60,41 +60,6 @@ describe('SettingsView OAuth providers', () => {
     expect(providerRow('OpenRouter').textContent).toContain('Configured');
   });
 
-  it('renders static oauth token connections without a Connect action', async () => {
-    currentSettings = settingsPayload({
-      oauthConfigured: false,
-      extraProviders: [
-        {
-          id: 'openai',
-          name: 'OpenAI',
-          base_url: 'https://api.openai.com/v1',
-          models_endpoint: null,
-          credentials_configured: false,
-          status: 'missing_credentials',
-          model_count: 2,
-          connections: [
-            {
-              id: 'openai:oauth',
-              type: 'oauth',
-              label: 'OAuth',
-              configured: false,
-              connectable: false,
-            },
-          ],
-        },
-      ],
-    });
-    mountedComponent = mountSettingsView();
-    await openProvidersPanel();
-
-    const row = providerRow('OpenAI');
-    expect(row.textContent).toContain(
-      'OAuth token configured from environment or data directory.',
-    );
-    expect(row.textContent).toContain('Missing credentials');
-    expect(row.textContent).not.toContain('Connect');
-  });
-
   it('starts provider.connect and shows the device flow dialog with the user code', async () => {
     mountedComponent = mountSettingsView();
     await openProvidersPanel();

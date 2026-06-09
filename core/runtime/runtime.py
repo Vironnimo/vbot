@@ -30,8 +30,8 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.mistral import MistralAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.openai_subscription import OpenAISubscriptionAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig, ProviderRegistry
@@ -99,7 +99,7 @@ _ADAPTER_MAP: dict[
     type[ProviderAdapter],
 ] = {
     "openai_compatible": OpenAICompatibleAdapter,
-    "openai_subscription": OpenAISubscriptionAdapter,
+    "openai": OpenAIAdapter,
     "openrouter": OpenRouterAdapter,
     "minimax": MiniMaxAdapter,
     "mistral": MistralAdapter,
@@ -931,6 +931,7 @@ class Runtime:
             connection.auth,
             model_lookup=self._model_lookup_for(provider_id),
             debug_recorder=debug_recorder,
+            connection_mode=connection.mode,
         )
 
         return cast(ProviderAdapter, adapter)

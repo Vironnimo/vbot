@@ -478,16 +478,16 @@ def test_get_adapter_unknown_adapter_type_raises_config_error(
     """Runtime.get_adapter() raises ConfigError for an unknown adapter type.
 
     This test verifies the adapter factory mapping rejects unknown types
-    by temporarily removing the openai_compatible entry.
+    by temporarily removing the openai entry.
     """
     # Arrange
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake-key")
     runtime = Runtime(config)
     runtime.start()
 
-    # Patch the adapter map to remove the openai_compatible entry
+    # Patch the adapter map to remove the openai entry
     original_map = runtime.get_adapter.__globals__["_ADAPTER_MAP"].copy()
-    runtime.get_adapter.__globals__["_ADAPTER_MAP"].pop("openai_compatible")
+    runtime.get_adapter.__globals__["_ADAPTER_MAP"].pop("openai")
 
     try:
         # Act & Assert

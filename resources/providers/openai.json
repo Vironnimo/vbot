@@ -1,19 +1,9 @@
 {
   "id": "openai",
   "name": "OpenAI",
-  "adapter": "openai_compatible",
+  "adapter": "openai",
   "base_url": "https://api.openai.com/v1",
   "connections": [
-    {
-      "id": "oauth",
-      "type": "oauth",
-      "label": "OAuth",
-      "auth": {
-        "header": "Authorization",
-        "prefix": "Bearer ",
-        "credential_key": "OPENAI_OAUTH_TOKEN"
-      }
-    },
     {
       "id": "api-key",
       "type": "api_key",
@@ -22,6 +12,29 @@
         "header": "Authorization",
         "prefix": "Bearer ",
         "credential_key": "OPENAI_API_KEY"
+      }
+    },
+    {
+      "id": "subscription",
+      "type": "oauth",
+      "label": "ChatGPT Plus/Pro",
+      "auth": {
+        "header": "Authorization",
+        "prefix": "Bearer "
+      },
+      "base_url": "https://chatgpt.com/backend-api",
+      "mode": "codex_responses",
+      "models_endpoint": "/codex/models",
+      "oauth": {
+        "flow": "device",
+        "device_flow": "openai_codex",
+        "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+        "device_auth_url": "https://auth.openai.com/api/accounts/deviceauth/usercode",
+        "token_url": "https://auth.openai.com/oauth/token",
+        "verification_uri": "https://auth.openai.com/codex/device",
+        "redirect_uri": "https://auth.openai.com/deviceauth/callback",
+        "expires_in": 600,
+        "scopes": ["openid", "profile", "email", "offline_access"]
       }
     }
   ],
