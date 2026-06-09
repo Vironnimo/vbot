@@ -1728,6 +1728,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 200000,
                     "max_output_tokens": 64000,
+                    "connections": [],
                 },
                 {
                     "id": "ollama/llama3.2",
@@ -1746,6 +1747,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 8192,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-4.1-mini",
@@ -1764,6 +1766,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-5.2",
@@ -1787,6 +1790,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
+                    "connections": [],
                 },
             ]
         },
@@ -1827,6 +1831,7 @@ async def test_model_list_filters_by_connection_usability(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-5.2",
@@ -1850,10 +1855,79 @@ async def test_model_list_filters_by_connection_usability(
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
+                    "connections": [],
                 },
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_model_list_outputs_per_model_connections_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``model.list`` propagates the per-model ``connections`` allowlist
+    from the registry into the RPC payload. The WebUI uses this list to
+    decide which provider connections to offer for a given model — a
+    model tagged ``["subscription"]`` is not offered on ``api-key``."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.models._models["openai"] = [
+        Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
+            connections=("api-key",),
+        ),
+        Model(
+            model_id="gpt-5.5",
+            name="GPT-5.5",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
+            connections=("subscription",),
+        ),
+    ]
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response["ok"] is True
+    by_id = {model["id"]: model for model in response["result"]["models"]}
+    assert by_id["openai/gpt-5.2"]["connections"] == ["api-key"]
+    assert by_id["openai/gpt-5.5"]["connections"] == ["subscription"]
+
+
+@pytest.mark.asyncio
+async def test_model_list_outputs_empty_connections_for_unrestricted_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model with no ``connections`` allowlist surfaces ``connections``
+    as an empty list — the WebUI treats that as "valid for every
+    connection of the provider"."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response["ok"] is True
+    for model in response["result"]["models"]:
+        assert model["connections"] == []
 
 
 @pytest.mark.asyncio
@@ -2178,6 +2252,133 @@ async def test_model_refresh_db_passes_first_usable_connection_to_discovery(
     assert response["ok"] is True
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
     assert FAKE_REFRESH_MODEL_KWARGS[0]["credential_connection"].id == "api-key"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_iterates_every_refreshable_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider with multiple endpoint-bearing credentialed connections is
+    refreshed once per connection.
+
+    Confirms the RPC layer walks the full connection list rather than
+    stopping at the first usable one. The registry is reloaded exactly
+    once at the end of the call, and the merged catalog is the union of
+    every connection's result (here all the same stub ``fresh-model``).
+    """
+
+    monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
+    monkeypatch.setenv("OPENAI_SECONDARY_KEY", "secondary-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint=None,
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_PRIMARY_KEY"),
+                ),
+                SimpleNamespace(
+                    id="secondary",
+                    type="api_key",
+                    label="Secondary",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_SECONDARY_KEY"),
+                ),
+                SimpleNamespace(
+                    id="missing-creds",
+                    type="api_key",
+                    label="Missing Credentials",
+                    base_url="https://api.openai.com/v1",
+                    models_endpoint="/v1/models",
+                    auth=SimpleNamespace(credential_key="OPENAI_MISSING_KEY"),
+                ),
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
+    )
+
+    assert response["ok"] is True, response
+    # Two refreshes — the third connection has no credentials.
+    assert FAKE_REFRESH_MODEL_PROVIDER_IDS == ["openai", "openai"]
+    assert sorted(FAKE_REFRESH_MODEL_CALLS) == ["primary-key", "secondary-key"]
+    connection_ids = [kwargs["credential_connection"].id for kwargs in FAKE_REFRESH_MODEL_KWARGS]
+    assert connection_ids == ["api-key", "secondary"]
+    # The registry reloads once and the merged catalog is readable.
+    refreshed_model = state.runtime.models.get("openai", "fresh-model")
+    assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_model_refresh_db_skips_connections_without_effective_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection without an effective ``models_endpoint`` is silently skipped.
+
+    Provider-level ``models_endpoint=None`` and connection-level
+    ``models_endpoint=None`` together mean there is no catalog to fetch,
+    so the connection is excluded from the iteration — even when it has
+    valid credentials.
+    """
+
+    monkeypatch.setenv("OPENAI_PRIMARY_KEY", "primary-key")
+    monkeypatch.setattr(delegates, "refresh_models", fake_refresh_models)
+    FAKE_REFRESH_MODEL_PROVIDER_IDS.clear()
+    FAKE_REFRESH_MODEL_CALLS.clear()
+    FAKE_REFRESH_MODEL_KWARGS.clear()
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(
+        SimpleNamespace(
+            id="openai",
+            name="OpenAI",
+            adapter="openai",
+            base_url="https://api.openai.com/v1",
+            defaults={},
+            extra_headers={},
+            models_endpoint=None,
+            connections=[
+                SimpleNamespace(
+                    id="api-key",
+                    type="api_key",
+                    label="API Key",
+                    base_url=None,
+                    models_endpoint=None,
+                    auth=SimpleNamespace(credential_key="OPENAI_PRIMARY_KEY"),
+                ),
+            ],
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openai"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "domain_error"
+    assert "provider 'openai' does not support model refresh" in response["error"]["message"]
+    assert FAKE_REFRESH_MODEL_CALLS == []
 
 
 @pytest.mark.asyncio

@@ -4,33 +4,37 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 ## Overview
 
-`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime creates adapters with one explicit connection, an async token getter, provider defaults, optional debug capture, and provider-scoped model lookup. Concrete wire behavior belongs in the provider child specs under `.vorch/specs/providers/`; keep the root spec focused on shared contracts and extension rules. Direct OpenAI Platform access and ChatGPT subscription access are separate providers because credentials, endpoints, account routing, and supported runtime APIs differ.
+`core/providers/` translates canonical vBot chat requests into external provider wire protocols. Provider configs live in `resources/providers/*.json`; normalized model catalogs live in `resources/models/*.json`; runtime creates adapters with one explicit connection, an async token getter, provider defaults, optional debug capture, and provider-scoped model lookup. Concrete wire behavior belongs in the provider child specs under `.vorch/specs/providers/`; keep the root spec focused on shared contracts and extension rules. A single provider can serve multiple connection variants (different auth, base URL, or wire protocol) through one adapter class that branches on the connection's declared `mode`; OpenAI is the canonical example with `api-key` and `subscription` connections on one `OpenAIAdapter`.
 
 ## Data Model
 
 - Provider JSON owns `id`, `name`, adapter selector, base URL, `connections`, optional `defaults`, optional `extra_headers`, and optional `models_endpoint`.
-- Connection JSON is provider-local until exposed externally as `<provider_id>:<local_connection_id>`. Supported connection types are `api_key` and `oauth`; API-key connections require `auth.credential_key`, while OAuth Device Flow connections store their flow metadata under `oauth`.
+- Connection JSON is provider-local until exposed externally as `<provider_id>:<local_connection_id>`. Supported connection types are `api_key` and `oauth`; API-key connections require `auth.credential_key`, while OAuth Device Flow connections store their flow metadata under `oauth`. A connection may also carry:
+  - `mode: str` — adapter-interpreted wire-variant selector. The provider's adapter reads it at construction time and picks the right request builder / response parser for the connection (e.g. OpenAI `codex_responses` vs the generic chat-completions default). `None` and the default chat-completions value both mean the generic path.
+  - `models_endpoint: str` — per-connection discovery endpoint, overrides the provider-level `models_endpoint`. Used when different connections of the same provider talk to different model catalogs.
+  - `base_url: str` — per-connection base URL, overrides the provider-level base URL. Used when different connections of the same provider hit different hosts (e.g. Platform `api.openai.com` vs ChatGPT `chatgpt.com`).
+  Both `mode` and `models_endpoint` must be strings when present; non-string values are a config error.
 - `ProviderRegistry.load(resources_dir)` parses `resources/providers/*.json`, rejects duplicate provider ids/connection ids, validates connection types/OAuth device-flow names, and caches the registry by resolved resources path.
 - `TokenStore` persists OAuth tokens under `<data_dir>/oauth/<provider_id>-<local_connection_id>.json` after validating ids against path traversal. Expired tokens still count as usable when they have a refresh path (`refresh_token` or Copilot's stored `github_oauth_token`).
+- Each catalog model may carry a `connections` allowlist (`tuple[str, ...]`) that binds it to a subset of its provider's connections; empty tuple means "all connections". Discovery writes each refreshed model with `connections: [<credential_connection.id>]` and refresh merge keeps models belonging to other connections intact (see `models.md` and `model_tasks.md` for the read-side filter).
 
 ## Interfaces
 
-- `runtime.get_adapter(provider_id, connection_id)` is the adapter factory. It requires a full compositional connection id, resolves the selected connection, injects `StaticTokenGetter` or `OAuthTokenGetter`, injects `model_lookup(model_id)`, and passes a `ProviderDebugRecorder` when debug mode is enabled.
+- `runtime.get_adapter(provider_id, connection_id)` is the adapter factory. It requires a full compositional connection id, resolves the selected connection, injects `StaticTokenGetter` or `OAuthTokenGetter`, injects `model_lookup(model_id)`, and passes a `ProviderDebugRecorder` when debug mode is enabled. The connection's `mode` is threaded into the adapter as `connection_mode`; adapters that ignore it (because they have a single wire variant) accept the keyword-only parameter and discard it.
 - `ProviderCredentialResolver` reads API-key credentials from process environment first, then the data-dir `.env` fallback. OAuth credentials come from `TokenStore`; OAuth connections without `oauth` metadata are treated as static-token stubs.
 - Server RPC `provider.set_key` only targets API-key connections. It writes the connection's configured `credential_key` to the data-dir `.env`, reloads runtime fallback credentials, and never returns the secret value.
-- Model discovery uses `models_endpoint`, the first usable connection, adapter `discovery_headers()`/`discovery_params()`/`supplementary_discovery_params()` hooks, and `normalize_catalog_entry()`. Discovery accepts top-level `data` or `models` lists and writes refreshable catalog artifacts.
+- Model discovery uses the effective `models_endpoint` (`connection.models_endpoint` or provider-level fallback) and base URL (`connection.base_url` or provider-level fallback) for each connection. A refresh iterates every connection that has both credentials and an effective `models_endpoint`; each iteration's discovered models are tagged with `connections: [<credential_connection.id>]` and merged into the existing catalog by replacing only models whose `connections` include the current connection id. Discovery also uses adapter `discovery_headers()`/`discovery_params()`/`supplementary_discovery_params()` hooks and `normalize_catalog_entry()`. Discovery accepts top-level `data` or `models` lists and writes refreshable catalog artifacts.
 - `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the chat-facing contract. `stream()` yields normalized vBot deltas only; raw provider chunks and SSE event names stay inside adapters.
 
 ## Specific Specs
 
-- `providers/openai.md` - Direct OpenAI Platform provider and generic OpenAI-compatible adapter behavior.
+- `providers/openai.md` - Direct OpenAI Platform access and ChatGPT subscription access as one provider with two connections (`api-key`, `subscription`); single `OpenAIAdapter` branches on connection `mode`.
 - `providers/anthropic.md` - Anthropic Messages adapter.
 - `providers/openrouter.md` - OpenRouter runtime, reasoning, and multi-modality catalog discovery.
 - `providers/opencode-go.md` - OpenCode Go routing and reasoning replay behavior.
 - `providers/mistral.md` - Mistral-specific reasoning and catalog normalization.
 - `providers/minimax.md` - MiniMax OpenAI-compatible endpoint, sparse catalog normalization, and thinking controls.
 - `providers/github-copilot.md` - GitHub Copilot OAuth, endpoint routing, policy, and catalog metadata.
-- `providers/openai-subscription.md` - OpenAI Subscription Codex OAuth, ChatGPT account header, model discovery, and Responses routing.
 
 ## Adding A Provider
 

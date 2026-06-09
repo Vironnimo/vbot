@@ -1,4 +1,9 @@
-"""OpenAI Subscription provider adapter."""
+"""OpenAI provider adapter.
+
+Handles both the OpenAI Platform ``/chat/completions`` endpoint (default
+``api-key`` connection) and the ChatGPT Codex ``/codex/responses`` endpoint
+(``subscription`` connection with ``mode: codex_responses``).
+"""
 
 from __future__ import annotations
 
@@ -23,6 +28,11 @@ from core.providers.providers import ProviderConfig
 from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
 from core.utils.retry import retry_async
 
+CODEX_RESPONSES_MODE = "codex_responses"
+CODEX_EXTRA_HEADERS: dict[str, str] = {
+    "OpenAI-Beta": "responses=experimental",
+    "originator": "vbot",
+}
 CODEX_RESPONSES_ENDPOINT = "/codex/responses"
 RESPONSES_POLICY_ENDPOINT = "/responses"
 OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
@@ -46,8 +56,16 @@ DISCOVERY_REASONING_PARAMETER_NAMES = frozenset(
 CODEX_CLIENT_VERSION = "0.136.0"
 
 
-class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
-    """Adapter for ChatGPT Plus/Pro Subscription access through Codex OAuth."""
+class OpenAIAdapter(OpenAICompatibleAdapter):
+    """Adapter for the unified ``openai`` provider.
+
+    The connection's ``mode`` selects the wire variant:
+
+    - ``CODEX_RESPONSES_MODE`` (``"codex_responses"``): Codex Responses API
+      (``/codex/responses``) — used by the ``subscription`` connection.
+    - ``None`` (default): inherited OpenAI-compatible ``/chat/completions``
+      — used by the ``api-key`` connection.
+    """
 
     @classmethod
     def discovery_headers(
@@ -56,18 +74,18 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         credential_value: str,
         headers: Mapping[str, str],
     ) -> dict[str, str]:
-        """Add ChatGPT account routing headers for `/codex/models` discovery."""
+        """Add ChatGPT account routing and Codex headers for ``/codex/models``."""
 
         account_id = extract_chatgpt_account_id(credential_value)
         if account_id is None:
             raise ProviderAuthError(
                 "OpenAI Subscription OAuth token is missing a ChatGPT account id; please reconnect"
             )
-        return {**headers, "chatgpt-account-id": account_id}
+        return {**headers, "chatgpt-account-id": account_id, **CODEX_EXTRA_HEADERS}
 
     @classmethod
     def discovery_params(cls) -> dict[str, str]:
-        """Return query parameters required by `/codex/models` discovery."""
+        """Return query parameters required by ``/codex/models`` discovery."""
 
         return {"client_version": CODEX_CLIENT_VERSION}
 
@@ -77,7 +95,7 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one OpenAI Subscription `/codex/models` entry."""
+        """Normalize one OpenAI Subscription ``/codex/models`` entry."""
 
         normalized_raw = _normalize_catalog_raw(raw)
         base_model = OpenAICompatibleAdapter.normalize_catalog_entry(normalized_raw, defaults)
@@ -136,6 +154,11 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         )
 
     async def _build_headers(self) -> dict[str, str]:
+        if self._connection_mode == CODEX_RESPONSES_MODE:
+            return await self._build_codex_headers()
+        return await super()._build_headers()
+
+    async def _build_codex_headers(self) -> dict[str, str]:
         token = await self._token_getter()
         account_id = extract_chatgpt_account_id(token)
         if account_id is None:
@@ -146,6 +169,7 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
             self._auth_config.header: f"{self._auth_config.prefix}{token}",
             "chatgpt-account-id": account_id,
         }
+        headers.update(CODEX_EXTRA_HEADERS)
         if self._config.extra_headers:
             headers.update(self._config.extra_headers)
         return headers
@@ -157,14 +181,21 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Send a non-streaming Responses request through the Codex backend."""
+        """Send a non-streaming request.
 
-        payload = self._build_responses_payload(
-            messages,
-            model_id=model_id,
-            **self._request_kwargs_with_defaults(kwargs),
-        )
-        return await self._post_json(CODEX_RESPONSES_ENDPOINT, payload)
+        Routes to the Codex Responses endpoint when ``connection_mode`` is
+        ``CODEX_RESPONSES_MODE``; otherwise delegates to the inherited
+        ``/chat/completions`` request.
+        """
+
+        if self._connection_mode == CODEX_RESPONSES_MODE:
+            payload = self._build_responses_payload(
+                messages,
+                model_id=model_id,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+            return await self._post_json(CODEX_RESPONSES_ENDPOINT, payload)
+        return await super().send(messages, model_id=model_id, **kwargs)
 
     async def stream(
         self,
@@ -173,21 +204,32 @@ class OpenAISubscriptionAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Stream a Responses request as normalized vBot deltas."""
+        """Stream a request as normalized vBot deltas.
 
-        payload = self._build_responses_payload(
-            messages,
-            model_id=model_id,
-            stream=True,
-            **self._request_kwargs_with_defaults(kwargs),
-        )
-        async for delta in self._stream_responses(payload):
+        Routes to the Codex Responses endpoint when ``connection_mode`` is
+        ``CODEX_RESPONSES_MODE``; otherwise delegates to the inherited
+        ``/chat/completions`` stream.
+        """
+
+        if self._connection_mode == CODEX_RESPONSES_MODE:
+            payload = self._build_responses_payload(
+                messages,
+                model_id=model_id,
+                stream=True,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+            async for delta in self._stream_responses(payload):
+                yield delta
+            return
+        async for delta in super().stream(messages, model_id=model_id, **kwargs):
             yield delta
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        """Normalize a Responses API result to canonical assistant fields."""
+        """Normalize a provider response to canonical assistant fields."""
 
-        if isinstance(response.get("output"), list):
+        if self._connection_mode == CODEX_RESPONSES_MODE and isinstance(
+            response.get("output"), list
+        ):
             return normalize_responses_response(response)
         return super().normalize_response(response)
 

@@ -117,8 +117,8 @@ async def test_start_openai_device_flow_posts_json_and_uses_configured_verificat
 
     # Act
     session = await engine.start_device_flow(
-        "openai-subscription",
-        "oauth",
+        "openai",
+        "subscription",
         _openai_oauth_config(),
     )
 
@@ -211,8 +211,8 @@ async def test_poll_loop_exchanges_openai_device_authorization_code(
     # Act
     with patch("core.providers.auth_flow.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
         await engine._poll_for_token(
-            "openai-subscription",
-            "oauth",
+            "openai",
+            "subscription",
             _openai_oauth_config(),
             "device-auth-id",
             2,
@@ -236,7 +236,7 @@ async def test_poll_loop_exchanges_openai_device_authorization_code(
         "code_verifier": ["code-verifier"],
         "redirect_uri": [OPENAI_REDIRECT_URI],
     }
-    token = token_store.load("openai-subscription", "oauth")
+    token = token_store.load("openai", "subscription")
     assert token is not None
     assert token.access_token == access_token
     assert token.refresh_token == "refresh-secret"

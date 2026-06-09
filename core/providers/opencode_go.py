@@ -52,7 +52,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         auth_config: AuthConfig | None = None,
         model_lookup: ModelLookup | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
+        *,
+        connection_mode: str | None = None,
     ) -> None:
+        # ``connection_mode`` is accepted for parity with the unified
+        # ``get_adapter`` call site but is not used by the OpenCode Go
+        # adapter; the inner OpenAI-compatible and Anthropic adapters
+        # inherit it through the same parameter.
+        del connection_mode
         super().__init__(
             config,
             token_getter,
