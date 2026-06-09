@@ -949,6 +949,148 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('does not duplicate a note-triggered run output that history already persisted', () => {
+    // Refresh while the internal follow-up run a non-blocking sub-agent
+    // completion spawns is still RUNNING. That run emits no
+    // user_message_persisted event (its trigger is a hidden note), so it cannot
+    // be anchored to a history user message. Its assistant output is already in
+    // history, so the replayed live run must not render the turn a second time.
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-note-run',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
+      {
+        id: 'assistant-spawn',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: { agent_id: 'tester', blocking: false },
+          },
+        ],
+      },
+      {
+        id: 'tool-subagent',
+        role: 'tool',
+        tool_call_id: 'call-subagent',
+        name: 'subagent',
+        content: '{"ok":true}',
+      },
+      {
+        id: 'assistant-started',
+        role: 'assistant',
+        content: 'The worker is running.',
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+        timing: { duration_ms: 10 },
+      },
+      {
+        id: 'assistant-result',
+        role: 'assistant',
+        content: 'The worker finished: the answer is 42.',
+      },
+    ]);
+
+    // Re-attach to the still-running note-triggered run (no user_message_persisted).
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/api/runs/run-two/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-two',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-result',
+          role: 'assistant',
+          content: 'The worker finished: the answer is 42.',
+        },
+      },
+    });
+
+    const occurrences = countTimelineTextOccurrences(
+      visibleTimelineItems(sessionState),
+      'The worker finished: the answer is 42.',
+    );
+
+    expect(occurrences).toBe(1);
+  });
+
+  it('keeps a note-triggered run output that history has not persisted yet', () => {
+    // Same shape, but the run's output is not yet in history (mid-stream). The
+    // live run must still render so the user sees in-flight output.
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-note-run-live',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Run a non-blocking worker' },
+      {
+        id: 'assistant-started',
+        role: 'assistant',
+        content: 'The worker is running.',
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-one',
+        status: 'completed',
+        timing: { duration_ms: 10 },
+      },
+    ]);
+
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/api/runs/run-two/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-two',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-result',
+          role: 'assistant',
+          content: 'The worker finished: the answer is 42.',
+        },
+      },
+    });
+
+    const occurrences = countTimelineTextOccurrences(
+      visibleTimelineItems(sessionState),
+      'The worker finished: the answer is 42.',
+    );
+
+    expect(occurrences).toBe(1);
+  });
+
   it('preserves active streaming items when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -3209,6 +3351,22 @@ describe('chat state helpers', () => {
     });
   });
 });
+
+function countTimelineTextOccurrences(timelineItems, text) {
+  let count = 0;
+  for (const item of timelineItems) {
+    if (item.type === 'message' && item.message?.content === text) {
+      count += 1;
+      continue;
+    }
+    if (item.type === 'assistant_run') {
+      count += (item.outputs ?? []).filter(
+        (output) => output.content === text,
+      ).length;
+    }
+  }
+  return count;
+}
 
 function reportedMultiStepMessages() {
   return [
