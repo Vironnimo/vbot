@@ -300,6 +300,22 @@ export const subAgentToolStatusLabel = (
   return formatDurationMs(toolDurationMs(tool), 'chat.toolDurationSeconds');
 };
 
+// Single source of truth for whether a tool/sub-agent row should render a
+// per-row cancel control. The row shape is intentionally narrow so the rule
+// stays testable and easy to extend (e.g. when other tools gain a cancel).
+export const isRowCancellable = (row) => {
+  if (!isPlainObject(row)) {
+    return false;
+  }
+  if (row.kind === 'tool_call') {
+    return row.toolName === 'bash' && row.toolStatus === 'running';
+  }
+  if (row.kind === 'sub_agent') {
+    return row.dotStatus === 'running';
+  }
+  return false;
+};
+
 export const toolArguments = (tool) =>
   tool.arguments ?? tool.toolCall?.arguments;
 
@@ -920,7 +936,7 @@ function subAgentResultEnvelope(tool) {
   return isPlainObject(parsedResult) ? parsedResult : {};
 }
 
-function subAgentResultData(tool) {
+export function subAgentResultData(tool) {
   const sessionData = isPlainObject(tool.subAgentSession)
     ? tool.subAgentSession
     : {};
