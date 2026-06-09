@@ -482,10 +482,10 @@ class ChatRunManager:
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
 
-    async def cancel(self, run_id: str) -> Run:
+    async def cancel(self, run_id: str, reason: str | None = None) -> Run:
         """Request cancellation and wait until the run reaches a terminal state."""
         run = self.get(run_id)
-        run.request_cancel()
+        run.request_cancel(reason=reason)
         await run._done.wait()  # noqa: SLF001 - manager owns run lifecycle internals.
         return run
 
