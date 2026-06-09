@@ -767,6 +767,180 @@ class TestProviderRegistryConnectionTypes:
 
 
 # ---------------------------------------------------------------------------
+# Connection mode and models_endpoint (per-connection wire variant)
+# ---------------------------------------------------------------------------
+
+
+class TestConnectionModeAndModelsEndpoint:
+    """Tests for the per-connection ``mode`` and ``models_endpoint`` fields."""
+
+    def test_connection_config_defaults_to_none_for_mode_and_models_endpoint(self) -> None:
+        """A ConnectionConfig built without the new fields exposes them as None."""
+        # Arrange / Act
+        connection = ConnectionConfig(
+            id="api-key",
+            type="api_key",
+            label="API Key",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+                credential_key="TEST_KEY",
+            ),
+        )
+
+        # Assert
+        assert connection.mode is None
+        assert connection.models_endpoint is None
+
+    def test_connection_config_accepts_mode_and_models_endpoint(self) -> None:
+        """A ConnectionConfig built with both fields stores them as provided."""
+        # Arrange / Act
+        connection = ConnectionConfig(
+            id="subscription",
+            type="oauth",
+            label="ChatGPT Plus/Pro",
+            auth=AuthConfig(
+                header="Authorization",
+                prefix="Bearer ",
+            ),
+            mode="codex_responses",
+            models_endpoint="/codex/models",
+        )
+
+        # Assert
+        assert connection.mode == "codex_responses"
+        assert connection.models_endpoint == "/codex/models"
+
+    def test_openai_subscription_connection_parses_mode_and_models_endpoint(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A connection carrying mode + models_endpoint parses both onto the dataclass."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = {
+            "id": "openai",
+            "name": "OpenAI",
+            "adapter": "openai",
+            "base_url": "https://chatgpt.com/backend-api",
+            "connections": [
+                {
+                    "id": "subscription",
+                    "type": "oauth",
+                    "label": "ChatGPT Plus/Pro",
+                    "auth": {"header": "Authorization", "prefix": "Bearer "},
+                    "mode": "codex_responses",
+                    "models_endpoint": "/codex/models",
+                }
+            ],
+        }
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        connection = registry.get("openai").get_connection("subscription")
+
+        # Assert
+        assert connection.mode == "codex_responses"
+        assert connection.models_endpoint == "/codex/models"
+
+    def test_connection_without_mode_or_models_endpoint_remains_none(
+        self,
+        providers_dir: Path,
+    ) -> None:
+        """Connections without mode/models_endpoint keep both fields as None."""
+        # Arrange
+        registry = ProviderRegistry.load(providers_dir)
+
+        # Act
+        config = registry.get("openai")
+
+        # Assert
+        assert config.get_connection("api-key").mode is None
+        assert config.get_connection("api-key").models_endpoint is None
+        assert config.get_connection("oauth").mode is None
+        assert config.get_connection("oauth").models_endpoint is None
+
+    def test_provider_level_models_endpoint_is_independent_of_connection_field(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Per-connection models_endpoint does not affect provider-level models_endpoint."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = {
+            "id": "openai",
+            "name": "OpenAI",
+            "adapter": "openai",
+            "base_url": "https://chatgpt.com/backend-api",
+            "models_endpoint": "/provider/models",
+            "connections": [
+                {
+                    "id": "api-key",
+                    "type": "api_key",
+                    "label": "API Key",
+                    "auth": {
+                        "header": "Authorization",
+                        "prefix": "Bearer ",
+                        "credential_key": "OPENAI_API_KEY",
+                    },
+                },
+                {
+                    "id": "subscription",
+                    "type": "oauth",
+                    "label": "ChatGPT Plus/Pro",
+                    "auth": {"header": "Authorization", "prefix": "Bearer "},
+                    "models_endpoint": "/codex/models",
+                },
+            ],
+        }
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act
+        registry = ProviderRegistry.load(tmp_path)
+        config = registry.get("openai")
+
+        # Assert
+        assert config.models_endpoint == "/provider/models"
+        assert config.get_connection("api-key").models_endpoint is None
+        assert config.get_connection("subscription").models_endpoint == "/codex/models"
+
+    def test_non_string_mode_raises_config_error(self, tmp_path: Path) -> None:
+        """A non-string ``mode`` value raises ConfigError with field context."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        connection["mode"] = 42
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="mode must be a string"):
+            ProviderRegistry.load(tmp_path)
+
+    def test_non_string_connection_models_endpoint_raises_config_error(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-string connection-level ``models_endpoint`` raises ConfigError."""
+        # Arrange
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENAI_DATA)
+        connection = dict(OPENAI_DATA["connections"][1])
+        connection["models_endpoint"] = ["not", "a", "string"]
+        data["connections"] = [connection]
+        (prov_dir / "openai.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(ConfigError, match="models_endpoint must be a string"):
+            ProviderRegistry.load(tmp_path)
+
+
+# ---------------------------------------------------------------------------
 # Registry: empty directory
 # ---------------------------------------------------------------------------
 
