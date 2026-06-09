@@ -59,6 +59,23 @@ describe('i18n t()', () => {
     }
   });
 
+  it('contains Phase 5 per-row cancel control labels', () => {
+    const requiredKeys = [
+      'chat.cancelToolCall',
+      'chat.cancelToolCallAria',
+      'chat.cancelSubAgent',
+      'chat.cancelSubAgentAria',
+    ];
+
+    for (const key of requiredKeys) {
+      expect(englishCatalog[key], key).toBeTruthy();
+      expect(t(key), key).toBe(englishCatalog[key]);
+    }
+
+    expect(t('chat.cancelToolCallAria').toLowerCase()).toContain('tool');
+    expect(t('chat.cancelSubAgentAria').toLowerCase()).toContain('sub');
+  });
+
   function expectCatalogKeys(requiredKeys) {
     for (const key of requiredKeys) {
       expect(englishCatalog[key], key).toBeTruthy();
