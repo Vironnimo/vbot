@@ -10,7 +10,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 - `Tool`: `name`, `description`, `parameters`, `handler`, `internal`, and `display`.
 - `ToolDisplay`: per-invocation presentation metadata. It builds `{ summary, hidden_argument_keys }` for `tool_call_started` events without adding provider-visible parameters.
-- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, `allowed_skills`, plus emit/cancel/note/skill hooks.
+- `ToolContext`: `agent_id`, `session_id`, `run_id`, `tool_call_id`, `tool_name`, `tool_call_index`, `workspace`, `app_root`, `data_root`, `nesting_depth`, `allowed_skills`, plus emit/cancel/note/skill hooks and per-call cancel hooks (`cancel_registration_hook`, `cancel_check_hook`).
 - Result envelope: `{ ok, error, data, artifacts }`. Success uses `error: null`; failure uses `data: null` and `error.code`/`error.message`.
 - Tool timing is not part of the result envelope. Completed tool calls expose a sibling `timing` object on `tool_call_result` Run events and on persisted `role: "tool"` ChatMessages: `{ started_at, completed_at, duration_ms }`. Durations are non-negative milliseconds measured with a monotonic clock.
 - `ToolCall`: one requested tool invocation with stable id, name, and arguments; execution index is assigned when scheduling a sibling batch.
@@ -25,6 +25,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 - `ToolRegistry.provider_definitions(...) -> list[dict]` returns provider-visible `name`, `description`, and JSON Schema only.
 - `ToolRegistry.prompt_definitions(...) -> list[dict]` returns prompt-visible name/description pairs.
 - `ToolRegistry.dispatch(context, arguments, allowed_tools=None) -> dict` executes a tool and validates the result envelope.
+- `ToolContext.on_cancel(callback)` registers a per-tool-call cancel callback (no-op when no registration hook is wired); `ToolContext.was_cancelled_by_user() -> bool` reports whether the current call was user-cancelled (False when no check hook is wired). These hooks are wired by the chat dispatcher through `ToolExecutionConfig` so a tool can plug into `Run.register_tool_cancel` / `Run.tool_call_cancelled` without importing the Run domain.
 - Result-envelope validation failures raise `InvalidToolResultError` (a `ValueError` subclass), distinct from plain `ValueError` argument failures. The chat loop maps the former to an `invalid_tool_result` failure envelope and the latter to `invalid_arguments`, without inspecting error message text.
 - `ToolExecutor.execute_many(tool_calls, config) -> list[dict]` executes sibling tool calls concurrently and returns results in original call order.
 - `core.tools.availability.effective_agent_allowed_tools(...)` applies Agent-level derived availability before runtime dispatch. The `memory` tool is added when `memory_prompt_mode` is not `off` and removed when it is `off`, independent of persisted `allowed_tools`.
