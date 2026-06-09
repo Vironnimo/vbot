@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   compactToolValue,
+  isRowCancellable,
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentResultKey,
@@ -236,5 +237,82 @@ describe('chatTimelinePresentation', () => {
     );
     expect(subAgentResultTextFromMessages([])).toBe('');
     expect(subAgentResultTextFromMessages(null)).toBe('');
+  });
+
+  it('marks only running bash tool rows as cancellable', () => {
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'bash',
+        toolStatus: 'running',
+      }),
+    ).toBe(true);
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'bash',
+        toolStatus: 'success',
+      }),
+    ).toBe(false);
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'bash',
+        toolStatus: 'failed',
+      }),
+    ).toBe(false);
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'bash',
+        toolStatus: 'cancelled',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not mark non-bash tool rows as cancellable', () => {
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'read',
+        toolStatus: 'running',
+      }),
+    ).toBe(false);
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'edit',
+        toolStatus: 'running',
+      }),
+    ).toBe(false);
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'grep',
+        toolStatus: 'running',
+      }),
+    ).toBe(false);
+  });
+
+  it('marks only running sub-agent rows as cancellable', () => {
+    expect(isRowCancellable({ kind: 'sub_agent', dotStatus: 'running' })).toBe(
+      true,
+    );
+    expect(isRowCancellable({ kind: 'sub_agent', dotStatus: 'success' })).toBe(
+      false,
+    );
+    expect(isRowCancellable({ kind: 'sub_agent', dotStatus: 'failed' })).toBe(
+      false,
+    );
+    expect(
+      isRowCancellable({ kind: 'sub_agent', dotStatus: 'cancelled' }),
+    ).toBe(false);
+  });
+
+  it('rejects unknown row shapes', () => {
+    expect(isRowCancellable(null)).toBe(false);
+    expect(isRowCancellable(undefined)).toBe(false);
+    expect(isRowCancellable({})).toBe(false);
+    expect(isRowCancellable({ kind: 'reasoning' })).toBe(false);
   });
 });

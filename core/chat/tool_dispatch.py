@@ -79,95 +79,103 @@ class _EmittingToolRegistry(ToolRegistry):
                 ),
             },
         )
-        result: JsonObject | None = None
-        if self._extension_registry is not None:
-            ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
-            for extension_name, handler in self._extension_registry._handlers.get(
-                "tool_call",
-                [],
-            ):
-                try:
-                    hook_result = handler(
-                        ctx,
-                        tool_name=context.tool_name,
-                        tool_call_id=context.tool_call_id,
-                        input=arguments,
-                    )
-                    if inspect.isawaitable(hook_result):
-                        hook_result = await hook_result
-                except Exception as exc:
-                    _LOGGER.warning(
-                        "Extension %r tool_call handler raised: %s",
-                        extension_name,
-                        exc,
-                    )
-                    continue
-                if isinstance(hook_result, dict):
-                    validated_override = _validated_extension_tool_hook_result(
-                        tool_name=context.tool_name,
-                        extension_name=extension_name,
-                        hook_name="tool_call",
-                        result=hook_result,
-                    )
-                    if validated_override is None:
+        try:
+            result: JsonObject | None = None
+            if self._extension_registry is not None:
+                ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
+                for extension_name, handler in self._extension_registry._handlers.get(
+                    "tool_call",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(
+                            ctx,
+                            tool_name=context.tool_name,
+                            tool_call_id=context.tool_call_id,
+                            input=arguments,
+                        )
+                        if inspect.isawaitable(hook_result):
+                            hook_result = await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r tool_call handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
                         continue
-                    result = validated_override
-                    break
+                    if isinstance(hook_result, dict):
+                        validated_override = _validated_extension_tool_hook_result(
+                            tool_name=context.tool_name,
+                            extension_name=extension_name,
+                            hook_name="tool_call",
+                            result=hook_result,
+                        )
+                        if validated_override is None:
+                            continue
+                        result = validated_override
+                        break
 
-        if result is None:
-            result = await self._dispatch_with_failure_envelope(context, arguments, allowed_tools)
+            if result is None:
+                result = await self._dispatch_with_failure_envelope(
+                    context, arguments, allowed_tools
+                )
 
-        if self._extension_registry is not None:
-            ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
-            for extension_name, handler in self._extension_registry._handlers.get(
-                "tool_result",
-                [],
-            ):
-                try:
-                    hook_result = handler(
-                        ctx,
-                        tool_name=context.tool_name,
-                        tool_call_id=context.tool_call_id,
-                        input=arguments,
-                        result=result,
-                    )
-                    if inspect.isawaitable(hook_result):
-                        hook_result = await hook_result
-                except Exception as exc:
-                    _LOGGER.warning(
-                        "Extension %r tool_result handler raised: %s",
-                        extension_name,
-                        exc,
-                    )
-                    continue
-                if isinstance(hook_result, dict):
-                    patched_result = dict(result)
-                    patched_result.update(hook_result)
-                    validated_patch = _validated_extension_tool_hook_result(
-                        tool_name=context.tool_name,
-                        extension_name=extension_name,
-                        hook_name="tool_result",
-                        result=patched_result,
-                    )
-                    if validated_patch is not None:
-                        result = validated_patch
+            if self._extension_registry is not None:
+                ctx = HookContext(session_id=self._run.session_id, agent_id=self._run.agent_id)
+                for extension_name, handler in self._extension_registry._handlers.get(
+                    "tool_result",
+                    [],
+                ):
+                    try:
+                        hook_result = handler(
+                            ctx,
+                            tool_name=context.tool_name,
+                            tool_call_id=context.tool_call_id,
+                            input=arguments,
+                            result=result,
+                        )
+                        if inspect.isawaitable(hook_result):
+                            hook_result = await hook_result
+                    except Exception as exc:
+                        _LOGGER.warning(
+                            "Extension %r tool_result handler raised: %s",
+                            extension_name,
+                            exc,
+                        )
+                        continue
+                    if isinstance(hook_result, dict):
+                        patched_result = dict(result)
+                        patched_result.update(hook_result)
+                        validated_patch = _validated_extension_tool_hook_result(
+                            tool_name=context.tool_name,
+                            extension_name=extension_name,
+                            hook_name="tool_result",
+                            result=patched_result,
+                        )
+                        if validated_patch is not None:
+                            result = validated_patch
 
-        timing = _timing_payload(started_at, started_perf)
-        self._tool_timings[context.tool_call_id] = timing
-        self._run.raise_if_cancelled()
-        self._run.emit(
-            TOOL_CALL_RESULT_EVENT,
-            {
-                "tool_call": {
-                    "id": context.tool_call_id,
-                    "index": context.tool_call_index,
-                    "name": context.tool_name,
+            timing = _timing_payload(started_at, started_perf)
+            self._tool_timings[context.tool_call_id] = timing
+            self._run.raise_if_cancelled()
+            self._run.emit(
+                TOOL_CALL_RESULT_EVENT,
+                {
+                    "tool_call": {
+                        "id": context.tool_call_id,
+                        "index": context.tool_call_index,
+                        "name": context.tool_name,
+                    },
+                    "result": result,
+                    "timing": timing,
                 },
-                "result": result,
-                "timing": timing,
-            },
-        )
-        return result
+            )
+            return result
+        finally:
+            # Per-call cancel registry entries are scoped to a single dispatch.
+            # Clearing on every exit path keeps the registry bounded and lets a
+            # later call that re-uses the same id start from a clean slate.
+            self._run.clear_tool_cancel(context.tool_call_id)
 
     def timing_for_call(self, tool_call_id: str) -> JsonObject | None:
         """Return measured timing for a completed tool call."""
@@ -247,6 +255,10 @@ async def _dispatch_tool_calls(
                 payload,
             ),
             cancellation_hook=lambda: run.cancel_requested,
+            tool_call_cancel_registrar=lambda tool_call_id, callback: run.register_tool_cancel(
+                tool_call_id, callback
+            ),
+            tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
             note_hook=session.add_note,
             skill_activation_hook=session.activate_skill_context,
             nesting_depth=nesting_depth,

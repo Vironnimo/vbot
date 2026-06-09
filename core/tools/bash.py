@@ -70,10 +70,18 @@ FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
+USER_CANCELLED_FAILURE_CODE = "cancelled_by_user"
+USER_CANCELLED_FAILURE_MESSAGE = "Command aborted by the user"
+BACKGROUND_USER_CANCELLED_MESSAGE = "Background process was aborted by the user."
 
 _LOGGER = get_logger("tools.bash")
 
 _cached_shell_env: dict[str, str] | None = None
+
+# Process session ids killed by the per-tool-call user-cancel callback. The
+# completion watcher reads this set to distinguish user-killed sessions from
+# natural completion and tool-enforced timeouts.
+_user_cancelled_session_ids: set[str] = set()
 
 
 async def bash_handler(
@@ -103,6 +111,8 @@ async def bash_handler(
     except (OSError, ValueError) as error:
         return tool_failure("process_spawn_failed", f"failed to start process: {error}")
 
+    _register_user_cancel_callback(process_manager, context, session_id)
+
     timeout_task, timeout_state = _schedule_timeout(
         process_manager,
         session_id,
@@ -129,6 +139,12 @@ async def bash_handler(
         timeout_state,
     )
 
+    if timeout_task is not None:
+        timeout_task.cancel()
+
+    if context.was_cancelled_by_user():
+        return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
+
     if result["data"] is not None and result["data"].get("status") == "running":
         _maybe_spawn_completion_watcher(
             process_manager,
@@ -143,9 +159,6 @@ async def bash_handler(
         return tool_failure(
             "process_timeout", f"process timed out after {parsed['timeout']} seconds"
         )
-
-    if timeout_task is not None:
-        timeout_task.cancel()
 
     return result
 
@@ -229,13 +242,19 @@ async def _watch_background_process(
     if not isinstance(output, str):
         output = ""
 
-    message = (
-        "Background process completed.\n"
-        f"Command: {command}\n"
-        f"Exit code: {session.exit_code}\n"
-        "Output:\n"
-        f"{output}"
-    )
+    user_cancelled = process_session_id in _user_cancelled_session_ids
+
+    if user_cancelled:
+        message = f"{BACKGROUND_USER_CANCELLED_MESSAGE}\nCommand: {command}\nOutput:\n{output}"
+        _user_cancelled_session_ids.discard(process_session_id)
+    else:
+        message = (
+            "Background process completed.\n"
+            f"Command: {command}\n"
+            f"Exit code: {session.exit_code}\n"
+            "Output:\n"
+            f"{output}"
+        )
 
     await trigger_service.trigger_run(
         agent_id,
@@ -272,6 +291,33 @@ def _maybe_spawn_completion_watcher(
             f"agent={context.agent_id} session={context.session_id}",
         )
     )
+
+
+def _register_user_cancel_callback(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> None:
+    """Register a cancel callback that kills the spawned process and tags the session.
+
+    The callback runs once when the runtime invokes it for a per-tool-call user
+    cancel. It marks the session id in the bash module's local set so the
+    background completion watcher can distinguish user-killed sessions from
+    natural completion and tool-enforced timeouts. The kill coroutine is
+    scheduled on the running event loop because the callback type is sync.
+    """
+
+    def cancel_callback() -> None:
+        _user_cancelled_session_ids.add(session_id)
+        kill_coro = process_manager.kill(session_id, context.agent_id)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(kill_coro)
+        else:
+            loop.create_task(kill_coro)
+
+    context.on_cancel(cancel_callback)
 
 
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:

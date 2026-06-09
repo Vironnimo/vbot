@@ -553,6 +553,58 @@ export function listQueue(agentId, sessionId, options = {}) {
   );
 }
 
+export function cancelRun(runId, options = {}, rpcOptions = {}) {
+  if (!isNonEmptyString(runId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Run id must be a non-empty string',
+      {
+        method: 'chat.cancel',
+      },
+    );
+  }
+
+  const params = { run_id: runId };
+  const reason = isPlainObject(options) ? options.reason : null;
+  if (isNonEmptyString(reason)) {
+    params.reason = reason;
+  }
+
+  return rpc('chat.cancel', params, rpcOptions);
+}
+
+export function cancelToolCall(
+  { agentId, runId, toolCallId } = {},
+  options = {},
+) {
+  if (!isNonEmptyString(runId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Run id must be a non-empty string',
+      {
+        method: 'chat.cancel_tool_call',
+      },
+    );
+  }
+
+  if (!isNonEmptyString(toolCallId)) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Tool call id must be a non-empty string',
+      {
+        method: 'chat.cancel_tool_call',
+      },
+    );
+  }
+
+  const params = { run_id: runId, tool_call_id: toolCallId };
+  if (isNonEmptyString(agentId)) {
+    params.agent_id = agentId;
+  }
+
+  return rpc('chat.cancel_tool_call', params, options);
+}
+
 export function removeFromQueue(agentId, sessionId, itemId, options = {}) {
   if (!isNonEmptyString(agentId)) {
     throw new ApiClientError(
