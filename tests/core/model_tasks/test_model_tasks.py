@@ -188,9 +188,7 @@ def test_list_targets_with_empty_connections_keeps_existing_expansion() -> None:
             )
         ]
     )
-    models = _Models(
-        [_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,), connections=())]
-    )
+    models = _Models([_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,), connections=())])
     service = TaskModelService(
         providers,
         models,
