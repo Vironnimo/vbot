@@ -11,9 +11,12 @@
     runMetaParts,
     speechArtifactFromTool,
     subAgentAgentId,
+    subAgentDisplayResult,
     subAgentDotStatus,
     subAgentNavigationTarget,
     subAgentPreview,
+    subAgentResultKey,
+    subAgentShouldFetchResult,
     timestampForItem,
     toolArgumentSummary,
     toolArguments,
@@ -27,9 +30,11 @@
     item,
     agentName = '',
     subAgentStatuses = {},
+    subAgentResults = {},
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
+    onRequestSubAgentResult = () => {},
     onRetry = () => {},
     showRetry = false,
   } = $props();
@@ -43,6 +48,28 @@
       onNavigateToSubAgent(target);
     }
   }
+
+  // Once a non-blocking sub-agent run finishes (dot flips to success) and we have
+  // no fetched result yet, request its final output so it appears automatically.
+  const subAgentResultFetchTargets = $derived(
+    visibleRunChildren(item)
+      .filter((child) => isSubAgentTool(child))
+      .filter((child) =>
+        subAgentShouldFetchResult(
+          child,
+          subAgentDotStatus(child, item, subAgentStatuses),
+        ),
+      )
+      .filter((child) => !subAgentResults[subAgentResultKey(child)])
+      .map((child) => subAgentNavigationTarget(child))
+      .filter(Boolean),
+  );
+
+  $effect(() => {
+    for (const target of subAgentResultFetchTargets) {
+      onRequestSubAgentResult(target.agentId, target.sessionId);
+    }
+  });
 </script>
 
 {#snippet toolDetailSection(
@@ -130,6 +157,7 @@
       {:else if child.type === 'tool_call'}
         {#if isSubAgentTool(child)}
           {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
+          {@const subAgentResult = subAgentResults[subAgentResultKey(child)]}
           <details class="tool-event run-tool-event subagent-tool-event">
             <summary class="tool-event-line subagent-line">
               <span
@@ -161,6 +189,11 @@
               {:else if isStartingBlockingSubAgent(child)}
                 <span class="subagent-state">
                   {t('chat.subagent.starting', 'starting')}
+                </span>
+              {/if}
+              {#if subAgentResult?.loading}
+                <span class="subagent-state">
+                  {t('chat.subagent.loadingResult', 'loading result…')}
                 </span>
               {/if}
               {#if toolStatusLabel(child)}
@@ -196,7 +229,7 @@
               {/if}
               {@render toolDetailSection(
                 t('chat.toolResultLabel', 'Result'),
-                child.result,
+                subAgentDisplayResult(child, subAgentResult),
                 toolStatus(child) === 'failed',
                 true,
                 toolNameForRunTool(child),

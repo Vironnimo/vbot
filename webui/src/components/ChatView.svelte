@@ -9,6 +9,7 @@
     updateQueueItem,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { subAgentResultTextFromMessages } from '$lib/chatTimelinePresentation.js';
 
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
@@ -65,10 +66,12 @@
   let submittedTurnScrollKey = $state(0);
   let submittedTurnScrollRunId = $state('');
   let subAgentRunStatuses = $state({});
+  let subAgentResults = $state({});
   let handledSubAgentNavigationKey = '';
   const ACTION_INFO_TIMEOUT_MS = 4000;
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
+  const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
   let actionInfoTimeoutId = null;
 
   let activeAgent = $derived(getActiveAgent());
@@ -311,6 +314,41 @@
       markSessionError(sessionState, error);
     } finally {
       loadingHistory = false;
+    }
+  };
+
+  // Non-blocking sub-agent spawns only return a "running" descriptor, so once the
+  // child run finishes the timeline asks for its final output here. We fetch the
+  // child session's last assistant message once per (agent, session) and cache it.
+  const requestSubAgentResult = async (agentId, sessionId) => {
+    if (!agentId || !sessionId) {
+      return;
+    }
+    const key = `${agentId}::${sessionId}`;
+    if (subAgentResults[key]) {
+      return;
+    }
+    subAgentResults = {
+      ...subAgentResults,
+      [key]: { loading: true, result: '' },
+    };
+    try {
+      const history = await rpc('chat.history', {
+        agent_id: agentId,
+        session_id: sessionId,
+        limit: SUBAGENT_RESULT_HISTORY_LIMIT,
+      });
+      const result = subAgentResultTextFromMessages(history.messages ?? []);
+      subAgentResults = {
+        ...subAgentResults,
+        [key]: { loading: false, result },
+      };
+    } catch {
+      // Non-critical: the user can still open the sub-agent session directly.
+      subAgentResults = {
+        ...subAgentResults,
+        [key]: { loading: false, result: '' },
+      };
     }
   };
 
@@ -698,8 +736,10 @@
             loadingOlderHistory={activeSessionState?.loadingOlderHistory ===
               true}
             subAgentStatuses={subAgentRunStatuses}
+            {subAgentResults}
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={navigateToSubAgent}
+            onRequestSubAgentResult={requestSubAgentResult}
             onRetry={handleRetry}
           />
         </div>

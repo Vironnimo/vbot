@@ -24,7 +24,9 @@
     submittedTurnScrollKey = 0,
     submittedTurnScrollRunId = '',
     subAgentStatuses = {},
+    subAgentResults = {},
     onNavigateToSubAgent = () => {},
+    onRequestSubAgentResult = () => {},
     onRetry = () => {},
     hasOlderHistory = false,
     loadingOlderHistory = false,
@@ -359,9 +361,11 @@
             {item}
             {agentName}
             {subAgentStatuses}
+            {subAgentResults}
             {isReasoningOpen}
             onReasoningOpenChange={setReasoningOpen}
             {onNavigateToSubAgent}
+            {onRequestSubAgentResult}
             {onRetry}
             showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
