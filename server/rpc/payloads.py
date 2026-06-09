@@ -103,6 +103,7 @@ def _model_response(provider_id: str, model: Any) -> JsonObject:
         },
         "context_window": model.context_window,
         "max_output_tokens": model.max_output_tokens,
+        "connections": list(model.connections),
     }
 
 

@@ -96,12 +96,17 @@ class AnthropicAdapter(ProviderAdapter):
         auth_config: AuthConfig | None = None,
         model_lookup: ModelLookup | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
+        *,
+        connection_mode: str | None = None,
     ) -> None:
         self._config = config
         self._token_getter = (
             StaticTokenGetter(token_getter) if isinstance(token_getter, str) else token_getter
         )
         self._auth_config = auth_config or config.connections[0].auth
+        # ``connection_mode`` is accepted for parity with the unified
+        # ``get_adapter`` call site but is not used by the Anthropic adapter.
+        del connection_mode
         super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._client = build_async_client(
             base_url=base_url or config.base_url,

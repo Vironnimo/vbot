@@ -1728,6 +1728,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 200000,
                     "max_output_tokens": 64000,
+                    "connections": [],
                 },
                 {
                     "id": "ollama/llama3.2",
@@ -1746,6 +1747,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 8192,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-4.1-mini",
@@ -1764,6 +1766,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-5.2",
@@ -1787,6 +1790,7 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
+                    "connections": [],
                 },
             ]
         },
@@ -1827,6 +1831,7 @@ async def test_model_list_filters_by_connection_usability(
                     },
                     "context_window": 128000,
                     "max_output_tokens": 16000,
+                    "connections": [],
                 },
                 {
                     "id": "openai/gpt-5.2",
@@ -1850,10 +1855,79 @@ async def test_model_list_filters_by_connection_usability(
                     },
                     "context_window": 256000,
                     "max_output_tokens": 32000,
+                    "connections": [],
                 },
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_model_list_outputs_per_model_connections_allowlist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``model.list`` propagates the per-model ``connections`` allowlist
+    from the registry into the RPC payload. The WebUI uses this list to
+    decide which provider connections to offer for a given model — a
+    model tagged ``["subscription"]`` is not offered on ``api-key``."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.models._models["openai"] = [
+        Model(
+            model_id="gpt-5.2",
+            name="GPT-5.2",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
+            connections=("api-key",),
+        ),
+        Model(
+            model_id="gpt-5.5",
+            name="GPT-5.5",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=256000,
+            max_output_tokens=32000,
+            connections=("subscription",),
+        ),
+    ]
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response["ok"] is True
+    by_id = {model["id"]: model for model in response["result"]["models"]}
+    assert by_id["openai/gpt-5.2"]["connections"] == ["api-key"]
+    assert by_id["openai/gpt-5.5"]["connections"] == ["subscription"]
+
+
+@pytest.mark.asyncio
+async def test_model_list_outputs_empty_connections_for_unrestricted_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model with no ``connections`` allowlist surfaces ``connections``
+    as an empty list — the WebUI treats that as "valid for every
+    connection of the provider"."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(state, {"method": "model.list", "params": {}})
+
+    assert response["ok"] is True
+    for model in response["result"]["models"]:
+        assert model["connections"] == []
 
 
 @pytest.mark.asyncio
