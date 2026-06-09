@@ -122,6 +122,126 @@ def test_list_targets_expands_multiple_usable_connections() -> None:
     ]
 
 
+def test_list_targets_respects_per_model_connections_allowlist() -> None:
+    """A provider with two usable connections and per-connection-tagged
+    models produces exactly one target per model — never the cross product.
+    Codex-style models (gpt-5.5) only get the ``subscription`` connection;
+    Platform-style models (gpt-5.2) only get the ``api-key`` connection.
+    """
+
+    providers = _Providers(
+        providers=[
+            _provider(
+                "openai",
+                "OpenAI",
+                [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")],
+            )
+        ]
+    )
+    models = _Models(
+        [
+            _model(
+                "gpt-5.2",
+                (TASK_SPEECH_TO_TEXT,),
+                name="GPT-5.2",
+                provider_id="openai",
+                connections=("api-key",),
+            ),
+            _model(
+                "gpt-5.5",
+                (TASK_SPEECH_TO_TEXT,),
+                name="GPT-5.5",
+                provider_id="openai",
+                connections=("subscription",),
+            ),
+        ]
+    )
+    service = TaskModelService(
+        providers,
+        models,
+        _Credentials(granted={"openai:api-key", "openai:subscription"}),
+        _Storage(),
+    )
+
+    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
+
+    # One target per (model, allowed-connection) — no cross product.
+    assert [target.id for target in targets] == [
+        "openai/gpt-5.2::api-key",
+        "openai/gpt-5.5::subscription",
+    ]
+    assert targets[0].connection_id == "openai:api-key"
+    assert targets[1].connection_id == "openai:subscription"
+
+
+def test_list_targets_with_empty_connections_keeps_existing_expansion() -> None:
+    """Models with ``connections == ()`` are still valid for every usable
+    connection — the per-model allowlist is opt-in. The legacy
+    cross-product expansion remains unchanged for these entries."""
+
+    providers = _Providers(
+        providers=[
+            _provider(
+                "openrouter",
+                "OpenRouter",
+                [("api-key", "API Key"), ("oauth", "OAuth")],
+            )
+        ]
+    )
+    models = _Models([_model("openai/gpt-4o-transcribe", (TASK_SPEECH_TO_TEXT,), connections=())])
+    service = TaskModelService(
+        providers,
+        models,
+        _Credentials(granted={"openrouter:api-key", "openrouter:oauth"}),
+        _Storage(),
+    )
+
+    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
+
+    assert [target.id for target in targets] == [
+        "openrouter/openai/gpt-4o-transcribe::api-key",
+        "openrouter/openai/gpt-4o-transcribe::oauth",
+    ]
+
+
+def test_list_targets_with_connections_allowlist_skips_non_matching_connection() -> None:
+    """When a connection in the usable set is not in the model's allowlist,
+    no target is produced for that (model, connection) pair — the model
+    is simply absent on that connection's side of the expansion."""
+
+    providers = _Providers(
+        providers=[
+            _provider(
+                "openai",
+                "OpenAI",
+                [("api-key", "API Key"), ("subscription", "ChatGPT Plus/Pro")],
+            )
+        ]
+    )
+    models = _Models(
+        [
+            _model(
+                "gpt-5.5",
+                (TASK_SPEECH_TO_TEXT,),
+                name="GPT-5.5",
+                provider_id="openai",
+                connections=("subscription",),
+            )
+        ]
+    )
+    service = TaskModelService(
+        providers,
+        models,
+        _Credentials(granted={"openai:api-key", "openai:subscription"}),
+        _Storage(),
+    )
+
+    targets = service.list_targets(TASK_SPEECH_TO_TEXT)
+
+    # Only the subscription target exists; api-key is not in the allowlist.
+    assert [target.id for target in targets] == ["openai/gpt-5.5::subscription"]
+
+
 def test_list_targets_single_usable_connection_omits_label_suffix() -> None:
     """With one usable connection, the label is the bare model label — unchanged from before."""
 
@@ -920,6 +1040,7 @@ def _model(
     provider_id: str = "openrouter",
     supported_voices: tuple[str, ...] = (),
     supported_parameters: tuple[str, ...] = (),
+    connections: tuple[str, ...] = (),
 ) -> SimpleNamespace:
     """Build a model stub that satisfies ``ModelQuery.matches``.
 
@@ -931,6 +1052,10 @@ def _model(
     ``supported_voices`` and ``supported_parameters`` flow through to the
     model-aware schema builder so the Phase 3 TTS voice / image seed /
     STT response_format behavior is exercised end-to-end.
+
+    ``connections`` flows through to target expansion: an empty tuple
+    means the model is valid for every connection, a non-empty tuple
+    gates the model to those local connection ids only.
     """
 
     if name is None:
@@ -944,6 +1069,7 @@ def _model(
         model_id=model_id,
         name=name,
         context_window=128000,
+        connections=connections,
         capabilities=SimpleNamespace(
             task_types=task_types,
             input_modalities=("text",),

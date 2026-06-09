@@ -95,7 +95,7 @@ class StubProviders:
     def get(self, provider_id: str) -> object:
         if provider_id not in self._provider_ids:
             raise KeyError(provider_id)
-        return StubProviderConfig([StubConnection("oauth"), StubConnection("api-key")])
+        return StubProviderConfig([StubConnection("subscription"), StubConnection("api-key")])
 
 
 @dataclass(frozen=True)
@@ -852,7 +852,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
 async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     tmp_path: Path,
 ) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2::oauth", allowed_tools=["*"])
+    agent = StubAgent(id="coder", model="openai/gpt-5.2::subscription", allowed_tools=["*"])
     adapter = StubAdapter([])
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="unused",
@@ -2855,7 +2855,7 @@ async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: P
 async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
-        model="openai/gpt-5.2::oauth",
+        model="openai/gpt-5.2::subscription",
         allowed_tools=["*"],
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
@@ -2864,7 +2864,7 @@ async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> No
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openai"
-    assert runtime.adapter_connection_id == "openai:oauth"
+    assert runtime.adapter_connection_id == "openai:subscription"
 
 
 @pytest.mark.asyncio
@@ -2917,12 +2917,14 @@ async def test_chat_loop_model_without_suffix_prefers_first_usable_in_provider_o
     )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.provider_credentials = StubProviderCredentials({"openai:oauth", "openai:api-key"})
+    runtime.provider_credentials = StubProviderCredentials(
+        {"openai:subscription", "openai:api-key"}
+    )
 
     await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openai"
-    assert runtime.adapter_connection_id == "openai:oauth"
+    assert runtime.adapter_connection_id == "openai:subscription"
 
 
 class TestParseModelWithConnection:
