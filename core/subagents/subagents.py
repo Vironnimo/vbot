@@ -45,6 +45,23 @@ SUBAGENT_STATUS_QUEUED = "queued"
 SUBAGENT_SESSION_STARTED_EVENT = "subagent_session_started"
 SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
+USER_CANCEL_REASON = "user"
+SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
+
+# Cascade policy switch: when True, a parent Run cancellation cascades to every
+# sub-agent child including non-blocking ones (legacy behaviour). When False,
+# only blocking sub-agent spawns (and queued-then-started blocking waits) get
+# the cascade; non-blocking spawns survive the parent cancel.
+# FLIP-BACK: set CASCADE_NON_BLOCKING_CHILDREN = True to restore the old behaviour.
+CASCADE_NON_BLOCKING_CHILDREN = False
+
+
+def _should_register_parent_cascade(blocking: bool) -> bool:
+    """Return whether a spawn should register a parent-cancel cascade callback.
+
+    The cascade policy is a single flip point: see ``CASCADE_NON_BLOCKING_CHILDREN``.
+    """
+    return blocking or CASCADE_NON_BLOCKING_CHILDREN
 
 
 class SubAgentCoordinator:
@@ -192,15 +209,16 @@ async def _handle_subagent(
                         parent_key, target_agent_id, session.id, item.item_id
                     )
                     slot_registered = True
-                    _attach_parent_cancellation(
-                        runtime,
-                        context.run_id,
-                        queued_item=item,
-                        queued_agent_id=target_agent_id,
-                        queued_session_id=session.id,
-                        batch_tracker=batch_tracker,
-                        parent_key=parent_key,
-                    )
+                    if _should_register_parent_cascade(blocking=False):
+                        _attach_parent_cancellation(
+                            runtime,
+                            context.run_id,
+                            queued_item=item,
+                            queued_agent_id=target_agent_id,
+                            queued_session_id=session.id,
+                            batch_tracker=batch_tracker,
+                            parent_key=parent_key,
+                        )
                     _track_queued_subagent_completion(batch_tracker, parent_key, item)
                     return tool_success(
                         {
@@ -212,6 +230,8 @@ async def _handle_subagent(
                     )
                 sub_run = queued_run
             else:
+                # Blocking parents always cascade so an awaited queued child
+                # honours the parent cancel, even if it has not started yet.
                 _attach_parent_cancellation(
                     runtime,
                     context.run_id,
@@ -236,13 +256,14 @@ async def _handle_subagent(
         )
         batch_tracker.register_reserved(parent_key, target_agent_id, session.id, sub_run.id)
         slot_registered = True
-        _attach_parent_cancellation(
-            runtime,
-            context.run_id,
-            sub_run=sub_run,
-            batch_tracker=batch_tracker,
-            parent_key=parent_key,
-        )
+        if _should_register_parent_cascade(blocking=blocking):
+            _attach_parent_cancellation(
+                runtime,
+                context.run_id,
+                sub_run=sub_run,
+                batch_tracker=batch_tracker,
+                parent_key=parent_key,
+            )
 
         if not blocking:
             _track_subagent_completion(batch_tracker, parent_key, sub_run)
@@ -418,11 +439,23 @@ async def _wait_for_subagent_result(run: Run) -> JsonObject:
     try:
         result = await run.wait()
     except RunCancelledError:
-        return _result_dict(run, status=RunStatus.CANCELLED.value, message=None)
+        return _cancelled_result_dict(run)
     except Exception as error:
         return _result_dict(run, status=RunStatus.FAILED.value, message=str(error))
 
     return _result_dict(run, status=run.status.value, message=result)
+
+
+def _cancelled_result_dict(run: Run) -> JsonObject:
+    """Build the result dict for a cancelled child run, threading the cancel reason."""
+    if run.cancel_reason == USER_CANCEL_REASON:
+        return _result_dict(
+            run,
+            status=RunStatus.CANCELLED.value,
+            message=SUBAGENT_USER_CANCEL_MESSAGE,
+            cancelled_by_user=True,
+        )
+    return _result_dict(run, status=RunStatus.CANCELLED.value, message=None)
 
 
 def _result_from_session(
@@ -483,7 +516,13 @@ async def _poll_result_from_session(
     return result
 
 
-def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
+def _result_dict(
+    run: Run,
+    *,
+    status: str,
+    message: Any,
+    cancelled_by_user: bool = False,
+) -> JsonObject:
     content: str | None
     usage: JsonObject | None
     if isinstance(message, ChatMessage):
@@ -505,6 +544,8 @@ def _result_dict(run: Run, *, status: str, message: Any) -> JsonObject:
         "result": content,
         "usage": usage,
     }
+    if cancelled_by_user:
+        data["cancelled_by_user"] = True
     if status == RunStatus.FAILED.value and not content:
         data["note"] = "No assistant output found in sub-agent session."
     return data
@@ -663,6 +704,7 @@ def _attach_parent_cancellation(
             queued_session_id=queued_session_id,
             batch_tracker=batch_tracker,
             parent_key=parent_key,
+            parent_reason=parent_run.cancel_reason,
         )
     )
 
@@ -676,11 +718,12 @@ def _cancel_subagent_child(
     queued_session_id: str | None,
     batch_tracker: SubAgentBatchTracker | None,
     parent_key: ParentKey | None,
+    parent_reason: str | None = None,
 ) -> None:
     if sub_run is not None:
         if batch_tracker is not None and parent_key is not None:
             batch_tracker.discard_parent(parent_key)
-        sub_run.request_cancel()
+        sub_run.request_cancel(reason=parent_reason)
         return
     if queued_item is None or queued_agent_id is None or queued_session_id is None:
         return
@@ -699,7 +742,7 @@ def _cancel_subagent_child(
         return
     if batch_tracker is not None and parent_key is not None:
         batch_tracker.discard_parent(parent_key)
-    started_run.request_cancel()
+    started_run.request_cancel(reason=parent_reason)
 
 
 def _chat_run_manager(runtime: Any) -> ChatRunManager:
