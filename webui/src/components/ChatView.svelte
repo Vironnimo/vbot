@@ -219,12 +219,27 @@
     return normalizedBuiltInCommandName(trimmed) === 'compact';
   };
 
-  const newSessionIdFromCommandResponse = (response) => {
+  // Extract a session-switch target from a handled command response.
+  // `/new` returns `{ data: { command: "new", session_id } }` and stays on the
+  // current agent. `/handoff` returns `{ data: { command: "handoff", session_id,
+  // agent_id } }` and may target a different agent — that is the cross-agent
+  // switch path. Returns `{ sessionId, agentId }` when the response names a new
+  // session, otherwise null.
+  const commandSwitchFromResponse = (response) => {
     const data = response?.data;
-    if (data?.command !== 'new' || typeof data.session_id !== 'string') {
-      return '';
+    if (!data || typeof data.session_id !== 'string') {
+      return null;
     }
-    return data.session_id.trim();
+    const sessionId = data.session_id.trim();
+    if (!sessionId) {
+      return null;
+    }
+    if (data.command === 'new' || data.command === 'handoff') {
+      const targetAgentId =
+        typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+      return { sessionId, targetAgentId };
+    }
+    return null;
   };
 
   const loadCommands = async () => {
@@ -529,9 +544,19 @@
       const run = await rpc('chat.stream', params);
       if (run?.command_handled) {
         setActionInfo(run.reply);
-        const newSessionId = newSessionIdFromCommandResponse(run);
-        if (newSessionId) {
-          await switchToCurrentSession(agent.id, newSessionId);
+        const commandSwitch = commandSwitchFromResponse(run);
+        if (commandSwitch) {
+          const targetAgentId = commandSwitch.targetAgentId || agent.id;
+          // When the switch targets a different agent than the one currently
+          // selected, update the agent-selection state first so the shared
+          // selection flow observes the new agent before the session switch
+          // lands. `switchToCurrentSession` then updates the target agent's
+          // `current_session_id` and loads the new session.
+          if (targetAgentId !== chatState.selectedAgentId) {
+            selectAgent(chatState, targetAgentId);
+            onAgentSelected?.(targetAgentId);
+          }
+          await switchToCurrentSession(targetAgentId, commandSwitch.sessionId);
         } else if (isCompactCommand(content)) {
           await loadHistoryForSession(agent.id, sessionState.sessionId);
         }

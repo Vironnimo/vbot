@@ -281,6 +281,179 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).not.toHaveBeenCalled();
   });
 
+  it('switches to the new session returned by a same-agent /handoff command', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-handoff-same': [
+            {
+              id: 'handoff-same-assistant-one',
+              role: 'assistant',
+              content: 'Handoff target reply (same agent)',
+            },
+          ],
+        },
+        streamHandler: ({ content }) => {
+          if (content === '/handoff') {
+            return {
+              command_handled: true,
+              reply: 'Handoff sent to alpha. Opening new session.',
+              data: {
+                command: 'handoff',
+                session_id: 'session-handoff-same',
+                agent_id: 'alpha',
+              },
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('/handoff');
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' &&
+            params?.session_id === 'session-handoff-same',
+        ),
+      100,
+    );
+
+    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
+      'Handoff sent to alpha. Opening new session.',
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+      content: '/handoff',
+    });
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'alpha',
+      session_id: 'session-handoff-same',
+      limit: 100,
+    });
+    expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+    expect(activeAgentTab()?.textContent).toContain('Alpha');
+  });
+
+  it('switches to a different agent and its new session for a cross-agent /handoff command', async () => {
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const agents = [
+      createAgent({
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'parent-session',
+      }),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'beta-current-session',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'parent-session': [
+            {
+              id: 'parent-assistant-one',
+              role: 'assistant',
+              content: 'Parent main response',
+            },
+          ],
+          'session-handoff-cross': [
+            {
+              id: 'handoff-cross-assistant-one',
+              role: 'assistant',
+              content: 'Handoff target reply (cross agent)',
+            },
+          ],
+        },
+        streamHandler: ({ content }) => {
+          if (content === '/handoff beta') {
+            return {
+              command_handled: true,
+              reply: 'Handoff sent to beta. Opening new session.',
+              data: {
+                command: 'handoff',
+                session_id: 'session-handoff-cross',
+                agent_id: 'beta',
+              },
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    // Mirror App's behavior: `onAgentSelected` updates a reactive selected
+    // id that flows back as `sharedSelectedAgentId`, so the agent-sync effect
+    // observes the new selection and short-circuits.
+    const parentHarness = createChatViewParentHarness();
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        get sharedSelectedAgentId() {
+          return parentHarness.selectedAgentId;
+        },
+        onAgentSelected: (agentId) => {
+          parentHarness.setSelectedAgentId(agentId);
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Parent main response'),
+      100,
+    );
+
+    sendComposerMessage('/handoff beta');
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes(
+          'Handoff target reply (cross agent)',
+        ),
+      100,
+    );
+
+    expect(document.body.querySelector('.chat-view__info')?.textContent).toBe(
+      'Handoff sent to beta. Opening new session.',
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
+      agent_id: 'alpha',
+      session_id: 'parent-session',
+      content: '/handoff beta',
+    });
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'session-handoff-cross',
+      limit: 100,
+    });
+    expect(subscribeRunEventsMock).not.toHaveBeenCalled();
+    expect(activeAgentTab()?.textContent).toContain('Beta');
+  });
+
   it('subscribes to the run returned by a /retry command', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

@@ -190,12 +190,55 @@ def test_dispatch_non_command_message_returns_not_a_command() -> None:
 def test_built_in_commands_include_current_catalog() -> None:
     assert set(CommandDispatcher.BUILT_IN_COMMANDS) == {
         "compact",
+        "handoff",
         "help",
         "new",
         "retry",
         "status",
         "stop",
     }
+
+
+def test_dispatch_handoff_without_argument_returns_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/handoff")
+
+    assert result == CommandAction(name="handoff", argument=None)
+
+
+def test_dispatch_handoff_with_agent_id_returns_action() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/handoff coder")
+
+    assert result == CommandAction(name="handoff", argument="coder")
+
+
+def test_dispatch_handoff_preserves_agent_id_case() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/handoff MyAgent")
+
+    assert isinstance(result, CommandAction)
+    assert result.name == "handoff"
+    assert result.argument == "MyAgent"
+
+
+def test_dispatch_handoff_tolerates_surrounding_whitespace() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "  /handoff coder  ")
+
+    assert result == CommandAction(name="handoff", argument="coder")
+
+
+def test_dispatch_handoff_with_two_arguments_returns_not_a_command() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    result = dispatcher.dispatch("coder", "session-one", "/handoff a b")
+
+    assert isinstance(result, NotACommand)
 
 
 @pytest.mark.parametrize(
