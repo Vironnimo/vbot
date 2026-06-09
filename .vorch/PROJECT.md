@@ -38,8 +38,8 @@ Each domain has a spec in `.vorch/specs/`, named after its module. A **domain** 
 | Spec file | Domain | What it covers |
 |---|---|---|
 | `.vorch/specs/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
-| `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview and index to provider-specific specs |
-| `.vorch/specs/providers/openai-subscription.md` | OpenAI Subscription provider | Codex OAuth, ChatGPT account header, model discovery, Responses routing |
+| `.vorch/specs/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific specs |
+| `.vorch/specs/providers/openai.md` | OpenAI provider | Single provider with `api-key` (chat/completions) and `subscription` (codex/responses) connections, Codex OAuth, ChatGPT account header, model discovery |
 | `.vorch/specs/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/specs/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas |
 | `.vorch/specs/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |

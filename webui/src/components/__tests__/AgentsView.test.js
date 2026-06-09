@@ -206,7 +206,7 @@ describe('AgentsView', () => {
       createAgentsRpcMock({
         agents: [{ ...baseAgent(), model: 'openai/gpt-5.2' }],
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
         ],
       }),
@@ -220,7 +220,7 @@ describe('AgentsView', () => {
     await openSearchableDropdown('agent-model');
     const modelOptionLabels = searchableOptionLabels('agent-model');
     expect(modelOptionLabels).toContain('openai/gpt-5.2');
-    expect(modelOptionLabels).toContain('openai/gpt-5.2 (OAuth)');
+    expect(modelOptionLabels).toContain('openai/gpt-5.2 (ChatGPT Plus/Pro)');
     expect(modelOptionLabels).toContain('openai/gpt-5.2 (API Key)');
     expect(modelOptionLabels).not.toContain(
       'Unavailable / custom: openai/gpt-5.2',
@@ -405,7 +405,7 @@ describe('AgentsView', () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
         ],
       }),
@@ -421,7 +421,7 @@ describe('AgentsView', () => {
     await openSearchableDropdown('agent-model');
 
     const labels = searchableOptionLabels('agent-model');
-    expect(labels).toContain('openai/gpt-5.2 (OAuth)');
+    expect(labels).toContain('openai/gpt-5.2 (ChatGPT Plus/Pro)');
     expect(labels).toContain('openai/gpt-5.2 (API Key)');
   });
 
@@ -429,7 +429,7 @@ describe('AgentsView', () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
           usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
         ],
@@ -442,7 +442,7 @@ describe('AgentsView', () => {
     await waitForCondition(() => modelTriggerLabel(), 100);
 
     await openSearchableDropdown('agent-model');
-    setSearchableFilter('agent-model', 'oauth');
+    setSearchableFilter('agent-model', 'Plus');
 
     await waitForCondition(
       () => searchableOptionLabels('agent-model').length === 1,
@@ -450,12 +450,12 @@ describe('AgentsView', () => {
     );
 
     expect(searchableOptionLabels('agent-model')).toEqual([
-      'openai/gpt-5.2 (OAuth)',
+      'openai/gpt-5.2 (ChatGPT Plus/Pro)',
     ]);
 
-    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (ChatGPT Plus/Pro)');
     await waitForCondition(
-      () => modelTriggerLabel() === 'openai/gpt-5.2 (OAuth)',
+      () => modelTriggerLabel() === 'openai/gpt-5.2 (ChatGPT Plus/Pro)',
       100,
     );
 
@@ -493,7 +493,7 @@ describe('AgentsView', () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
         ],
       }),
@@ -513,7 +513,7 @@ describe('AgentsView', () => {
     vi.useFakeTimers();
 
     openSearchableDropdownSync('agent-model');
-    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (ChatGPT Plus/Pro)');
 
     expect(getAgentUpdateCalls()).toHaveLength(0);
 
@@ -527,7 +527,7 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
-      model: 'openai/gpt-5.2::oauth',
+      model: 'openai/gpt-5.2::subscription',
     });
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -789,7 +789,7 @@ describe('AgentsView', () => {
       createAgentsRpcMock({
         agents,
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
           usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
         ],
@@ -870,7 +870,7 @@ describe('AgentsView', () => {
       createAgentsRpcMock({
         agents: [baseAgent()],
         connections: [
-          usableConnection('openai:oauth', 'openai', 'OAuth'),
+          usableConnection('openai:subscription', 'openai', 'ChatGPT Plus/Pro'),
           usableConnection('openai:api-key', 'openai', 'API Key'),
           usableConnection('anthropic:api-key', 'anthropic', 'API Key'),
         ],
@@ -889,7 +889,7 @@ describe('AgentsView', () => {
     );
 
     await openSearchableDropdown('agent-model');
-    selectSearchableOption('agent-model', 'openai/gpt-5.2 (OAuth)');
+    selectSearchableOption('agent-model', 'openai/gpt-5.2 (ChatGPT Plus/Pro)');
 
     await openSearchableDropdown('agent-fallback-model');
     selectSearchableOption(
@@ -910,7 +910,7 @@ describe('AgentsView', () => {
     );
     expect(updateCall[1]).toMatchObject({
       id: 'alpha',
-      model: 'openai/gpt-5.2::oauth',
+      model: 'openai/gpt-5.2::subscription',
       fallback_model: 'anthropic/claude-sonnet-4-20250219::api-key',
     });
   });
@@ -1555,7 +1555,7 @@ function usableConnection(id, providerId, label) {
   return {
     id,
     provider_id: providerId,
-    type: id.endsWith(':oauth') ? 'oauth' : 'api_key',
+    type: id.endsWith(':subscription') ? 'oauth' : 'api_key',
     label,
     usable: true,
   };
