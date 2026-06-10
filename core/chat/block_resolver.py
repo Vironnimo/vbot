@@ -102,7 +102,10 @@ class ContentBlockResolver:
         media_type = self._require_string(block, "media_type")
 
         if not is_current_turn:
-            return {"type": "text", "text": f"[Bild: {filename}]"}
+            return {
+                "type": "text",
+                "text": self._historical_media_note(attachment_id, filename, media_type),
+            }
 
         if not vision_supported:
             raise ChatError("Model does not support vision; cannot process image attachment")
@@ -118,6 +121,23 @@ class ContentBlockResolver:
             "base64": base64.b64encode(blob_data).decode("ascii"),
             "media_type": media_type,
         }
+
+    def _historical_media_note(
+        self,
+        attachment_id: str,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        # Historical media is not resent as binary content; the note keeps the blob
+        # path visible so the agent can still open the file with the read tool.
+        try:
+            record = self._attachment_store.get(attachment_id)
+        except Exception:
+            return (
+                f"[Image from an earlier turn: {filename} ({media_type}) "
+                "— file no longer available]"
+            )
+        return f"[Image from an earlier turn: {filename} ({media_type}) — Path: {record.file_path}]"
 
     def _resolve_file_block(self, block: JsonObject) -> JsonObject:
         attachment_id = self._require_string(block, "attachment_id")

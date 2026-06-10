@@ -27,7 +27,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 - `store(filename: str, data: bytes) -> AttachmentRecord` — checks size, sniffs MIME, validates the allowlist, writes blob and sidecar, extracts `text_content` for `text/*`
 - `get(attachment_id: str) -> AttachmentRecord` — loads one attachment record from its sidecar
 - `delete(attachment_id: str) -> None` — deletes blob and sidecar if present
-- Expected domain errors:
+- Expected domain errors (all exported from `core.attachments`):
   - `AttachmentError`
   - `AttachmentNotFoundError`
   - `AttachmentTooLargeError`
@@ -47,7 +47,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 
 - `get()` accepts only canonical UUID4 ids: a non-UUID4 id raises `AttachmentNotFoundError` (surfaced as HTTP 404), not a validation error, and ids are lower-cased before lookup. It also re-checks that the blob exists and that the sidecar `id` matches, raising `AttachmentNotFoundError` / `AttachmentError` otherwise.
 - `get()` recomputes `file_path` from the current `data_dir` and ignores the path stored in the sidecar — the persisted `file_path` is informational only, so moving the data directory does not break resolution.
-- Image attachments only round-trip on the current user turn: `ContentBlockResolver` sends the current turn's image as base64 (requires `vision_supported`, else `ChatError`) and degrades images from earlier turns to a `[Bild: <filename>]` text placeholder. Non-image `media` blocks on the current turn are hard-rejected (`V1 supports only image/*`). `MediaBlock` storage stays format-generic; this image-only scope is a chat-layer decision, not a storage one.
+- Image attachments only round-trip on the current user turn: `ContentBlockResolver` sends the current turn's image as base64 (requires `vision_supported`, else `ChatError`) and degrades images from earlier turns to an `[Image from an earlier turn: <filename> (<type>) — Path: <file_path>]` text note so the agent can still open the blob with the `read` tool; if the attachment record is gone, the note says the file is no longer available instead of failing the request. Non-image `media` blocks on the current turn are hard-rejected (`V1 supports only image/*`). `MediaBlock` storage stays format-generic; this image-only scope is a chat-layer decision, not a storage one.
 - Text files never become `FileBlock`s: `text_content` is persisted in the sidecar and echoed by `POST /api/upload`, so clients build a `TextBlock` directly from it without re-fetching the blob. Other non-image files stay `FileBlock`s.
 - `file_path` is intentionally surfaced to the chat layer in the `FileBlock` note (`[File: <name> (<type>) — Path: <file_path>]`) so agents can open the blob with the existing `read` tool. This is by design, not a leak.
 - Cleanup of orphaned or deleted-session attachments is explicitly out of scope: there is no index, GC, or reference counting.
