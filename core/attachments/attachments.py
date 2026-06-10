@@ -66,6 +66,9 @@ class AttachmentRecord:
     stored_at: str
     file_path: str
     text_content: str | None
+    # Cached speech-to-text result for audio attachments; written once on first
+    # transcription so later requests reuse it instead of re-calling STT.
+    transcription: str | None = None
 
 
 class AttachmentStore:
@@ -155,6 +158,17 @@ class AttachmentStore:
 
         return replace(record, id=normalized_id, file_path=str(blob_path))
 
+    def set_transcription(self, attachment_id: str, transcription: str) -> AttachmentRecord:
+        """Persist a cached transcription for one attachment and return the record."""
+
+        if not isinstance(transcription, str) or not transcription.strip():
+            raise AttachmentError("transcription must be a non-empty string")
+
+        record = self.get(attachment_id)
+        updated_record = replace(record, transcription=transcription)
+        self._write_sidecar(self._sidecar_path(updated_record.id), asdict(updated_record))
+        return updated_record
+
     def delete(self, attachment_id: str) -> None:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
@@ -211,10 +225,20 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "image/png"
     if data.startswith(b"GIF8"):
         return "image/gif"
-    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-        return "image/webp"
+    if len(data) >= 12 and data.startswith(b"RIFF"):
+        riff_format = data[8:12]
+        if riff_format == b"WEBP":
+            return "image/webp"
+        if riff_format == b"WAVE":
+            return "audio/wav"
+        if riff_format == b"AVI ":
+            return "video/x-msvideo"
     if data.startswith(b"%PDF"):
         return "application/pdf"
+
+    audio_video_media_type = _sniff_audio_video_media_type(data)
+    if audio_video_media_type is not None:
+        return audio_video_media_type
 
     if data.startswith(b"PK\x03\x04"):
         ooxml_media_type = _sniff_ooxml_media_type(data)
@@ -229,6 +253,32 @@ def _sniff_mime(data: bytes, filename: str) -> str:
         return "text/plain"
 
     return "application/octet-stream"
+
+
+def _sniff_audio_video_media_type(data: bytes) -> str | None:
+    if data.startswith(b"OggS"):
+        # Ogg can also carry video (Theora), but in practice — especially Telegram
+        # voice messages — it is audio (Opus/Vorbis).
+        return "audio/ogg"
+    if data.startswith(b"ID3"):
+        return "audio/mpeg"
+    if data.startswith((b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")):
+        # Raw MP3 frame sync without an ID3 tag.
+        return "audio/mpeg"
+    if data.startswith(b"fLaC"):
+        return "audio/flac"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"M4A ", b"M4B "):
+            return "audio/mp4"
+        if brand == b"qt  ":
+            return "video/quicktime"
+        return "video/mp4"
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        # EBML container (Matroska/WebM). Audio-only WebM exists but is rare for
+        # uploaded files; classify as video.
+        return "video/webm"
+    return None
 
 
 def _normalize_attachment_id(attachment_id: str) -> str:
@@ -283,7 +333,7 @@ def _extract_text_content(data: bytes, media_type: str) -> str | None:
 
 
 def _is_allowed_mime(media_type: str) -> bool:
-    if media_type.startswith("text/"):
+    if media_type.startswith(("text/", "audio/", "video/")):
         return True
     if media_type.startswith(_OOXML_PREFIX):
         return True
@@ -305,6 +355,10 @@ def _record_from_dict(data: JsonObject) -> AttachmentRecord:
     if text_content is not None and not isinstance(text_content, str):
         raise AttachmentError("Attachment metadata field 'text_content' must be a string or null")
 
+    transcription = data.get("transcription")
+    if transcription is not None and not isinstance(transcription, str):
+        raise AttachmentError("Attachment metadata field 'transcription' must be a string or null")
+
     return AttachmentRecord(
         id=attachment_id,
         filename=filename,
@@ -313,6 +367,7 @@ def _record_from_dict(data: JsonObject) -> AttachmentRecord:
         stored_at=stored_at,
         file_path=file_path,
         text_content=text_content,
+        transcription=transcription,
     )
 
 
