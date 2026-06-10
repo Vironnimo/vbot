@@ -514,6 +514,40 @@ describe('ChatComposer', () => {
     ]);
   });
 
+  it.each([
+    ['voice.ogg', 'audio/ogg'],
+    ['clip.mp4', 'video/mp4'],
+  ])('sends uploaded %s as media block', async (filename, mediaType) => {
+    const onSendMessage = vi.fn();
+    uploadAttachment.mockResolvedValue({
+      attachment_id: 'attachment-av-1',
+      filename,
+      media_type: mediaType,
+      size_bytes: 9,
+      text_content: null,
+    });
+
+    mountedComponent = mount(ChatComposer, {
+      target: document.body,
+      props: { onSendMessage },
+    });
+    flushSync();
+
+    await selectFileFromPicker(
+      new File(['av-data'], filename, { type: mediaType }),
+    );
+    submitComposer();
+
+    expect(onSendMessage).toHaveBeenCalledWith([
+      {
+        type: 'media',
+        attachment_id: 'attachment-av-1',
+        filename,
+        media_type: mediaType,
+      },
+    ]);
+  });
+
   it('sends non-image binary uploads as file blocks', async () => {
     const onSendMessage = vi.fn();
     uploadAttachment.mockResolvedValue({
