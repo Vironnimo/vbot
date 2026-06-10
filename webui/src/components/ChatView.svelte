@@ -51,6 +51,7 @@
     pendingSubAgentNavigation = null,
     runServerEvent = null,
     runServerEvents = [],
+    connectionSnapshot = null,
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
@@ -73,6 +74,7 @@
   let subAgentRunStatuses = $state({});
   let subAgentResults = $state({});
   let handledSubAgentNavigationKey = '';
+  let handledConnectionSnapshot = null;
   const ACTION_INFO_TIMEOUT_MS = 4000;
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
@@ -150,6 +152,24 @@
 
     handledSubAgentNavigationKey = navigationKey;
     handleSubAgentNavigation(agentId, sessionId);
+  });
+
+  // Apply each distinct `/ws` `connection_ready` hello frame to the run stream
+  // exactly once. The frame is the durable source of truth for active runs and
+  // sub-agent statuses (see `chatRunStream.applyConnectionSnapshot`); the
+  // local `handledConnectionSnapshot` reference is the dedup guard so a re-run
+  // of this effect for the same snapshot object cannot re-trigger side effects
+  // (same pattern as `pendingSubAgentNavigation` above).
+  $effect(() => {
+    if (
+      !connectionSnapshot ||
+      connectionSnapshot === handledConnectionSnapshot
+    ) {
+      return;
+    }
+
+    handledConnectionSnapshot = connectionSnapshot;
+    runStream.applyConnectionSnapshot(connectionSnapshot);
   });
 
   $effect(() => {

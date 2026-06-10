@@ -429,7 +429,53 @@ export function createChatRunStream({
     clearPendingRunEventFlushes();
   }
 
+  function applyConnectionSnapshot(snapshot) {
+    const activeRuns = Array.isArray(snapshot?.active_runs)
+      ? snapshot.active_runs
+      : [];
+    if (activeRuns.length === 0) {
+      return;
+    }
+
+    const subAgentUpdates = {};
+    for (const activeRun of activeRuns) {
+      if (!activeRun?.run_id) {
+        continue;
+      }
+      subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
+      if (activeRun.agent_id && activeRun.session_id) {
+        subAgentUpdates[
+          `session:${activeRun.agent_id}::${activeRun.session_id}`
+        ] = 'running';
+      }
+    }
+    if (Object.keys(subAgentUpdates).length > 0) {
+      updateSubAgentRunStatuses(subAgentUpdates);
+    }
+
+    for (const activeRun of activeRuns) {
+      if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
+        continue;
+      }
+      if (!isDisplayedSession(activeRun.agent_id, activeRun.session_id)) {
+        continue;
+      }
+      const sessionState = ensureSessionState(
+        chatState,
+        activeRun.agent_id,
+        activeRun.session_id,
+      );
+      attachRunStream(sessionState, {
+        run_id: activeRun.run_id,
+        status: 'running',
+        sse_url: activeRun.sse_url,
+        events: [],
+      });
+    }
+  }
+
   return {
+    applyConnectionSnapshot,
     attachRunStream,
     closeSubscriptions,
     closeSubscriptionsExcept,
