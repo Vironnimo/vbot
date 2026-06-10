@@ -9,29 +9,19 @@ für später. Jeder Eintrag ist eigenständig fixbar; Domain-Spec nach dem Fix a
 
 ## Mittel
 
-### M1 — Anthropic: `temperature` + Thinking-Konflikt nicht behandelt
-`_apply_anthropic_reasoning` (`core/providers/anthropic.py:807`) aktiviert Thinking
-(`thinking: {type: adaptive}` + `output_config.effort`), lässt aber eine gesetzte Agent-Temperature
-im Payload. Anthropic lehnt für Sonnet-Klasse-Modelle Temperature ≠ 1 bei aktivem Thinking ab.
-Der GitHub-Copilot-Messages-Pfad behandelt genau das: er lässt Temperature bei aktivem adaptivem
-Thinking für Sonnet weg (`core/providers/github_copilot_messages.py`, Tests
-`test_build_payload_omits_temperature_for_sonnet_when_adaptive_thinking_is_active` und
-`..._keeps_temperature_for_haiku...`). Der direkte Anthropic-Adapter braucht dieselbe Policy.
-Repro: Agent mit `temperature: 0.5` + `thinking_effort: high` → vermutlich 400.
-**Fix-Richtung:** In `_apply_anthropic_reasoning` (oder `_build_payload`) Temperature aus den
-kwargs entfernen, wenn Thinking aktiviert wird — Modell-Differenzierung analog Copilot-Policy prüfen.
+### ~~M1 — Anthropic: `temperature` + Thinking-Konflikt nicht behandelt~~ ✅ Gefixt (2026-06-10)
+`_build_payload` droppt Temperature (Caller-Kwarg **und** Provider-Default), wenn Thinking aktiviert
+wird (adaptive via `thinking_effort` oder rohes `thinking`-Kwarg mit `adaptive`/`enabled`);
+`{type: disabled}` behält Temperature. Bewusst ohne Modell-Differenzierung: der direkte Adapter hat
+keine Per-Modell-Policy-Schicht, und Temperature wegzulassen ist bei aktivem Thinking für alle
+Modelle semantisch verlustfrei (Default ist ohnehin 1). Tests in
+`tests/core/providers/test_anthropic.py`; Spec `providers/anthropic.md` aktualisiert.
 
-### M2 — Modell-Fallback sendet `reasoning_meta` des Primär-Providers an den Fallback-Provider
-Der In-Run-Fallback-Pfad (`core/chat/chat.py:434-444`) re-used die live mutierte `messages`-Liste.
-Die enthält `_assistant_continuation_dict`-Einträge mit `reasoning`/`reasoning_meta` des
-Primär-Providers. Anthropic und OpenAI lesen nur ihre eigenen Meta-Keys (harmlos), aber
-OpenAI-kompatibel und OpenRouter teilen sich den Key `reasoning_details`
-(`OPENAI_REASONING_META_KEYS` in `core/providers/openai_compatible.py:50`) → Cross-Provider-Replay
-möglich. Verstößt gegen die Spec-Regel `.vorch/specs/chat.md:71` („stale reasoning_meta from the
-old provider must never be sent to the new provider“). History-Rebuilds für *neue* Runs strippen
-korrekt via `_message_to_request_dict` — nur der In-Run-Fallback leakt.
-**Fix-Richtung:** Beim Fallback-Wechsel `reasoning`/`reasoning_meta` aus den Assistant-Einträgen
-der weiterverwendeten `messages`-Liste strippen (Provider wechselt → Meta ist per Definition stale).
+### ~~M2 — Modell-Fallback sendet `reasoning_meta` des Primär-Providers an den Fallback-Provider~~ ✅ Gefixt (2026-06-10)
+Der Fallback-Wechsel in `core/chat/chat.py` strippt jetzt `reasoning`/`reasoning_meta` aus den
+Assistant-Einträgen der weiterverwendeten `messages`-Liste
+(`_strip_assistant_reasoning_fields` in `core/chat/messages.py`). Test
+`test_fallback_request_strips_primary_provider_reasoning_meta`; Spec `chat.md` aktualisiert.
 
 ### M3 — `_sync_skill_context_messages` fügt stur bei Index 1 ein
 `core/chat/tool_dispatch.py:491-502`: neue Skill-Kontexte werden mit `messages.insert(1, ...)`
@@ -113,7 +103,7 @@ falsy und wird gefiltert statt mit „id must be a non-empty string“ abgelehnt
 - Cancellation läuft als `asyncio.CancelledError` (`core/runs/runs.py:221-224`) und wird im
   Chat-Loop separat behandelt — keine fälschlich persistierten Error-Messages bei Cancel.
 - Cross-Provider-`reasoning_meta` wird bei History-Rebuilds für neue Runs korrekt gestrippt
-  (`_message_to_request_dict`); nur der In-Run-Fallback leakt (→ M2).
+  (`_message_to_request_dict`); der In-Run-Fallback strippt seit dem M2-Fix ebenfalls.
 - OpenAI-Discovery: `discovery_headers` verlangt eine ChatGPT-Account-ID, aber nur die
   `subscription`-Connection hat ein `models_endpoint` — API-Key-Discovery läuft nie in den Pfad.
 - `core/models` (Registry, Query, Catalog-Load) ohne Befund; `apply_overrides`/Merge bis auf M5 ok.
