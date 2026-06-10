@@ -101,7 +101,54 @@ def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> N
     )
 
     # Assert
-    assert resolved[0]["content"] == [{"type": "text", "text": "[Bild: old-photo.png]"}]
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                f"[Image from an earlier turn: old-photo.png (image/png) "
+                f"— Path: {record.file_path}]"
+            ),
+        }
+    ]
+
+
+def test_historical_turn_image_with_deleted_attachment_degrades_gracefully(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("gone.png", b"\x89PNG\r\n\x1a\ngone")
+    store.delete(record.id)
+    resolver = ContentBlockResolver(store)
+    messages = [
+        {
+            "id": "user-historical",
+            "role": "user",
+            "content": [
+                {
+                    "type": "media",
+                    "attachment_id": record.id,
+                    "filename": "gone.png",
+                    "media_type": "image/png",
+                }
+            ],
+        }
+    ]
+
+    # Act
+    resolved = resolver.resolve_messages(
+        messages,
+        current_user_message_id="other-message",
+        vision_supported=True,
+    )
+
+    # Assert
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": "[Image from an earlier turn: gone.png (image/png) — file no longer available]",
+        }
+    ]
 
 
 @pytest.mark.parametrize("current_turn", [True, False])
@@ -288,7 +335,15 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
 
     # Assert
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
-    assert request_messages[1]["content"] == [{"type": "text", "text": "[Bild: old-photo.png]"}]
+    assert request_messages[1]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                f"[Image from an earlier turn: old-photo.png (image/png) "
+                f"— Path: {record.file_path}]"
+            ),
+        }
+    ]
     assert request_messages[2]["content"] == "latest plain text"
 
 
