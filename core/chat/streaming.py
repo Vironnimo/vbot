@@ -21,13 +21,6 @@ JsonObject = dict[str, Any]
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
 MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
 
-CONTENT_DELTA_TYPE = "content_delta"
-REASONING_DELTA_TYPE = "reasoning_delta"
-TOOL_CALL_DELTA_TYPE = "tool_call_delta"
-REASONING_META_TYPE = "reasoning_meta"
-USAGE_TYPE = "usage"
-FINISH_TYPE = "finish"
-
 
 class StreamingError(VBotError):
     """Base error for provider-agnostic streaming helpers."""
