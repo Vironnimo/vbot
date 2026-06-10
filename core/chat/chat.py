@@ -690,9 +690,12 @@ class ChatLoop:
                     nesting_depth=self._nesting_depth,
                 )
                 for tool_message in tool_messages:
-                    run.raise_if_cancelled()
                     session.append(tool_message)
                     messages.append(_message_to_request_dict(tool_message))
+                # Honor cancellation only after every sibling tool result has
+                # been persisted, so a mid-cycle cancel never leaves an
+                # assistant turn with dangling tool_calls in JSONL history.
+                run.raise_if_cancelled()
             finally:
                 session.flush_deferred_notes()
 

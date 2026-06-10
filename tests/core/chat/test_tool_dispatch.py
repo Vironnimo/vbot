@@ -276,6 +276,52 @@ class TestDispatchCancelWiring:
         )
         assert _decode_tool_result(messages[0].content) == tool_success({"reused": True})
 
+    @pytest.mark.asyncio
+    async def test_dispatch_returns_completed_result_when_run_cancel_arrives(
+        self, tmp_path: Path
+    ) -> None:
+        # Arrange: a tool that signals when it has started so the test
+        # can flip the run cancel flag during the in-flight dispatch.
+        # The dispatch must still return the computed result so the
+        # chat-loop persist loop can record it before honoring the
+        # run cancel — this is the bug the write-side fix prevents.
+        tool_started = asyncio.Event()
+
+        async def slow_handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            tool_started.set()
+            # Yield to give the test a chance to flip cancel_requested
+            # before the tool returns.
+            await asyncio.sleep(0.05)
+            return tool_success({"ok": True})
+
+        tools = ToolRegistry()
+        tools.register("slow", "Slow tool.", {"type": "object"}, slow_handler)
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+        tool_calls = [ToolCall(id="call-slow", name="slow", arguments={})]
+
+        async def flip_flag_after_tool_starts() -> None:
+            await tool_started.wait()
+            run.cancel_requested = True
+
+        flip_task = asyncio.create_task(flip_flag_after_tool_starts())
+        messages = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            tool_calls,
+            session,
+            run,
+            nesting_depth=0,
+        )
+        await flip_task
+
+        # Assert: dispatch returned the tool's computed result; the cancel
+        # flag is honored at the chat-loop persist-loop boundary, not by
+        # silently dropping the result here.
+        assert len(messages) == 1
+        assert _decode_tool_result(messages[0].content) == tool_success({"ok": True})
+
 
 async def _wait_for_registry_entry(run: Run, tool_call_id: str, *, timeout: float) -> None:
     """Poll until the per-tool-call cancel registry has an entry for *tool_call_id*."""
