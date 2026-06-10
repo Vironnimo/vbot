@@ -4,6 +4,8 @@ import {
   RUN_EVENT_TOOL_CALL_DELTA,
 } from './api.js';
 
+import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
+
 export {
   assistantRunChildProgressKey,
   visibleTimelineItems,
@@ -102,8 +104,19 @@ export function updateSessionUsage(sessionState, usage) {
 }
 
 export function loadHistory(sessionState, messages, options = {}) {
+  const visibleMessages = Array.isArray(messages)
+    ? messages.filter(isVisibleHistoryMessage)
+    : [];
+  // While a run is active the retained run events survive the reload, but
+  // events of *other* runs whose output the fresh history now persists are
+  // dead weight: the render-time dedup drops them anyway, so prune them here
+  // to keep `runEvents` from growing across navigations (handoff3 B10).
   const activeRunEvents = isRunActive(sessionState)
-    ? sessionState.runEvents
+    ? pruneRunEventsPersistedInHistory(
+        sessionState.runEvents,
+        visibleMessages,
+        sessionState.currentRun?.runId ?? null,
+      )
     : [];
   const activeStreamingItems = isRunActive(sessionState)
     ? sessionState.streamingItems
@@ -117,9 +130,7 @@ export function loadHistory(sessionState, messages, options = {}) {
   const activeSeenStreamingEventKeys = isRunActive(sessionState)
     ? sessionState.seenStreamingEventKeys
     : new Set();
-  sessionState.messages = Array.isArray(messages)
-    ? messages.filter(isVisibleHistoryMessage)
-    : [];
+  sessionState.messages = visibleMessages;
   sessionState.hasOlderHistory = options.hasMore === true;
   sessionState.runEvents = activeRunEvents;
   sessionState.streamingItems = activeStreamingItems;

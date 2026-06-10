@@ -64,6 +64,24 @@ export function assistantRunChildProgressKey(child) {
   return `${chunkCount}:${latestSequence ?? ''}:${contentLength}`;
 }
 
+// Per-session memo of projected assistant_run items, keyed by run. A run
+// whose group contains a terminal event can no longer change: non-delta run
+// events are appended exactly once (appendRunEvent dedups by run_id +
+// sequence) and never mutated, and the in-place-mutating compressed streaming
+// deltas only exist for the active run. Reusing the terminal runs' projection
+// across the ≤33 ms streaming flushes keeps the per-flush rebuild cost bound
+// to the active run instead of growing with session age (handoff3 B10).
+const liveRunProjectionCachesBySession = new WeakMap();
+
+function liveRunProjectionCache(sessionState) {
+  let cache = liveRunProjectionCachesBySession.get(sessionState);
+  if (!cache) {
+    cache = new Map();
+    liveRunProjectionCachesBySession.set(sessionState, cache);
+  }
+  return cache;
+}
+
 function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
   if (!sessionState) {
     return [];
@@ -76,7 +94,7 @@ function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
 
   const historyItems = historyTimelineItems(sessionState.messages);
   const liveItems = dropPersistedInactiveLiveRuns(
-    liveTimelineItems(runEvents),
+    liveTimelineItems(runEvents, liveRunProjectionCache(sessionState)),
     sessionState.messages,
     sessionState.currentRun?.runId ?? null,
   );
@@ -381,8 +399,12 @@ function trackedRunSourceWithoutUserAnchor(
 }
 
 function liveRunOutputPersistedInHistory(liveAssistantRun, messages) {
+  return runOutputPersistedInHistory(liveAssistantRun?.events, messages);
+}
+
+function runOutputPersistedInHistory(events, messages) {
   const liveMessageIds = new Set();
-  for (const event of liveAssistantRun?.events ?? []) {
+  for (const event of events ?? []) {
     if (
       event?.type !== 'assistant_output' &&
       event?.type !== 'tool_call_result'
@@ -449,6 +471,42 @@ function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
   return liveItems.filter(
     (item) => !liveItemBelongsToRuns(item, persistedRunIds),
   );
+}
+
+// Event-level counterpart of dropPersistedInactiveLiveRuns, used by
+// `loadHistory` to shrink `sessionState.runEvents` instead of only hiding the
+// duplicates at render time (handoff3 B10). Events of a non-active run whose
+// output is fully persisted in the freshly loaded history would be dropped by
+// the render-time predicate anyway, so removing them from the retained array
+// changes nothing visually while keeping the array from growing across
+// navigations and reloads during an active run.
+export function pruneRunEventsPersistedInHistory(
+  runEvents,
+  messages,
+  activeRunId,
+) {
+  const eventsByRun = new Map();
+  for (const event of runEvents ?? []) {
+    const runId = event?.run_id;
+    if (!runId || runId === activeRunId) {
+      continue;
+    }
+    if (!eventsByRun.has(runId)) {
+      eventsByRun.set(runId, []);
+    }
+    eventsByRun.get(runId).push(event);
+  }
+
+  const prunedRunIds = new Set();
+  for (const [runId, events] of eventsByRun) {
+    if (runOutputPersistedInHistory(events, messages)) {
+      prunedRunIds.add(runId);
+    }
+  }
+  if (prunedRunIds.size === 0) {
+    return runEvents ?? [];
+  }
+  return (runEvents ?? []).filter((event) => !prunedRunIds.has(event?.run_id));
 }
 
 function liveItemBelongsToRuns(item, runIds) {
@@ -560,7 +618,7 @@ function matchesRunId(candidateRunId, activeRunId) {
   return candidateRunId === activeRunId;
 }
 
-function liveTimelineItems(runEvents) {
+function liveTimelineItems(runEvents, projectionCache = null) {
   const runGroups = new Map();
   const timelineEntries = [];
 
@@ -609,9 +667,17 @@ function liveTimelineItems(runEvents) {
     }
   }
 
+  if (projectionCache) {
+    for (const runKey of projectionCache.keys()) {
+      if (!runGroups.has(runKey)) {
+        projectionCache.delete(runKey);
+      }
+    }
+  }
+
   return timelineEntries
     .sort((left, right) => left.order - right.order)
-    .flatMap((entry) => liveTimelineEntryItems(entry));
+    .flatMap((entry) => liveTimelineEntryItems(entry, projectionCache));
 }
 
 function ensureLiveRunGroup(runGroups, timelineEntries, event, arrivalIndex) {
@@ -632,13 +698,34 @@ function ensureLiveRunGroup(runGroups, timelineEntries, event, arrivalIndex) {
   return runGroup;
 }
 
-function liveTimelineEntryItems(entry) {
+function liveTimelineEntryItems(entry, projectionCache) {
   if (entry.kind === 'standalone') {
     return [entry.item];
   }
 
-  const assistantRun = buildLiveAssistantRunItem(entry.runKey, entry.events);
+  const assistantRun = projectedLiveAssistantRunItem(entry, projectionCache);
   return [entry.userItem, assistantRun].filter(Boolean);
+}
+
+function projectedLiveAssistantRunItem(entry, projectionCache) {
+  const cacheable =
+    Boolean(projectionCache) &&
+    entry.events.some((event) => TERMINAL_RUN_EVENTS.has(event?.type));
+  if (cacheable) {
+    const cached = projectionCache.get(entry.runKey);
+    if (cached && cached.eventCount === entry.events.length) {
+      return cached.assistantRun;
+    }
+  }
+
+  const assistantRun = buildLiveAssistantRunItem(entry.runKey, entry.events);
+  if (cacheable) {
+    projectionCache.set(entry.runKey, {
+      eventCount: entry.events.length,
+      assistantRun,
+    });
+  }
+  return assistantRun;
 }
 
 function createStandaloneRunEventItem(event) {
