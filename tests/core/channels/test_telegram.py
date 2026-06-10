@@ -605,6 +605,17 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     voice_message = make_real_message(
         voice=telegram.Voice(file_id="v", file_unique_id="vu", duration=2)
     )
+    sticker_message = make_real_message(
+        sticker=telegram.Sticker(
+            file_id="s",
+            file_unique_id="su",
+            width=512,
+            height=512,
+            is_animated=False,
+            is_video=False,
+            type="regular",
+        )
+    )
 
     assert text_handler.check_update(telegram.Update(update_id=1, message=text_message))
     assert not text_handler.check_update(telegram.Update(update_id=2, edited_message=text_message))
@@ -613,10 +624,11 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert not media_handler.check_update(
         telegram.Update(update_id=5, edited_message=photo_message)
     )
-    assert unsupported_handler.check_update(telegram.Update(update_id=6, message=voice_message))
-    assert not unsupported_handler.check_update(telegram.Update(update_id=7, message=photo_message))
+    assert media_handler.check_update(telegram.Update(update_id=6, message=voice_message))
+    assert unsupported_handler.check_update(telegram.Update(update_id=7, message=sticker_message))
+    assert not unsupported_handler.check_update(telegram.Update(update_id=8, message=voice_message))
     assert not unsupported_handler.check_update(
-        telegram.Update(update_id=8, edited_message=voice_message)
+        telegram.Update(update_id=9, edited_message=sticker_message)
     )
     await adapter.stop()
 
@@ -1325,6 +1337,78 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attribute_name", "payload", "expected_media_type", "expected_filename"),
+    [
+        ("voice", b"OggS\x00\x02opus", "audio/ogg", "telegram-voice-vu-1.ogg"),
+        ("audio", b"ID3\x04\x00mp3", "audio/mpeg", "telegram-audio-vu-1"),
+        ("video", b"\x00\x00\x00\x18ftypisom", "video/mp4", "telegram-video-vu-1.mp4"),
+        (
+            "video_note",
+            b"\x00\x00\x00\x18ftypisom",
+            "video/mp4",
+            "telegram-video-note-vu-1.mp4",
+        ),
+    ],
+)
+async def test_inbound_audio_video_message_triggers_media_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attribute_name: str,
+    payload: bytes,
+    expected_media_type: str,
+    expected_filename: str,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(payload))
+    )
+
+    media_object = SimpleNamespace(file_id="media-1", file_unique_id="vu-1", file_name=None)
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=12345),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(
+            text=None,
+            caption="check this",
+            photo=None,
+            document=None,
+            media_group_id=None,
+            message_thread_id=None,
+            **{attribute_name: media_object},
+        ),
+    )
+
+    await adapter._handle_inbound_media(update, SimpleNamespace())
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 2
+    assert isinstance(blocks[0], TextBlock)
+    assert blocks[0].text == "check this"
+    assert isinstance(blocks[1], MediaBlock)
+    assert blocks[1].media_type == expected_media_type
+    assert blocks[1].filename == expected_filename
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_unsupported_message_type_replies_for_allowed_chat(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1345,10 +1429,7 @@ async def test_unsupported_message_type_replies_for_allowed_chat(
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(
         chat_id=12345,
-        text=(
-            "Sorry, this message type isn't supported yet. "
-            "I can process text, photos, and documents."
-        ),
+        text="Sorry, this message type isn't supported yet.",
     )
     await adapter.stop()
 
