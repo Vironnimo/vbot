@@ -20,6 +20,13 @@ import sys
 import time
 from pathlib import Path
 
+# Tool output is decoded as UTF-8, but Windows consoles often use a legacy
+# code page that cannot encode characters like vitest's check marks — degrade
+# those to "?" instead of crashing the runner mid-report.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEBUI_ROOT = PROJECT_ROOT / "webui"
 FRONTEND_FILE_SUFFIXES = {
