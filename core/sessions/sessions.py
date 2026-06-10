@@ -198,15 +198,6 @@ class ChatSession:
         self.sidecar_path.unlink(missing_ok=True)
 
     @staticmethod
-    def _parse_line(line: str, line_number: int) -> ChatMessage:
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
-
-        return ChatSession._message_from_data(data, line_number)
-
-    @staticmethod
     def _parse_line_bytes(line: bytes, line_number: int) -> ChatMessage:
         data = json.loads(line.decode("utf-8"))
         return ChatSession._message_from_data(data, line_number)

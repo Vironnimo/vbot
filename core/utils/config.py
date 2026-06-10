@@ -263,12 +263,3 @@ class Config:
                 continue
 
         return value
-
-
-def load_config() -> Config:
-    """Convenience helper — create a ``Config`` with default paths.
-
-    Returns:
-        A fully loaded :class:`Config` instance.
-    """
-    return Config()
