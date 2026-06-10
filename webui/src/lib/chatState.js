@@ -573,6 +573,11 @@ function isStreamingDeltaRunEvent(eventType) {
 }
 
 function appendCompressedStreamingRunEvent(sessionState, event) {
+  if (event.type === RUN_EVENT_TOOL_CALL_DELTA) {
+    appendCompressedToolCallDeltaEvent(sessionState, event);
+    return;
+  }
+
   const payloadKey = streamingDeltaPayloadKey(event.type);
   if (!payloadKey) {
     return;
@@ -607,6 +612,60 @@ function appendCompressedStreamingRunEvent(sessionState, event) {
       ...event,
       payload: {
         ...event.payload,
+      },
+      _streamingPhase: sessionState.streamingPhase,
+      _streamChunkCount: 1,
+      _streamLatestSequence: streamEventLatestSequence(event),
+    },
+  ];
+}
+
+// Tool-call deltas are compressed into one retained event per
+// (run, tool call, streaming phase) so the live run projection can render a
+// "preparing" tool row from the very first delta. Unlike text deltas, merging
+// looks the event up by tool call id instead of only checking the trailing
+// event, because sibling tool calls may interleave their argument fragments.
+function appendCompressedToolCallDeltaEvent(sessionState, event) {
+  const payload = event.payload ?? {};
+  const toolCallId = payload.tool_call_id ?? payload.id;
+  if (!toolCallId) {
+    return;
+  }
+  const nameDelta = payload.name_delta ?? '';
+  const argumentsDelta = payload.arguments_delta ?? '';
+  if (!nameDelta && !argumentsDelta) {
+    return;
+  }
+
+  const existingEvent = sessionState.streamingRunEvents.find(
+    (candidate) =>
+      candidate.type === event.type &&
+      candidate.run_id === event.run_id &&
+      candidate._streamingPhase === sessionState.streamingPhase &&
+      (candidate.payload?.tool_call_id ?? candidate.payload?.id) === toolCallId,
+  );
+  if (existingEvent) {
+    existingEvent.payload.name_delta = `${existingEvent.payload?.name_delta ?? ''}${nameDelta}`;
+    existingEvent.payload.arguments_delta = `${existingEvent.payload?.arguments_delta ?? ''}${argumentsDelta}`;
+    existingEvent.sequence = firstSeenSequence(
+      existingEvent.sequence,
+      event.sequence,
+    );
+    existingEvent._streamChunkCount = streamEventChunkCount(existingEvent) + 1;
+    existingEvent._streamLatestSequence = streamEventLatestSequence(event);
+    existingEvent.timestamp ??= event.timestamp;
+    return;
+  }
+
+  sessionState.streamingRunEvents = [
+    ...sessionState.streamingRunEvents,
+    {
+      ...event,
+      payload: {
+        ...payload,
+        tool_call_id: toolCallId,
+        name_delta: nameDelta,
+        arguments_delta: argumentsDelta,
       },
       _streamingPhase: sessionState.streamingPhase,
       _streamChunkCount: 1,
