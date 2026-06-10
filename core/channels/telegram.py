@@ -11,7 +11,11 @@ from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from core.attachments import AttachmentStore
+from core.attachments import (
+    AttachmentStore,
+    AttachmentTooLargeError,
+    AttachmentTypeNotAllowedError,
+)
 from core.channels.adapter import (
     ChannelAdapter,
     ConversationFacts,
@@ -48,6 +52,12 @@ _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
 _UNSUPPORTED_COMMAND_REPLY = "This command is not available from Telegram channels yet."
+_UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
+_FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
+_MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
+_UNSUPPORTED_MESSAGE_TYPE_REPLY = (
+    "Sorry, this message type isn't supported yet. I can process text, photos, and documents."
+)
 _SYSTEM_REMINDER_TEMPLATE = (
     "This session is receiving messages via Telegram "
     "(channel: {channel_id}, chat: {chat_id}).\n"
@@ -150,6 +160,17 @@ class TelegramChannelAdapter(ChannelAdapter):
         # UpdateType.MESSAGE restricts handlers to new messages: edited messages must not
         # trigger new Runs, and channel posts are out of scope for chat routing.
         new_messages_only = telegram_ext.filters.UpdateType.MESSAGE
+        # Animations carry a backward-compat `document` field and normally hit the media
+        # handler first; the ANIMATION filter here only catches them if Telegram ever
+        # stops setting that field.
+        unsupported_message_types = (
+            telegram_ext.filters.VOICE
+            | telegram_ext.filters.AUDIO
+            | telegram_ext.filters.VIDEO
+            | telegram_ext.filters.VIDEO_NOTE
+            | telegram_ext.filters.ANIMATION
+            | telegram_ext.filters.Sticker.ALL
+        )
         return [
             telegram_ext.MessageHandler(
                 telegram_ext.filters.TEXT & new_messages_only,
@@ -159,6 +180,10 @@ class TelegramChannelAdapter(ChannelAdapter):
                 (telegram_ext.filters.PHOTO | telegram_ext.filters.Document.ALL)
                 & new_messages_only,
                 self._handle_inbound_media,
+            ),
+            telegram_ext.MessageHandler(
+                unsupported_message_types & new_messages_only,
+                self._handle_unsupported_message_type,
             ),
         ]
 
@@ -370,6 +395,17 @@ class TelegramChannelAdapter(ChannelAdapter):
             conversation.chat_id,
             _QueuedInboundMedia(route=route, reply_plan=reply_plan, messages=(message,)),
         )
+
+    async def _handle_unsupported_message_type(self, update: Any, _context: Any) -> None:
+        """Reply to allowed chats that this message type cannot be processed yet."""
+        conversation = self._conversation_facts(update)
+        if conversation is None:
+            return
+
+        if not self._is_chat_allowed(int(conversation.chat_id)):
+            return
+
+        await self.send(_UNSUPPORTED_MESSAGE_TYPE_REPLY, conversation.chat_id)
 
     def _prepare_inbound_route(
         self,
@@ -692,19 +728,25 @@ class TelegramChannelAdapter(ChannelAdapter):
         await self._trigger_and_relay(queued.route, queued.reply_plan, queued.message.content)
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
+        # Per-message handling: one failing album item must not drop its siblings,
+        # and every failure produces user-visible feedback instead of silence.
         content_blocks: list[ContentBlock] = []
-        try:
-            for message in queued.messages:
+        failure_replies: list[str] = []
+        for message in queued.messages:
+            try:
                 content_blocks.extend(await self._build_media_message_blocks(message))
-        except Exception as error:
-            _LOGGER.warning(
-                "Telegram inbound media processing failed (channel=%s target=%s): %s",
-                self._config.id,
-                queued.reply_plan.platform_target,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return
+            except Exception as error:
+                _LOGGER.warning(
+                    "Telegram inbound media processing failed (channel=%s target=%s): %s",
+                    self._config.id,
+                    queued.reply_plan.platform_target,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                failure_replies.append(_media_failure_reply(error))
+
+        for reply in dict.fromkeys(failure_replies):
+            await self.send(reply, queued.reply_plan.platform_target)
 
         if not content_blocks:
             return
@@ -1009,6 +1051,15 @@ def _extract_assistant_output(event: RunEvent) -> str | None:
 
 def _format_failed_reply() -> str:
     return _FAILED_REPLY
+
+
+def _media_failure_reply(error: Exception) -> str:
+    """Map a media-ingest failure to user-facing reply text without leaking internals."""
+    if isinstance(error, AttachmentTypeNotAllowedError):
+        return _UNSUPPORTED_FILE_REPLY
+    if isinstance(error, AttachmentTooLargeError):
+        return _FILE_TOO_LARGE_REPLY
+    return _MEDIA_FAILED_REPLY
 
 
 def _resolve_channel_token(token_env_var: str, runtime: object) -> str:

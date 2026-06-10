@@ -597,10 +597,13 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
             **content,
         )
 
-    text_handler, media_handler = adapter._build_message_handlers(telegram_ext)
+    text_handler, media_handler, unsupported_handler = adapter._build_message_handlers(telegram_ext)
     text_message = make_real_message(text="hi")
     photo_message = make_real_message(
         photo=[telegram.PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
+    )
+    voice_message = make_real_message(
+        voice=telegram.Voice(file_id="v", file_unique_id="vu", duration=2)
     )
 
     assert text_handler.check_update(telegram.Update(update_id=1, message=text_message))
@@ -609,6 +612,11 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
     assert media_handler.check_update(telegram.Update(update_id=4, message=photo_message))
     assert not media_handler.check_update(
         telegram.Update(update_id=5, edited_message=photo_message)
+    )
+    assert unsupported_handler.check_update(telegram.Update(update_id=6, message=voice_message))
+    assert not unsupported_handler.check_update(telegram.Update(update_id=7, message=photo_message))
+    assert not unsupported_handler.check_update(
+        telegram.Update(update_id=8, edited_message=voice_message)
     )
     await adapter.stop()
 
@@ -1210,6 +1218,161 @@ async def test_inbound_text_document_triggers_text_block_with_content(
     assert len(blocks) == 1
     assert isinstance(blocks[0], TextBlock)
     assert blocks[0].text == "hello from text file"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_disallowed_document_type_replies_instead_of_silent_drop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    trigger_mock = AsyncMock()
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    # Non-UTF8 binary without a known signature sniffs to octet-stream -> rejected.
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"\xff\xfe\xfdbinary"))
+    )
+
+    await adapter._handle_inbound_media(
+        make_document_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="doc-3",
+            file_unique_id="docuniq-3",
+            file_name="archive.zip",
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(
+        chat_id=12345,
+        text="Sorry, this file type isn't supported yet.",
+    )
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+
+    bot.get_file.side_effect = [
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nok"))
+        ),
+        SimpleNamespace(
+            download_as_bytearray=AsyncMock(side_effect=RuntimeError("download failed"))
+        ),
+    ]
+
+    queued = telegram_module._QueuedInboundMedia(
+        route=RouteFacts(agent_id="assistant", session_id=session_id),
+        reply_plan=ReplyPlanFacts(channel_id="tg-assistant", platform_target="12345"),
+        messages=(
+            make_photo_update(
+                chat_id=12345,
+                user_id=50,
+                file_id="photo-ok",
+                file_unique_id="uniq-ok",
+            ).effective_message,
+            make_photo_update(
+                chat_id=12345,
+                user_id=50,
+                file_id="photo-broken",
+                file_unique_id="uniq-broken",
+            ).effective_message,
+        ),
+    )
+
+    await adapter._process_queued_media(queued)
+
+    sent_texts = [call.kwargs["text"] for call in bot.send_message.await_args_list]
+    assert sent_texts == [
+        "Sorry, I couldn't process the attached file. Please try again.",
+        "ok",
+    ]
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], MediaBlock)
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_message_type_replies_for_allowed_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    voice_update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=12345),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(text=None, message_thread_id=None),
+    )
+
+    await adapter._handle_unsupported_message_type(voice_update, SimpleNamespace())
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_awaited_once_with(
+        chat_id=12345,
+        text=(
+            "Sorry, this message type isn't supported yet. "
+            "I can process text, photos, and documents."
+        ),
+    )
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_message_type_ignores_disallowed_chat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    voice_update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=99999),
+        effective_user=SimpleNamespace(id=50),
+        effective_message=SimpleNamespace(text=None, message_thread_id=None),
+    )
+
+    await adapter._handle_unsupported_message_type(voice_update, SimpleNamespace())
+
+    trigger_mock.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
     await adapter.stop()
 
 
