@@ -502,6 +502,46 @@ async def test_finalize_assistant_fields_includes_usage_when_received_via_delta(
     assert response_dict["usage"] == {"input_tokens": 500, "output_tokens": 200}
 
 
+async def test_accumulator_keeps_cache_token_fields_from_usage_delta() -> None:
+    accumulator = StreamingAccumulator()
+
+    visible = accumulator.add_delta(
+        {
+            "type": "usage",
+            "input_tokens": 250,
+            "output_tokens": 80,
+            "cache_read_tokens": 200,
+            "cache_write_tokens": 30,
+        }
+    )
+
+    assert visible == []
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.usage == {
+        "input_tokens": 250,
+        "output_tokens": 80,
+        "cache_read_tokens": 200,
+        "cache_write_tokens": 30,
+    }
+
+
+async def test_accumulator_drops_non_integer_cache_token_fields() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "usage",
+            "input_tokens": 250,
+            "output_tokens": 80,
+            "cache_read_tokens": None,
+            "cache_write_tokens": "bad",
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+    assert fields.usage == {"input_tokens": 250, "output_tokens": 80}
+
+
 async def test_usage_delta_rejects_non_integer_tokens() -> None:
     accumulator = StreamingAccumulator()
 

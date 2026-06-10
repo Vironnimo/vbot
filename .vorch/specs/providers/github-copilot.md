@@ -20,8 +20,8 @@ GitHub Copilot provider with OAuth Device Flow, endpoint-aware runtime policy, a
 ## Endpoint Policy
 
 - `/chat/completions`: conservative fallback through `OpenAICompatibleAdapter` after Copilot policy filters unsupported kwargs.
-- `/responses`: OpenAI Responses-like helper for output items, function calls, usage, reasoning metadata, readable reasoning summaries, and semantic SSE events.
-- `/v1/messages`: Anthropic Messages-like helper for Claude-style models, content blocks, tools, thinking/output config, and SSE normalization.
+- `/responses`: OpenAI Responses-like helper for output items, function calls, usage, reasoning metadata, readable reasoning summaries, and semantic SSE events. Usage normalization maps `input_tokens_details.cached_tokens` (or `prompt_tokens_details`) to canonical `cache_read_tokens`; cached tokens are already included in the wire's input count.
+- `/v1/messages`: Anthropic Messages-like helper for Claude-style models, content blocks, tools, thinking/output config, and SSE normalization. Usage normalization reuses `apply_anthropic_cache_usage` from the Anthropic adapter: cache read/write counts become `cache_read_tokens`/`cache_write_tokens` and are added onto `input_tokens` (non-stream and `message_start`).
 - `ws:/responses` can appear in catalog metadata but is ignored; websocket Responses frames are not implemented.
 
 Endpoint selection uses sanitized model metadata first:

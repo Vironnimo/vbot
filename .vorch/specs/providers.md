@@ -46,6 +46,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 
 ## Conventions
 
+- Usage normalization is canonical across adapters: `input_tokens` always means the total prompt including cached tokens, and provider prompt-cache counters map to optional `cache_read_tokens`/`cache_write_tokens` (OpenAI-style `prompt_tokens_details.cached_tokens` / Responses `input_tokens_details.cached_tokens` are subsets of the wire's input count; Anthropic-style separate cache counters are added onto `input_tokens`). Semantics live in `chat.md` → Token Usage.
 - Provider defaults are request defaults, not model facts. They are applied with lower priority than caller kwargs; unknown per-model output limits stay `max_output_tokens: null` in catalogs even when request defaults contain `max_tokens`.
 - Provider JSON uses `connections`; old single-provider `auth` JSON is invalid.
 - Provider chat HTTP clients use bounded connect/write/pool timeouts and no read timeout; long non-streaming generations may exceed one minute. Streaming stalls are guarded by the chat streaming chunk timeout.

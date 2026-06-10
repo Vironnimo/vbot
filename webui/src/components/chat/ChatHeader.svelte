@@ -24,6 +24,9 @@
   let tokenBadgeText = $derived.by(() =>
     formatTokenBadge(activeSessionState?.usage, activeAgent?.context_window),
   );
+  let tokenBadgeTooltip = $derived.by(() =>
+    formatTokenTooltip(activeSessionState?.usage),
+  );
   let micDotClass = $derived(computeMicDotClass(wakewordStatus));
   let micTooltip = $derived(computeMicTooltip(wakewordStatus));
   let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
@@ -67,6 +70,50 @@
       });
     }
     return '';
+  }
+
+  function formatTokenTooltip(usage) {
+    if (!usage) {
+      return undefined;
+    }
+    const numberFormat = new Intl.NumberFormat();
+    const lines = [
+      t('chat.tokenTooltipInput', 'Input: {tokens} tok', {
+        tokens: numberFormat.format(
+          Number.isFinite(usage.input_tokens) ? usage.input_tokens : 0,
+        ),
+      }),
+    ];
+    if (Number.isFinite(usage.cache_read_tokens)) {
+      lines.push(
+        t('chat.tokenTooltipCacheRead', 'Cache read: {tokens} tok', {
+          tokens: numberFormat.format(usage.cache_read_tokens),
+        }),
+      );
+    }
+    if (Number.isFinite(usage.cache_write_tokens)) {
+      lines.push(
+        t('chat.tokenTooltipCacheWrite', 'Cache write: {tokens} tok', {
+          tokens: numberFormat.format(usage.cache_write_tokens),
+        }),
+      );
+    }
+    lines.push(
+      t('chat.tokenTooltipOutput', 'Output: {tokens} tok', {
+        tokens: numberFormat.format(
+          Number.isFinite(usage.output_tokens) ? usage.output_tokens : 0,
+        ),
+      }),
+    );
+    if (usage.estimated === true) {
+      lines.push(
+        t(
+          'chat.tokenTooltipEstimated',
+          'Estimated (provider sent no usage data)',
+        ),
+      );
+    }
+    return lines.join('\n');
   }
 
   function computeMicDotClass(status) {
@@ -147,7 +194,8 @@
       </button>
     {/if}
     {#if tokenBadgeText}
-      <span class="token-badge">{tokenBadgeText}</span>
+      <span class="token-badge" title={tokenBadgeTooltip}>{tokenBadgeText}</span
+      >
     {/if}
     <button
       type="button"

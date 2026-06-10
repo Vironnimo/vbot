@@ -392,7 +392,7 @@ class AnthropicAdapter(ProviderAdapter):
 
         content_blocks_by_index: dict[int, dict[str, Any]] = {}
         reasoning_meta_blocks: list[dict[str, Any]] = []
-        _usage_input_tokens: int | None = None
+        _usage_from_start: dict[str, Any] | None = None
         seen_message_stop = False
 
         try:
@@ -409,7 +409,7 @@ class AnthropicAdapter(ProviderAdapter):
                 ):
                     yield normalized_delta
                 event_type = parsed.get("type")
-                # Accumulate input tokens from message_start for later usage delta.
+                # Accumulate input-side usage from message_start for later usage delta.
                 if event_type == "message_start":
                     message = parsed.get("message", {})
                     if isinstance(message, dict):
@@ -417,16 +417,17 @@ class AnthropicAdapter(ProviderAdapter):
                         if isinstance(usage, dict):
                             input_tokens = usage.get("input_tokens")
                             if isinstance(input_tokens, int):
-                                _usage_input_tokens = input_tokens
+                                _usage_from_start = {"input_tokens": input_tokens}
+                                apply_anthropic_cache_usage(_usage_from_start, usage)
                 # Yield complete usage delta when both token counts are available.
                 elif event_type == "message_delta":
                     delta_usage = parsed.get("usage", {})
                     if isinstance(delta_usage, dict):
                         output_tokens = delta_usage.get("output_tokens")
-                        if isinstance(output_tokens, int) and _usage_input_tokens is not None:
+                        if isinstance(output_tokens, int) and _usage_from_start is not None:
                             yield {
                                 "type": "usage",
-                                "input_tokens": _usage_input_tokens,
+                                **_usage_from_start,
                                 "output_tokens": output_tokens,
                             }
                 if parsed.get("type") == "message_stop":
@@ -904,10 +905,32 @@ def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     if input_tokens is None:
         return None
     output_tokens = usage.get("output_tokens")
-    return {
+    normalized: dict[str, Any] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens if output_tokens is not None else 0,
     }
+    apply_anthropic_cache_usage(normalized, usage)
+    return normalized
+
+
+def apply_anthropic_cache_usage(normalized: dict[str, Any], usage: dict[str, Any]) -> None:
+    """Fold Anthropic cache token counts into canonical usage fields.
+
+    Anthropic reports ``cache_read_input_tokens`` and
+    ``cache_creation_input_tokens`` separately from ``input_tokens``;
+    canonical ``input_tokens`` means the total prompt including cached
+    tokens, so both counts are added on top.
+    """
+    cache_read = usage.get("cache_read_input_tokens")
+    cache_write = usage.get("cache_creation_input_tokens")
+    input_tokens = normalized["input_tokens"]
+    if isinstance(cache_read, int) and isinstance(input_tokens, int):
+        normalized["cache_read_tokens"] = cache_read
+        input_tokens += cache_read
+    if isinstance(cache_write, int) and isinstance(input_tokens, int):
+        normalized["cache_write_tokens"] = cache_write
+        input_tokens += cache_write
+    normalized["input_tokens"] = input_tokens
 
 
 def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:

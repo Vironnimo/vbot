@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.providers.anthropic import apply_anthropic_cache_usage
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
@@ -52,7 +53,7 @@ class CopilotMessagesStreamState:
 
     content_blocks_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
     reasoning_meta_blocks: list[dict[str, Any]] = field(default_factory=list)
-    input_tokens: int | None = None
+    usage_from_start: dict[str, Any] | None = None
 
 
 def build_copilot_messages_payload(
@@ -552,7 +553,7 @@ def _extract_messages_tool_calls(content_blocks: Any) -> list[dict[str, Any]] | 
     return tool_calls or None
 
 
-def _extract_messages_usage(response: dict[str, Any]) -> dict[str, int] | None:
+def _extract_messages_usage(response: dict[str, Any]) -> dict[str, Any] | None:
     usage = response.get("usage")
     if not isinstance(usage, dict):
         return None
@@ -560,10 +561,12 @@ def _extract_messages_usage(response: dict[str, Any]) -> dict[str, int] | None:
     output_tokens = usage.get("output_tokens")
     if not isinstance(input_tokens, int):
         return None
-    return {
+    normalized: dict[str, Any] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
     }
+    apply_anthropic_cache_usage(normalized, usage)
+    return normalized
 
 
 def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:
@@ -584,7 +587,9 @@ def _capture_message_start_usage(
         return
     input_tokens = usage.get("input_tokens")
     if isinstance(input_tokens, int):
-        state.input_tokens = input_tokens
+        usage_from_start: dict[str, Any] = {"input_tokens": input_tokens}
+        apply_anthropic_cache_usage(usage_from_start, usage)
+        state.usage_from_start = usage_from_start
 
 
 def _normalize_content_block_start(
@@ -694,11 +699,11 @@ def _normalize_message_delta(
     usage = event.get("usage")
     if isinstance(usage, dict):
         output_tokens = usage.get("output_tokens")
-        if isinstance(output_tokens, int) and state.input_tokens is not None:
+        if isinstance(output_tokens, int) and state.usage_from_start is not None:
             normalized_deltas.append(
                 {
                     "type": "usage",
-                    "input_tokens": state.input_tokens,
+                    **state.usage_from_start,
                     "output_tokens": output_tokens,
                 }
             )
