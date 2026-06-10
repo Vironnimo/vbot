@@ -411,6 +411,19 @@ def _assistant_continuation_dict(message: ChatMessage) -> JsonObject:
     return data
 
 
+def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:
+    """Remove ``reasoning``/``reasoning_meta`` from assistant request entries.
+
+    Used when a Run switches providers mid-run: reasoning metadata produced by
+    the old provider is stale by definition and must never be replayed to the
+    new provider.
+    """
+    for message in messages:
+        if message.get("role") == "assistant":
+            message.pop("reasoning", None)
+            message.pop("reasoning_meta", None)
+
+
 def _restore_active_tool_continuation(
     rebuilt_messages: list[JsonObject],
     current_messages: list[JsonObject],

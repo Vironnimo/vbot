@@ -1563,6 +1563,68 @@ async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        fallback_model="anthropic/claude-sonnet-4::api-key",
+        allowed_tools=["echo"],
+    )
+    primary_adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": "Primary readable reasoning",
+                "reasoning_meta": {"reasoning_details": [{"type": "primary-opaque"}]},
+                "tool_calls": [{"id": "call_1", "name": "echo", "arguments": {"value": "x"}}],
+            },
+            ProviderRateLimitError("primary rate limited"),
+        ]
+    )
+    fallback_adapter = StubAdapter([{"content": "Done", "tool_calls": None}])
+    tools = ToolRegistry()
+    tools.register(
+        "echo",
+        "Echo value.",
+        {"type": "object"},
+        lambda _context, arguments: tool_success({"value": arguments["value"]}),
+    )
+    runtime = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+        tools=tools,
+    )
+
+    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+
+    assert assistant.content == "Done"
+    # The primary's own tool-continuation request still round-trips its meta.
+    primary_followup_assistants = [
+        message
+        for message in primary_adapter.requests[1]["messages"]
+        if message.get("role") == "assistant"
+    ]
+    assert any("reasoning_meta" in message for message in primary_followup_assistants)
+    # The fallback provider must never see the primary's reasoning fields.
+    fallback_assistants = [
+        message
+        for message in fallback_adapter.requests[0]["messages"]
+        if message.get("role") == "assistant"
+    ]
+    assert fallback_assistants
+    assert all(
+        "reasoning" not in message and "reasoning_meta" not in message
+        for message in fallback_assistants
+    )
+
+
+@pytest.mark.asyncio
 async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",
