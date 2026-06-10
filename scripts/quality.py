@@ -17,6 +17,13 @@ import sys
 import time
 from pathlib import Path
 
+# Tool output is decoded as UTF-8, but Windows consoles often use a legacy
+# code page that cannot encode every character — degrade those to "?" instead
+# of crashing the runner mid-report.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON_FILE_SUFFIXES = {".py"}
 SNAPSHOT_IGNORED_DIRS = {
@@ -286,7 +293,14 @@ def main() -> int:
             before_snapshot = snapshot_target_files(snapshot_paths)
 
         start = time.monotonic()
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # ruff/mypy/pytest emit UTF-8 regardless of the console code page.
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         elapsed = time.monotonic() - start
         total_elapsed += elapsed
         output = (result.stdout + result.stderr).strip()
