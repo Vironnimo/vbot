@@ -739,6 +739,11 @@ def _to_anthropic_user_content_block(block: Any) -> dict[str, Any]:
                 "media content block requires string base64 and media_type fields",
                 retryable=False,
             )
+        if not media_type.startswith("image/"):
+            raise ProviderError(
+                f"Anthropic adapter supports only image media blocks; received {media_type}",
+                retryable=False,
+            )
         return {
             "type": "image",
             "source": {

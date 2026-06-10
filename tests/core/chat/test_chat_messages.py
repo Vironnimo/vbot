@@ -1,5 +1,6 @@
 """Tests for canonical chat message primitives."""
 
+import asyncio
 import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
@@ -827,7 +828,7 @@ class TestRepairDanglingToolCalls:
 
         # Act: build the compacted request history through the same path the
         # chat loop uses (which calls _embed_notes_into_request internally).
-        request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
 
         # Assert: dangling tool call is answered with a synthesized failure.
         tool_entries = [entry for entry in request_messages if entry.get("role") == "tool"]
@@ -918,7 +919,7 @@ class TestRepairDanglingToolCalls:
         jsonl_before = session.path.read_text(encoding="utf-8")
 
         # Act: run the build path that synthesizes the missing tool result.
-        request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
         jsonl_after = session.path.read_text(encoding="utf-8")
 
         # Assert: the request payload now contains a synthesized tool entry.

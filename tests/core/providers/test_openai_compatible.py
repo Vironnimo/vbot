@@ -343,6 +343,32 @@ class TestSendRequestFormat:
         with pytest.raises(ProviderError, match="media content block requires"):
             _to_openai_user_content_part(invalid_part)
 
+    @pytest.mark.parametrize(
+        ("media_type", "expected_format"),
+        [
+            ("audio/wav", "wav"),
+            ("audio/mpeg", "mp3"),
+        ],
+    )
+    def test_audio_media_part_maps_to_input_audio(self, media_type, expected_format):
+        """Native audio media parts translate to OpenAI input_audio parts."""
+        part = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
+
+        result = _to_openai_user_content_part(part)
+
+        assert result == {
+            "type": "input_audio",
+            "input_audio": {"data": "YXVkaW8=", "format": expected_format},
+        }
+
+    @pytest.mark.parametrize("media_type", ["audio/ogg", "video/mp4", "application/pdf"])
+    def test_unsupported_media_type_part_raises(self, media_type):
+        """Media types outside the supported wire set must raise, not degrade."""
+        part = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
+
+        with pytest.raises(ProviderError, match="unsupported media type"):
+            _to_openai_user_content_part(part)
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_send_maps_user_list_content_text_part(self, openai_adapter):

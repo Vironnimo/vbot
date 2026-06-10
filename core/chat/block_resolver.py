@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from core.attachments import AttachmentStore
 from core.chat.errors import ChatError
+from core.speech import SpeechError
+from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("chat.block_resolver")
+
+# Native audio pass-through is gated by wire support, not just model capability:
+# OpenAI-style `input_audio` parts accept only WAV and MP3. Everything else
+# (notably Telegram's Ogg/Opus voice messages) degrades to STT transcription.
+_NATIVE_AUDIO_MEDIA_TYPES = frozenset({"audio/wav", "audio/mpeg"})
+
+
+class SpeechTranscriber(Protocol):
+    """Speech-to-text hook used to degrade audio attachments to text."""
+
+    async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> Any:
+        """Return an object with a ``text`` attribute for the given audio bytes."""
+        ...
 
 
 class AttachmentResolveError(ChatError):
@@ -19,34 +36,40 @@ class AttachmentResolveError(ChatError):
 class ContentBlockResolver:
     """Resolve canonical content blocks into provider-facing request parts."""
 
-    def __init__(self, attachment_store: AttachmentStore) -> None:
+    def __init__(
+        self,
+        attachment_store: AttachmentStore,
+        *,
+        transcriber: SpeechTranscriber | None = None,
+    ) -> None:
         self._attachment_store = attachment_store
+        self._transcriber = transcriber
 
-    def resolve_messages(
+    async def resolve_messages(
         self,
         messages: list[JsonObject],
         *,
         current_user_message_id: str,
-        vision_supported: bool,
+        input_modalities: frozenset[str],
     ) -> list[JsonObject]:
         """Return a new message list with user content blocks resolved."""
         resolved_messages: list[JsonObject] = []
         for message in messages:
             resolved_messages.append(
-                self._resolve_message(
+                await self._resolve_message(
                     message,
                     current_user_message_id=current_user_message_id,
-                    vision_supported=vision_supported,
+                    input_modalities=input_modalities,
                 )
             )
         return resolved_messages
 
-    def _resolve_message(
+    async def _resolve_message(
         self,
         message: JsonObject,
         *,
         current_user_message_id: str,
-        vision_supported: bool,
+        input_modalities: frozenset[str],
     ) -> JsonObject:
         resolved_message = dict(message)
         if message.get("role") != "user":
@@ -58,21 +81,21 @@ class ContentBlockResolver:
 
         is_current_turn = message.get("id") == current_user_message_id
         resolved_message["content"] = [
-            self._resolve_block(
+            await self._resolve_block(
                 block,
                 is_current_turn=is_current_turn,
-                vision_supported=vision_supported,
+                input_modalities=input_modalities,
             )
             for block in content
         ]
         return resolved_message
 
-    def _resolve_block(
+    async def _resolve_block(
         self,
         block: Any,
         *,
         is_current_turn: bool,
-        vision_supported: bool,
+        input_modalities: frozenset[str],
     ) -> JsonObject:
         if not isinstance(block, dict):
             raise ChatError("content blocks must be objects")
@@ -81,39 +104,65 @@ class ContentBlockResolver:
         if block_type == "text":
             return {"type": "text", "text": self._require_string(block, "text")}
         if block_type == "media":
-            return self._resolve_media_block(
+            return await self._resolve_media_block(
                 block,
                 is_current_turn=is_current_turn,
-                vision_supported=vision_supported,
+                input_modalities=input_modalities,
             )
         if block_type == "file":
             return self._resolve_file_block(block)
         raise ChatError(f"unsupported content block type: {block_type}")
 
-    def _resolve_media_block(
+    async def _resolve_media_block(
         self,
         block: JsonObject,
         *,
         is_current_turn: bool,
-        vision_supported: bool,
+        input_modalities: frozenset[str],
     ) -> JsonObject:
         attachment_id = self._require_string(block, "attachment_id")
         filename = self._require_string(block, "filename")
         media_type = self._require_string(block, "media_type")
 
-        if not is_current_turn:
-            return {
-                "type": "text",
-                "text": self._historical_media_note(attachment_id, filename, media_type),
-            }
-
-        if not vision_supported:
-            raise ChatError("Model does not support vision; cannot process image attachment")
-
-        if not media_type.startswith("image/"):
-            raise ChatError(
-                f"V1 supports only image/* media attachments; received media_type={media_type}"
+        if media_type.startswith("image/"):
+            return self._resolve_image_block(
+                attachment_id,
+                filename,
+                media_type,
+                is_current_turn=is_current_turn,
+                input_modalities=input_modalities,
             )
+        if media_type.startswith("audio/"):
+            return await self._resolve_audio_block(
+                attachment_id,
+                filename,
+                media_type,
+                is_current_turn=is_current_turn,
+                input_modalities=input_modalities,
+            )
+        if media_type.startswith("video/"):
+            # No supported provider wire accepts raw video; the path note lets the
+            # agent work on the file with tools instead.
+            return self._path_note_block("Video", attachment_id, filename, media_type)
+
+        raise ChatError(f"unsupported media attachment type: {media_type}")
+
+    def _resolve_image_block(
+        self,
+        attachment_id: str,
+        filename: str,
+        media_type: str,
+        *,
+        is_current_turn: bool,
+        input_modalities: frozenset[str],
+    ) -> JsonObject:
+        if not is_current_turn:
+            return self._path_note_block(
+                "Image from an earlier turn", attachment_id, filename, media_type
+            )
+
+        if "image" not in input_modalities:
+            raise ChatError("Model does not support vision; cannot process image attachment")
 
         blob_data = self._read_attachment_bytes(attachment_id)
         return {
@@ -122,22 +171,102 @@ class ContentBlockResolver:
             "media_type": media_type,
         }
 
-    def _historical_media_note(
+    async def _resolve_audio_block(
         self,
         attachment_id: str,
         filename: str,
         media_type: str,
-    ) -> str:
-        # Historical media is not resent as binary content; the note keeps the blob
-        # path visible so the agent can still open the file with the read tool.
-        try:
-            record = self._attachment_store.get(attachment_id)
-        except Exception:
-            return (
-                f"[Image from an earlier turn: {filename} ({media_type}) "
-                "— file no longer available]"
+        *,
+        is_current_turn: bool,
+        input_modalities: frozenset[str],
+    ) -> JsonObject:
+        record = self._load_record_or_none(attachment_id)
+
+        if record is not None and isinstance(record.transcription, str):
+            return self._transcription_block(filename, media_type, record.transcription)
+
+        if not is_current_turn:
+            return self._path_note_block(
+                "Audio from an earlier turn", attachment_id, filename, media_type
             )
-        return f"[Image from an earlier turn: {filename} ({media_type}) — Path: {record.file_path}]"
+
+        if record is None:
+            raise AttachmentResolveError(
+                f"Failed to load attachment metadata for id '{attachment_id}'"
+            )
+
+        if "audio" in input_modalities and media_type in _NATIVE_AUDIO_MEDIA_TYPES:
+            blob_data = self._read_attachment_bytes(attachment_id)
+            return {
+                "type": "media",
+                "base64": base64.b64encode(blob_data).decode("ascii"),
+                "media_type": media_type,
+            }
+
+        transcription = await self._transcribe_attachment(record, filename, media_type)
+        return self._transcription_block(filename, media_type, transcription)
+
+    async def _transcribe_attachment(
+        self,
+        record: Any,
+        filename: str,
+        media_type: str,
+    ) -> str:
+        if self._transcriber is None:
+            raise ChatError(
+                "Model does not support audio input and no speech-to-text "
+                "service is available; cannot process audio attachment"
+            )
+
+        blob_data = self._read_attachment_bytes(record.id)
+        try:
+            result = await self._transcriber.transcribe(
+                blob_data, filename=filename, media_type=media_type
+            )
+        except SpeechError as exc:
+            raise ChatError(
+                f"Audio attachment '{filename}' could not be transcribed: {exc}"
+            ) from exc
+
+        text = getattr(result, "text", None)
+        if not isinstance(text, str) or not text.strip():
+            raise ChatError(f"Audio attachment '{filename}' produced an empty transcription")
+
+        try:
+            self._attachment_store.set_transcription(record.id, text)
+        except Exception as exc:
+            _LOGGER.warning("Could not cache transcription for attachment %s: %s", record.id, exc)
+        return text
+
+    @staticmethod
+    def _transcription_block(filename: str, media_type: str, transcription: str) -> JsonObject:
+        return {
+            "type": "text",
+            "text": (
+                f"[Audio attachment {filename} ({media_type}) — automatic transcription, "
+                f"may contain recognition errors]:\n{transcription}"
+            ),
+        }
+
+    def _path_note_block(
+        self,
+        label: str,
+        attachment_id: str,
+        filename: str,
+        media_type: str,
+    ) -> JsonObject:
+        # Media that is not resent as binary content keeps the blob path visible
+        # so the agent can still open the file with the read tool.
+        record = self._load_record_or_none(attachment_id)
+        if record is None:
+            return {
+                "type": "text",
+                "text": f"[{label}: {filename} ({media_type}) — file no longer available]",
+            }
+        return {
+            "type": "text",
+            "text": f"[{label}: {filename} ({media_type}) — Path: {record.file_path}]",
+        }
 
     def _resolve_file_block(self, block: JsonObject) -> JsonObject:
         attachment_id = self._require_string(block, "attachment_id")
@@ -148,6 +277,12 @@ class ContentBlockResolver:
             "type": "text",
             "text": f"[File: {filename} ({media_type}) — Path: {record.file_path}]",
         }
+
+    def _load_record_or_none(self, attachment_id: str) -> Any | None:
+        try:
+            return self._attachment_store.get(attachment_id)
+        except Exception:
+            return None
 
     def _read_attachment_record(self, attachment_id: str) -> Any:
         try:
