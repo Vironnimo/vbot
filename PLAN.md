@@ -8,7 +8,7 @@ get stuck in `running`, and the timeline no longer depends on replaying historic
 [handoff3.md](handoff3.md), remaining backlog: [STRUCTURE.md](STRUCTURE.md)) found one root cause
 behind most recurring problems: **the client reconstructs truth from event replays instead of
 querying it.** This plan introduces (1) a transport epoch + connect snapshot and (2) explicit
-status reconciliation, fixing bugs **B1, B3, B5, B7, B11** from handoff3.md.
+status reconciliation, fixing bugs **B1, B2, B3, B5, B7, B11** from handoff3.md.
 
 ---
 
