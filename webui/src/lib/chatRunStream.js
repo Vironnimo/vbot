@@ -5,6 +5,7 @@ import {
   appendRunEvent,
   ensureSessionState,
   highestContiguousRunEventSequence,
+  removeQueuedMessage,
   startRun,
 } from './chatState.js';
 
@@ -168,6 +169,17 @@ export function createChatRunStream({
     trackSubAgentRunStatus(event);
     if (event.type === 'compaction_completed' && event.payload?.message) {
       appendCompactionCheckpoint(sessionState, event.payload.message);
+    }
+    if (
+      event.type === 'run_started' &&
+      typeof event.payload?.queue_item_id === 'string' &&
+      event.payload.queue_item_id.length > 0
+    ) {
+      // The started run is now executing, so its queued-item handle is no
+      // longer "pending" — drop it locally. The terminal-event
+      // `syncSessionQueue` call below still re-fetches the server list, so
+      // the projection stays consistent if the local removal races.
+      removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
       clearPendingReconnect(sessionState.key);

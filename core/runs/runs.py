@@ -169,6 +169,7 @@ class Run:
         self._task: asyncio.Task[None] | None = None
         self._cancel_callbacks: list[CancelCallback] = []
         self._tool_cancel_callbacks: dict[str, CancelCallback | _CancelledToolCallSentinel] = {}
+        self._started_from_queue_item_id: str | None = None
 
     @property
     def events(self) -> list[RunEvent]:
@@ -425,6 +426,7 @@ class ChatRunManager:
                     agent_id=agent_id,
                     session_id=session_id,
                     executor=item.executor,
+                    queue_item_id=item.item_id,
                 )
                 item.future.set_result(run)
                 return item
@@ -544,7 +546,10 @@ class ChatRunManager:
             }
 
         try:
-            run.emit(RUN_STARTED_EVENT, {"status": RunStatus.RUNNING.value})
+            started_payload: JsonObject = {"status": RunStatus.RUNNING.value}
+            if run._started_from_queue_item_id is not None:  # noqa: SLF001 - executor shares run instance.
+                started_payload["queue_item_id"] = run._started_from_queue_item_id  # noqa: SLF001
+            run.emit(RUN_STARTED_EVENT, started_payload)
             result = await executor(run)
             if run.cancel_requested:
                 run.mark_cancelled(payload_extras={"timing": terminal_timing()})
@@ -589,6 +594,7 @@ class ChatRunManager:
                 agent_id=agent_id,
                 session_id=session_id,
                 executor=item.executor,
+                queue_item_id=item.item_id,
             )
             if not item.future.done():
                 item.future.set_result(run)
@@ -600,6 +606,7 @@ class ChatRunManager:
         agent_id: str,
         session_id: str,
         executor: RunExecutor,
+        queue_item_id: str | None = None,
     ) -> Run:
         run = Run(
             run_id=str(uuid.uuid4()),
@@ -607,6 +614,7 @@ class ChatRunManager:
             session_id=session_id,
             event_retention_limit=self._run_event_retention_limit,
         )
+        run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.
         self._active_by_session[session_key] = run
         self._runs[run.id] = run
         task = asyncio.create_task(self._execute(run, session_key, executor))
