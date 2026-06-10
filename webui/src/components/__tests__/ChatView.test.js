@@ -12,6 +12,7 @@ const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
 const listQueueMock = vi.fn(async () => ({ items: [] }));
 const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
+const applyConnectionSnapshotMock = vi.fn();
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -31,6 +32,26 @@ vi.mock('$lib/api.js', () => ({
   removeFromQueue: (...args) => removeFromQueueMock(...args),
   updateQueueItem: (...args) => updateQueueItemMock(...args),
 }));
+
+// Wrap the real run-stream factory so the wiring test can observe calls to
+// `applyConnectionSnapshot` independently of whatever side effects the real
+// implementation triggers (sub-agent status updates, `subscribeRunEvents`
+// attach, etc.). The wiring assertion is purely "the effect called the run
+// stream's `applyConnectionSnapshot` with the snapshot prop", which the spy
+// captures cleanly while the real `chatRunStream.js` runs untouched.
+vi.mock('../../lib/chatRunStream.js', async () => {
+  const actual = await vi.importActual('../../lib/chatRunStream.js');
+  return {
+    ...actual,
+    createChatRunStream: (options) => {
+      const stream = actual.createChatRunStream(options);
+      return {
+        ...stream,
+        applyConnectionSnapshot: applyConnectionSnapshotMock,
+      };
+    },
+  };
+});
 
 const { default: ChatView } = await import('../ChatView.svelte');
 
@@ -52,6 +73,7 @@ describe('ChatView', () => {
     removeFromQueueMock.mockResolvedValue({ ok: true });
     updateQueueItemMock.mockReset();
     updateQueueItemMock.mockResolvedValue({ ok: true });
+    applyConnectionSnapshotMock.mockReset();
     mountedComponent = null;
   });
 
@@ -1860,6 +1882,86 @@ describe('ChatView', () => {
     expect(document.body.textContent).toContain('Sub-agent');
     expect(document.body.textContent).toContain('Parent:');
     expect(document.body.textContent).toContain('orchestrator/parent-session');
+  });
+
+  it('applies a non-null connectionSnapshot prop to the run stream', async () => {
+    const { createChatViewConnectionSnapshotHarness } =
+      await import('./chatViewConnectionSnapshotHarness.svelte.js');
+    const harness = createChatViewConnectionSnapshotHarness();
+    const snapshot = {
+      type: 'connection_ready',
+      epoch: 'bus-epoch-1',
+      last_sequence: 42,
+      active_runs: [
+        {
+          run_id: 'run-snapshot-1',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          status: 'running',
+          sse_url: '/api/runs/run-snapshot-1/events',
+        },
+      ],
+    };
+    harness.setConnectionSnapshot(snapshot);
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get connectionSnapshot() {
+          return harness.connectionSnapshot;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => applyConnectionSnapshotMock.mock.calls.length === 1,
+      100,
+    );
+
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledWith(snapshot);
+  });
+
+  it('does not re-apply the same connectionSnapshot reference (dedup)', async () => {
+    const { createChatViewConnectionSnapshotHarness } =
+      await import('./chatViewConnectionSnapshotHarness.svelte.js');
+    const harness = createChatViewConnectionSnapshotHarness();
+    const snapshot = {
+      type: 'connection_ready',
+      epoch: 'bus-epoch-1',
+      last_sequence: 42,
+      active_runs: [],
+    };
+    harness.setConnectionSnapshot(snapshot);
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get connectionSnapshot() {
+          return harness.connectionSnapshot;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => applyConnectionSnapshotMock.mock.calls.length === 1,
+      100,
+    );
+
+    // Re-assign the harness to the same snapshot object. Svelte 5's `$state`
+    // setter no-ops for the same reference, but the test still documents the
+    // dedup contract: even if the effect re-runs for the same reference, the
+    // call must not happen again.
+    harness.setConnectionSnapshot(snapshot);
+    flushSync();
+
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });
 

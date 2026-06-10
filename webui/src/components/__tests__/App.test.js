@@ -517,10 +517,18 @@ describe('App', () => {
     );
 
     // The hello frame has no payload.run_id / run_event_sequence, so
-    // `runServerEvents` must not grow. The lifecycle path is the only one
-    // that calls `subscribeRunEvents`, so a no-op there proves routing
-    // bypassed the run-event list.
-    expect(subscribeRunEventsMock.mock.calls.length).toBe(subscribeCallsBefore);
+    // it stays out of `runServerEvents`. However, the snapshot application
+    // in ChatView (Phase 1.3) legitimately triggers one SSE subscription
+    // for the displayed session's active run — this is the intended
+    // snapshot path, not the replay path.
+    expect(subscribeRunEventsMock.mock.calls.length).toBe(
+      subscribeCallsBefore + 1,
+    );
+    expect(subscribeRunEventsMock).toHaveBeenLastCalledWith(
+      '/api/runs/run-snapshot-1/events',
+      expect.any(Object),
+      expect.any(Object),
+    );
   });
 
   it('keeps the run_server_events path working for normal run lifecycle events', async () => {
