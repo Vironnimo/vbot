@@ -273,3 +273,9 @@ Several test names and fixture names from earlier in the project still reference
 `ChatTimeline.svelte` renders exclusively through `visibleTimelineItemsForRender`, which filters out all `streamingItems` entries (`includeStreamingToolCalls: false`, `includeStreamingAssistantAndReasoning: false`). Since tool-call deltas now reach the rendered timeline through compressed `streamingRunEvents` (`appendCompressedToolCallDeltaEvent` in `chatState.js`), the entire `streamingItems` machinery — `appendToolCallStreamingItem`, `appendTextStreamingItem`, the `includeStreaming*` options in `buildVisibleTimelineItems`, `shouldRenderStreamingItem`, `labelForStreamingItem`, `streamingToolName` — only serves the non-render selector `visibleTimelineItems`, which no component uses (tests only).
 
 **Why deferred:** removal touches `chatState.js`, `chatTimeline.js`, `chatTimelinePresentation.js`, and a sizable block of tests; purely cleanup, no user-visible behavior. Worth doing as its own commit so the streaming-preview fix stays reviewable.
+
+## 2026-06-10 — Pre-existing test failure on main: `test_subagent_result_fetch_marks_only_requested_run_for_reused_session`
+
+`tests/core/tools/test_subagent.py::test_subagent_result_fetch_marks_only_requested_run_for_reused_session` fails with a `KeyError` at `test_subagent.py:1483` on a clean checkout of `main` (verified with the working tree stashed, commit d9d38ea era). Not caused by the Telegram channel fixes — discovered while running broader suites as part of that work.
+
+**Why deferred:** unrelated to the channel work in flight; needs its own investigation in the subagents domain (likely batch-tracker/result-fetch bookkeeping, see recent commit 1b8fc75).
