@@ -1276,6 +1276,83 @@ class TestSendProviderConfig:
 
 
 # ---------------------------------------------------------------------------
+# _build_payload() — None-valued caller kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadNoneKwargs:
+    """``None``-valued caller kwargs are dropped, letting provider defaults win.
+
+    Falsy-but-not-None values (e.g. ``0.0``) must survive. Explicit non-None
+    values must still override the default. Covers both ``send()`` and
+    ``stream()`` payload construction (both call ``_build_payload``).
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_and_provider_default_applies(self, openai_adapter):
+        """``temperature=None`` is absent from the payload; default fills in."""
+        # Arrange — OPENAI_CONFIG declares defaults.temperature=0.7
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=None)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert "temperature" in request_body
+        assert request_body["temperature"] == 0.7  # from defaults
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_zero_kwarg_survives_through_send(self, openai_adapter):
+        """``temperature=0.0`` (falsy but not None) survives the None filter."""
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.0)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_nonzero_kwarg_overrides_default(self, openai_adapter):
+        """Explicit non-None kwargs continue to override the provider default."""
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.3)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_for_stream(self, openai_adapter):
+        """``stream()`` also drops ``None`` caller kwargs before sending."""
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=None):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.7  # default applied
+        assert "stream" in request_body  # stream() still adds stream=true
+
+
+# ---------------------------------------------------------------------------
 # stream() — SSE parsing
 # ---------------------------------------------------------------------------
 

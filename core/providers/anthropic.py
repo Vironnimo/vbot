@@ -173,7 +173,10 @@ class AnthropicAdapter(ProviderAdapter):
         the Anthropic API — system messages must not appear in the messages
         array) and assembles model, messages, defaults, and overrides.
         """
-        request_kwargs = dict(kwargs)
+        # ``None``-valued caller kwargs mean "not specified" — drop them so they
+        # do not clobber provider defaults below. Falsy-but-non-None values
+        # (e.g. ``temperature=0.0``) must survive.
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
 
