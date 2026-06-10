@@ -1,4 +1,4 @@
-"""End-to-end hardening tests for the Phase 3 server layer."""
+"""Server RPC end-to-end integration tests with a stub runtime."""
 
 from __future__ import annotations
 
