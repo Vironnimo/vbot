@@ -108,15 +108,8 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         telegram_ext = _load_telegram_ext()
         application = telegram_ext.Application.builder().token(self._token).build()
-        application.add_handler(
-            telegram_ext.MessageHandler(telegram_ext.filters.TEXT, self._handle_inbound_message)
-        )
-        application.add_handler(
-            telegram_ext.MessageHandler(
-                telegram_ext.filters.PHOTO | telegram_ext.filters.Document.ALL,
-                self._handle_inbound_media,
-            )
-        )
+        for handler in self._build_message_handlers(telegram_ext):
+            application.add_handler(handler)
         self._application = application
         self._stop_event.clear()
 
@@ -131,6 +124,22 @@ class TelegramChannelAdapter(ChannelAdapter):
         await updater.start_polling()
         _LOGGER.info("Telegram adapter started (channel=%s)", self._config.id)
         await self._stop_event.wait()
+
+    def _build_message_handlers(self, telegram_ext: Any) -> list[Any]:
+        # UpdateType.MESSAGE restricts handlers to new messages: edited messages must not
+        # trigger new Runs, and channel posts are out of scope for chat routing.
+        new_messages_only = telegram_ext.filters.UpdateType.MESSAGE
+        return [
+            telegram_ext.MessageHandler(
+                telegram_ext.filters.TEXT & new_messages_only,
+                self._handle_inbound_message,
+            ),
+            telegram_ext.MessageHandler(
+                (telegram_ext.filters.PHOTO | telegram_ext.filters.Document.ALL)
+                & new_messages_only,
+                self._handle_inbound_media,
+            ),
+        ]
 
     async def stop(self) -> None:
         """Stop polling, cancel per-chat workers, and release Telegram resources."""
