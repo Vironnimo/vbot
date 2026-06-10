@@ -385,9 +385,26 @@ def _make_subagent_executor(
 ) -> tuple[Any, RunExecutor]:
     from core.chat import ChatLoop
 
-    sub_loop = ChatLoop(runtime, streaming=True)
+    # Child Runs must match normal live Runs: without the live loop's
+    # attachment resolver, persisted media blocks reach the adapter
+    # unresolved; without its compaction service, child runs never
+    # auto-compact. Only the nesting depth needs a private loop instance.
+    parent_loop = _runtime_streaming_chat_loop(runtime)
+    sub_loop = ChatLoop(
+        runtime,
+        streaming=True,
+        attachment_resolver=getattr(parent_loop, "_attachment_resolver", None),
+        compaction_service=getattr(parent_loop, "_compaction_service", None),
+    )
     sub_loop._nesting_depth = context.nesting_depth + 1  # noqa: SLF001 - planned depth handoff.
     return sub_loop, lambda run: sub_loop._execute_run(run, content)  # noqa: SLF001
+
+
+def _runtime_streaming_chat_loop(runtime: Any) -> Any | None:
+    try:
+        return getattr(runtime, "streaming_chat_loop", None)
+    except RuntimeError:
+        return None
 
 
 def _track_subagent_completion(

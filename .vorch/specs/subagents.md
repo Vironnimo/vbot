@@ -26,7 +26,7 @@ Sub-agent orchestration, in-memory batch tracking, parent-child run linkage, and
 ## Conventions
 
 - With `session_id`, spawning routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
-- Child Runs execute through a streaming `ChatLoop`, matching normal live Runs and allowing long provider generations to make progress through stream deltas instead of waiting for one complete non-streaming response.
+- Child Runs execute through a streaming `ChatLoop`, matching normal live Runs and allowing long provider generations to make progress through stream deltas instead of waiting for one complete non-streaming response. The child loop inherits the attachment resolver and compaction service from `runtime.streaming_chat_loop` (`_make_subagent_executor`), so child Runs resolve persisted media blocks and auto-compact like live Runs; only the nesting depth is private to the child loop instance.
 - An explicitly targeted existing Session that is busy enqueues a follow-up Run through `ChatRunManager`; a freshly created Session that is already busy instead fails with `session_busy` (a new Session should never be busy).
 - Blocking mode waits for completion and returns the result payload.
 - The `subagent` tool emits `subagent_session_started` Run events as soon as a child Session is known, then again when run/queue details are known. The event payload includes the parent tool-call id/index plus child `agent_id`, `session_id`, optional `run_id` or `queue_item_id`, and `status` so accessors can link to running child Sessions before the final tool result exists.
