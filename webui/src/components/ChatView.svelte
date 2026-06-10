@@ -88,7 +88,7 @@
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
   // Both caches grow per run/spawn for the lifetime of the tab (handoff3
   // B10), so they are LRU-capped. Statuses are tiny strings — a generous cap
-  // keeps every plausibly rendered row covered (~5 entries per run). Results
+  // keeps every plausibly rendered row covered (~7 entries per run). Results
   // hold full child outputs, so the cap is much tighter; an evicted entry of
   // a still-rendered row simply refetches (missing entries allow fetch).
   const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
