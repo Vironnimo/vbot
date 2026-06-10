@@ -414,17 +414,20 @@ function liveRunOutputPersistedInHistory(liveAssistantRun, messages) {
   return true;
 }
 
-// On refresh the app WebSocket replays its retained lifecycle buffer from
-// sequence 0, so run_started/run_output events for runs that already completed
-// before the page loaded get re-injected into this session's runEvents — most
-// visibly the parent run that spawned a non-blocking sub-agent, replayed
-// alongside the still-active follow-up run it triggered. liveTimelineItems then
-// builds a live block (plus user_message_persisted item) for every run_id, but
+// Safety net: `runEvents` accumulates every run event appended while the tab is
+// open and is only cleared by the next `loadHistory` for an idle session. When a
+// follow-up run starts in the same session, the previous run's events remain
+// next to the new active run's events. The snapshot model removes the original
+// trigger (the WS replay-from-0 that re-injected already-completed runs on
+// refresh), but this natural-flow case can still surface — most visibly the
+// parent run that spawned a non-blocking sub-agent, whose events stay in
+// `runEvents` until the next history load. liveTimelineItems builds a live
+// block (plus user_message_persisted item) for every run_id, but
 // selectTrackedRunTimelineSource only reconciles the single active run against
-// history; every other replayed run leaks in as a duplicate of its
-// already-persisted turn. Drop the live items of any non-active run whose output
-// is fully persisted in history. The active run is left untouched because it may
-// still be streaming output that is not persisted yet; its own splice/anchor
+// history; every other run leaks in as a duplicate of its already-persisted
+// turn. Drop the live items of any non-active run whose output is fully
+// persisted in history. The active run is left untouched because it may still
+// be streaming output that is not persisted yet; its own splice/anchor
 // handling deduplicates it.
 function dropPersistedInactiveLiveRuns(liveItems, messages, activeRunId) {
   const persistedRunIds = new Set();
