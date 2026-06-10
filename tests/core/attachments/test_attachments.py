@@ -64,6 +64,66 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert loaded == record
 
 
+@pytest.mark.parametrize(
+    ("filename", "data", "expected_media_type"),
+    [
+        ("voice.ogg", b"OggS\x00\x02opus-data", "audio/ogg"),
+        ("song.mp3", b"ID3\x04\x00mp3-data", "audio/mpeg"),
+        ("raw.mp3", b"\xff\xfbmp3-frame-data", "audio/mpeg"),
+        ("clip.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav"),
+        ("track.flac", b"fLaCflac-data", "audio/flac"),
+        ("audio.m4a", b"\x00\x00\x00\x18ftypM4A m4a-data", "audio/mp4"),
+        ("movie.mp4", b"\x00\x00\x00\x18ftypisommp4-data", "video/mp4"),
+        ("movie.mov", b"\x00\x00\x00\x14ftypqt  mov-data", "video/quicktime"),
+        ("clip.webm", b"\x1a\x45\xdf\xa3webm-data", "video/webm"),
+        ("old.avi", b"RIFF\x24\x00\x00\x00AVI avi-data", "video/x-msvideo"),
+    ],
+)
+def test_store_accepts_audio_and_video_files(
+    tmp_path: Path,
+    filename: str,
+    data: bytes,
+    expected_media_type: str,
+) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+
+    # Act
+    record = store.store(filename, data)
+
+    # Assert
+    assert record.media_type == expected_media_type
+    assert record.text_content is None
+    assert record.transcription is None
+
+
+def test_set_transcription_persists_to_sidecar(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
+
+    # Act
+    updated = store.set_transcription(record.id, "hello world")
+
+    # Assert
+    assert updated.transcription == "hello world"
+    assert store.get(record.id).transcription == "hello world"
+
+    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert sidecar_payload["transcription"] == "hello world"
+
+
+def test_set_transcription_rejects_empty_text(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", b"OggS\x00\x02opus-data")
+
+    # Act / Assert
+    with pytest.raises(AttachmentError, match="non-empty string"):
+        store.set_transcription(record.id, "   ")
+
+
 def test_store_rejects_file_larger_than_max_size(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path, max_size_bytes=4)
