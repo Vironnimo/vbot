@@ -14,11 +14,12 @@
     subAgentAgentId,
     subAgentDisplayResult,
     subAgentDotStatus,
+    subAgentEffectiveRunId,
     subAgentNavigationTarget,
     subAgentNeedsStatusVerification,
     subAgentPreview,
+    subAgentResultEntryAllowsFetch,
     subAgentResultKey,
-    subAgentRunId,
     subAgentShouldFetchResult,
     subAgentToolStatusLabel,
     timestampForItem,
@@ -79,6 +80,8 @@
 
   // Once a non-blocking sub-agent run finishes (dot flips to success) and we have
   // no fetched result yet, request its final output so it appears automatically.
+  // The cache key is run-scoped when the child run id is known, so repeated
+  // spawns into the same child session each fetch their own result.
   const subAgentResultFetchTargets = $derived(
     visibleRunChildren(item)
       .filter((child) => isSubAgentTool(child))
@@ -88,14 +91,20 @@
           subAgentDotStatus(child, item, subAgentStatuses),
         ),
       )
-      .filter((child) => !subAgentResults[subAgentResultKey(child)])
-      .map((child) => subAgentNavigationTarget(child))
+      .map((child) => {
+        const key = subAgentResultKey(child, subAgentStatuses);
+        if (!key || !subAgentResultEntryAllowsFetch(subAgentResults[key])) {
+          return null;
+        }
+        const target = subAgentNavigationTarget(child);
+        return target ? { ...target, key } : null;
+      })
       .filter(Boolean),
   );
 
   $effect(() => {
     for (const target of subAgentResultFetchTargets) {
-      onRequestSubAgentResult(target.agentId, target.sessionId);
+      onRequestSubAgentResult(target.agentId, target.sessionId, target.key);
     }
   });
 
@@ -121,7 +130,7 @@
         }
         return {
           ...target,
-          runId: subAgentRunId(child),
+          runId: subAgentEffectiveRunId(child, subAgentStatuses),
         };
       })
       .filter(Boolean),
@@ -219,7 +228,8 @@
       {:else if child.type === 'tool_call'}
         {#if isSubAgentTool(child)}
           {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
-          {@const subAgentResult = subAgentResults[subAgentResultKey(child)]}
+          {@const subAgentResult =
+            subAgentResults[subAgentResultKey(child, subAgentStatuses)]}
           {@const subAgentTimeLabel = subAgentToolStatusLabel(
             child,
             dotStatus,
