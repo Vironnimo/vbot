@@ -29,7 +29,7 @@ const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
 export { compactToolValue };
 
 export const isUserItem = (item) =>
-  item.type === 'streaming' || item.type === 'assistant_run'
+  item.type === 'assistant_run'
     ? false
     : item.type === 'message'
       ? item.message.role === 'user'
@@ -38,18 +38,14 @@ export const isUserItem = (item) =>
 export const isAssistantItem = (item) =>
   item.type === 'assistant_run'
     ? true
-    : item.type === 'streaming'
-      ? ['assistant', 'reasoning', 'tool_call'].includes(
-          item.streamingItem.type,
-        )
-      : item.type === 'message'
-        ? item.message.role === 'assistant'
-        : [
-            'assistant_output',
-            'reasoning',
-            'tool_call_started',
-            'tool_call_result',
-          ].includes(item.event.type);
+    : item.type === 'message'
+      ? item.message.role === 'assistant'
+      : [
+          'assistant_output',
+          'reasoning',
+          'tool_call_started',
+          'tool_call_result',
+        ].includes(item.event.type);
 
 export const shouldRenderMessage = (message) =>
   hasUserContentBlocks(message) ||
@@ -719,9 +715,6 @@ export function timestampForItem(item) {
   if (item.type === 'assistant_run') {
     return item.timestamp ?? item.startTimestamp ?? item.endTimestamp;
   }
-  if (item.type === 'streaming') {
-    return item.streamingItem?.timestamp;
-  }
   if (item.type === 'compaction_separator') {
     return item.timestamp;
   }
@@ -760,34 +753,6 @@ export const isFailedToolEvent = (event) =>
   event.type === 'tool_call_result' && hasToolResultError(event);
 
 export const isTerminalEvent = (event) => event.type.startsWith('run_');
-
-export const labelForStreamingItem = (streamingItem) => {
-  if (streamingItem.type === 'reasoning') {
-    return t('chat.event.thinking', 'Thinking').toUpperCase();
-  }
-  if (streamingItem.type === 'tool_call') {
-    return t('chat.event.toolPreparing', 'Preparing tool').toUpperCase();
-  }
-  return t('chat.role.assistant', 'Assistant').toUpperCase();
-};
-
-export const streamingToolName = (streamingItem) =>
-  streamingItem.name || t('chat.toolPendingName', 'tool');
-
-export const shouldRenderStreamingItem = (streamingItem, timelineItems) => {
-  if (!['assistant', 'reasoning'].includes(streamingItem?.type)) {
-    return true;
-  }
-
-  if (!streamingItem?.run_id) {
-    return true;
-  }
-
-  return !timelineItems.some(
-    (item) =>
-      item.type === 'assistant_run' && item.runId === streamingItem.run_id,
-  );
-};
 
 export const latestTerminalStateForItems = (timelineItems) => {
   for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
