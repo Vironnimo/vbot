@@ -924,6 +924,83 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_omits_temperature_when_thinking_effort_is_active(self, anthropic_adapter):
+        """Anthropic rejects temperature alongside active thinking — drop it."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            temperature=0.5,
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert "temperature" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_omits_temperature_when_raw_thinking_kwarg_is_active(
+        self, anthropic_adapter
+    ):
+        """A raw enabled-thinking kwarg also conflicts with temperature."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            temperature=0.5,
+            thinking={"type": "enabled", "budget_tokens": 10000},
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "enabled", "budget_tokens": 10000}
+        assert "temperature" not in request_body
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_skips_default_temperature_when_thinking_is_active(self):
+        """The provider-default temperature must not refill the dropped kwarg."""
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        adapter = AnthropicAdapter(CUSTOM_CONFIG, API_KEY)
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            thinking_effort="high",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert "temperature" not in request_body
+        assert request_body["max_tokens"] == 8192
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_keeps_temperature_when_thinking_is_disabled(self, anthropic_adapter):
+        """Disabled thinking does not conflict with temperature."""
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            temperature=0.5,
+            thinking_effort="none",
+        )
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["thinking"] == {"type": "disabled"}
+        assert request_body["temperature"] == 0.5
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_suppresses_reasoning_when_catalog_disables_it(self):
         """Catalog-known non-reasoning models do not receive Anthropic thinking controls."""
         route = respx.post(ANTHROPIC_URL).mock(
