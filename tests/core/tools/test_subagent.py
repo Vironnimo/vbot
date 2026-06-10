@@ -1474,18 +1474,20 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
         runtime=runtime,
         batch_tracker=tracker,
     )
+    batch = tracker._batches[parent_key]  # noqa: SLF001 - test checks fetched disambiguation.
+    fetched_after_old_fetch = {run_id: entry.fetched for run_id, entry in batch.entries.items()}
     tracker.on_sub_agent_complete(parent_key, "run-new", {"result": "new answer"})
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
     # Assert
     assert result["ok"] is True
-    batch = tracker._batches[parent_key]  # noqa: SLF001 - test checks fetched disambiguation.
-    assert batch.entries["run-old"].fetched is True
-    assert batch.entries["run-new"].fetched is False
+    assert fetched_after_old_fetch == {"run-old": True, "run-new": False}
     assert len(trigger_service.calls) == 1
     assert "### worker (session shared-session) — completed" in trigger_service.calls[0][1]
     assert "new answer" in trigger_service.calls[0][1]
+    assert "old answer" not in trigger_service.calls[0][1]
+    assert parent_key not in tracker._batches  # noqa: SLF001 - noted batch is pruned.
 
 
 async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(

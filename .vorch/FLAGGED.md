@@ -279,3 +279,5 @@ Several test names and fixture names from earlier in the project still reference
 `tests/core/tools/test_subagent.py::test_subagent_result_fetch_marks_only_requested_run_for_reused_session` fails with a `KeyError` at `test_subagent.py:1483` on a clean checkout of `main` (verified with the working tree stashed, commit d9d38ea era). Not caused by the Telegram channel fixes — discovered while running broader suites as part of that work.
 
 **Why deferred:** unrelated to the channel work in flight; needs its own investigation in the subagents domain (likely batch-tracker/result-fetch bookkeeping, see recent commit 1b8fc75).
+
+**Resolved 2026-06-10:** the test asserted the pre-1b8fc75 tracker contract (batch surviving the completion note). Commit 1b8fc75 marks noted entries fetched and prunes the batch immediately but only updated `tests/core/subagents/test_tracker.py`. The tool-layer test now checks fetched disambiguation before the second run completes and asserts the note content plus batch pruning afterwards.
