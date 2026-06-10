@@ -291,9 +291,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     json=payload,
                     headers=headers,
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             reason = response.text
@@ -301,7 +299,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
             )
             classify_http_status(response.status_code, detail=detail)
-            return dict(response.json())
+            return dict(_decode_response_json(response, "OpenAI-compatible provider"))
 
         return await retry_async(_do_request)
 
@@ -355,9 +353,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
@@ -403,10 +399,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     yield normalized_delta
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
@@ -459,6 +455,23 @@ def _stream_choices(chunk: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(choices, list):
         return []
     return [choice for choice in choices if isinstance(choice, dict)]
+
+
+def _decode_response_json(response: httpx.Response, context: str) -> dict[str, Any]:
+    """Decode a 2xx response body to JSON or raise a non-retryable ProviderError."""
+    try:
+        decoded = response.json()
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"{context} sent malformed JSON in response: {exc.msg}",
+            retryable=False,
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise ProviderError(
+            f"{context} sent non-object JSON in response",
+            retryable=False,
+        )
+    return decoded
 
 
 def _normalize_openai_message_delta(

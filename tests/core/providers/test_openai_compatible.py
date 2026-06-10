@@ -1096,6 +1096,72 @@ class TestSendErrorClassification:
 
             assert exc_info.value.retryable is True
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_read_error_raises_network_error(self, openai_adapter):
+        """A non-streaming read failure (httpx.ReadError) is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(side_effect=httpx.ReadError("connection reset"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection reset"),
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_read_error_is_retried(self, openai_adapter):
+        """A transient ReadError is retried; a subsequent success returns the response."""
+
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(
+            side_effect=[
+                httpx.ReadError("connection reset"),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+            ]
+        )
+
+        # Act
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        # Assert
+        assert result == SUCCESS_RESPONSE
+        assert route.call_count == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_remote_protocol_error_raises_network_error(self, openai_adapter):
+        """A non-streaming RemoteProtocolError is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(side_effect=httpx.RemoteProtocolError("server disconnected"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: server disconnected"),
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_malformed_json_raises_non_retryable_provider_error(self, openai_adapter):
+        """A 2xx response with unparseable JSON raises a non-retryable ProviderError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text="not-valid-json{"))
+
+        # Act / Assert
+        with pytest.raises(ProviderError) as exc_info:
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        assert exc_info.value.retryable is False
+        assert "malformed JSON" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # send() — retry behaviour
@@ -1897,6 +1963,38 @@ class TestStreamSSE:
                 ),
             ),
             pytest.raises(ProviderTimeoutError, match="stream timed out"),
+        ):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_network_error_on_mid_stream_remote_protocol_error(
+        self,
+        openai_adapter,
+    ):
+        """stream() wraps mid-stream httpx.RemoteProtocolError as NetworkError (h11 disconnect)."""
+
+        class _ProtocolErrorStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}\n\n'
+                raise httpx.RemoteProtocolError("server disconnected")
+
+            async def aclose(self) -> None:
+                pass
+
+        with (
+            patch.object(
+                openai_adapter._client,
+                "send",
+                new=AsyncMock(
+                    return_value=httpx.Response(
+                        200,
+                        stream=_ProtocolErrorStream(),
+                        headers={"content-type": "text/event-stream"},
+                    )
+                ),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: server disconnected"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass
