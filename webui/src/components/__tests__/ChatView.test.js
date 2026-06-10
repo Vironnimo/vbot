@@ -2239,8 +2239,252 @@ describe('ChatView', () => {
     expect(findButtonByText('Cancel run')).toBeTruthy();
     expect(findButtonByText('New Session')?.disabled).toBe(true);
   });
-});
 
+  // Helper: render a single running sub-agent tool row in the parent
+  // timeline (mirrors the fast-subagent test setup). The caller is
+  // responsible for installing an `rpcMock.mockImplementation` first; this
+  // helper does NOT overwrite it (the verify tests pass a custom mock that
+  // must keep responding after the mount completes).
+  async function mountChatViewWithRunningSubAgent() {
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Spawn background sub-agent');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-verify-1',
+        sequence: 1,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+            arguments: {
+              agent_id: 'alpha',
+              blocking: false,
+              content: 'Inspect the project',
+            },
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'subagent_session_started',
+        run_id: 'run-verify-1',
+        sequence: 2,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+          },
+          data: {
+            agent_id: 'alpha',
+            session_id: 'sub-session-1',
+            run_id: 'verify-run',
+            status: 'running',
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_result',
+        run_id: 'run-verify-1',
+        sequence: 3,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+          },
+          result: JSON.stringify({
+            ok: true,
+            data: {
+              agent_id: 'alpha',
+              session_id: 'sub-session-1',
+              run_id: 'verify-run',
+              status: 'running',
+            },
+          }),
+        },
+      },
+    });
+    flushSync();
+
+    // The sub-agent row is in the parent timeline, dot still "running"
+    // because the frozen persisted descriptor says so.
+    const runningRow = document.querySelector('.subagent-tool-event');
+    expect(runningRow).not.toBeNull();
+    expect(runningRow?.querySelector('.te-dot.running')).not.toBeNull();
+    return runningRow;
+  }
+
+  // Custom RPC mock factory for the sub-agent verification tests. The
+  // default `createChatRpcMock` returns plain assistant messages for
+  // `sub-session-1`; the verify path needs to see a `run_summary` (or an
+  // `active_run`) in the response. The test passes the response override
+  // for `sub-session-1`; everything else falls through to the default
+  // behaviour.
+  function createVerifyRpcMock({ subSessionHistory }) {
+    const fallback = createChatRpcMock({
+      streamResponse: {
+        run_id: 'run-verify-1',
+        sse_url: '/api/runs/run-verify-1/events',
+        status: 'running',
+        events: [],
+      },
+    });
+    return async (method, params) => {
+      if (method === 'chat.history' && params?.session_id === 'sub-session-1') {
+        return subSessionHistory;
+      }
+      return fallback(method, params);
+    };
+  }
+
+  it('verifySubAgentStatus: settles a stuck running sub-agent dot from a run_summary in chat.history (B5 regression)', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [
+            {
+              id: 'sub-assistant-original',
+              role: 'assistant',
+              content: 'Sub-agent response',
+            },
+            {
+              id: 'sub-run-summary-1',
+              role: 'run_summary',
+              run_id: 'verify-run',
+              status: 'completed',
+              timing: { duration_ms: 4200 },
+            },
+          ],
+          has_more: false,
+        },
+      }),
+    );
+
+    await mountChatViewWithRunningSubAgent();
+
+    // The verification call hits the public exported method (same one
+    // the future `onVerifySubAgentStatus` callback chain will invoke).
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    // Dot settled to "done" (status "completed" → dot "success") and the
+    // child duration rendered in the time label.
+    const settledRow = document.querySelector('.subagent-tool-event');
+    expect(settledRow).not.toBeNull();
+    expect(settledRow?.querySelector('.te-dot.running')).toBeNull();
+    expect(settledRow?.querySelector('.te-dot.done')).not.toBeNull();
+    expect(settledRow?.querySelector('.te-time')?.textContent?.trim()).toBe(
+      '4.2s',
+    );
+
+    // The verify path targeted the right RPC (at least one verify
+    // round-trip; the row's settled "success" dot also triggers the
+    // existing `requestSubAgentResult` lookup, so more than one call is
+    // expected and acceptable).
+    const verifyHistoryCalls = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    );
+    expect(verifyHistoryCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('verifySubAgentStatus: keeps the dot running when chat.history reports an active_run, with a once-per-key guard', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+          active_run: {
+            run_id: 'verify-run',
+            sse_url: '/api/runs/verify-run/events',
+            status: 'running',
+            events: [],
+          },
+        },
+      }),
+    );
+
+    await mountChatViewWithRunningSubAgent();
+
+    // First call: chat.history returns active_run → dot stays "running".
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    const stillRunningRow = document.querySelector('.subagent-tool-event');
+    expect(stillRunningRow).not.toBeNull();
+    expect(stillRunningRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(stillRunningRow?.querySelector('.te-dot.done')).toBeNull();
+
+    const historyCallCountAfterFirst = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    ).length;
+
+    // Second call with the same key: the once-per-key guard must short-
+    // circuit and not issue a second `chat.history` round-trip.
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    const historyCallCountAfterSecond = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    ).length;
+
+    expect(historyCallCountAfterSecond).toBe(historyCallCountAfterFirst);
+
+    // The dot is still running — the verify path did not flip it to
+    // "done".
+    const finalRow = document.querySelector('.subagent-tool-event');
+    expect(finalRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(finalRow?.querySelector('.te-dot.done')).toBeNull();
+  });
+});
 function createChatRpcMock({
   usage,
   contextWindow = 262144,
