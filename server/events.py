@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -72,6 +73,20 @@ class ServerEventBus:
         self._subscribers: list[_ServerEventSubscriber] = []
         self._subscriber_queue_limit = subscriber_queue_limit
         self._next_sequence = 1
+        # Generation identifier used by /ws clients to detect a server restart
+        # (bus restarts at sequence 1, so a sequence regression on its own is
+        # ambiguous — the epoch is the authoritative "new server" signal).
+        self._epoch = uuid.uuid4().hex
+
+    @property
+    def epoch(self) -> str:
+        """Return this bus instance's generation identifier."""
+        return self._epoch
+
+    @property
+    def last_sequence(self) -> int:
+        """Return the sequence number of the most recently published event (0 if none)."""
+        return self._next_sequence - 1
 
     @property
     def events(self) -> list[JsonObject]:
@@ -84,6 +99,7 @@ class ServerEventBus:
             raise ValueError(f"unsupported server event type: {event_type}")
         event = {
             "sequence": self._next_sequence,
+            "epoch": self._epoch,
             "type": event_type,
             "payload": dict(payload or {}),
             "timestamp": datetime.now(UTC).isoformat(),

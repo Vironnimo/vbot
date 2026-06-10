@@ -2977,7 +2977,7 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('uses completed persisted history when replay resumes with only later live events', () => {
+  it('uses completed persisted history when a follow-up run starts with its own live events', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',

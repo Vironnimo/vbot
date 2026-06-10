@@ -27,6 +27,7 @@
     subAgentResults = {},
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
+    onVerifySubAgentStatus = () => {},
     onRetry = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
@@ -368,6 +369,7 @@
             onReasoningOpenChange={setReasoningOpen}
             {onNavigateToSubAgent}
             {onRequestSubAgentResult}
+            {onVerifySubAgentStatus}
             {onRetry}
             {onCancelToolCall}
             {onCancelSubAgent}

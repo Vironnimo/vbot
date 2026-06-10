@@ -5,6 +5,7 @@ import {
   appendRunEvent,
   ensureSessionState,
   highestContiguousRunEventSequence,
+  removeQueuedMessage,
   startRun,
 } from './chatState.js';
 
@@ -168,6 +169,17 @@ export function createChatRunStream({
     trackSubAgentRunStatus(event);
     if (event.type === 'compaction_completed' && event.payload?.message) {
       appendCompactionCheckpoint(sessionState, event.payload.message);
+    }
+    if (
+      event.type === 'run_started' &&
+      typeof event.payload?.queue_item_id === 'string' &&
+      event.payload.queue_item_id.length > 0
+    ) {
+      // The started run is now executing, so its queued-item handle is no
+      // longer "pending" — drop it locally. The terminal-event
+      // `syncSessionQueue` call below still re-fetches the server list, so
+      // the projection stays consistent if the local removal races.
+      removeQueuedMessage(sessionState, event.payload.queue_item_id);
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
       clearPendingReconnect(sessionState.key);
@@ -373,6 +385,11 @@ export function createChatRunStream({
     delete activeSubscriptions[sessionKey];
   }
 
+  function closeSubscriptionFor(sessionKey) {
+    closeRunSubscription(sessionKey);
+    clearPendingReconnect(sessionKey);
+  }
+
   function closeSubscriptionsExcept(sessionKey) {
     for (const key of Object.keys(activeSubscriptions)) {
       if (key === sessionKey) {
@@ -429,8 +446,55 @@ export function createChatRunStream({
     clearPendingRunEventFlushes();
   }
 
+  function applyConnectionSnapshot(snapshot) {
+    const activeRuns = Array.isArray(snapshot?.active_runs)
+      ? snapshot.active_runs
+      : [];
+    if (activeRuns.length === 0) {
+      return;
+    }
+
+    const subAgentUpdates = {};
+    for (const activeRun of activeRuns) {
+      if (!activeRun?.run_id) {
+        continue;
+      }
+      subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
+      if (activeRun.agent_id && activeRun.session_id) {
+        subAgentUpdates[
+          `session:${activeRun.agent_id}::${activeRun.session_id}`
+        ] = 'running';
+      }
+    }
+    if (Object.keys(subAgentUpdates).length > 0) {
+      updateSubAgentRunStatuses(subAgentUpdates);
+    }
+
+    for (const activeRun of activeRuns) {
+      if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
+        continue;
+      }
+      if (!isDisplayedSession(activeRun.agent_id, activeRun.session_id)) {
+        continue;
+      }
+      const sessionState = ensureSessionState(
+        chatState,
+        activeRun.agent_id,
+        activeRun.session_id,
+      );
+      attachRunStream(sessionState, {
+        run_id: activeRun.run_id,
+        status: 'running',
+        sse_url: activeRun.sse_url,
+        events: [],
+      });
+    }
+  }
+
   return {
+    applyConnectionSnapshot,
     attachRunStream,
+    closeSubscriptionFor,
     closeSubscriptions,
     closeSubscriptionsExcept,
     handleServerEvents,

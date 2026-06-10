@@ -463,6 +463,118 @@ describe('App', () => {
 
     expect(mountedComponent).toBe(currentMount);
   });
+
+  it('routes the connection_ready hello frame into connectionSnapshot and skips the run-server-events path', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Alpha');
+    });
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    const subscribeCallsBefore = subscribeRunEventsMock.mock.calls.length;
+
+    const helloFrame = {
+      type: 'connection_ready',
+      epoch: 'bus-epoch-7',
+      last_sequence: 42,
+      active_runs: [
+        {
+          run_id: 'run-snapshot-1',
+          agent_id: 'alpha',
+          session_id: 'session-parent',
+          status: 'running',
+          sse_url: '/api/runs/run-snapshot-1/events',
+        },
+        {
+          run_id: 'run-snapshot-2',
+          agent_id: 'alpha',
+          session_id: 'session-other',
+          status: 'running',
+          sse_url: '/api/runs/run-snapshot-2/events',
+        },
+      ],
+    };
+
+    handlers.onEvent(helloFrame);
+    flushSync();
+
+    // The full frame (epoch, last_sequence, active_runs) lives in the
+    // connectionSnapshot state — verify the export returns it untouched.
+    expect(mountedComponent.getConnectionSnapshot()).toEqual(helloFrame);
+    expect(mountedComponent.getConnectionSnapshot().active_runs).toHaveLength(
+      2,
+    );
+
+    // The hello frame has no payload.run_id / run_event_sequence, so
+    // it stays out of `runServerEvents`. However, the snapshot application
+    // in ChatView (Phase 1.3) legitimately triggers one SSE subscription
+    // for the displayed session's active run — this is the intended
+    // snapshot path, not the replay path.
+    expect(subscribeRunEventsMock.mock.calls.length).toBe(
+      subscribeCallsBefore + 1,
+    );
+    expect(subscribeRunEventsMock).toHaveBeenLastCalledWith(
+      '/api/runs/run-snapshot-1/events',
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it('keeps the run_server_events path working for normal run lifecycle events', async () => {
+    const agents = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'session-parent',
+      },
+    ];
+    rpcMock.mockImplementation(createChatRpcMock(agents));
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    await waitForAssertion(() => {
+      expect(activeAgentTab()?.textContent).toContain('Alpha');
+    });
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    const subscribeCallsBefore = subscribeRunEventsMock.mock.calls.length;
+
+    handlers.onEvent(
+      runServerEvent('run_started', 'run-plain', 11, {
+        run_event_type: 'run_started',
+        status: 'running',
+      }),
+    );
+    flushSync();
+
+    // A plain run_started still flows through `runServerEvents`, which
+    // delegates to runStream.handleServerEvents → attachRunStream →
+    // subscribeRunEvents. The connection_ready routing change must not
+    // disturb that.
+    expect(subscribeRunEventsMock.mock.calls.length).toBe(
+      subscribeCallsBefore + 1,
+    );
+    expect(subscribeRunEventsMock).toHaveBeenLastCalledWith(
+      '/api/runs/run-plain/events',
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    // And the connection snapshot is still null because no hello arrived.
+    expect(mountedComponent.getConnectionSnapshot()).toBeNull();
+  });
 });
 
 async function waitForAssertion(assertion) {
@@ -616,6 +728,23 @@ function createRunningSubAgentRpcMock(agents) {
     }
 
     if (method === 'chat.history') {
+      if (params?.session_id !== 'session-parent') {
+        return {
+          agent_id: params?.agent_id ?? '',
+          session_id: params?.session_id ?? '',
+          messages: [],
+          active_run: {
+            run_id:
+              params?.session_id === 'sub-session-running'
+                ? 'sub-run-running'
+                : `run-${params?.session_id ?? 'other'}`,
+            agent_id: params?.agent_id ?? '',
+            session_id: params?.session_id ?? '',
+            status: 'running',
+            events: [],
+          },
+        };
+      }
       return {
         agent_id: params?.agent_id ?? '',
         session_id: params?.session_id ?? '',

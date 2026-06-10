@@ -714,6 +714,64 @@ describe('subscribeServerEvents()', () => {
 
     connection.close();
   });
+
+  it('includes epoch query param when epoch is non-empty', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        epoch: 'abc123',
+      },
+    );
+
+    expect(connection.socket.url).toContain('epoch=abc123');
+
+    connection.close();
+  });
+
+  it('combines epoch and after_sequence when both are non-empty', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        afterSequence: 5,
+        epoch: 'abc123',
+      },
+    );
+
+    expect(connection.socket.url).toContain('after_sequence=5');
+    expect(connection.socket.url).toContain('epoch=abc123');
+
+    connection.close();
+  });
+
+  it('omits epoch query param when epoch is the empty string', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      {
+        WebSocket: MockWebSocket,
+        baseUrl: 'https://localhost:8420/',
+        epoch: '',
+      },
+    );
+
+    expect(connection.socket.url).not.toContain('epoch=');
+
+    connection.close();
+  });
+
+  it('omits epoch query param when epoch is omitted', () => {
+    const connection = subscribeServerEvents(
+      { onEvent: vi.fn() },
+      { WebSocket: MockWebSocket, baseUrl: 'https://localhost:8420/' },
+    );
+
+    expect(connection.socket.url).not.toContain('epoch=');
+
+    connection.close();
+  });
 });
 
 describe('subscribeLogEvents()', () => {
