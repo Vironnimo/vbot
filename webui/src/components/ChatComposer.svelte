@@ -8,7 +8,7 @@
 
   const SKILL_TRIGGER_PATTERN = /[A-Za-z0-9_-]/u;
   const ATTACHMENT_ACCEPT =
-    'image/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    'image/*,audio/*,video/*,text/*,application/pdf,application/msword,application/vnd.ms-excel,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
   let {
     disabled = false,
@@ -132,6 +132,10 @@
   const hasImageMediaType = (mediaType) =>
     typeof mediaType === 'string' &&
     mediaType.toLowerCase().startsWith('image/');
+
+  const hasMediaMediaType = (mediaType) =>
+    typeof mediaType === 'string' &&
+    /^(image|audio|video)\//.test(mediaType.toLowerCase());
 
   const hasTextMediaType = (mediaType) =>
     typeof mediaType === 'string' &&
@@ -374,7 +378,7 @@
           (attachment) => !attachment.uploading && attachment.attachment_id,
         )
         .map((attachment) => {
-          if (hasImageMediaType(attachment.media_type)) {
+          if (hasMediaMediaType(attachment.media_type)) {
             return {
               type: 'media',
               attachment_id: attachment.attachment_id,
