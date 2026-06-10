@@ -1,7 +1,9 @@
 """Tests for canonical chat message primitives."""
 
+import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -18,6 +20,12 @@ from core.chat.chat import (
     error_kind_llm_visible,
 )
 from core.chat.content_blocks import FileBlock, TextBlock
+from core.chat.messages import (
+    INTERRUPTED_TOOL_RESULT_CODE,
+    INTERRUPTED_TOOL_RESULT_MESSAGE,
+    _embed_notes_into_request,
+    _repair_dangling_tool_calls,
+)
 
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 FIXED_TIMING = {
@@ -671,3 +679,255 @@ class TestErrorKindLlmVisibility:
     )
     def test_llm_invisible_and_unknown_error_kinds_return_false(self, kind):
         assert error_kind_llm_visible(kind) is False
+
+
+def _synthesized_failure_envelope() -> dict:
+    return {
+        "ok": False,
+        "error": {
+            "code": INTERRUPTED_TOOL_RESULT_CODE,
+            "message": INTERRUPTED_TOOL_RESULT_MESSAGE,
+        },
+        "data": None,
+        "artifacts": [],
+    }
+
+
+class TestRepairDanglingToolCalls:
+    """The shared history-build path must synthesize tool results for dangling tool_calls."""
+
+    def test_dangling_assistant_followed_by_error_synthesizes_tool_results(self) -> None:
+        # Arrange: a history broken by the bug-hunt repro — an assistant turn
+        # with tool_calls persisted, but no tool results, followed by an error.
+        messages = [
+            ChatMessage.user("Do something", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[
+                    ToolCall(id="call_one", name="read", arguments={"path": "x"}),
+                    ToolCall(id="call_two", name="read", arguments={"path": "y"}),
+                ],
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.error(
+                ERROR_KIND_PROVIDER_ERROR,
+                "Run aborted.",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        # Act
+        request = _embed_notes_into_request(messages)
+
+        # Assert: synthesized tool results come immediately after the assistant
+        # turn, followed by the LLM-visible error as a system-reminder note.
+        assert [message["role"] for message in request] == [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+            "user",
+        ]
+        for entry, expected_id in zip(request[2:4], ["call_one", "call_two"], strict=True):
+            assert entry["role"] == "tool"
+            assert entry["tool_call_id"] == expected_id
+            assert entry["name"] == "read"
+            envelope = json.loads(entry["content"])
+            assert envelope == _synthesized_failure_envelope()
+        assert request[-1]["role"] == "user"
+        assert "Run aborted." in request[-1]["content"]
+
+    def test_partial_results_only_synthesizes_missing_call_preserves_order(self) -> None:
+        # Arrange: 2 of 3 sibling tool calls were persisted; the missing one
+        # must be synthesized and the existing two kept. Synthesized entries
+        # appear in the assistant's original tool-call order relative to each
+        # other (this is the only order the repair can establish without
+        # re-ordering the existing persisted tool entries).
+        messages = [
+            ChatMessage.user("Multi", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.2",
+                content=None,
+                tool_calls=[
+                    ToolCall(id="call_alpha", name="read", arguments={}),
+                    ToolCall(id="call_beta", name="read", arguments={}),
+                    ToolCall(id="call_gamma", name="read", arguments={}),
+                ],
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_alpha",
+                name="read",
+                content=json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}),
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_gamma",
+                name="read",
+                content=json.dumps({"ok": True, "error": None, "data": {}, "artifacts": []}),
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.user("Next request", timestamp=FIXED_TIMESTAMP),
+        ]
+
+        # Act
+        request = _embed_notes_into_request(messages)
+
+        # Assert: every tool_call_id is answered, exactly one synthetic entry
+        # is added, and the synthetic one is the missing call (beta).
+        assert [message["role"] for message in request] == [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+            "tool",
+            "user",
+        ]
+        answered = [entry.get("tool_call_id") for entry in request if entry.get("role") == "tool"]
+        assert sorted(answered) == ["call_alpha", "call_beta", "call_gamma"]  # type: ignore[type-var]
+        synthetic_ids = [
+            entry.get("tool_call_id")
+            for entry in request
+            if entry.get("role") == "tool" and "result_unavailable" in entry.get("content", "")
+        ]
+        assert synthetic_ids == ["call_beta"]
+        # The synthesized entry must come after the dangling assistant turn;
+        # the trailing user message stays last.
+        assert request[-1]["role"] == "user"
+        assert request[-1]["content"] == "Next request"
+
+    def test_compaction_tail_path_gets_same_repair(self, tmp_path) -> None:
+        # Arrange: tail of a compacted session contains a dangling assistant turn.
+        from core.chat.chat import ChatLoop
+        from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+        session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+        tail_user = ChatMessage.user("Current question", timestamp=FIXED_TIMESTAMP)
+        session.append(ChatMessage.user("Old question", timestamp=FIXED_TIMESTAMP))
+        session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
+        session.append(tail_user)
+        session.append(
+            ChatMessage.assistant(
+                model=agent.model,
+                content=None,
+                tool_calls=[ToolCall(id="dangling", name="read", arguments={})],
+            )
+        )
+        session.append(
+            ChatMessage.compaction_checkpoint(
+                summary="Compacted earlier turns.",
+                tail_boundary_id=tail_user.id,
+                compacted_token_count=10,
+            )
+        )
+
+        # Act: build the compacted request history through the same path the
+        # chat loop uses (which calls _embed_notes_into_request internally).
+        request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+
+        # Assert: dangling tool call is answered with a synthesized failure.
+        tool_entries = [entry for entry in request_messages if entry.get("role") == "tool"]
+        assert len(tool_entries) == 1
+        assert tool_entries[0]["tool_call_id"] == "dangling"
+        assert tool_entries[0]["name"] == "read"
+        envelope = json.loads(tool_entries[0]["content"])
+        assert envelope == _synthesized_failure_envelope()
+
+    def test_repair_does_not_double_answer_already_answered_calls(self) -> None:
+        # Arrange: every tool call already has a matching tool result.
+        tool_envelope = json.dumps({"ok": True, "error": None, "data": {"x": 1}, "artifacts": []})
+        request: list[dict[str, Any]] = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_ok", "name": "read", "arguments": {}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_ok", "name": "read", "content": tool_envelope},
+        ]
+
+        # Act
+        repaired = _repair_dangling_tool_calls(request)
+
+        # Assert: no synthetic entries are added.
+        assert repaired == request
+
+    def test_repair_preserves_synthesized_name_when_tool_call_has_name(self) -> None:
+        # Arrange
+        request: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "only_call", "name": "bash", "arguments": {}}],
+            },
+        ]
+
+        # Act
+        repaired = _repair_dangling_tool_calls(request)
+
+        # Assert
+        assert len(repaired) == 2
+        assert repaired[1]["name"] == "bash"
+        envelope = json.loads(repaired[1]["content"])
+        assert envelope == _synthesized_failure_envelope()
+
+    def test_repair_uses_unknown_name_when_tool_call_name_missing(self) -> None:
+        # Arrange
+        request: list[dict[str, Any]] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "only_call", "arguments": {}}],
+            },
+        ]
+
+        # Act
+        repaired = _repair_dangling_tool_calls(request)
+
+        # Assert
+        assert repaired[1]["name"] == "unknown"
+        assert repaired[1]["tool_call_id"] == "only_call"
+
+    def test_repaired_entries_are_never_persisted_to_session_jsonl(self, tmp_path) -> None:
+        # Arrange: a session with a dangling assistant turn in JSONL, then run
+        # the build path. The synthesized entries must show up in the request
+        # payload but not in the session file the next time we load it.
+        from core.chat.chat import ChatLoop
+        from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+        runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+        session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+        session.append(ChatMessage.user("Please read", timestamp=FIXED_TIMESTAMP))
+        session.append(
+            ChatMessage.assistant(
+                model=agent.model,
+                content=None,
+                tool_calls=[ToolCall(id="dangling_one", name="read", arguments={})],
+            )
+        )
+        # No tool result persisted; this is the dangling state.
+
+        jsonl_before = session.path.read_text(encoding="utf-8")
+
+        # Act: run the build path that synthesizes the missing tool result.
+        request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+        jsonl_after = session.path.read_text(encoding="utf-8")
+
+        # Assert: the request payload now contains a synthesized tool entry.
+        tool_entries = [entry for entry in request_messages if entry.get("role") == "tool"]
+        assert any(entry.get("tool_call_id") == "dangling_one" for entry in tool_entries)
+        # Assert: the JSONL file is byte-for-byte unchanged; no synthesized
+        # tool message was appended by the repair.
+        assert jsonl_after == jsonl_before
+        # And re-loading the session still shows the dangling assistant turn
+        # (not a tool entry), confirming the repair is request-only.
+        reloaded = session.load()
+        assert [message.role for message in reloaded] == ["user", "assistant"]
