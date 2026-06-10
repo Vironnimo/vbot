@@ -728,6 +728,23 @@ function createRunningSubAgentRpcMock(agents) {
     }
 
     if (method === 'chat.history') {
+      if (params?.session_id !== 'session-parent') {
+        return {
+          agent_id: params?.agent_id ?? '',
+          session_id: params?.session_id ?? '',
+          messages: [],
+          active_run: {
+            run_id:
+              params?.session_id === 'sub-session-running'
+                ? 'sub-run-running'
+                : `run-${params?.session_id ?? 'other'}`,
+            agent_id: params?.agent_id ?? '',
+            session_id: params?.session_id ?? '',
+            status: 'running',
+            events: [],
+          },
+        };
+      }
       return {
         agent_id: params?.agent_id ?? '',
         session_id: params?.session_id ?? '',
