@@ -360,6 +360,44 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
     }
 
 
+def test_normalize_response_extracts_cached_tokens_from_input_tokens_details() -> None:
+    response = {
+        "id": "resp_1",
+        "status": "completed",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}],
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "input_tokens_details": {"cached_tokens": 8},
+        },
+    }
+
+    normalized = normalize_responses_response(response)
+
+    assert normalized["usage"] == {
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "cache_read_tokens": 8,
+    }
+
+
+def test_normalize_response_ignores_non_int_cached_tokens() -> None:
+    response = {
+        "id": "resp_1",
+        "status": "completed",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "Done."}]}],
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "input_tokens_details": {"cached_tokens": None},
+        },
+    }
+
+    normalized = normalize_responses_response(response)
+
+    assert normalized["usage"] == {"input_tokens": 11, "output_tokens": 7}
+
+
 def test_normalize_response_drops_malformed_function_arguments_json() -> None:
     normalized = normalize_responses_response(
         {

@@ -422,10 +422,27 @@ def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
     output_tokens = usage.get("output_tokens", usage.get("completion_tokens"))
     if not isinstance(input_tokens, int) and not isinstance(output_tokens, int):
         return None
-    return {
+    normalized = {
         "input_tokens": input_tokens if isinstance(input_tokens, int) else 0,
         "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
     }
+    cache_read_tokens = _responses_cached_input_tokens(usage)
+    if cache_read_tokens is not None:
+        normalized["cache_read_tokens"] = cache_read_tokens
+    return normalized
+
+
+def _responses_cached_input_tokens(usage: Mapping[str, Any]) -> int | None:
+    """Read ``input_tokens_details.cached_tokens`` when present.
+
+    Cached tokens are a subset of ``input_tokens`` on the Responses
+    wire, so no input-token adjustment is needed.
+    """
+    details = usage.get("input_tokens_details", usage.get("prompt_tokens_details"))
+    if not isinstance(details, Mapping):
+        return None
+    cached_tokens = details.get("cached_tokens")
+    return cached_tokens if isinstance(cached_tokens, int) else None
 
 
 def _iter_sse_events(lines: Iterable[str]) -> Iterator[tuple[str, Mapping[str, Any]]]:

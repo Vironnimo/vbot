@@ -761,10 +761,14 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     has_output = isinstance(completion_tokens, int)
     if not has_input and not has_output:
         return None
-    return {
+    normalized = {
         "input_tokens": prompt_tokens if isinstance(prompt_tokens, int) else 0,
         "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
     }
+    cache_read_tokens = _openai_cached_prompt_tokens(usage)
+    if cache_read_tokens is not None:
+        normalized["cache_read_tokens"] = cache_read_tokens
+    return normalized
 
 
 def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
@@ -786,11 +790,28 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(prompt_tokens, int):
         return None
     completion_tokens = usage.get("completion_tokens")
-    return {
+    delta = {
         "type": "usage",
         "input_tokens": prompt_tokens,
         "output_tokens": completion_tokens if isinstance(completion_tokens, int) else 0,
     }
+    cache_read_tokens = _openai_cached_prompt_tokens(usage)
+    if cache_read_tokens is not None:
+        delta["cache_read_tokens"] = cache_read_tokens
+    return delta
+
+
+def _openai_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:
+    """Read ``prompt_tokens_details.cached_tokens`` when present.
+
+    Cached tokens are a subset of ``prompt_tokens`` on the OpenAI wire,
+    so no input-token adjustment is needed.
+    """
+    details = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    cached_tokens = details.get("cached_tokens")
+    return cached_tokens if isinstance(cached_tokens, int) else None
 
 
 def _provider_default_max_tokens(defaults: Mapping[str, Any] | None) -> int:
