@@ -15,6 +15,7 @@ from core.chat import ChatLoop, ChatSessionManager
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
+    RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
     ChatRunManager,
@@ -1118,3 +1119,91 @@ async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
         assert await runs_by_session[session_id].wait() == session_id
 
     assert manager.active_runs() == []
+
+
+async def test_drained_queued_run_started_payload_contains_queue_item_id() -> None:
+    """A queued item that gets drained carries its item id on the run_started payload."""
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+    queued_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        await queued_release.wait()
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_execute,
+    )
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="Queued next",
+    )
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+
+    queued_run = await asyncio.wait_for(item.future, timeout=1)
+    await asyncio.sleep(0)
+
+    started_events = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {
+        "status": RunStatus.RUNNING.value,
+        "queue_item_id": item.item_id,
+    }
+
+    queued_release.set()
+    assert await queued_run.wait() == "queued"
+
+
+async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() -> None:
+    """enqueue on an idle session still tags run_started with the queued item id."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        display_content="Hello",
+    )
+    run = await item.future
+    await asyncio.sleep(0)
+
+    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {
+        "status": RunStatus.RUNNING.value,
+        "queue_item_id": item.item_id,
+    }
+
+    release.set()
+    assert await run.wait() == "done"
+
+
+async def test_start_run_payload_omits_queue_item_id() -> None:
+    """A plain start() call produces a run_started payload without queue_item_id."""
+    manager = ChatRunManager()
+
+    async def execute(_run: Run) -> str:
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    assert await run.wait() == "done"
+
+    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {"status": RunStatus.RUNNING.value}
+    assert "queue_item_id" not in started_events[0].payload

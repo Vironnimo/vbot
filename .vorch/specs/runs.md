@@ -26,7 +26,7 @@ Run event payload ownership stays with the domain that emits the event. `core/ch
 
 ## Interfaces
 
-- `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes an event unless the Run is terminal or cancellation suppression drops a non-terminal event.
+- `Run.emit(event_type, payload=None) -> RunEvent | None` appends and publishes an event unless the Run is terminal or cancellation suppression drops a non-terminal event. The `run_started` payload is `{"status": "running"}` with an optional `queue_item_id` when the run was started from a queued item.
 - `Run.subscribe(after_sequence=0)` streams retained and future events until terminal state; lagging live subscribers are evicted instead of building unbounded queues.
 - `Run.wait()` waits for terminal state, returns the executor result, re-raises failures, and raises `RunCancelledError` for cancelled Runs.
 - `Run.request_cancel(reason=None)` marks cancellation requested, stores the optional `reason` on `Run.cancel_reason` for inclusion in the `run_cancelled` terminal payload, schedules registered sync/async cancel callbacks, and cancels the background executor task if one exists.

@@ -154,7 +154,7 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         "run_event_sequence": event.sequence,
         "run_event_timestamp": event.timestamp,
     }
-    if event.type in RUN_OUTPUT_EVENT_TYPES:
+    if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:
         payload["output"] = _remove_opaque_provider_metadata(event.payload)
     if event.type in RUN_TERMINAL_EVENT_TYPES:
         payload["status"] = event.payload.get("status")

@@ -4,6 +4,7 @@ import { createChatRunStream } from '../chatRunStream.js';
 import {
   CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
+  addServerQueuedMessage,
   createChatState,
   ensureSessionState,
   setAgents,
@@ -196,5 +197,170 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(harness.subAgentRunStatuses).toEqual({});
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
+  });
+});
+
+describe('createChatRunStream() queue removal on run_started (regression for B7)', () => {
+  let chatState;
+  const DISPLAYED_AGENT_ID = 'alpha';
+  const DISPLAYED_SESSION_ID = 'session-displayed';
+  const QUEUED_ITEM_ID = 'queue-item-42';
+  const DRAINED_RUN_ID = 'run-drained-1';
+
+  beforeEach(() => {
+    chatState = createChatState();
+    setAgents(chatState, [
+      {
+        id: DISPLAYED_AGENT_ID,
+        name: 'Alpha',
+        current_session_id: DISPLAYED_SESSION_ID,
+      },
+    ]);
+  });
+
+  it('removes the queued item from sessionState.queue when a WS run_started event carries its queue_item_id, without any chat.queue_list round-trip', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    addServerQueuedMessage(sessionState, {
+      id: QUEUED_ITEM_ID,
+      content: 'queued work to drain',
+      created_at: '2026-06-10T00:00:00+00:00',
+    });
+    expect(sessionState.queue.map((item) => item.id)).toEqual([QUEUED_ITEM_ID]);
+
+    // WS server-event envelope: the bridge includes the run-event payload
+    // under `payload.output` (see Phase 2.3 Task 2). The run-event
+    // `run_started` itself carries the queue_item_id the server added in
+    // _start_run_locked.
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: DRAINED_RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: {
+          status: 'running',
+          queue_item_id: QUEUED_ITEM_ID,
+        },
+      },
+    });
+
+    expect(sessionState.queue).toEqual([]);
+    // The queue removal happens on the run_started branch; the
+    // `syncSessionQueue` round-trip is the terminal-event backstop and
+    // must not fire for a non-terminal run_started.
+    expect(harness.syncSessionQueue).not.toHaveBeenCalled();
+  });
+
+  it('removes the queued item when an SSE run_started event carries its queue_item_id, without any chat.queue_list round-trip', () => {
+    let capturedOnEvent = null;
+    const subscribeRunEvents = vi.fn((_sseUrl, handlers) => {
+      capturedOnEvent = handlers.onEvent;
+      return { close: vi.fn() };
+    });
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents,
+    });
+
+    // Apply a snapshot with one active run for the displayed session so
+    // the SSE path is wired up; that path forwards raw run-event
+    // payloads (not WS envelopes) into the handler.
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      epoch: 'epoch-b7',
+      last_sequence: 0,
+      active_runs: [
+        {
+          run_id: DRAINED_RUN_ID,
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: '/api/runs/run-drained-1/events',
+        },
+      ],
+    });
+    expect(typeof capturedOnEvent).toBe('function');
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    addServerQueuedMessage(sessionState, {
+      id: QUEUED_ITEM_ID,
+      content: 'queued work to drain',
+      created_at: '2026-06-10T00:00:00+00:00',
+    });
+    expect(sessionState.queue.map((item) => item.id)).toEqual([QUEUED_ITEM_ID]);
+
+    // SSE delivers the raw run event payload.
+    capturedOnEvent({
+      data: {
+        type: 'run_started',
+        run_id: DRAINED_RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        sequence: 1,
+        payload: {
+          status: 'running',
+          queue_item_id: QUEUED_ITEM_ID,
+        },
+      },
+    });
+
+    expect(sessionState.queue).toEqual([]);
+    expect(harness.syncSessionQueue).not.toHaveBeenCalled();
+  });
+
+  it('leaves the queue untouched when a run_started event has no queue_item_id', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    addServerQueuedMessage(sessionState, {
+      id: QUEUED_ITEM_ID,
+      content: 'queued work',
+      created_at: '2026-06-10T00:00:00+00:00',
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: DRAINED_RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: {
+          status: 'running',
+        },
+      },
+    });
+
+    expect(sessionState.queue.map((item) => item.id)).toEqual([QUEUED_ITEM_ID]);
+    expect(harness.syncSessionQueue).not.toHaveBeenCalled();
   });
 });
