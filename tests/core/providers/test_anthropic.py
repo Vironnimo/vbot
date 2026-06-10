@@ -15,7 +15,7 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.anthropic import AnthropicAdapter
+from core.providers.anthropic import AnthropicAdapter, _to_anthropic_user_content_block
 from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
@@ -349,6 +349,20 @@ class TestSendRequestFormat:
                 ],
             }
         ]
+
+    @pytest.mark.parametrize(
+        "invalid_block",
+        [
+            {"type": "media", "base64": None, "media_type": "image/png"},
+            {"type": "media", "base64": "aW1n", "media_type": None},
+            {"type": "media", "base64": "aW1n", "media_type": ""},
+            {"type": "media"},
+        ],
+    )
+    def test_invalid_media_block_raises_instead_of_raw_passthrough(self, invalid_block):
+        """Malformed media blocks must never reach the wire as raw dicts."""
+        with pytest.raises(ProviderError, match="media content block requires"):
+            _to_anthropic_user_content_block(invalid_block)
 
     @respx.mock
     @pytest.mark.asyncio

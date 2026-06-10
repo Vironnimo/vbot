@@ -25,6 +25,7 @@ from core.providers.errors import (
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _to_openai_assistant_message,
+    _to_openai_user_content_part,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -327,6 +328,20 @@ class TestSendRequestFormat:
                 ],
             }
         ]
+
+    @pytest.mark.parametrize(
+        "invalid_part",
+        [
+            {"type": "media", "base64": None, "media_type": "image/png"},
+            {"type": "media", "base64": "aW1n", "media_type": None},
+            {"type": "media", "base64": "aW1n", "media_type": ""},
+            {"type": "media"},
+        ],
+    )
+    def test_invalid_media_part_raises_instead_of_empty_image(self, invalid_part):
+        """Malformed media parts must not silently become empty data URLs."""
+        with pytest.raises(ProviderError, match="media content block requires"):
+            _to_openai_user_content_part(invalid_part)
 
     @respx.mock
     @pytest.mark.asyncio
