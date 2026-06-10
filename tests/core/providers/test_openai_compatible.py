@@ -901,6 +901,40 @@ class TestNormalizeResponseUsage:
 
         assert normalized["usage"] == {"input_tokens": 100, "output_tokens": 0}
 
+    def test_usage_includes_cache_read_tokens_from_prompt_tokens_details(self, openai_adapter):
+        """prompt_tokens_details.cached_tokens is exposed as cache_read_tokens."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "prompt_tokens_details": {"cached_tokens": 30},
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {
+            "input_tokens": 42,
+            "output_tokens": 13,
+            "cache_read_tokens": 30,
+        }
+
+    def test_usage_omits_cache_read_tokens_when_cached_tokens_not_int(self, openai_adapter):
+        """Non-integer cached_tokens values are ignored."""
+        response = {
+            "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 13,
+                "prompt_tokens_details": {"cached_tokens": None},
+            },
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 42, "output_tokens": 13}
+
     def test_usage_omitted_when_usage_absent(self, openai_adapter):
         """No usage key in normalized response when response has no usage object."""
         response = {
@@ -2062,6 +2096,40 @@ class TestStreamUsageDelta:
         assert chunks == [
             {"type": "content_delta", "text": "Hi"},
             {"type": "usage", "input_tokens": 100, "output_tokens": 0},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_usage_delta_includes_cache_read_tokens(self, openai_adapter):
+        """A final chunk with prompt_tokens_details.cached_tokens yields cache_read_tokens."""
+        # Arrange
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            'data: {"id":"chatcmpl-1","choices":[],'
+            '"usage":{"prompt_tokens":42,"completion_tokens":13,'
+            '"prompt_tokens_details":{"cached_tokens":30}}}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            chunks.append(chunk)
+
+        # Assert
+        assert chunks == [
+            {"type": "content_delta", "text": "Hi"},
+            {
+                "type": "usage",
+                "input_tokens": 42,
+                "output_tokens": 13,
+                "cache_read_tokens": 30,
+            },
         ]
 
     @respx.mock

@@ -438,6 +438,64 @@ def test_normalize_response_extracts_text_thinking_meta_tool_calls_and_usage() -
     }
 
 
+def test_normalize_response_folds_cache_tokens_into_input_tokens() -> None:
+    normalized = normalize_copilot_messages_response(
+        {
+            "content": [{"type": "text", "text": "Use this."}],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 50,
+            },
+        }
+    )
+
+    assert normalized["usage"] == {
+        "input_tokens": 560,
+        "output_tokens": 20,
+        "cache_read_tokens": 500,
+        "cache_write_tokens": 50,
+    }
+
+
+def test_stream_usage_delta_folds_cache_tokens_from_message_start() -> None:
+    state = CopilotMessagesStreamState()
+
+    events: list[dict[str, Any]] = [
+        {
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 7,
+                    "cache_read_input_tokens": 300,
+                    "cache_creation_input_tokens": 40,
+                }
+            },
+        },
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 11},
+        },
+    ]
+
+    deltas = []
+    for event in events:
+        deltas.extend(normalize_copilot_messages_stream_event(event, state))
+
+    assert deltas == [
+        {"type": "finish", "reason": "stop"},
+        {
+            "type": "usage",
+            "input_tokens": 347,
+            "output_tokens": 11,
+            "cache_read_tokens": 300,
+            "cache_write_tokens": 40,
+        },
+    ]
+
+
 def test_normalize_response_extracts_visible_thinking_text_block() -> None:
     normalized = normalize_copilot_messages_response(
         {
