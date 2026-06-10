@@ -1227,6 +1227,46 @@ class TestSendSuccess:
 
         assert normalized["usage"] == {"input_tokens": 2589, "output_tokens": 0}
 
+    def test_normalize_response_folds_cache_tokens_into_input_tokens(self, anthropic_adapter):
+        """Cache read/write tokens are exposed and added onto input_tokens.
+
+        Anthropic reports cache tokens separately from input_tokens; canonical
+        input_tokens means the total prompt including cached tokens.
+        """
+        response = {
+            "content": [{"type": "text", "text": "Hello!"}],
+            "usage": {
+                "input_tokens": 25,
+                "output_tokens": 87,
+                "cache_read_input_tokens": 1000,
+                "cache_creation_input_tokens": 200,
+            },
+        }
+
+        normalized = anthropic_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {
+            "input_tokens": 1225,
+            "output_tokens": 87,
+            "cache_read_tokens": 1000,
+            "cache_write_tokens": 200,
+        }
+
+    def test_normalize_response_ignores_non_int_cache_tokens(self, anthropic_adapter):
+        """Non-integer cache token values are ignored and input_tokens stays raw."""
+        response = {
+            "content": [{"type": "text", "text": "Hello!"}],
+            "usage": {
+                "input_tokens": 25,
+                "output_tokens": 87,
+                "cache_read_input_tokens": None,
+            },
+        }
+
+        normalized = anthropic_adapter.normalize_response(response)
+
+        assert normalized["usage"] == {"input_tokens": 25, "output_tokens": 87}
+
     def test_normalize_response_omits_usage_when_absent(self, anthropic_adapter):
         """Usage key is omitted when the response has no usage object."""
         response = {
@@ -2651,6 +2691,65 @@ class TestStreamUsageDelta:
             "type": "usage",
             "input_tokens": 25,
             "output_tokens": 10,
+        }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_usage_delta_folds_cache_tokens_from_message_start(
+        self, anthropic_adapter
+    ):
+        """Cache tokens from message_start usage are folded into the usage delta."""
+        # Arrange — message_start reports cache read/write alongside input_tokens
+        sse_body = (
+            "event: message_start\n"
+            'data: {"type":"message_start","message":{"id":"msg_01",'
+            '"usage":{"input_tokens":25,"cache_read_input_tokens":1000,'
+            '"cache_creation_input_tokens":200}}}\n'
+            "\n"
+            "event: content_block_start\n"
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}\n'
+            "\n"
+            "event: content_block_delta\n"
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"Hello"}}\n'
+            "\n"
+            "event: content_block_stop\n"
+            'data: {"type":"content_block_stop","index":0}\n'
+            "\n"
+            "event: message_delta\n"
+            'data: {"type":"message_delta",'
+            '"delta":{"stop_reason":"end_turn"},'
+            '"usage":{"output_tokens":10}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        # Act
+        chunks = []
+        async for chunk in anthropic_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+        ):
+            chunks.append(chunk)
+
+        # Assert — input_tokens is the total prompt including cached tokens
+        usage_deltas = [c for c in chunks if c.get("type") == "usage"]
+        assert len(usage_deltas) == 1
+        assert usage_deltas[0] == {
+            "type": "usage",
+            "input_tokens": 1225,
+            "output_tokens": 10,
+            "cache_read_tokens": 1000,
+            "cache_write_tokens": 200,
         }
 
     @respx.mock

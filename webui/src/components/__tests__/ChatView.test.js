@@ -158,6 +158,69 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
+  it('shows the usage breakdown with cache tokens in the token badge tooltip', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: {
+          input_tokens: 3886,
+          output_tokens: 92,
+          cache_read_tokens: 3000,
+          cache_write_tokens: 200,
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    const numberFormat = new Intl.NumberFormat();
+    const expectedTooltip = [
+      `Input: ${numberFormat.format(3886)} tok`,
+      `Cache read: ${numberFormat.format(3000)} tok`,
+      `Cache write: ${numberFormat.format(200)} tok`,
+      `Output: ${numberFormat.format(92)} tok`,
+    ].join('\n');
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.token-badge')?.getAttribute('title') ===
+        expectedTooltip,
+      100,
+    );
+
+    expect(
+      document.body.querySelector('.token-badge')?.getAttribute('title'),
+    ).toBe(expectedTooltip);
+  });
+
+  it('omits cache lines from the token badge tooltip without cache usage', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: { input_tokens: 3886, output_tokens: 92 },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    const numberFormat = new Intl.NumberFormat();
+    const expectedTooltip = [
+      `Input: ${numberFormat.format(3886)} tok`,
+      `Output: ${numberFormat.format(92)} tok`,
+    ].join('\n');
+
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.token-badge')?.getAttribute('title') ===
+        expectedTooltip,
+      100,
+    );
+
+    expect(
+      document.body.querySelector('.token-badge')?.getAttribute('title'),
+    ).toBe(expectedTooltip);
+  });
+
   it('does not render a refresh button in the chat header', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
