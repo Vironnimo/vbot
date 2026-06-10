@@ -21,26 +21,15 @@ function isRunActive(sessionState) {
   return sessionState?.status === CHAT_STATUS_RUNNING;
 }
 
-export function visibleTimelineItems(sessionState) {
-  return buildVisibleTimelineItems(sessionState, sessionState?.runEvents ?? []);
-}
-
 export function visibleTimelineItemsForRender(sessionState) {
   if (!sessionState) {
     return [];
   }
 
-  return buildVisibleTimelineItems(
-    sessionState,
-    [
-      ...(sessionState.runEvents ?? []),
-      ...(sessionState.streamingRunEvents ?? []),
-    ],
-    {
-      includeStreamingAssistantAndReasoning: false,
-      includeStreamingToolCalls: false,
-    },
-  );
+  return buildVisibleTimelineItems(sessionState, [
+    ...(sessionState.runEvents ?? []),
+    ...(sessionState.streamingRunEvents ?? []),
+  ]);
 }
 
 export function assistantRunChildProgressKey(child) {
@@ -82,15 +71,10 @@ function liveRunProjectionCache(sessionState) {
   return cache;
 }
 
-function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
+function buildVisibleTimelineItems(sessionState, runEvents) {
   if (!sessionState) {
     return [];
   }
-
-  const {
-    includeStreamingAssistantAndReasoning = true,
-    includeStreamingToolCalls = true,
-  } = options;
 
   const historyItems = historyTimelineItems(sessionState.messages);
   const liveItems = dropPersistedInactiveLiveRuns(
@@ -107,56 +91,7 @@ function buildVisibleTimelineItems(sessionState, runEvents, options = {}) {
       )
     : [...historyItems, ...liveItems];
 
-  const strippedReconciledItems = reconciledItems.map((item) =>
-    stripTimelineSequence(item),
-  );
-
-  const streamingTimelineItems = (sessionState.streamingItems ?? [])
-    .filter((item) => {
-      if (item.type === 'tool_call') {
-        return (
-          includeStreamingToolCalls &&
-          !streamingToolCallAlreadyRendered(strippedReconciledItems, item)
-        );
-      }
-      if (item.type === 'assistant' || item.type === 'reasoning') {
-        return includeStreamingAssistantAndReasoning;
-      }
-      return true;
-    })
-    .map((item) => ({
-      id: item.id,
-      type: 'streaming',
-      streamingItem: item,
-    }));
-
-  return [...strippedReconciledItems, ...streamingTimelineItems];
-}
-
-function streamingToolCallAlreadyRendered(reconciledItems, streamingItem) {
-  if (streamingItem?.type !== 'tool_call' || !streamingItem.toolCallId) {
-    return false;
-  }
-
-  return (reconciledItems ?? []).some((item) => {
-    if (item?.type !== 'assistant_run') {
-      return false;
-    }
-
-    if (!runIdsMatch(item.runId ?? item.run_id, streamingItem.run_id)) {
-      return false;
-    }
-
-    return (item.tools ?? item.items ?? []).some(
-      (child) =>
-        child?.type === 'tool_call' &&
-        child.toolCallId === streamingItem.toolCallId,
-    );
-  });
-}
-
-function runIdsMatch(leftRunId, rightRunId) {
-  return Boolean(leftRunId) && Boolean(rightRunId) && leftRunId === rightRunId;
+  return reconciledItems.map((item) => stripTimelineSequence(item));
 }
 
 function childStreamingProgress(child) {

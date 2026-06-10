@@ -149,12 +149,6 @@
   }
 
   function timelineItemSignature(item) {
-    if (item.type === 'streaming') {
-      if (item.streamingItem?.type === 'tool_call') {
-        return `${item.id}:${item.streamingItem.sequence}:${(item.streamingItem.name ?? '').length}:${(item.streamingItem.argumentsText ?? '').length}`;
-      }
-      return `${item.id}:${item.streamingItem.sequence}`;
-    }
     if (item.type === 'assistant_run') {
       return `${item.id}:${item.status}:${(item.items ?? [])
         .map(
@@ -378,7 +372,6 @@
         {:else}
           <ChatTimelineEntry
             {item}
-            {timelineItems}
             {agentName}
             {isReasoningOpen}
             onReasoningOpenChange={setReasoningOpen}
