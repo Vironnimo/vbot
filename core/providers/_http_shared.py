@@ -252,3 +252,27 @@ def parse_sse_json_data(data: str, *, context: str) -> Any:
             f"{context} sent malformed JSON in stream: {exc.msg}",
             retryable=False,
         ) from exc
+
+
+def decode_response_json(response: httpx.Response, context: str) -> dict[str, Any]:
+    """Decode a 2xx response body to JSON or raise a non-retryable ProviderError.
+
+    Used by non-streaming request paths in provider adapters to assert the
+    response body is a JSON object. Mirrors :func:`parse_sse_json_data` for the
+    streaming path: malformed JSON and non-object payloads both surface as
+    non-retryable ``ProviderError`` (the caller's classify step already
+    filtered the HTTP status).
+    """
+    try:
+        decoded = response.json()
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"{context} sent malformed JSON in response: {exc.msg}",
+            retryable=False,
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise ProviderError(
+            f"{context} sent non-object JSON in response",
+            retryable=False,
+        )
+    return decoded
