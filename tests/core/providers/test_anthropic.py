@@ -1346,6 +1346,88 @@ class TestSendErrorClassification:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_read_error_raises_network_error(self, anthropic_adapter):
+        """A non-streaming read failure (httpx.ReadError) is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.ReadError("connection reset"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection reset"),
+        ):
+            await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_read_error_is_retried(self, anthropic_adapter):
+        """A transient ReadError is retried; a subsequent success returns the response."""
+
+        # Arrange
+        route = respx.post(ANTHROPIC_URL).mock(
+            side_effect=[
+                httpx.ReadError("connection reset"),
+                httpx.Response(
+                    200,
+                    json={
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}],
+                        "model": "claude-sonnet-4-20250219",
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 3},
+                    },
+                ),
+            ]
+        )
+
+        # Act
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            result = await anthropic_adapter.send(
+                SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219"
+            )
+
+        # Assert
+        assert result["id"] == "msg_1"
+        assert route.call_count == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_remote_protocol_error_raises_network_error(self, anthropic_adapter):
+        """A non-streaming RemoteProtocolError is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(side_effect=httpx.RemoteProtocolError("server disconnected"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: server disconnected"),
+        ):
+            await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_malformed_json_raises_non_retryable_provider_error(
+        self,
+        anthropic_adapter,
+    ):
+        """A 2xx response with unparseable JSON raises a non-retryable ProviderError."""
+
+        # Arrange
+        respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, text="not-valid-json{"))
+
+        # Act / Assert
+        with pytest.raises(ProviderError) as exc_info:
+            await anthropic_adapter.send(SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219")
+
+        assert exc_info.value.retryable is False
+        assert "malformed JSON" in str(exc_info.value)
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_parses_anthropic_error_format(self, anthropic_adapter):
         """Error messages include Anthropic's error type and message."""
         # Arrange
@@ -1573,6 +1655,89 @@ class TestSendProviderConfig:
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["max_tokens"] == 8192
         assert request_body["temperature"] == 0.7
+
+
+# ---------------------------------------------------------------------------
+# _build_payload() — None-valued caller kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadNoneKwargs:
+    """``None``-valued caller kwargs are dropped, letting provider defaults win.
+
+    Falsy-but-not-None values (e.g. ``0.0``) must survive. Explicit non-None
+    values must still override the default. Covers both ``send()`` and
+    ``stream()`` payload construction (both call ``_build_payload``).
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_and_provider_default_applies(self, custom_adapter):
+        """``temperature=None`` is absent from the payload; default fills in."""
+        # Arrange — CUSTOM_CONFIG declares defaults.temperature=0.7
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert "temperature" in request_body
+        assert request_body["temperature"] == 0.7  # from defaults
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_zero_kwarg_survives_through_send(self, custom_adapter):
+        """``temperature=0.0`` (falsy but not None) survives the None filter."""
+        # Arrange
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.0
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_nonzero_kwarg_overrides_default(self, custom_adapter):
+        """Explicit non-None kwargs continue to override the provider default."""
+        # Arrange
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.3
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_for_stream(self, custom_adapter):
+        """``stream()`` also drops ``None`` caller kwargs before sending."""
+        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        route = respx.post(CUSTOM_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in custom_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
+        ):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.7  # default applied
+        assert request_body["stream"] is True  # stream() still adds stream=true
 
 
 # ---------------------------------------------------------------------------
@@ -2211,6 +2376,51 @@ class TestStreamSSE:
                 new=AsyncMock(return_value=broken_response),
             ),
             pytest.raises(ProviderTimeoutError, match="timed out"),
+        ):
+            async for _ in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            ):
+                pass
+
+        assert broken_response.closed is True
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_network_error_on_mid_stream_remote_protocol_error(
+        self,
+        anthropic_adapter,
+    ):
+        """stream() wraps mid-stream httpx.RemoteProtocolError as NetworkError (h11 disconnect)."""
+
+        request = httpx.Request("POST", ANTHROPIC_URL)
+
+        class _BrokenProtocolLineIterator:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise httpx.RemoteProtocolError("server disconnected", request=request)
+
+        class _BrokenProtocolStreamResponse:
+            status_code = 200
+
+            def __init__(self) -> None:
+                self.closed = False
+
+            def aiter_lines(self):
+                return _BrokenProtocolLineIterator()
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        broken_response = _BrokenProtocolStreamResponse()
+        with (
+            patch.object(
+                anthropic_adapter._client,
+                "send",
+                new=AsyncMock(return_value=broken_response),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: server disconnected"),
         ):
             async for _ in anthropic_adapter.stream(
                 SAMPLE_MESSAGES,
