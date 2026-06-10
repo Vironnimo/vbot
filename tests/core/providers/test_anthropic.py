@@ -1576,6 +1576,89 @@ class TestSendProviderConfig:
 
 
 # ---------------------------------------------------------------------------
+# _build_payload() — None-valued caller kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadNoneKwargs:
+    """``None``-valued caller kwargs are dropped, letting provider defaults win.
+
+    Falsy-but-not-None values (e.g. ``0.0``) must survive. Explicit non-None
+    values must still override the default. Covers both ``send()`` and
+    ``stream()`` payload construction (both call ``_build_payload``).
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_and_provider_default_applies(self, custom_adapter):
+        """``temperature=None`` is absent from the payload; default fills in."""
+        # Arrange — CUSTOM_CONFIG declares defaults.temperature=0.7
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert "temperature" in request_body
+        assert request_body["temperature"] == 0.7  # from defaults
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_zero_kwarg_survives_through_send(self, custom_adapter):
+        """``temperature=0.0`` (falsy but not None) survives the None filter."""
+        # Arrange
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.0
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_nonzero_kwarg_overrides_default(self, custom_adapter):
+        """Explicit non-None kwargs continue to override the provider default."""
+        # Arrange
+        route = respx.post(CUSTOM_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await custom_adapter.send(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=0.3
+        )
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_for_stream(self, custom_adapter):
+        """``stream()`` also drops ``None`` caller kwargs before sending."""
+        sse_body = 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+        route = respx.post(CUSTOM_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in custom_adapter.stream(
+            SAMPLE_MESSAGES, model_id="claude-sonnet-4-20250219", temperature=None
+        ):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.7  # default applied
+        assert request_body["stream"] is True  # stream() still adds stream=true
+
+
+# ---------------------------------------------------------------------------
 # stream() — SSE parsing
 # ---------------------------------------------------------------------------
 

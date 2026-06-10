@@ -52,6 +52,7 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Sparse OpenAI-compatible catalogs remain usable as text chat catalogs. Missing optional facts are unknown, not authoritative negatives, unless the provider-specific adapter says otherwise.
 - Subclass `OpenAICompatibleAdapter` only when runtime behavior, streaming, reasoning, catalog normalization, or request policy differs from the generic `/chat/completions` contract.
 - Token values, API keys, authorization codes, user codes, refresh tokens, and account ids must never be logged.
+- None-valued caller kwargs are treated as not specified — adapters drop them before building payloads; provider defaults then apply. Falsy-but-not-None values (e.g. `temperature=0.0`) survive the filter and continue to override defaults.
 
 ## Constraints & Gotchas
 

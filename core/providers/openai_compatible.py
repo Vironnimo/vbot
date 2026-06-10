@@ -219,7 +219,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Build the request payload with model, messages, defaults, and overrides."""
-        request_kwargs = dict(kwargs)
+        # ``None``-valued caller kwargs mean "not specified" — drop them so they
+        # do not clobber provider defaults below. Falsy-but-non-None values
+        # (e.g. ``temperature=0.0``) must survive.
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": [self._format_message(message) for message in messages],
