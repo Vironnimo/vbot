@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
 
   import {
     cancelRun,
@@ -28,6 +29,7 @@
     markSessionError,
     prependHistory,
     removeQueuedMessage,
+    resetStaleRun,
     selectAgent,
     selectedAgent,
     setAgents,
@@ -51,6 +53,7 @@
     pendingSubAgentNavigation = null,
     runServerEvent = null,
     runServerEvents = [],
+    connectionSnapshot = null,
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
@@ -73,6 +76,7 @@
   let subAgentRunStatuses = $state({});
   let subAgentResults = $state({});
   let handledSubAgentNavigationKey = '';
+  let handledConnectionSnapshot = null;
   const ACTION_INFO_TIMEOUT_MS = 4000;
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
@@ -150,6 +154,24 @@
 
     handledSubAgentNavigationKey = navigationKey;
     handleSubAgentNavigation(agentId, sessionId);
+  });
+
+  // Apply each distinct `/ws` `connection_ready` hello frame to the run stream
+  // exactly once. The frame is the durable source of truth for active runs and
+  // sub-agent statuses (see `chatRunStream.applyConnectionSnapshot`); the
+  // local `handledConnectionSnapshot` reference is the dedup guard so a re-run
+  // of this effect for the same snapshot object cannot re-trigger side effects
+  // (same pattern as `pendingSubAgentNavigation` above).
+  $effect(() => {
+    if (
+      !connectionSnapshot ||
+      connectionSnapshot === handledConnectionSnapshot
+    ) {
+      return;
+    }
+
+    handledConnectionSnapshot = connectionSnapshot;
+    runStream.applyConnectionSnapshot(connectionSnapshot);
   });
 
   $effect(() => {
@@ -265,6 +287,119 @@
     }
   };
 
+  // Sub-agent status self-heal lookup. When a sub-agent tool row's dot shows
+  // "running" but no live status has been recorded in `subAgentRunStatuses`,
+  // the row's "running" belief comes from a frozen persisted descriptor alone
+  // (typical after a page refresh, a missed terminal event, a rolled replay
+  // buffer, or a server restart that killed the child). This path asks the
+  // server for the child's durable truth (`chat.history` → `active_run` or the
+  // last `run_summary`) and projects it into the same `run:`/`session:` keys
+  // the run stream would have written, so the dot settles correctly without
+  // depending on event replay. The once-per-key guard prevents re-verification
+  // churn across re-renders; the error path releases the guard so a later
+  // attempt can retry (unlike `requestSubAgentResult` / `subAgentResults` which
+  // cache failures permanently — see handoff3 B6).
+  const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
+  const subAgentStatusVerificationKeys = new SvelteSet();
+  const subAgentStatusInflightKeys = new SvelteSet();
+  const handleVerifySubAgentStatus = async (agentId, sessionId, runId) => {
+    if (!agentId || !sessionId) {
+      return;
+    }
+    const trimmedRunId = typeof runId === 'string' ? runId.trim() : '';
+    const key = trimmedRunId || `${agentId}::${sessionId}`;
+    if (
+      subAgentStatusVerificationKeys.has(key) ||
+      subAgentStatusInflightKeys.has(key)
+    ) {
+      return;
+    }
+    subAgentStatusInflightKeys.add(key);
+    try {
+      const history = await rpc('chat.history', {
+        agent_id: agentId,
+        session_id: sessionId,
+        limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
+      });
+      const updates = {};
+      if (history?.active_run) {
+        const activeRunId =
+          typeof history.active_run.run_id === 'string'
+            ? history.active_run.run_id.trim()
+            : '';
+        if (activeRunId) {
+          updates[`run:${activeRunId}`] = 'running';
+        }
+        updates[`session:${agentId}::${sessionId}`] = 'running';
+      } else {
+        const messages = Array.isArray(history?.messages)
+          ? history.messages
+          : [];
+        let summary = null;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index];
+          if (!message || message.role !== 'run_summary') {
+            continue;
+          }
+          if (trimmedRunId) {
+            const summaryRunId =
+              typeof message.run_id === 'string' ? message.run_id.trim() : '';
+            if (summaryRunId !== trimmedRunId) {
+              continue;
+            }
+          }
+          summary = message;
+          break;
+        }
+        const status = summary
+          ? normalizeSubAgentRunSummaryStatus(summary.status)
+          : 'completed';
+        const summaryRunId = summary
+          ? typeof summary.run_id === 'string'
+            ? summary.run_id.trim()
+            : ''
+          : '';
+        const runKey = trimmedRunId || summaryRunId;
+        if (runKey) {
+          updates[`run:${runKey}`] = status;
+        }
+        updates[`session:${agentId}::${sessionId}`] = status;
+        const durationMs = summary?.timing?.duration_ms;
+        if (Number.isFinite(durationMs) && durationMs >= 0) {
+          if (runKey) {
+            updates[`runDuration:${runKey}`] = durationMs;
+          }
+          updates[`sessionDuration:${agentId}::${sessionId}`] = durationMs;
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
+      }
+      subAgentStatusVerificationKeys.add(key);
+    } catch {
+      // Release the guard so a later attempt can retry; verification
+      // failures are never cached (contrast with `subAgentResults`).
+    } finally {
+      subAgentStatusInflightKeys.delete(key);
+    }
+  };
+
+  // Normalizes a `run_summary` message's terminal `status` into one of the
+  // status values `statusFromRunEvent` produces (`completed`/`failed`/
+  // `cancelled`). Anything unrecognised falls back to `completed` so the dot
+  // settles to success and the row can fetch its result instead of staying
+  // stuck on `running` forever.
+  function normalizeSubAgentRunSummaryStatus(value) {
+    const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (status === 'failed' || status === 'error') {
+      return 'failed';
+    }
+    if (status === 'cancelled' || status === 'canceled') {
+      return 'cancelled';
+    }
+    return 'completed';
+  }
+
   const loadAgents = async (options = {}) => {
     chatState.loadingAgents = true;
     chatState.agentsError = null;
@@ -318,6 +453,14 @@
     historyError = '';
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     runStream.closeSubscriptionsExcept(sessionState.key);
+    // Snapshot the run id we are about to ask the server about so the
+    // reconcile step below can distinguish a *stale* run (terminal event was
+    // missed, SSE gave up, bus buffer rolled, or the server restarted and
+    // the run is gone) from a *genuinely new* run that started between
+    // request and response — losing the latter would clobber state that
+    // the next WS `run_started` is about to re-establish. See plan
+    // `run-lifecycle-truth.md` Phase 2.1 "ChatView reconcile".
+    const staleRunId = sessionState.currentRun?.runId ?? '';
     try {
       const history = await rpc('chat.history', {
         agent_id: agentId,
@@ -327,6 +470,23 @@
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
       });
+      // History is the durable source of truth for which run is active. If
+      // it says "no active run" but the local state still claims a run is
+      // running *with the same run id we had before the request*, that run
+      // is dead — reset the live state and drop the SSE subscription so
+      // `canCreateNewSession(...)` unblocks and the timeline falls back to
+      // the just-loaded history. The `staleRunId === currentRun.runId`
+      // guard prevents a race where a new run legitimately started
+      // between request and response (a WS `run_started` will reassert
+      // running state for the new run).
+      if (
+        !history.active_run &&
+        isRunActive(sessionState) &&
+        sessionState.currentRun?.runId === staleRunId
+      ) {
+        resetStaleRun(sessionState);
+        runStream.closeSubscriptionFor(sessionState.key);
+      }
       runStream.attachRunStream(sessionState, history.active_run);
       await syncSessionQueue(sessionState);
     } catch (error) {
@@ -675,6 +835,14 @@
     await handleRetry();
   }
 
+  // Exposed for tests and for the run-component verification wiring
+  // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
+  // → subAgentNeedsStatusVerification). Returns a promise that resolves when
+  // the verification round-trip finishes.
+  export async function verifySubAgentStatus(agentId, sessionId, runId) {
+    await handleVerifySubAgentStatus(agentId, sessionId, runId);
+  }
+
   const handleRemoveQueuedMessage = async (queuedMessageId) => {
     const sessionState = activeSessionState;
     const agent = activeAgent;
@@ -821,6 +989,7 @@
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={navigateToSubAgent}
             onRequestSubAgentResult={requestSubAgentResult}
+            onVerifySubAgentStatus={verifySubAgentStatus}
             onRetry={handleRetry}
             onCancelToolCall={handleCancelToolCall}
             onCancelSubAgent={handleCancelSubAgent}

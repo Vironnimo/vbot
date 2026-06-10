@@ -15,6 +15,7 @@ from core.chat import ChatLoop, ChatSessionManager
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
+    RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
     ChatRunManager,
@@ -1037,3 +1038,172 @@ async def test_tool_call_cancel_isolates_state_between_tool_call_ids() -> None:
     assert run.tool_call_cancelled("tool-2") is False
     assert run.cancel_tool_call("tool-2") is True
     assert run.tool_call_cancelled("tool-2") is True
+
+
+async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> None:
+    """active_runs() exposes only RUNNING entries; terminal ones are filtered out."""
+    manager = ChatRunManager()
+    running_release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def running_execute(_run: Run) -> str:
+        started.set()
+        await running_release.wait()
+        return "active"
+
+    async def finishing_execute(_run: Run) -> str:
+        return "done"
+
+    running_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=running_execute,
+    )
+    await started.wait()
+
+    finishing_run = await manager.start(
+        agent_id="coder",
+        session_id="session-two",
+        executor=finishing_execute,
+    )
+    assert await finishing_run.wait() == "done"
+    assert finishing_run.status == RunStatus.COMPLETED
+
+    active = manager.active_runs()
+
+    assert active == [running_run]
+    assert all(run.status == RunStatus.RUNNING for run in active)
+    assert manager.active_run(agent_id="coder", session_id="session-two") is None
+
+    running_release.set()
+    assert await running_run.wait() == "active"
+
+    assert manager.active_runs() == []
+
+
+async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
+    """active_runs() returns the running run from every session that has one."""
+    manager = ChatRunManager()
+    started_events = {
+        "session-one": asyncio.Event(),
+        "session-two": asyncio.Event(),
+        "session-three": asyncio.Event(),
+    }
+    releases = {session: asyncio.Event() for session in started_events}
+
+    async def execute(_run: Run) -> str:
+        started_events[_run.session_id].set()
+        await releases[_run.session_id].wait()
+        return _run.session_id
+
+    runs_by_session: dict[str, Run] = {}
+    for session_id in started_events:
+        runs_by_session[session_id] = await manager.start(
+            agent_id="coder",
+            session_id=session_id,
+            executor=execute,
+        )
+
+    for _session_id, event in started_events.items():
+        await event.wait()
+
+    active = manager.active_runs()
+
+    assert set(active) == set(runs_by_session.values())
+    assert {run.session_id for run in active} == set(runs_by_session)
+    assert all(run.status == RunStatus.RUNNING for run in active)
+    assert len(active) == len(runs_by_session)
+
+    for session_id, release in releases.items():
+        release.set()
+        assert await runs_by_session[session_id].wait() == session_id
+
+    assert manager.active_runs() == []
+
+
+async def test_drained_queued_run_started_payload_contains_queue_item_id() -> None:
+    """A queued item that gets drained carries its item id on the run_started payload."""
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+    queued_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        await queued_release.wait()
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_execute,
+    )
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        display_content="Queued next",
+    )
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+
+    queued_run = await asyncio.wait_for(item.future, timeout=1)
+    await asyncio.sleep(0)
+
+    started_events = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {
+        "status": RunStatus.RUNNING.value,
+        "queue_item_id": item.item_id,
+    }
+
+    queued_release.set()
+    assert await queued_run.wait() == "queued"
+
+
+async def test_enqueue_idle_session_start_immediately_carries_queue_item_id() -> None:
+    """enqueue on an idle session still tags run_started with the queued item id."""
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        display_content="Hello",
+    )
+    run = await item.future
+    await asyncio.sleep(0)
+
+    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {
+        "status": RunStatus.RUNNING.value,
+        "queue_item_id": item.item_id,
+    }
+
+    release.set()
+    assert await run.wait() == "done"
+
+
+async def test_start_run_payload_omits_queue_item_id() -> None:
+    """A plain start() call produces a run_started payload without queue_item_id."""
+    manager = ChatRunManager()
+
+    async def execute(_run: Run) -> str:
+        return "done"
+
+    run = await manager.start(agent_id="coder", session_id="session-one", executor=execute)
+    assert await run.wait() == "done"
+
+    started_events = [event for event in run.events if event.type == RUN_STARTED_EVENT]
+    assert len(started_events) == 1
+    assert started_events[0].payload == {"status": RunStatus.RUNNING.value}
+    assert "queue_item_id" not in started_events[0].payload
