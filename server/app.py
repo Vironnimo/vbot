@@ -26,7 +26,7 @@ from core.image import (
     ImageExecutionError,
     ImageUnsupportedTargetError,
 )
-from core.runs import ChatRunManager, RunNotFoundError
+from core.runs import ChatRunManager, RunNotFoundError, RunStatus
 from core.settings import SettingsValidationError, load_validated_settings_json
 from core.speech import (
     SpeechConfigurationError,
@@ -276,11 +276,31 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket) -> None:
         await websocket.accept()
-        after_sequence = _parse_after_sequence(websocket.query_params.get("after_sequence"))
+        event_bus = websocket.app.state.event_bus
+        client_epoch = _parse_query_string(websocket.query_params.get("epoch"))
+        client_after_sequence = _parse_after_sequence(websocket.query_params.get("after_sequence"))
+        # Read last_sequence *before* sending the hello frame so any events
+        # published during the await are still in the retained deque and get
+        # replayed by the subsequent subscribe.
+        last_sequence_at_hello = _bus_last_sequence(event_bus)
+        active_runs = _active_runs_snapshot(websocket.app.state)
+        hello_frame: JsonObject = {
+            "type": "connection_ready",
+            "epoch": _bus_epoch(event_bus),
+            "last_sequence": last_sequence_at_hello,
+            "active_runs": active_runs,
+        }
+        await websocket.send_json(hello_frame)
+        if (
+            hello_frame["epoch"]
+            and client_epoch == hello_frame["epoch"]
+            and client_after_sequence > 0
+        ):
+            subscribe_after_sequence = client_after_sequence
+        else:
+            subscribe_after_sequence = last_sequence_at_hello
         try:
-            async for event in websocket.app.state.event_bus.subscribe(
-                after_sequence=after_sequence
-            ):
+            async for event in event_bus.subscribe(after_sequence=subscribe_after_sequence):
                 await websocket.send_json(event)
         except WebSocketDisconnect:
             return
@@ -701,6 +721,53 @@ def _parse_after_sequence(raw: str | None) -> int:
     except (ValueError, TypeError):
         return 0
     return max(value, 0)
+
+
+def _parse_query_string(raw: str | None) -> str:
+    """Return the query string value as-is, or empty when absent/blank."""
+    if raw is None:
+        return ""
+    return raw.strip()
+
+
+def _bus_epoch(event_bus: ServerEventBus) -> str:
+    """Return the event bus generation epoch."""
+    return event_bus.epoch
+
+
+def _bus_last_sequence(event_bus: ServerEventBus) -> int:
+    """Return the bus's last issued sequence number."""
+    return event_bus.last_sequence
+
+
+def _active_runs_snapshot(state: Any) -> list[JsonObject]:
+    """Build the active-runs list for the connection_ready hello frame.
+
+    Returns an empty list when the chat run manager is unavailable so the
+    handshake can still complete — the snapshot is connection-specific and
+    the client treats empty ``active_runs`` as authoritative for that scope.
+    """
+    try:
+        chat_runs = _app_chat_runs(state)
+    except HTTPException:
+        return []
+    snapshot: list[JsonObject] = []
+    active_runs = getattr(chat_runs, "active_runs", None)
+    if not callable(active_runs):
+        return snapshot
+    for run in active_runs():
+        if run.status != RunStatus.RUNNING:
+            continue
+        snapshot.append(
+            {
+                "run_id": run.id,
+                "agent_id": run.agent_id,
+                "session_id": run.session_id,
+                "status": RunStatus.RUNNING.value,
+                "sse_url": f"/api/runs/{run.id}/events",
+            }
+        )
+    return snapshot
 
 
 def _replay_after_sequence(request: Request) -> int:
