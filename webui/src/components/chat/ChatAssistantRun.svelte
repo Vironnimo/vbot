@@ -333,6 +333,7 @@
             kind: 'tool_call',
             toolName: toolNameForRunTool(child),
             toolStatus: toolStatus(child),
+            streaming: Boolean(child.streaming),
           })}
           <details class="tool-event run-tool-event">
             <summary class="tool-event-line">

@@ -2549,6 +2549,125 @@ describe('chat state helpers', () => {
     ).toBe(false);
   });
 
+  it('renders a preparing tool row inside the assistant run from tool-call deltas', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-render-selector-tool-preview',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-render-selector-tool-preview',
+      sequence: 1,
+      payload: { content_delta: 'Searching past sessions.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-render-selector-tool-preview',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'session_search',
+        arguments_delta: '{"query": "ca',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-render-selector-tool-preview',
+      sequence: 3,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: '',
+        arguments_delta: 'rs"}',
+      },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(renderItems.map((item) => item.type)).toEqual(['assistant_run']);
+    expect(renderItems[0].tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-one',
+        name: 'session_search',
+        partialArgumentsText: '{"query": "cars"}',
+        streaming: true,
+        status: 'preparing',
+        startedEvent: null,
+      }),
+    ]);
+  });
+
+  it('compresses interleaved sibling tool-call deltas into one retained event per call', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compressed-sibling-tool-deltas',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-compressed-sibling-tool-deltas',
+      sequence: 1,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: 'read',
+        arguments_delta: '{"path"',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-compressed-sibling-tool-deltas',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-two',
+        name_delta: 'grep',
+        arguments_delta: '{"pattern"',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-compressed-sibling-tool-deltas',
+      sequence: 3,
+      payload: {
+        tool_call_id: 'call-one',
+        name_delta: '',
+        arguments_delta: ': "a.txt"}',
+      },
+    });
+
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'tool_call_delta',
+        sequence: 1,
+        payload: expect.objectContaining({
+          tool_call_id: 'call-one',
+          name_delta: 'read',
+          arguments_delta: '{"path": "a.txt"}',
+        }),
+        _streamChunkCount: 2,
+        _streamLatestSequence: 3,
+      }),
+      expect.objectContaining({
+        type: 'tool_call_delta',
+        sequence: 2,
+        payload: expect.objectContaining({
+          tool_call_id: 'call-two',
+          name_delta: 'grep',
+          arguments_delta: '{"pattern"',
+        }),
+        _streamChunkCount: 1,
+        _streamLatestSequence: 2,
+      }),
+    ]);
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+    expect(renderItems[0].tools).toEqual([
+      expect.objectContaining({ toolCallId: 'call-one', name: 'read' }),
+      expect.objectContaining({ toolCallId: 'call-two', name: 'grep' }),
+    ]);
+  });
+
   it('suppresses render selector tool-call wrappers once assistant-run rows include the same call', () => {
     const sessionState = ensureSessionState(
       createChatState(),
@@ -2603,6 +2722,9 @@ describe('chat state helpers', () => {
             toolCallId: 'call-one',
             name: 'read',
             status: CHAT_STATUS_RUNNING,
+            streaming: false,
+            partialArgumentsText: null,
+            arguments: { path: 'a.txt' },
           }),
         ],
       }),
