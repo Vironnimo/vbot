@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
+    decode_response_json,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -173,7 +174,10 @@ class AnthropicAdapter(ProviderAdapter):
         the Anthropic API — system messages must not appear in the messages
         array) and assembles model, messages, defaults, and overrides.
         """
-        request_kwargs = dict(kwargs)
+        # ``None``-valued caller kwargs mean "not specified" — drop them so they
+        # do not clobber provider defaults below. Falsy-but-non-None values
+        # (e.g. ``temperature=0.0``) must survive.
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
 
@@ -291,16 +295,14 @@ class AnthropicAdapter(ProviderAdapter):
                     json=payload,
                     headers=headers,
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             detail = self._build_error_detail(response.status_code, response.text)
             classify_http_status(
                 response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
             )
-            return dict(response.json())
+            return dict(decode_response_json(response, "Anthropic provider"))
 
         return await retry_async(_do_request)
 
@@ -359,9 +361,7 @@ class AnthropicAdapter(ProviderAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
@@ -425,10 +425,10 @@ class AnthropicAdapter(ProviderAdapter):
                     break
             if not seen_message_stop:
                 raise NetworkError("Stream ended without message_stop event")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
