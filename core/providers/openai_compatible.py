@@ -22,6 +22,7 @@ from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
+    decode_response_json,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -219,7 +220,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Build the request payload with model, messages, defaults, and overrides."""
-        request_kwargs = dict(kwargs)
+        # ``None``-valued caller kwargs mean "not specified" — drop them so they
+        # do not clobber provider defaults below. Falsy-but-non-None values
+        # (e.g. ``temperature=0.0``) must survive.
+        request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": [self._format_message(message) for message in messages],
@@ -288,9 +292,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     json=payload,
                     headers=headers,
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             reason = response.text
@@ -298,7 +300,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
             )
             classify_http_status(response.status_code, detail=detail)
-            return dict(response.json())
+            return dict(decode_response_json(response, "OpenAI-compatible provider"))
 
         return await retry_async(_do_request)
 
@@ -352,9 +354,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
@@ -400,10 +400,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     yield normalized_delta
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 

@@ -1096,6 +1096,72 @@ class TestSendErrorClassification:
 
             assert exc_info.value.retryable is True
 
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_read_error_raises_network_error(self, openai_adapter):
+        """A non-streaming read failure (httpx.ReadError) is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(side_effect=httpx.ReadError("connection reset"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: connection reset"),
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_read_error_is_retried(self, openai_adapter):
+        """A transient ReadError is retried; a subsequent success returns the response."""
+
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(
+            side_effect=[
+                httpx.ReadError("connection reset"),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+            ]
+        )
+
+        # Act
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            result = await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        # Assert
+        assert result == SUCCESS_RESPONSE
+        assert route.call_count == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_remote_protocol_error_raises_network_error(self, openai_adapter):
+        """A non-streaming RemoteProtocolError is wrapped as NetworkError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(side_effect=httpx.RemoteProtocolError("server disconnected"))
+
+        # Act / Assert
+        with (
+            patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(NetworkError, match="Connection failed: server disconnected"),
+        ):
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_malformed_json_raises_non_retryable_provider_error(self, openai_adapter):
+        """A 2xx response with unparseable JSON raises a non-retryable ProviderError."""
+
+        # Arrange
+        respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, text="not-valid-json{"))
+
+        # Act / Assert
+        with pytest.raises(ProviderError) as exc_info:
+            await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2")
+
+        assert exc_info.value.retryable is False
+        assert "malformed JSON" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # send() — retry behaviour
@@ -1273,6 +1339,83 @@ class TestSendProviderConfig:
         # Assert
         api_key_header = route.calls.last.request.headers.get("x-api-key")
         assert api_key_header == API_KEY  # No "Bearer " prefix
+
+
+# ---------------------------------------------------------------------------
+# _build_payload() — None-valued caller kwargs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPayloadNoneKwargs:
+    """``None``-valued caller kwargs are dropped, letting provider defaults win.
+
+    Falsy-but-not-None values (e.g. ``0.0``) must survive. Explicit non-None
+    values must still override the default. Covers both ``send()`` and
+    ``stream()`` payload construction (both call ``_build_payload``).
+    """
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_and_provider_default_applies(self, openai_adapter):
+        """``temperature=None`` is absent from the payload; default fills in."""
+        # Arrange — OPENAI_CONFIG declares defaults.temperature=0.7
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=None)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert "temperature" in request_body
+        assert request_body["temperature"] == 0.7  # from defaults
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_zero_kwarg_survives_through_send(self, openai_adapter):
+        """``temperature=0.0`` (falsy but not None) survives the None filter."""
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.0)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_explicit_nonzero_kwarg_overrides_default(self, openai_adapter):
+        """Explicit non-None kwargs continue to override the provider default."""
+        # Arrange
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+        # Act
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=0.3)
+
+        # Assert
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_none_kwarg_drops_key_for_stream(self, openai_adapter):
+        """``stream()`` also drops ``None`` caller kwargs before sending."""
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\ndata: [DONE]\n\n'
+        )
+        route = respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2", temperature=None):
+            pass
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["temperature"] == 0.7  # default applied
+        assert "stream" in request_body  # stream() still adds stream=true
 
 
 # ---------------------------------------------------------------------------
@@ -1820,6 +1963,38 @@ class TestStreamSSE:
                 ),
             ),
             pytest.raises(ProviderTimeoutError, match="stream timed out"),
+        ):
+            async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_stream_raises_network_error_on_mid_stream_remote_protocol_error(
+        self,
+        openai_adapter,
+    ):
+        """stream() wraps mid-stream httpx.RemoteProtocolError as NetworkError (h11 disconnect)."""
+
+        class _ProtocolErrorStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}\n\n'
+                raise httpx.RemoteProtocolError("server disconnected")
+
+            async def aclose(self) -> None:
+                pass
+
+        with (
+            patch.object(
+                openai_adapter._client,
+                "send",
+                new=AsyncMock(
+                    return_value=httpx.Response(
+                        200,
+                        stream=_ProtocolErrorStream(),
+                        headers={"content-type": "text/event-stream"},
+                    )
+                ),
+            ),
+            pytest.raises(NetworkError, match="Stream read failed: server disconnected"),
         ):
             async for _ in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
                 pass

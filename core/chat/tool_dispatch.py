@@ -157,7 +157,11 @@ class _EmittingToolRegistry(ToolRegistry):
 
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
-            self._run.raise_if_cancelled()
+            # Do not discard a completed tool result when the run is
+            # cancelled: the executor already returned the result, the
+            # per-tool cancel callback was the proper signal to interrupt
+            # the handler, and the chat loop's persist loop will record
+            # the result before honoring the run cancel.
             self._run.emit(
                 TOOL_CALL_RESULT_EVENT,
                 {
@@ -264,7 +268,6 @@ async def _dispatch_tool_calls(
             nesting_depth=nesting_depth,
         ),
     )
-    run.raise_if_cancelled()
     return [
         ChatMessage.tool(
             tool_call_id=tool_call.id,

@@ -14,7 +14,11 @@ from typing import Any
 import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._http_shared import (
+    classify_http_status,
+    decode_response_json,
+    wrap_network_error,
+)
 from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
 from core.providers.github_copilot_responses import (
     ResponsesStreamState,
@@ -295,13 +299,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             headers = await self._build_headers()
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             classify_http_status(response.status_code, detail=_http_error_detail(response))
-            return dict(response.json())
+            return dict(decode_response_json(response, "OpenAI provider"))
 
         return await retry_async(_do_request)
 
@@ -321,9 +323,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             if response.status_code >= 400:
@@ -360,10 +360,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     yield delta
             if not seen_finish_delta:
                 raise NetworkError("Stream ended without response completion event")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
