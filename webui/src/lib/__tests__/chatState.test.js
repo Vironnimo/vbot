@@ -14,7 +14,6 @@ import {
   currentSessionState,
   ensureSessionState,
   highestContiguousRunEventSequence,
-  highestRunEventSequence,
   isRunActive,
   loadHistory,
   removeQueuedMessage,
@@ -26,7 +25,6 @@ import {
   updateQueuedMessageContent,
   prependHistory,
   updateSessionUsage,
-  visibleTimelineItems,
   visibleTimelineItemsForRender,
 } from '../chatState.js';
 
@@ -135,7 +133,7 @@ describe('chat state helpers', () => {
       },
     ]);
 
-    const assistantRun = visibleTimelineItems(sessionState).find(
+    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
       (item) => item.type === 'assistant_run',
     );
 
@@ -201,7 +199,7 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED, timing },
     });
 
-    const assistantRun = visibleTimelineItems(sessionState).find(
+    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
       (item) => item.type === 'assistant_run',
     );
 
@@ -262,7 +260,7 @@ describe('chat state helpers', () => {
       'user',
       'assistant',
     ]);
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({
         id: 'message-one',
         type: 'message',
@@ -273,9 +271,9 @@ describe('chat state helpers', () => {
         outputs: [expect.objectContaining({ content: 'Hello' })],
       }),
     ]);
-    expect(JSON.stringify(visibleTimelineItems(sessionState))).not.toContain(
-      'Internal reminder',
-    );
+    expect(
+      JSON.stringify(visibleTimelineItemsForRender(sessionState)),
+    ).not.toContain('Internal reminder');
   });
 
   it('splits consecutive assistant history messages into separate run blocks', () => {
@@ -318,7 +316,7 @@ describe('chat state helpers', () => {
       },
     ]);
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems.map((item) => item.type)).toEqual([
       'message',
@@ -359,7 +357,7 @@ describe('chat state helpers', () => {
       { id: 'user-two', role: 'user', content: 'Try again later' },
     ]);
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(sessionState.messages.map((message) => message.role)).toEqual([
       'user',
@@ -427,7 +425,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems).toEqual([
       expect.objectContaining({ id: 'event-run-one-1', type: 'event' }),
@@ -542,7 +540,7 @@ describe('chat state helpers', () => {
       },
     ]);
 
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({
         id: 'user-one',
         type: 'message',
@@ -574,7 +572,7 @@ describe('chat state helpers', () => {
 
     loadHistory(sessionState, reportedMultiStepMessages());
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
     const assistantRun = timelineItems[1];
 
     expect(timelineItems).toHaveLength(2);
@@ -643,7 +641,7 @@ describe('chat state helpers', () => {
       },
     ]);
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
     const assistantRun = timelineItems[1];
 
     expect(timelineItems).toHaveLength(2);
@@ -720,7 +718,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems).toHaveLength(2);
     expect(timelineItems[0]).toEqual(
@@ -733,7 +731,9 @@ describe('chat state helpers', () => {
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
       }),
     );
-    expect(timelineItems[1].reasoning).toEqual([]);
+    expect(timelineItems[1].reasoning).toEqual([
+      expect.objectContaining({ content: 'Checking', streaming: true }),
+    ]);
   });
 
   it('uses persisted history after completed overlap instead of merging later live events', () => {
@@ -789,7 +789,7 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
         id: 'history-run-assistant-one',
@@ -860,7 +860,7 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems).toHaveLength(2);
     expect(timelineItems[1]).toEqual(
@@ -941,7 +941,7 @@ describe('chat state helpers', () => {
     });
 
     expect(sessionState.status).toBe(CHAT_STATUS_COMPLETED);
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
       expect.objectContaining({
         id: 'history-run-assistant-one',
@@ -1030,7 +1030,7 @@ describe('chat state helpers', () => {
     });
 
     const occurrences = countTimelineTextOccurrences(
-      visibleTimelineItems(sessionState),
+      visibleTimelineItemsForRender(sessionState),
       'The worker finished: the answer is 42.',
     );
 
@@ -1087,7 +1087,7 @@ describe('chat state helpers', () => {
     });
 
     const occurrences = countTimelineTextOccurrences(
-      visibleTimelineItems(sessionState),
+      visibleTimelineItemsForRender(sessionState),
       'The worker finished: the answer is 42.',
     );
 
@@ -1223,7 +1223,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     // The parent run's first assistant block must not render twice.
     expect(
@@ -1249,7 +1249,7 @@ describe('chat state helpers', () => {
     ).toHaveLength(0);
   });
 
-  it('preserves active streaming items when history refreshes during a run', () => {
+  it('preserves active streaming run events when history refreshes during a run', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -1271,8 +1271,11 @@ describe('chat state helpers', () => {
       { id: 'message-one', role: 'user', content: 'Hi' },
     ]);
 
-    expect(sessionState.streamingItems).toEqual([
-      expect.objectContaining({ type: 'assistant', content: 'Hel' }),
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'assistant_output_delta',
+        payload: expect.objectContaining({ content_delta: 'Hel' }),
+      }),
     ]);
   });
 
@@ -1463,7 +1466,7 @@ describe('chat state helpers', () => {
       payload: { message: { role: 'assistant', content: 'Hello' } },
     });
 
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       {
         id: 'message-one',
         type: 'message',
@@ -1518,7 +1521,7 @@ describe('chat state helpers', () => {
       payload: { message: { role: 'assistant', content: 'Hi' } },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(sessionState.runEvents).toHaveLength(3);
     expect(assistantRun).toEqual(
@@ -1529,10 +1532,13 @@ describe('chat state helpers', () => {
       }),
     );
     expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'reasoning',
       'tool_call',
       'assistant_output',
     ]);
-    expect(assistantRun.reasoning).toEqual([]);
+    expect(assistantRun.reasoning).toEqual([
+      expect.objectContaining({ content: 'Think', streaming: true }),
+    ]);
     expect(assistantRun.tools).toEqual([
       expect.objectContaining({
         toolCallId: 'call-one',
@@ -1609,7 +1615,7 @@ describe('chat state helpers', () => {
       payload: { tool_call_id: 'call-one', data: 'warn\n' },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
     const [tool] = assistantRun.tools;
 
     expect(tool).toEqual(
@@ -1640,7 +1646,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
     const [assistantRun] = timelineItems;
 
     expect(timelineItems).toHaveLength(1);
@@ -1706,47 +1712,21 @@ describe('chat state helpers', () => {
       payload: { content_delta: ' now' },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(timelineItems.map((item) => item.type)).toEqual([
-      'assistant_run',
-      'streaming',
-      'streaming',
-      'streaming',
-    ]);
-    expect(timelineItems[0].items.map((item) => item.type)).toEqual([
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'reasoning',
       'tool_call',
+      'assistant_output',
     ]);
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: 'Plan',
-          sequence: 1,
-        }),
-      }),
-    );
-    expect(timelineItems[2]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: ' more',
-          sequence: 3,
-        }),
-      }),
-    );
-    expect(timelineItems[3]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'Done now',
-          sequence: 5,
-        }),
-      }),
-    );
+    // Reasoning streamed before and after a still-pending tool call merges into
+    // one reasoning block; the streamed answer stays a separate output row.
+    expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Plan more',
+    ]);
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'Done now',
+    ]);
   });
 
   it('keeps distinct assistant output phases across a tool-use loop', () => {
@@ -1791,36 +1771,17 @@ describe('chat state helpers', () => {
       payload: { content_delta: 'Second answer' },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(timelineItems.map((item) => item.type)).toEqual([
-      'assistant_run',
-      'streaming',
-      'streaming',
-    ]);
-    expect(timelineItems[0].items.map((item) => item.type)).toEqual([
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'assistant_output',
       'tool_call',
+      'assistant_output',
     ]);
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'First answer',
-          sequence: 1,
-        }),
-      }),
-    );
-    expect(timelineItems[2]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'Second answer',
-          sequence: 4,
-        }),
-      }),
-    );
+    expect(assistantRun.outputs.map((item) => item.content)).toEqual([
+      'First answer',
+      'Second answer',
+    ]);
   });
 
   it('keeps distinct reasoning phases across a tool-use loop', () => {
@@ -1865,36 +1826,17 @@ describe('chat state helpers', () => {
       payload: { reasoning_delta: 'Plan second' },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(timelineItems.map((item) => item.type)).toEqual([
-      'assistant_run',
-      'streaming',
-      'streaming',
-    ]);
-    expect(timelineItems[0].items.map((item) => item.type)).toEqual([
+    expect(assistantRun.items.map((item) => item.type)).toEqual([
+      'reasoning',
       'tool_call',
+      'reasoning',
     ]);
-    expect(timelineItems[1]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: 'Plan first',
-          sequence: 1,
-        }),
-      }),
-    );
-    expect(timelineItems[2]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: 'Plan second',
-          sequence: 4,
-        }),
-      }),
-    );
+    expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Plan first',
+      'Plan second',
+    ]);
   });
 
   it('merges tool started and result events into success, running, and failed rows', () => {
@@ -1947,7 +1889,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun.tools).toHaveLength(3);
     expect(assistantRun.tools.map((tool) => tool.toolCallId)).toEqual([
@@ -1986,7 +1928,7 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_CANCELLED },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
     expect(assistantRun.tools).toHaveLength(1);
@@ -2033,7 +1975,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const assistantRuns = visibleTimelineItems(sessionState);
+    const assistantRuns = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRuns.map((item) => item.runId)).toEqual([
       'run-old',
@@ -2081,14 +2023,13 @@ describe('chat state helpers', () => {
       payload: { content_delta: 'Second answer' },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems.map((item) => item.type)).toEqual([
       'message',
       'assistant_run',
       'event',
       'assistant_run',
-      'streaming',
     ]);
     expect(timelineItems[1].outputs).toEqual([
       expect.objectContaining({ content: 'First answer' }),
@@ -2097,16 +2038,9 @@ describe('chat state helpers', () => {
     expect(timelineItems[3]).toEqual(
       expect.objectContaining({ runId: 'run-two', type: 'assistant_run' }),
     );
-    expect(timelineItems[4]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'Second answer',
-          sequence: 2,
-        }),
-      }),
-    );
+    expect(timelineItems[3].outputs).toEqual([
+      expect.objectContaining({ content: 'Second answer', streaming: true }),
+    ]);
   });
 
   it('orders each live run user event before its assistant block using run arrival', () => {
@@ -2211,14 +2145,13 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems.map((item) => item.type)).toEqual([
       'event',
       'assistant_run',
       'event',
       'assistant_run',
-      'streaming',
     ]);
     expect(timelineItems[0].event.payload.message.content).toBe(
       'First request',
@@ -2238,16 +2171,9 @@ describe('chat state helpers', () => {
     expect(timelineItems[3].tools).toEqual([
       expect.objectContaining({ toolCallId: 'call-two', status: 'success' }),
     ]);
-    expect(timelineItems[4]).toEqual(
-      expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'reasoning',
-          content: 'Planning',
-          sequence: 3,
-        }),
-      }),
-    );
+    expect(timelineItems[3].reasoning).toEqual([
+      expect.objectContaining({ content: 'Planning', streaming: true }),
+    ]);
   });
 
   it('appends later runs after older runs even when run-local sequences restart', () => {
@@ -2302,7 +2228,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems.map((item) => item.id)).toEqual([
       'event-run-old-2',
@@ -2316,142 +2242,6 @@ describe('chat state helpers', () => {
     expect(timelineItems[3].tools).toEqual([
       expect.objectContaining({ toolCallId: 'new-tool' }),
     ]);
-  });
-
-  it('merges trailing text deltas while preserving interleaved order', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: { content_delta: 'Hel' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { content_delta: 'lo' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'reasoning_delta',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { reasoning_delta: 'Then' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 4,
-      payload: { content_delta: ' again' },
-    });
-
-    expect(sessionState.streamingItems.map((item) => item.content)).toEqual([
-      'Hello',
-      'Then',
-      ' again',
-    ]);
-    expect(sessionState.streamingItems.map((item) => item.type)).toEqual([
-      'assistant',
-      'reasoning',
-      'assistant',
-    ]);
-  });
-
-  it('accumulates partial tool call deltas without parsed final arguments', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'tool_call_delta',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        tool_call_id: 'call-one',
-        name_delta: 'read_',
-        arguments_delta: '{"path"',
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_delta',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: {
-        tool_call_id: 'call-one',
-        name_delta: 'file',
-        arguments_delta: ': "a.txt"}',
-      },
-    });
-
-    expect(sessionState.streamingItems).toEqual([
-      expect.objectContaining({
-        type: 'tool_call',
-        toolCallId: 'call-one',
-        name: 'read_file',
-        argumentsText: '{"path": "a.txt"}',
-        complete: false,
-      }),
-    ]);
-  });
-
-  it('keeps a streaming tool call at its first chronological position', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-
-    appendRunEvent(sessionState, {
-      type: 'tool_call_delta',
-      run_id: 'run-one',
-      sequence: 1,
-      payload: {
-        tool_call_id: 'call-one',
-        name_delta: 'read_',
-        arguments_delta: '{"path"',
-      },
-    });
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 2,
-      payload: { content_delta: 'Checking the file.' },
-    });
-    appendRunEvent(sessionState, {
-      type: 'tool_call_delta',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: {
-        tool_call_id: 'call-one',
-        name_delta: 'file',
-        arguments_delta: ': "a.txt"}',
-      },
-    });
-
-    expect(sessionState.streamingItems).toEqual([
-      expect.objectContaining({
-        type: 'tool_call',
-        toolCallId: 'call-one',
-        name: 'read_file',
-        argumentsText: '{"path": "a.txt"}',
-        sequence: 1,
-      }),
-      expect.objectContaining({
-        type: 'assistant',
-        content: 'Checking the file.',
-        sequence: 2,
-      }),
-    ]);
-    expect(visibleTimelineItems(sessionState).map((item) => item.type)).toEqual(
-      ['streaming', 'streaming'],
-    );
   });
 
   it('keeps render selector assistant/reasoning streaming content inside assistant runs', () => {
@@ -2793,8 +2583,8 @@ describe('chat state helpers', () => {
     appendRunEvent(sessionState, event);
     appendRunEvent(sessionState, event);
 
-    expect(sessionState.streamingItems).toHaveLength(1);
-    expect(sessionState.streamingItems[0].content).toBe('Hi');
+    expect(sessionState.streamingRunEvents).toHaveLength(1);
+    expect(sessionState.streamingRunEvents[0].payload.content_delta).toBe('Hi');
   });
 
   it('clears streaming items when final assistant output arrives', () => {
@@ -2817,8 +2607,7 @@ describe('chat state helpers', () => {
       payload: { message: { role: 'assistant', content: 'Final' } },
     });
 
-    expect(sessionState.streamingItems).toEqual([]);
-    expect(visibleTimelineItems(sessionState)).toEqual([
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
       expect.objectContaining({
         type: 'assistant_run',
         outputs: [
@@ -2844,15 +2633,17 @@ describe('chat state helpers', () => {
       payload: { content_delta: 'Draft' },
     });
 
-    let [streamingItem] = visibleTimelineItems(sessionState);
+    const [draftRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(streamingItem).toEqual(
+    expect(draftRun).toEqual(
       expect.objectContaining({
-        type: 'streaming',
-        streamingItem: expect.objectContaining({
-          type: 'assistant',
-          content: 'Draft',
-        }),
+        type: 'assistant_run',
+        outputs: [
+          expect.objectContaining({
+            content: 'Draft',
+            streaming: true,
+          }),
+        ],
       }),
     );
 
@@ -2863,7 +2654,7 @@ describe('chat state helpers', () => {
       payload: { message: { role: 'assistant', content: 'Final' } },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun).toEqual(
       expect.objectContaining({
@@ -2937,11 +2728,13 @@ describe('chat state helpers', () => {
       },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
+    // The streamed answer precedes the tool call it announced, and the final
+    // authoritative message replaces the streamed draft in place.
     expect(assistantRun.items.map((item) => item.type)).toEqual([
-      'tool_call',
       'assistant_output',
+      'tool_call',
     ]);
     expect(assistantRun.outputs).toEqual([
       expect.objectContaining({
@@ -2993,7 +2786,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun.items.map((item) => item.type)).toEqual([
       'reasoning',
@@ -3118,7 +2911,7 @@ describe('chat state helpers', () => {
       },
     });
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun.items.map((item) => item.type)).toEqual([
       'reasoning',
@@ -3146,7 +2939,7 @@ describe('chat state helpers', () => {
 
     appendReportedLiveRunEvents(sessionState, 'run-reported-live');
 
-    const [assistantRun] = visibleTimelineItems(sessionState);
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
     expect(assistantRun).toEqual(
       expect.objectContaining({
@@ -3159,6 +2952,7 @@ describe('chat state helpers', () => {
       'The timeline is in chatState.js.',
     ]);
     expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Find candidate files.',
       'Read the selected file.',
       'Summarize the result.',
     ]);
@@ -3189,7 +2983,7 @@ describe('chat state helpers', () => {
     appendReportedLiveRunEvents(sessionState, 'run-reported-overlap', 2);
     loadHistory(sessionState, reportedMultiStepMessages());
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
     const assistantRun = timelineItems[1];
 
     expect(timelineItems).toHaveLength(2);
@@ -3198,6 +2992,7 @@ describe('chat state helpers', () => {
       'The timeline is in chatState.js.',
     ]);
     expect(assistantRun.reasoning.map((item) => item.content)).toEqual([
+      'Find candidate files.',
       'Read the selected file.',
       'Summarize the result.',
     ]);
@@ -3243,7 +3038,7 @@ describe('chat state helpers', () => {
       { id: 'user-two', role: 'user', content: 'Thanks' },
     ]);
 
-    const timelineItems = visibleTimelineItems(sessionState);
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
 
     expect(timelineItems).toEqual([
       expect.objectContaining({ id: 'user-one', type: 'message' }),
@@ -3269,7 +3064,7 @@ describe('chat state helpers', () => {
     ]);
   });
 
-  it('clears streaming items on terminal cleanup', () => {
+  it('clears streaming run events on terminal cleanup', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -3294,23 +3089,7 @@ describe('chat state helpers', () => {
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    expect(sessionState.streamingItems).toEqual([]);
-  });
-
-  it('tracks the highest seen run sequence for reconnect handoff', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
-    appendRunEvent(sessionState, {
-      type: 'assistant_output_delta',
-      run_id: 'run-one',
-      sequence: 3,
-      payload: { content_delta: 'Hi' },
-    });
-
-    expect(highestRunEventSequence(sessionState)).toBe(3);
+    expect(sessionState.streamingRunEvents).toEqual([]);
   });
 
   it('tracks the highest contiguous active-run sequence for replay handoff', () => {
@@ -3352,7 +3131,6 @@ describe('chat state helpers', () => {
       },
     });
 
-    expect(highestRunEventSequence(sessionState)).toBe(5);
     expect(highestContiguousRunEventSequence(sessionState)).toBe(2);
 
     appendRunEvent(sessionState, {
@@ -3403,7 +3181,6 @@ describe('chat state helpers', () => {
       ],
     });
 
-    expect(highestRunEventSequence(sessionState)).toBe(8);
     expect(highestContiguousRunEventSequence(sessionState)).toBe(1);
   });
 
@@ -3687,7 +3464,6 @@ describe('chat state helpers', () => {
       sseUrl: '/api/runs/run-stale/events',
       status: CHAT_STATUS_RUNNING,
     });
-    expect(sessionState.streamingItems).not.toHaveLength(0);
     expect(sessionState.streamingRunEvents).not.toHaveLength(0);
     expect(sessionState.seenStreamingEventKeys.size).toBeGreaterThan(0);
     expect(sessionState.streamingPhase).toBeGreaterThan(0);
@@ -3702,7 +3478,6 @@ describe('chat state helpers', () => {
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.streamStatus).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
-    expect(sessionState.streamingItems).toEqual([]);
     expect(sessionState.streamingRunEvents).toEqual([]);
     expect(sessionState.streamingPhase).toBe(0);
     expect(sessionState.seenStreamingEventKeys).toEqual(new Set());

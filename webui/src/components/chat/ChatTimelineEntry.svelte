@@ -1,6 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { renderMarkdown, renderMarkdownStreaming } from '$lib/markdown.js';
+  import { renderMarkdown } from '$lib/markdown.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -25,13 +25,10 @@
     isUserItem,
     labelForEvent,
     labelForMessage,
-    labelForStreamingItem,
     messageFromEvent,
     metaForEvent,
     shouldRenderMessage,
-    shouldRenderStreamingItem,
     speechArtifactFromResult,
-    streamingToolName,
     textFromEvent,
     textFromMessage,
     toolArgumentForEvent,
@@ -44,7 +41,6 @@
 
   let {
     item,
-    timelineItems = [],
     agentName = '',
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
@@ -164,58 +160,7 @@
   {/if}
 {/snippet}
 
-{#if item.type === 'streaming' && shouldRenderStreamingItem(item.streamingItem, timelineItems)}
-  <article class="msg assistant streaming-message">
-    <div class="msg-header">
-      <div class="msg-avatar">{avatarForItem(item)}</div>
-      <span class="msg-author"
-        >{item.streamingItem.type === 'assistant'
-          ? agentName || t('chat.role.assistant', 'Assistant').toUpperCase()
-          : labelForStreamingItem(item.streamingItem)}</span
-      >
-    </div>
-    <div class="msg-content">
-      {#if item.streamingItem.type === 'reasoning'}
-        <details
-          class="reasoning-block streaming-reasoning"
-          open={isReasoningOpen(item.id)}
-          ontoggle={(event) =>
-            onReasoningOpenChange(item.id, event.currentTarget.open)}
-        >
-          {@render reasoningSummary(true, isReasoningOpen(item.id))}
-          <div class="reasoning-body">{item.streamingItem.content}</div>
-        </details>
-      {:else if item.streamingItem.type === 'tool_call'}
-        <details class="tool-event streaming-tool-event" open>
-          <summary class="tool-event-line">
-            <span class="te-dot running">●</span>
-            <span class="te-fn">{streamingToolName(item.streamingItem)}</span>
-            <span class="te-time">
-              {t('chat.toolPreparingArguments', 'preparing arguments')}
-            </span>
-          </summary>
-          <div class="tool-event-body">
-            <div class="teb-row">
-              <span class="teb-label">{t('chat.toolStatus', 'Status')}</span>
-              <span class="teb-code">
-                {t(
-                  'chat.toolArgumentsHidden',
-                  'Arguments are streaming and will appear when ready.',
-                )}
-              </span>
-            </div>
-          </div>
-        </details>
-      {:else}
-        <div class="msg-markdown streaming-text">
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html renderMarkdownStreaming(item.streamingItem.content ?? '')}
-          <span class="streaming-caret" aria-hidden="true"></span>
-        </div>
-      {/if}
-    </div>
-  </article>
-{:else if item.type === 'message' && shouldRenderMessage(item.message)}
+{#if item.type === 'message' && shouldRenderMessage(item.message)}
   <article
     class:assistant={item.message.role === 'assistant'}
     class:user={item.message.role === 'user'}

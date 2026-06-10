@@ -8,7 +8,6 @@ import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
 
 export {
   assistantRunChildProgressKey,
-  visibleTimelineItems,
   visibleTimelineItemsForRender,
 } from './chatTimeline.js';
 
@@ -73,7 +72,6 @@ export function ensureSessionState(state, agentId, sessionId) {
       sessionId,
       messages: [],
       runEvents: [],
-      streamingItems: [],
       streamingRunEvents: [],
       streamingPhase: 0,
       seenStreamingEventKeys: new Set(),
@@ -118,9 +116,6 @@ export function loadHistory(sessionState, messages, options = {}) {
         sessionState.currentRun?.runId ?? null,
       )
     : [];
-  const activeStreamingItems = isRunActive(sessionState)
-    ? sessionState.streamingItems
-    : [];
   const activeStreamingRunEvents = isRunActive(sessionState)
     ? sessionState.streamingRunEvents
     : [];
@@ -133,7 +128,6 @@ export function loadHistory(sessionState, messages, options = {}) {
   sessionState.messages = visibleMessages;
   sessionState.hasOlderHistory = options.hasMore === true;
   sessionState.runEvents = activeRunEvents;
-  sessionState.streamingItems = activeStreamingItems;
   sessionState.streamingRunEvents = activeStreamingRunEvents;
   sessionState.streamingPhase = activeStreamingPhase;
   sessionState.seenStreamingEventKeys = activeSeenStreamingEventKeys;
@@ -183,7 +177,6 @@ export function startRun(sessionState, run) {
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
-  sessionState.streamingItems = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -204,7 +197,6 @@ export function appendRunEvent(sessionState, event) {
     if (eventKey) {
       sessionState.seenStreamingEventKeys.add(eventKey);
     }
-    updateStreamingItems(sessionState, normalizedEvent);
     appendCompressedStreamingRunEvent(sessionState, normalizedEvent);
     return normalizedEvent;
   }
@@ -222,7 +214,7 @@ export function appendRunEvent(sessionState, event) {
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
   }
-  updateStreamingItems(sessionState, normalizedEvent);
+  advanceStreamingPhase(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
   }
@@ -251,7 +243,6 @@ function beginRunFromEvent(sessionState, event) {
   if (isSameRun) {
     return;
   }
-  sessionState.streamingItems = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -280,7 +271,6 @@ export function finishRun(sessionState, event) {
   }
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
-  sessionState.streamingItems = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -291,19 +281,6 @@ export function finishRun(sessionState, event) {
     updateSessionUsage(sessionState, event.payload.usage);
   }
   return sessionState;
-}
-
-export function highestRunEventSequence(sessionState) {
-  const streamingItemSequences = (sessionState?.streamingItems ?? [])
-    .map((item) => item.sequence)
-    .filter((sequence) => Number.isFinite(sequence));
-  return Math.max(
-    0,
-    ...(sessionState?.runEvents ?? [])
-      .map((event) => event.sequence)
-      .filter((sequence) => Number.isFinite(sequence)),
-    ...streamingItemSequences,
-  );
 }
 
 export function highestContiguousRunEventSequence(sessionState) {
@@ -417,7 +394,6 @@ export function markSessionError(sessionState, error) {
   sessionState.status = CHAT_STATUS_FAILED;
   sessionState.error = error?.message ?? String(error);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
-  sessionState.streamingItems = [];
   sessionState.streamingRunEvents = [];
   return sessionState;
 }
@@ -498,7 +474,6 @@ export function resetStaleRun(sessionState) {
   sessionState.status = CHAT_STATUS_IDLE;
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.currentRun = null;
-  sessionState.streamingItems = [];
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -715,97 +690,12 @@ function firstSeenSequence(existingSequence, candidateSequence) {
   return Math.min(existingSequence, candidateSequence);
 }
 
-function updateStreamingItems(sessionState, event) {
-  if (event.type === RUN_EVENT_ASSISTANT_OUTPUT_DELTA) {
-    appendTextStreamingItem(sessionState, event, 'assistant', 'content_delta');
-    return;
-  }
-  if (event.type === RUN_EVENT_REASONING_DELTA) {
-    appendTextStreamingItem(
-      sessionState,
-      event,
-      'reasoning',
-      'reasoning_delta',
-    );
-    return;
-  }
-  if (event.type === RUN_EVENT_TOOL_CALL_DELTA) {
-    appendToolCallStreamingItem(sessionState, event);
-    return;
-  }
+// Streaming deltas are grouped into phases so text that streams after a tool
+// call does not merge with text from before it. `tool_call_started` and
+// `tool_call_result` mark phase boundaries; the compressed `streamingRunEvents`
+// tag each retained delta with the current phase.
+function advanceStreamingPhase(sessionState, event) {
   if (event.type === 'tool_call_started' || event.type === 'tool_call_result') {
     sessionState.streamingPhase += 1;
-    return;
   }
-  if (event.type === 'assistant_output') {
-    sessionState.streamingItems = [];
-  }
-}
-
-function appendTextStreamingItem(sessionState, event, itemType, payloadKey) {
-  const contentDelta = event.payload?.[payloadKey];
-  if (!contentDelta) {
-    return;
-  }
-  const trailingItem = sessionState.streamingItems.at(-1);
-  if (
-    trailingItem?.type === itemType &&
-    trailingItem.phase === sessionState.streamingPhase
-  ) {
-    trailingItem.content += contentDelta;
-    trailingItem.sequence = event.sequence;
-    trailingItem.timestamp ??= event.timestamp;
-    return;
-  }
-  sessionState.streamingItems = [
-    ...sessionState.streamingItems,
-    {
-      id: `${itemType}-${event.run_id ?? 'run'}-${event.sequence ?? sessionState.streamingItems.length}`,
-      run_id: event.run_id,
-      type: itemType,
-      content: contentDelta,
-      sequence: event.sequence,
-      timestamp: event.timestamp,
-      phase: sessionState.streamingPhase,
-    },
-  ];
-}
-
-function appendToolCallStreamingItem(sessionState, event) {
-  const payload = event.payload ?? {};
-  const toolCallId = payload.tool_call_id ?? payload.id;
-  if (!toolCallId) {
-    return;
-  }
-  const existingItem = sessionState.streamingItems.find(
-    (item) =>
-      item.type === 'tool_call' &&
-      item.toolCallId === toolCallId &&
-      item.phase === sessionState.streamingPhase,
-  );
-  if (existingItem) {
-    existingItem.name += payload.name_delta ?? '';
-    existingItem.argumentsText += payload.arguments_delta ?? '';
-    existingItem.sequence = firstSeenSequence(
-      existingItem.sequence,
-      event.sequence,
-    );
-    existingItem.timestamp ??= event.timestamp;
-    return;
-  }
-  sessionState.streamingItems = [
-    ...sessionState.streamingItems,
-    {
-      id: `tool-call-${event.run_id ?? 'run'}-${toolCallId}`,
-      run_id: event.run_id,
-      type: 'tool_call',
-      toolCallId,
-      name: payload.name_delta ?? '',
-      argumentsText: payload.arguments_delta ?? '',
-      complete: false,
-      sequence: event.sequence,
-      timestamp: event.timestamp,
-      phase: sessionState.streamingPhase,
-    },
-  ];
 }
