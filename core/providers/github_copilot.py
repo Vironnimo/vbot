@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
@@ -11,6 +10,7 @@ import httpx
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._http_shared import (
     classify_http_status,
+    decode_response_json,
     iter_sse_data,
     parse_sse_json_data,
     wrap_network_error,
@@ -201,7 +201,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 raise wrap_network_error(exc) from exc
 
             classify_http_status(response.status_code, detail=_http_error_detail(response))
-            return dict(_decode_response_json(response, "GitHub Copilot provider"))
+            return dict(decode_response_json(response, "GitHub Copilot provider"))
 
         return await retry_async(_do_request)
 
@@ -364,23 +364,6 @@ def _copilot_supported_parameters(
 def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:
     reason = response.text if body is None else body
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
-
-
-def _decode_response_json(response: httpx.Response, context: str) -> dict[str, Any]:
-    """Decode a 2xx response body to JSON or raise a non-retryable ProviderError."""
-    try:
-        decoded = response.json()
-    except json.JSONDecodeError as exc:
-        raise ProviderError(
-            f"{context} sent malformed JSON in response: {exc.msg}",
-            retryable=False,
-        ) from exc
-    if not isinstance(decoded, dict):
-        raise ProviderError(
-            f"{context} sent non-object JSON in response",
-            retryable=False,
-        )
-    return decoded
 
 
 def _copilot_runtime_metadata(
