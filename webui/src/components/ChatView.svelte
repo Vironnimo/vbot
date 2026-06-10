@@ -14,6 +14,7 @@
   import { t } from '$lib/i18n.js';
   import {
     subAgentResultData,
+    subAgentResultEntryAllowsFetch,
     subAgentResultTextFromMessages,
   } from '$lib/chatTimelinePresentation.js';
 
@@ -297,8 +298,7 @@
   // the run stream would have written, so the dot settles correctly without
   // depending on event replay. The once-per-key guard prevents re-verification
   // churn across re-renders; the error path releases the guard so a later
-  // attempt can retry (unlike `requestSubAgentResult` / `subAgentResults` which
-  // cache failures permanently — see handoff3 B6).
+  // attempt can retry.
   const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
   const subAgentStatusVerificationKeys = new SvelteSet();
   const subAgentStatusInflightKeys = new SvelteSet();
@@ -322,15 +322,24 @@
         limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
       });
       const updates = {};
-      if (history?.active_run) {
-        const activeRunId =
-          typeof history.active_run.run_id === 'string'
-            ? history.active_run.run_id.trim()
-            : '';
+      const activeRunId =
+        typeof history?.active_run?.run_id === 'string'
+          ? history.active_run.run_id.trim()
+          : '';
+      // With a verified run id, only run-scoped keys are written: session-level
+      // keys would bleed this run's state into other spawn rows that reuse the
+      // same child session (handoff3 B6). A different run being active means
+      // the verified run itself is over, so fall through to the summary scan.
+      if (
+        history?.active_run &&
+        (!trimmedRunId || activeRunId === trimmedRunId)
+      ) {
         if (activeRunId) {
           updates[`run:${activeRunId}`] = 'running';
         }
-        updates[`session:${agentId}::${sessionId}`] = 'running';
+        if (!trimmedRunId) {
+          updates[`session:${agentId}::${sessionId}`] = 'running';
+        }
       } else {
         const messages = Array.isArray(history?.messages)
           ? history.messages
@@ -363,13 +372,17 @@
         if (runKey) {
           updates[`run:${runKey}`] = status;
         }
-        updates[`session:${agentId}::${sessionId}`] = status;
+        if (!trimmedRunId) {
+          updates[`session:${agentId}::${sessionId}`] = status;
+        }
         const durationMs = summary?.timing?.duration_ms;
         if (Number.isFinite(durationMs) && durationMs >= 0) {
           if (runKey) {
             updates[`runDuration:${runKey}`] = durationMs;
           }
-          updates[`sessionDuration:${agentId}::${sessionId}`] = durationMs;
+          if (!trimmedRunId) {
+            updates[`sessionDuration:${agentId}::${sessionId}`] = durationMs;
+          }
         }
       }
       if (Object.keys(updates).length > 0) {
@@ -499,13 +512,15 @@
 
   // Non-blocking sub-agent spawns only return a "running" descriptor, so once the
   // child run finishes the timeline asks for its final output here. We fetch the
-  // child session's last assistant message once per (agent, session) and cache it.
-  const requestSubAgentResult = async (agentId, sessionId) => {
+  // child session's last assistant message and cache it under the row's cache
+  // key (run-scoped when the child run id is known, so repeated spawns into the
+  // same child session each get their own result — see handoff3 B6).
+  const requestSubAgentResult = async (agentId, sessionId, cacheKey = '') => {
     if (!agentId || !sessionId) {
       return;
     }
-    const key = `${agentId}::${sessionId}`;
-    if (subAgentResults[key]) {
+    const key = cacheKey || `${agentId}::${sessionId}`;
+    if (!subAgentResultEntryAllowsFetch(subAgentResults[key])) {
       return;
     }
     subAgentResults = {
@@ -525,9 +540,16 @@
       };
     } catch {
       // Non-critical: the user can still open the sub-agent session directly.
+      // Marked as a retryable failure instead of a permanent empty result, so
+      // a transient chat.history error does not blank the row forever.
       subAgentResults = {
         ...subAgentResults,
-        [key]: { loading: false, result: '' },
+        [key]: {
+          loading: false,
+          result: '',
+          error: true,
+          failedAt: Date.now(),
+        },
       };
     }
   };

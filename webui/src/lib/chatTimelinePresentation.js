@@ -243,24 +243,24 @@ export const toolStatusLabel = (tool) => {
 };
 
 // Real wall-clock runtime of the child run a sub-agent tool refers to, captured
-// from the child run's terminal lifecycle event (run_id first, then session).
+// from the child run's terminal lifecycle event. Session-keyed fallback applies
+// only when no run id is known: a child session can be reused by later spawns,
+// so a session-scoped duration may describe a different run than this row's.
 // Returns null when no child duration was tracked yet.
 export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  const runId = subAgentEffectiveRunId(tool, statuses);
   if (runId) {
-    const durationMs = subAgentStatuses[`runDuration:${runId}`];
-    if (Number.isFinite(durationMs) && durationMs >= 0) {
-      return durationMs;
-    }
+    const durationMs = statuses[`runDuration:${runId}`];
+    return Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : null;
   }
 
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
   const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
   const sessionId = subAgentSessionId(tool);
   if (agentId && sessionId) {
-    const durationMs =
-      subAgentStatuses[`sessionDuration:${agentId}::${sessionId}`];
+    const durationMs = statuses[`sessionDuration:${agentId}::${sessionId}`];
     if (Number.isFinite(durationMs) && durationMs >= 0) {
       return durationMs;
     }
@@ -364,6 +364,24 @@ export const subAgentRunId = (tool) => {
   return trimmedString(data.run_id) || trimmedString(args.run_id);
 };
 
+// The child run id this spawn row refers to. A queued spawn's descriptor only
+// carries a queue_item_id; once the queued run starts, the run stream records a
+// `queueRun:<queue_item_id>` → run_id mapping (from the run_started payload),
+// which resolves the row to its own run even though the persisted descriptor
+// never learns the run id.
+export const subAgentEffectiveRunId = (tool, subAgentStatuses = {}) => {
+  const runId = subAgentRunId(tool);
+  if (runId) {
+    return runId;
+  }
+  const queueItemId = trimmedString(subAgentResultData(tool).queue_item_id);
+  if (!queueItemId) {
+    return '';
+  }
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  return trimmedString(statuses[`queueRun:${queueItemId}`]);
+};
+
 export const subAgentPreview = (tool) => {
   const args = subAgentArguments(tool);
   const toolName = toolNameForRunTool(tool);
@@ -426,9 +444,37 @@ export const subAgentNavigationTarget = (tool) => {
   return { agentId, sessionId };
 };
 
-export const subAgentResultKey = (tool) => {
+// Cache key for a spawn row's fetched result. Keyed by the child run when it is
+// known so repeated spawns into the same child session each fetch their own
+// final output; the session-level key is only the fallback for rows without a
+// resolvable run id.
+export const subAgentResultKey = (tool, subAgentStatuses = {}) => {
   const target = subAgentNavigationTarget(tool);
-  return target ? `${target.agentId}::${target.sessionId}` : '';
+  if (!target) {
+    return '';
+  }
+  const runId = subAgentEffectiveRunId(tool, subAgentStatuses);
+  return runId
+    ? `${target.agentId}::${target.sessionId}::${runId}`
+    : `${target.agentId}::${target.sessionId}`;
+};
+
+// A failed result fetch must not be cached forever (a transient chat.history
+// error would otherwise permanently blank the Result row), but deleting the
+// entry would retrigger the fetch effect in a tight loop. Instead failed
+// entries carry `error`/`failedAt` and become fetchable again after a cooldown,
+// so the next natural re-render retries.
+const SUBAGENT_RESULT_RETRY_DELAY_MS = 15000;
+
+export const subAgentResultEntryAllowsFetch = (entry, now = Date.now()) => {
+  if (!entry) {
+    return true;
+  }
+  if (entry.error && !entry.loading) {
+    const failedAt = Number.isFinite(entry.failedAt) ? entry.failedAt : 0;
+    return now - failedAt >= SUBAGENT_RESULT_RETRY_DELAY_MS;
+  }
+  return false;
 };
 
 // A non-blocking spawn returns a "running" descriptor as its tool result, so the
@@ -466,13 +512,16 @@ export const subAgentNeedsStatusVerification = (
   }
   const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
 
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
-  if (runId && Object.prototype.hasOwnProperty.call(statuses, `run:${runId}`)) {
-    return false;
+  // With a known run id only the run-scoped key counts: a session-scoped
+  // status may belong to a different run of the same (reused) child session,
+  // so it must neither settle this row nor suppress its verification.
+  const runId = subAgentEffectiveRunId(tool, statuses);
+  if (runId) {
+    return !Object.prototype.hasOwnProperty.call(statuses, `run:${runId}`);
   }
 
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
   const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
   const sessionId = subAgentSessionId(tool);
   if (
@@ -1036,27 +1085,27 @@ function matchingSubAgentResultStatus(tool, assistantRun) {
 }
 
 function externalSubAgentStatus(tool, subAgentStatuses) {
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  // With a known run id only the run-scoped status applies. The session-keyed
+  // entry may describe an earlier or later run of the same reused child
+  // session, so falling back to it would settle this row with another run's
+  // terminal state.
+  const runId = subAgentEffectiveRunId(tool, statuses);
   if (runId) {
-    const runStatus = subAgentStatusToDotStatus(
-      trimmedString(subAgentStatuses[`run:${runId}`]).toLowerCase(),
+    return subAgentStatusToDotStatus(
+      trimmedString(statuses[`run:${runId}`]).toLowerCase(),
     );
-    if (runStatus) {
-      return runStatus;
-    }
   }
 
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
   const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
   const sessionId = subAgentSessionId(tool);
   if (!agentId || !sessionId) {
     return '';
   }
   return subAgentStatusToDotStatus(
-    trimmedString(
-      subAgentStatuses[`session:${agentId}::${sessionId}`],
-    ).toLowerCase(),
+    trimmedString(statuses[`session:${agentId}::${sessionId}`]).toLowerCase(),
   );
 }
 

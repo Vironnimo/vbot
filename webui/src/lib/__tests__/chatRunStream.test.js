@@ -383,6 +383,37 @@ describe('createChatRunStream() queue removal on run_started (regression for B7)
     expect(harness.syncSessionQueue).not.toHaveBeenCalled();
   });
 
+  it('records a queueRun mapping on run_started so queued sub-agent rows resolve their own run id (B6)', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: DRAINED_RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: {
+          status: 'running',
+          queue_item_id: QUEUED_ITEM_ID,
+        },
+      },
+    });
+
+    expect(harness.subAgentRunStatuses[`queueRun:${QUEUED_ITEM_ID}`]).toBe(
+      DRAINED_RUN_ID,
+    );
+    expect(harness.subAgentRunStatuses[`run:${DRAINED_RUN_ID}`]).toBe(
+      'running',
+    );
+  });
+
   it('removes the queued item when an SSE run_started event carries its queue_item_id, without any chat.queue_list round-trip', () => {
     let capturedOnEvent = null;
     const subscribeRunEvents = vi.fn((_sseUrl, handlers) => {
