@@ -14,6 +14,7 @@ import {
   subAgentShouldFetchResult,
   subAgentToolStatusLabel,
   toolArgumentSummary,
+  visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { init } from '../i18n.js';
 
@@ -437,6 +438,36 @@ describe('chatTimelinePresentation', () => {
         toolStatus: 'cancelled',
       }),
     ).toBe(false);
+  });
+
+  it('does not mark streaming preview tool rows as cancellable', () => {
+    expect(
+      isRowCancellable({
+        kind: 'tool_call',
+        toolName: 'bash',
+        toolStatus: 'running',
+        streaming: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('renders a streaming preview tool row before its started event', () => {
+    const assistantRun = {
+      items: [
+        {
+          type: 'tool_call',
+          streaming: true,
+          name: 'session_search',
+          partialArgumentsText: '{"query": "ca',
+          startedEvent: null,
+          resultEvent: null,
+          stdout: '',
+          stderr: '',
+        },
+      ],
+    };
+
+    expect(visibleRunChildren(assistantRun)).toHaveLength(1);
   });
 
   it('does not mark non-bash tool rows as cancellable', () => {

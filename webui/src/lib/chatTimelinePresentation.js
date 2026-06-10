@@ -308,7 +308,13 @@ export const isRowCancellable = (row) => {
     return false;
   }
   if (row.kind === 'tool_call') {
-    return row.toolName === 'bash' && row.toolStatus === 'running';
+    // A streaming row only previews a tool call the model is still writing;
+    // there is no dispatched call to cancel yet.
+    return (
+      row.toolName === 'bash' &&
+      row.toolStatus === 'running' &&
+      row.streaming !== true
+    );
   }
   if (row.kind === 'sub_agent') {
     return row.dotStatus === 'running';
@@ -853,7 +859,11 @@ function shouldRenderToolCall(tool) {
     );
   }
   return Boolean(
-    tool.startedEvent || tool.resultEvent || tool.stdout || tool.stderr,
+    tool.startedEvent ||
+    tool.resultEvent ||
+    tool.stdout ||
+    tool.stderr ||
+    tool.streaming,
   );
 }
 
