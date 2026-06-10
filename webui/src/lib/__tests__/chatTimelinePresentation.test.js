@@ -5,6 +5,7 @@ import {
   isRowCancellable,
   subAgentDisplayResult,
   subAgentDotStatus,
+  subAgentNeedsStatusVerification,
   subAgentResultKey,
   subAgentResultTextFromMessages,
   subAgentRunDurationMs,
@@ -87,6 +88,55 @@ describe('chatTimelinePresentation', () => {
     });
 
     expect(status).toBe('success');
+  });
+
+  it('flags a frozen-descriptor running row for status verification when no live status has arrived', () => {
+    const tool = runningSubAgentTool();
+
+    // The dot says "running" but no run: or session: key exists in
+    // subAgentStatuses, so the only signal is the persisted descriptor.
+    expect(subAgentDotStatus(tool, null, {})).toBe('running');
+    expect(subAgentNeedsStatusVerification(tool, 'running', {})).toBe(true);
+  });
+
+  it('does not flag a row once a session status has arrived', () => {
+    const tool = runningSubAgentTool();
+
+    expect(
+      subAgentNeedsStatusVerification(tool, 'running', {
+        'session:worker::session-child': 'running',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not flag a row once a run status has arrived', () => {
+    const tool = runningSubAgentTool();
+
+    expect(
+      subAgentNeedsStatusVerification(tool, 'running', {
+        'run:run-child': 'completed',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not flag rows whose dot is not running', () => {
+    const tool = runningSubAgentTool();
+
+    expect(subAgentNeedsStatusVerification(tool, 'success', {})).toBe(false);
+    expect(subAgentNeedsStatusVerification(tool, 'failed', {})).toBe(false);
+    expect(subAgentNeedsStatusVerification(tool, 'cancelled', {})).toBe(false);
+  });
+
+  it('tolerates a missing or malformed status map by treating it as empty', () => {
+    const tool = runningSubAgentTool();
+
+    expect(subAgentNeedsStatusVerification(tool, 'running', null)).toBe(true);
+    expect(subAgentNeedsStatusVerification(tool, 'running', undefined)).toBe(
+      true,
+    );
+    expect(subAgentNeedsStatusVerification(tool, 'running', 'not-a-map')).toBe(
+      true,
+    );
   });
 
   it('keys a sub-agent result by its target agent and session', () => {

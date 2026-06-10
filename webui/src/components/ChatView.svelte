@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
 
   import {
     cancelRun,
@@ -285,6 +286,119 @@
       availableSkills = [];
     }
   };
+
+  // Sub-agent status self-heal lookup. When a sub-agent tool row's dot shows
+  // "running" but no live status has been recorded in `subAgentRunStatuses`,
+  // the row's "running" belief comes from a frozen persisted descriptor alone
+  // (typical after a page refresh, a missed terminal event, a rolled replay
+  // buffer, or a server restart that killed the child). This path asks the
+  // server for the child's durable truth (`chat.history` → `active_run` or the
+  // last `run_summary`) and projects it into the same `run:`/`session:` keys
+  // the run stream would have written, so the dot settles correctly without
+  // depending on event replay. The once-per-key guard prevents re-verification
+  // churn across re-renders; the error path releases the guard so a later
+  // attempt can retry (unlike `requestSubAgentResult` / `subAgentResults` which
+  // cache failures permanently — see handoff3 B6).
+  const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
+  const subAgentStatusVerificationKeys = new SvelteSet();
+  const subAgentStatusInflightKeys = new SvelteSet();
+  const handleVerifySubAgentStatus = async (agentId, sessionId, runId) => {
+    if (!agentId || !sessionId) {
+      return;
+    }
+    const trimmedRunId = typeof runId === 'string' ? runId.trim() : '';
+    const key = trimmedRunId || `${agentId}::${sessionId}`;
+    if (
+      subAgentStatusVerificationKeys.has(key) ||
+      subAgentStatusInflightKeys.has(key)
+    ) {
+      return;
+    }
+    subAgentStatusInflightKeys.add(key);
+    try {
+      const history = await rpc('chat.history', {
+        agent_id: agentId,
+        session_id: sessionId,
+        limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
+      });
+      const updates = {};
+      if (history?.active_run) {
+        const activeRunId =
+          typeof history.active_run.run_id === 'string'
+            ? history.active_run.run_id.trim()
+            : '';
+        if (activeRunId) {
+          updates[`run:${activeRunId}`] = 'running';
+        }
+        updates[`session:${agentId}::${sessionId}`] = 'running';
+      } else {
+        const messages = Array.isArray(history?.messages)
+          ? history.messages
+          : [];
+        let summary = null;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index];
+          if (!message || message.role !== 'run_summary') {
+            continue;
+          }
+          if (trimmedRunId) {
+            const summaryRunId =
+              typeof message.run_id === 'string' ? message.run_id.trim() : '';
+            if (summaryRunId !== trimmedRunId) {
+              continue;
+            }
+          }
+          summary = message;
+          break;
+        }
+        const status = summary
+          ? normalizeSubAgentRunSummaryStatus(summary.status)
+          : 'completed';
+        const summaryRunId = summary
+          ? typeof summary.run_id === 'string'
+            ? summary.run_id.trim()
+            : ''
+          : '';
+        const runKey = trimmedRunId || summaryRunId;
+        if (runKey) {
+          updates[`run:${runKey}`] = status;
+        }
+        updates[`session:${agentId}::${sessionId}`] = status;
+        const durationMs = summary?.timing?.duration_ms;
+        if (Number.isFinite(durationMs) && durationMs >= 0) {
+          if (runKey) {
+            updates[`runDuration:${runKey}`] = durationMs;
+          }
+          updates[`sessionDuration:${agentId}::${sessionId}`] = durationMs;
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
+      }
+      subAgentStatusVerificationKeys.add(key);
+    } catch {
+      // Release the guard so a later attempt can retry; verification
+      // failures are never cached (contrast with `subAgentResults`).
+    } finally {
+      subAgentStatusInflightKeys.delete(key);
+    }
+  };
+
+  // Normalizes a `run_summary` message's terminal `status` into one of the
+  // status values `statusFromRunEvent` produces (`completed`/`failed`/
+  // `cancelled`). Anything unrecognised falls back to `completed` so the dot
+  // settles to success and the row can fetch its result instead of staying
+  // stuck on `running` forever.
+  function normalizeSubAgentRunSummaryStatus(value) {
+    const status = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (status === 'failed' || status === 'error') {
+      return 'failed';
+    }
+    if (status === 'cancelled' || status === 'canceled') {
+      return 'cancelled';
+    }
+    return 'completed';
+  }
 
   const loadAgents = async (options = {}) => {
     chatState.loadingAgents = true;
@@ -721,6 +835,14 @@
     await handleRetry();
   }
 
+  // Exposed for tests and for the run-component verification wiring
+  // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
+  // → subAgentNeedsStatusVerification). Returns a promise that resolves when
+  // the verification round-trip finishes.
+  export async function verifySubAgentStatus(agentId, sessionId, runId) {
+    await handleVerifySubAgentStatus(agentId, sessionId, runId);
+  }
+
   const handleRemoveQueuedMessage = async (queuedMessageId) => {
     const sessionState = activeSessionState;
     const agent = activeAgent;
@@ -867,6 +989,7 @@
             onLoadOlder={loadOlderHistory}
             onNavigateToSubAgent={navigateToSubAgent}
             onRequestSubAgentResult={requestSubAgentResult}
+            onVerifySubAgentStatus={verifySubAgentStatus}
             onRetry={handleRetry}
             onCancelToolCall={handleCancelToolCall}
             onCancelSubAgent={handleCancelSubAgent}
