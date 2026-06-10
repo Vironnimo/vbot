@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -18,7 +19,11 @@ from core.chat.content_blocks import (
 )
 from core.chat.errors import ChatError, ChatMessageValidationError
 from core.sessions import ChatSession, is_skill_context_note
+from core.tools import tool_failure
 from core.utils.tokens import estimate_message_tokens
+
+INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
+INTERRUPTED_TOOL_RESULT_MESSAGE = "Tool run was interrupted before a result was recorded."
 
 MessageRole = Literal[
     "system",
@@ -461,6 +466,11 @@ def _messages_from_boundary(messages: list[ChatMessage], boundary_id: str) -> li
 
 
 def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
+    request_messages = _assemble_request_history(messages)
+    return _repair_dangling_tool_calls(request_messages)
+
+
+def _assemble_request_history(messages: list[ChatMessage]) -> list[JsonObject]:
     request_messages: list[JsonObject] = []
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
@@ -508,6 +518,79 @@ def _embed_notes_into_request(messages: list[ChatMessage]) -> list[JsonObject]:
         request_messages.append(_notes_to_synthetic_user_message(pending_notes))
 
     return request_messages
+
+
+def _repair_dangling_tool_calls(request_messages: list[JsonObject]) -> list[JsonObject]:
+    """Ensure every assistant tool_call_id is answered before the next non-tool message.
+
+    If a session history contains an assistant turn with ``tool_calls`` whose
+    results were never persisted (e.g. cancelled run, process kill, or write-side
+    bug), providers reject the malformed history with HTTP 400 and the session
+    becomes unusable. This post-pass synthesizes a stable failure envelope for
+    every missing ``tool_call_id`` immediately after the dangling assistant
+    turn, in the assistant's original tool-call order. The synthesized entries
+    exist only in the request payload — they are never written to JSONL.
+    """
+    repaired: list[JsonObject] = []
+    pending_tool_calls: list[JsonObject] = []
+    for message in request_messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            _flush_pending_tool_calls(repaired, pending_tool_calls)
+            pending_tool_calls = list(_iter_assistant_tool_calls(message))
+            repaired.append(message)
+            continue
+        if message.get("role") == "tool":
+            repaired.append(message)
+            continue
+        _flush_pending_tool_calls(repaired, pending_tool_calls)
+        pending_tool_calls = []
+        repaired.append(message)
+    _flush_pending_tool_calls(repaired, pending_tool_calls)
+    return repaired
+
+
+def _flush_pending_tool_calls(
+    output: list[JsonObject], pending_tool_calls: list[JsonObject]
+) -> None:
+    """Synthesize a tool result for every pending call not yet answered by output."""
+    answered_ids = _answered_tool_call_ids(output)
+    for tool_call in pending_tool_calls:
+        if tool_call.get("id") in answered_ids:
+            continue
+        output.append(_synthesize_interrupted_tool_result(tool_call))
+
+
+def _answered_tool_call_ids(messages: list[JsonObject]) -> set[str]:
+    answered: set[str] = set()
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        if isinstance(tool_call_id, str) and tool_call_id:
+            answered.add(tool_call_id)
+    return answered
+
+
+def _iter_assistant_tool_calls(message: JsonObject) -> list[JsonObject]:
+    raw_tool_calls = message.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return []
+    return [tool_call for tool_call in raw_tool_calls if isinstance(tool_call, dict)]
+
+
+def _synthesize_interrupted_tool_result(tool_call: JsonObject) -> JsonObject:
+    tool_name = tool_call.get("name")
+    name = tool_name if isinstance(tool_name, str) and tool_name else "unknown"
+    envelope = tool_failure(
+        INTERRUPTED_TOOL_RESULT_CODE,
+        INTERRUPTED_TOOL_RESULT_MESSAGE,
+    )
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call.get("id", ""),
+        "name": name,
+        "content": json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+    }
 
 
 def _notes_to_synthetic_user_message(notes: list[ChatMessage]) -> JsonObject:

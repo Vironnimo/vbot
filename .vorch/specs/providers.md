@@ -52,6 +52,9 @@ Provider configuration, credential resolution, adapter creation, retry/error cla
 - Sparse OpenAI-compatible catalogs remain usable as text chat catalogs. Missing optional facts are unknown, not authoritative negatives, unless the provider-specific adapter says otherwise.
 - Subclass `OpenAICompatibleAdapter` only when runtime behavior, streaming, reasoning, catalog normalization, or request policy differs from the generic `/chat/completions` contract.
 - Token values, API keys, authorization codes, user codes, refresh tokens, and account ids must never be logged.
+- None-valued caller kwargs are treated as not specified — adapters drop them before building payloads; provider defaults then apply. Falsy-but-not-None values (e.g. `temperature=0.0`) survive the filter and continue to override defaults.
+- Every httpx transport failure is classified into a vBot error type: `httpx.TimeoutException` (and its subclasses — `ConnectTimeout`, `ReadTimeout`, `PoolTimeout`, `WriteTimeout`) → `ProviderTimeoutError`; every other `httpx.TransportError` (`ConnectError`, `ReadError`, `WriteError`, `RemoteProtocolError`, `LocalProtocolError`, `ProtocolError`, …) → `NetworkError`. Both stay retryable so `retry_async` re-attempts; the chat loop catches them and persists a `role: "error"` message.
+- A 2xx response with an unparseable JSON body is a fatal `ProviderError(retryable=False)` (mirroring how malformed SSE data is handled by `parse_sse_json_data`). The raw `json.JSONDecodeError` is preserved as `__cause__`.
 
 ## Constraints & Gotchas
 
