@@ -10,7 +10,7 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 ## Interfaces
 
-- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` — validates non-empty bytes, resolves the `speech_to_text` binding, then calls the selected local executor or provider speech client.
+- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` — validates non-empty bytes, resolves the `speech_to_text` binding, then calls the selected local executor or provider speech client. Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber to degrade audio attachments to text (see `.vorch/specs/attachments.md`).
 - `SpeechService.synthesize(text) -> SpeechSynthesisResult` — trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` — calls `synthesize()` and persists one runtime artifact under `<data_dir>/speech/`.
 - `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` — accepts only 32-character lowercase hex IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.

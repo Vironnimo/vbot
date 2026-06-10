@@ -569,6 +569,14 @@ def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# OpenAI `input_audio` parts accept exactly these formats; the chat layer's
+# native-audio gate mirrors this mapping.
+_OPENAI_INPUT_AUDIO_FORMATS = {
+    "audio/wav": "wav",
+    "audio/mpeg": "mp3",
+}
+
+
 def _to_openai_user_content(content: Any) -> Any:
     if not isinstance(content, list):
         return content
@@ -588,10 +596,21 @@ def _to_openai_user_content_part(part: Any) -> dict[str, Any]:
                 "media content block requires string base64 and media_type fields",
                 retryable=False,
             )
-        return {
-            "type": "image_url",
-            "image_url": {"url": f"data:{media_type};base64,{base64_data}"},
-        }
+        if media_type.startswith("image/"):
+            return {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{base64_data}"},
+            }
+        audio_format = _OPENAI_INPUT_AUDIO_FORMATS.get(media_type)
+        if audio_format is not None:
+            return {
+                "type": "input_audio",
+                "input_audio": {"data": base64_data, "format": audio_format},
+            }
+        raise ProviderError(
+            f"unsupported media type for OpenAI-compatible wire: {media_type}",
+            retryable=False,
+        )
 
     if part_type == "text":
         text = part.get("text")

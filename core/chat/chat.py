@@ -93,7 +93,7 @@ from core.chat.messages import (
 from core.chat.model_resolution import (
     _ensure_provider_exists,
     _first_usable_connection_id,
-    _model_has_vision,
+    _model_input_modalities,
     _resolve_agent_connection,
     _resolve_fallback,
     _split_agent_model,
@@ -350,7 +350,7 @@ class ChatLoop:
                 if isinstance(content, str):
                     _activate_triggered_skills(self._runtime, agent, session, content)
             run.raise_if_cancelled()
-            messages = self._build_request_messages(agent, session)
+            messages = await self._build_request_messages(agent, session)
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
             extension_registry = _runtime_extensions(self._runtime)
@@ -528,7 +528,7 @@ class ChatLoop:
                 raise
             return session_manager.create(agent_id, session_id=session_id)
 
-    def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
+    async def _build_request_messages(self, agent: Any, session: ChatSession) -> list[JsonObject]:
         system_prompt = self._runtime.system_prompts.build_system_prompt(agent)
         system_messages = (
             [ChatMessage.system(system_prompt, agent.model).to_dict()]
@@ -587,10 +587,10 @@ class ChatLoop:
         if current_user_message is None:
             return request_messages
 
-        return self._attachment_resolver.resolve_messages(
+        return await self._attachment_resolver.resolve_messages(
             request_messages,
             current_user_message_id=current_user_message.id,
-            vision_supported=_model_has_vision(self._runtime, agent),
+            input_modalities=_model_input_modalities(self._runtime, agent),
         )
 
     async def _send_until_final(
@@ -798,7 +798,7 @@ class ChatLoop:
 
         session.append(checkpoint)
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
-        rebuilt_messages = self._build_request_messages(agent, session)
+        rebuilt_messages = await self._build_request_messages(agent, session)
         return _restore_active_tool_continuation(rebuilt_messages, messages)
 
     def _resolve_context_window(self, agent: Any) -> int | None:

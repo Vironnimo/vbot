@@ -755,7 +755,7 @@ def test_compaction_build_request_messages_without_checkpoint_keeps_existing_pat
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
 
-    request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
 
     assert [message["role"] for message in request_messages] == ["system", "user", "assistant"]
     assert request_messages[1]["content"] == "Hi"
@@ -783,7 +783,7 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
         )
     )
 
-    request_messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
 
     assert [message["role"] for message in request_messages] == [
@@ -827,7 +827,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    messages = await ChatLoop(runtime)._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     result = await ChatLoop(
@@ -876,7 +876,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     )
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
-    messages = ChatLoop(runtime)._build_request_messages(agent, session)
+    messages = await ChatLoop(runtime)._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     result = await ChatLoop(
@@ -928,7 +928,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = loop._build_request_messages(agent, session)
+    messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     rebuilt = await loop._maybe_auto_compact(
@@ -987,7 +987,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malfo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = loop._build_request_messages(agent, session)
+    messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await loop._maybe_auto_compact(
@@ -1037,7 +1037,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_loo
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = loop._build_request_messages(agent, session)
+    messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     await loop._maybe_auto_compact(
@@ -1086,7 +1086,7 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
     session.append(ChatMessage.user("Hi"))
     session.append(ChatMessage.assistant(model=agent.model, content="Hello"))
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
-    messages = loop._build_request_messages(agent, session)
+    messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
 
     with caplog.at_level("WARNING"):

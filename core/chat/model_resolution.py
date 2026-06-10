@@ -39,15 +39,17 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     return provider_id, model_id
 
 
-def _model_has_vision(runtime: Any, agent: Any) -> bool:
+def _model_input_modalities(runtime: Any, agent: Any) -> frozenset[str]:
+    """Return the agent model's input modalities, empty when the model is unknown."""
     try:
         provider_id, model_id = _split_agent_model(agent.model)
         model = runtime.models.get(provider_id, model_id)
     except Exception:
-        return False
+        return frozenset()
 
     capabilities = getattr(model, "capabilities", None)
-    return bool(getattr(capabilities, "vision", False))
+    modalities = getattr(capabilities, "input_modalities", ()) or ()
+    return frozenset(str(modality) for modality in modalities)
 
 
 def _resolve_agent_connection(runtime: Any, agent: Any) -> tuple[str, str]:

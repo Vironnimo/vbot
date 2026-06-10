@@ -364,6 +364,14 @@ class TestSendRequestFormat:
         with pytest.raises(ProviderError, match="media content block requires"):
             _to_anthropic_user_content_block(invalid_block)
 
+    @pytest.mark.parametrize("media_type", ["audio/wav", "audio/ogg", "video/mp4"])
+    def test_non_image_media_block_raises_clear_error(self, media_type):
+        """Anthropic's wire has no audio/video input; reject instead of mislabeling."""
+        block = {"type": "media", "base64": "YXVkaW8=", "media_type": media_type}
+
+        with pytest.raises(ProviderError, match="supports only image media blocks"):
+            _to_anthropic_user_content_block(block)
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_send_maps_user_text_blocks_to_anthropic_text_parts(self, anthropic_adapter):

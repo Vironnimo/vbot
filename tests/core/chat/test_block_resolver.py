@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +15,15 @@ from core.attachments import AttachmentStore
 from core.chat import ChatError, ChatLoop, ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
+from core.speech import SpeechExecutionError
+
+TEXT_IMAGE = frozenset({"text", "image"})
+TEXT_ONLY = frozenset({"text"})
+TEXT_IMAGE_AUDIO = frozenset({"text", "image", "audio"})
+
+WAV_BYTES = b"RIFF\x24\x00\x00\x00WAVEfmt wav-payload"
+OGG_BYTES = b"OggS\x00\x02voice-payload"
+MP4_BYTES = b"\x00\x00\x00\x18ftypisomvideo-payload"
 
 
 class _StubPrompts:
@@ -29,32 +41,54 @@ class _StubAgent:
         self.model = model
 
 
+class _StubTranscriber:
+    def __init__(self, text: str = "hello from speech") -> None:
+        self.text = text
+        self.calls: list[tuple[str, str]] = []
+
+    async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+        self.calls.append((filename, media_type))
+        return SimpleNamespace(text=self.text)
+
+
+class _FailingTranscriber:
+    async def transcribe(self, audio: bytes, *, filename: str, media_type: str) -> object:
+        raise SpeechExecutionError("provider unavailable")
+
+
+def _media_message(record: Any, *, message_id: str = "user-current") -> dict:
+    return {
+        "id": message_id,
+        "role": "user",
+        "content": [
+            {
+                "type": "media",
+                "attachment_id": record.id,
+                "filename": record.filename,
+                "media_type": record.media_type,
+            }
+        ],
+    }
+
+
+def _resolve(resolver: ContentBlockResolver, messages: list[dict], **kwargs) -> list[dict]:
+    return asyncio.run(resolver.resolve_messages(messages, **kwargs))
+
+
 def test_current_turn_image_media_block_resolves_to_base64(tmp_path: Path) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
     image_bytes = b"\x89PNG\r\n\x1a\nimage-bytes"
     record = store.store("photo.png", image_bytes)
     resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-current",
-            "role": "user",
-            "content": [
-                {
-                    "type": "media",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                }
-            ],
-        }
-    ]
+    messages = [_media_message(record)]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
         current_user_message_id="user-current",
-        vision_supported=True,
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -78,26 +112,14 @@ def test_historical_turn_image_resolves_to_placeholder_text(tmp_path: Path) -> N
     store = AttachmentStore(tmp_path)
     record = store.store("old-photo.png", b"\x89PNG\r\n\x1a\nold")
     resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-historical",
-            "role": "user",
-            "content": [
-                {
-                    "type": "media",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                }
-            ],
-        }
-    ]
+    messages = [_media_message(record, message_id="user-historical")]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
         current_user_message_id="other-message",
-        vision_supported=True,
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -120,26 +142,14 @@ def test_historical_turn_image_with_deleted_attachment_degrades_gracefully(
     record = store.store("gone.png", b"\x89PNG\r\n\x1a\ngone")
     store.delete(record.id)
     resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-historical",
-            "role": "user",
-            "content": [
-                {
-                    "type": "media",
-                    "attachment_id": record.id,
-                    "filename": "gone.png",
-                    "media_type": "image/png",
-                }
-            ],
-        }
-    ]
+    messages = [_media_message(record, message_id="user-historical")]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
         current_user_message_id="other-message",
-        vision_supported=True,
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -158,7 +168,6 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
     record = store.store("report.pdf", b"%PDF-1.7\n1 0 obj\n")
     resolver = ContentBlockResolver(store)
     message_id = "user-current" if current_turn else "user-historical"
-    current_id = "user-current"
     messages = [
         {
             "id": message_id,
@@ -175,10 +184,11 @@ def test_file_block_resolves_to_text_path_note(tmp_path: Path, current_turn: boo
     ]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
-        current_user_message_id=current_id,
-        vision_supported=True,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -196,7 +206,6 @@ def test_text_block_resolves_to_text_dict(tmp_path: Path, current_turn: bool) ->
     store = AttachmentStore(tmp_path)
     resolver = ContentBlockResolver(store)
     message_id = "user-current" if current_turn else "user-historical"
-    current_id = "user-current"
     messages = [
         {
             "id": message_id,
@@ -206,10 +215,11 @@ def test_text_block_resolves_to_text_dict(tmp_path: Path, current_turn: bool) ->
     ]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
-        current_user_message_id=current_id,
-        vision_supported=True,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -221,31 +231,226 @@ def test_current_turn_image_raises_when_vision_not_supported(tmp_path: Path) -> 
     store = AttachmentStore(tmp_path)
     record = store.store("photo.png", b"\x89PNG\r\n\x1a\nimage")
     resolver = ContentBlockResolver(store)
-    messages = [
-        {
-            "id": "user-current",
-            "role": "user",
-            "content": [
-                {
-                    "type": "media",
-                    "attachment_id": record.id,
-                    "filename": record.filename,
-                    "media_type": record.media_type,
-                }
-            ],
-        }
-    ]
+    messages = [_media_message(record)]
 
     # Act / Assert
     with pytest.raises(
         ChatError,
         match="Model does not support vision; cannot process image attachment",
     ):
-        resolver.resolve_messages(
+        _resolve(
+            resolver,
             messages,
             current_user_message_id="user-current",
-            vision_supported=False,
+            input_modalities=TEXT_ONLY,
         )
+
+
+def test_current_turn_native_audio_resolves_to_base64_for_audio_model(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.wav", WAV_BYTES)
+    transcriber = _StubTranscriber()
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    messages = [_media_message(record)]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+
+    # Assert
+    assert resolved[0]["content"] == [
+        {
+            "type": "media",
+            "base64": base64.b64encode(WAV_BYTES).decode("ascii"),
+            "media_type": "audio/wav",
+        }
+    ]
+    assert transcriber.calls == []
+
+
+def test_current_turn_audio_degrades_to_transcription_without_audio_modality(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    transcriber = _StubTranscriber(text="hallo welt")
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    messages = [_media_message(record)]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    # Assert
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                "[Audio attachment voice.ogg (audio/ogg) — automatic transcription, "
+                "may contain recognition errors]:\nhallo welt"
+            ),
+        }
+    ]
+    assert transcriber.calls == [("voice.ogg", "audio/ogg")]
+    assert store.get(record.id).transcription == "hallo welt"
+
+
+def test_current_turn_ogg_audio_degrades_even_for_audio_model(tmp_path: Path) -> None:
+    # Ogg is outside the OpenAI input_audio format set, so the native path is gated off.
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    transcriber = _StubTranscriber(text="ogg transcript")
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    messages = [_media_message(record)]
+
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+
+    assert transcriber.calls == [("voice.ogg", "audio/ogg")]
+    assert resolved[0]["content"][0]["type"] == "text"
+    assert "ogg transcript" in resolved[0]["content"][0]["text"]
+
+
+def test_cached_transcription_is_reused_without_new_stt_call(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    store.set_transcription(record.id, "cached words")
+    transcriber = _StubTranscriber()
+    resolver = ContentBlockResolver(store, transcriber=transcriber)
+    messages = [_media_message(record)]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    # Assert
+    assert transcriber.calls == []
+    assert "cached words" in resolved[0]["content"][0]["text"]
+
+
+def test_historical_audio_with_cached_transcription_embeds_transcript(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    store.set_transcription(record.id, "what was said")
+    resolver = ContentBlockResolver(store, transcriber=_StubTranscriber())
+    messages = [_media_message(record, message_id="user-historical")]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="other-message",
+        input_modalities=TEXT_IMAGE,
+    )
+
+    # Assert
+    assert "what was said" in resolved[0]["content"][0]["text"]
+
+
+def test_historical_audio_without_transcription_resolves_to_path_note(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.wav", WAV_BYTES)
+    resolver = ContentBlockResolver(store, transcriber=_StubTranscriber())
+    messages = [_media_message(record, message_id="user-historical")]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="other-message",
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+
+    # Assert
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": (
+                f"[Audio from an earlier turn: clip.wav (audio/wav) — Path: {record.file_path}]"
+            ),
+        }
+    ]
+
+
+def test_current_turn_audio_without_transcriber_raises_clear_error(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    resolver = ContentBlockResolver(store)
+    messages = [_media_message(record)]
+
+    # Act / Assert
+    with pytest.raises(ChatError, match="no speech-to-text"):
+        _resolve(
+            resolver,
+            messages,
+            current_user_message_id="user-current",
+            input_modalities=TEXT_IMAGE,
+        )
+
+
+def test_current_turn_audio_transcription_failure_raises_chat_error(tmp_path: Path) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("voice.ogg", OGG_BYTES)
+    resolver = ContentBlockResolver(store, transcriber=_FailingTranscriber())
+    messages = [_media_message(record)]
+
+    # Act / Assert
+    with pytest.raises(ChatError, match="could not be transcribed"):
+        _resolve(
+            resolver,
+            messages,
+            current_user_message_id="user-current",
+            input_modalities=TEXT_IMAGE,
+        )
+
+
+@pytest.mark.parametrize("current_turn", [True, False])
+def test_video_block_resolves_to_path_note(tmp_path: Path, current_turn: bool) -> None:
+    # Arrange
+    store = AttachmentStore(tmp_path)
+    record = store.store("clip.mp4", MP4_BYTES)
+    resolver = ContentBlockResolver(store)
+    message_id = "user-current" if current_turn else "user-historical"
+    messages = [_media_message(record, message_id=message_id)]
+
+    # Act
+    resolved = _resolve(
+        resolver,
+        messages,
+        current_user_message_id="user-current",
+        input_modalities=TEXT_IMAGE_AUDIO,
+    )
+
+    # Assert
+    assert resolved[0]["content"] == [
+        {
+            "type": "text",
+            "text": f"[Video: clip.mp4 (video/mp4) — Path: {record.file_path}]",
+        }
+    ]
 
 
 def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
@@ -271,10 +476,11 @@ def test_mixed_text_and_image_blocks_resolve_in_order(tmp_path: Path) -> None:
     ]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
         current_user_message_id="user-current",
-        vision_supported=True,
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -298,10 +504,11 @@ def test_string_content_messages_pass_through_unmodified(tmp_path: Path) -> None
     ]
 
     # Act
-    resolved = resolver.resolve_messages(
+    resolved = _resolve(
+        resolver,
         messages,
         current_user_message_id="u1",
-        vision_supported=True,
+        input_modalities=TEXT_IMAGE,
     )
 
     # Assert
@@ -331,7 +538,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
     loop = ChatLoop(_StubRuntime(), attachment_resolver=ContentBlockResolver(store))
 
     # Act
-    request_messages = loop._build_request_messages(_StubAgent(), session)
+    request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))
 
     # Assert
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
@@ -358,7 +565,7 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     loop = ChatLoop(_StubRuntime(), attachment_resolver=resolver)
 
     # Act
-    request_messages = loop._build_request_messages(_StubAgent(), session)
+    request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))
 
     # Assert
     resolver.resolve_messages.assert_not_called()

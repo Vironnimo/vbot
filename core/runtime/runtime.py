@@ -293,7 +293,7 @@ class Runtime:
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
-        resolver = ContentBlockResolver(self._attachment_store)
+        resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
         self._chat_loop = ChatLoop(self, streaming=False, attachment_resolver=resolver)
         self._streaming_chat_loop = ChatLoop(self, streaming=True, attachment_resolver=resolver)
         self._trigger_service = TriggerService(
