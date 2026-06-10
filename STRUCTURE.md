@@ -35,33 +35,22 @@ as part of that reducer. Delete `streamingItems`, the dead render branch, and on
 
 ---
 
-## 2. Bound client-side growth and render cost (includes bug B10)
+## 2. Bound client-side growth and render cost (includes bug B10) — ✅ resolved 2026-06-10
 
-**Problem:** several structures grow unboundedly for the lifetime of a tab/session view:
+Shipped (`webui/src/lib/clientCaches.js`; spec note in `.vorch/specs/webui.md` → State Flows):
 
-- `sessionState.runEvents` keeps every non-delta event of every run while the user stays on a
-  session (`loadHistory` only clears on navigation when idle). The timeline projection
-  (`visibleTimelineItemsForRender`) and `timelineSignature` re-walk **everything** on every flush —
-  up to every 33 ms while streaming. Render cost grows linearly with session age; likely the main
-  source of chat sluggishness in long sessions.
-- `subAgentRunStatuses` in ChatView records `run:` / `session:` / `runDuration:` /
-  `sessionDuration:` entries for *every* run of *every* session (`trackSubAgentRunStatus` does not
-  filter to sub-agents).
-- `handledRunServerEventKeys` in `chatRunStream.js` adds one key per WS run event, never pruned.
-- `subAgentResults` caches child outputs (potentially large strings) per child session, never
-  evicted.
+- `handledRunServerEventKeys` is a capped insertion-ordered key set (cap > App.svelte's bounded
+  500-event `runServerEvents` window).
+- `subAgentRunStatuses` and `subAgentResults` are LRU-capped; evicting a `run:`/`session:` status
+  key releases its verification guard so still-rendered rows can self-heal again.
+- `loadHistory` prunes retained `runEvents` of non-active runs whose output the fresh history
+  fully persists (event-level counterpart of `dropPersistedInactiveLiveRuns`).
+- `chatTimeline` memoizes the projected `assistant_run` item of terminal runs per session+run, so
+  the ≤33 ms streaming flush only rebuilds the active run's projection.
 
-**Direction:**
-- Prune run events of terminal runs whose output is persisted (the
-  `liveRunOutputPersistedInHistory` predicate already exists) after a history refresh, or cap
-  per-session retained runs.
-- Memoize the per-run timeline projection keyed by `run_id` + progress key
-  (`assistantRunChildProgressKey` exists) so a delta flush only re-projects the active run.
-- Cap the status/dedup maps (simple LRU or drop-on-terminal).
-
-**Files:** `webui/src/lib/chatState.js`, `webui/src/lib/chatTimeline.js`,
-`webui/src/lib/chatRunStream.js`, `webui/src/components/ChatView.svelte`,
-`webui/src/components/ChatTimeline.svelte`.
+Accepted residual: `runEvents` of the viewed session still grows with genuinely viewed scrollback
+between history loads — that is retained content, and its per-flush render cost is now bounded by
+the memoization.
 
 ---
 

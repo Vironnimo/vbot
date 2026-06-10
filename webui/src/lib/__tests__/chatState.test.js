@@ -3634,6 +3634,85 @@ describe('chat state helpers', () => {
   });
 });
 
+describe('loadHistory run-event pruning during an active run (handoff3 B10)', () => {
+  function seedFinishedRunEvents(sessionState, runId, messageId) {
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: runId,
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: runId,
+      sequence: 2,
+      payload: {
+        message: { id: messageId, role: 'assistant', content: 'Done.' },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: runId,
+      sequence: 3,
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+  }
+
+  it('drops events of a finished run whose output the loaded history persists, keeping the active run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-prune',
+    );
+    seedFinishedRunEvents(sessionState, 'run-finished', 'assistant-finished');
+    startRun(sessionState, {
+      run_id: 'run-active',
+      sse_url: '/api/runs/run-active/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          type: 'run_started',
+          run_id: 'run-active',
+          sequence: 1,
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+      ],
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      { id: 'assistant-finished', role: 'assistant', content: 'Done.' },
+      { id: 'user-two', role: 'user', content: 'Again' },
+    ]);
+
+    expect(sessionState.runEvents.map((event) => event.run_id)).toEqual([
+      'run-active',
+    ]);
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+  });
+
+  it('keeps events of a finished run whose output is not yet in the loaded history page', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-prune-keep',
+    );
+    seedFinishedRunEvents(sessionState, 'run-finished', 'assistant-finished');
+    startRun(sessionState, {
+      run_id: 'run-active',
+      sse_url: '/api/runs/run-active/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    const runEventsBefore = [...sessionState.runEvents];
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+    ]);
+
+    expect(sessionState.runEvents).toEqual(runEventsBefore);
+  });
+});
+
 function countTimelineTextOccurrences(timelineItems, text) {
   let count = 0;
   for (const item of timelineItems) {

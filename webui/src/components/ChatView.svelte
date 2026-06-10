@@ -11,6 +11,10 @@
     subscribeRunEvents,
     updateQueueItem,
   } from '$lib/api.js';
+  import {
+    mergeBoundedEntries,
+    subAgentGuardKeysForEvictedStatuses,
+  } from '$lib/clientCaches.js';
   import { t } from '$lib/i18n.js';
   import {
     subAgentResultData,
@@ -82,6 +86,13 @@
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
+  // Both caches grow per run/spawn for the lifetime of the tab (handoff3
+  // B10), so they are LRU-capped. Statuses are tiny strings — a generous cap
+  // keeps every plausibly rendered row covered (~5 entries per run). Results
+  // hold full child outputs, so the cap is much tighter; an evicted entry of
+  // a still-rendered row simply refetches (missing entries allow fetch).
+  const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
+  const SUBAGENT_RESULT_CACHE_LIMIT = 100;
   let actionInfoTimeoutId = null;
 
   let activeAgent = $derived(getActiveAgent());
@@ -302,6 +313,30 @@
   const SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT = 20;
   const subAgentStatusVerificationKeys = new SvelteSet();
   const subAgentStatusInflightKeys = new SvelteSet();
+
+  // Single write path for the status projection: LRU-merge under the cap and
+  // release the verification guards of evicted `run:`/`session:` keys, so a
+  // still-rendered row whose status entry aged out can self-heal again
+  // instead of showing a frozen "running" dot behind a spent guard.
+  const applySubAgentRunStatusUpdates = (updates) => {
+    const { entries, evictedKeys } = mergeBoundedEntries(
+      subAgentRunStatuses,
+      updates,
+      SUBAGENT_STATUS_CACHE_LIMIT,
+    );
+    subAgentRunStatuses = entries;
+    for (const guardKey of subAgentGuardKeysForEvictedStatuses(evictedKeys)) {
+      subAgentStatusVerificationKeys.delete(guardKey);
+    }
+  };
+
+  const setSubAgentResultEntry = (key, entry) => {
+    subAgentResults = mergeBoundedEntries(
+      subAgentResults,
+      { [key]: entry },
+      SUBAGENT_RESULT_CACHE_LIMIT,
+    ).entries;
+  };
   const handleVerifySubAgentStatus = async (agentId, sessionId, runId) => {
     if (!agentId || !sessionId) {
       return;
@@ -386,7 +421,7 @@
         }
       }
       if (Object.keys(updates).length > 0) {
-        subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
+        applySubAgentRunStatusUpdates(updates);
       }
       subAgentStatusVerificationKeys.add(key);
     } catch {
@@ -523,10 +558,7 @@
     if (!subAgentResultEntryAllowsFetch(subAgentResults[key])) {
       return;
     }
-    subAgentResults = {
-      ...subAgentResults,
-      [key]: { loading: true, result: '' },
-    };
+    setSubAgentResultEntry(key, { loading: true, result: '' });
     try {
       const history = await rpc('chat.history', {
         agent_id: agentId,
@@ -534,23 +566,17 @@
         limit: SUBAGENT_RESULT_HISTORY_LIMIT,
       });
       const result = subAgentResultTextFromMessages(history.messages ?? []);
-      subAgentResults = {
-        ...subAgentResults,
-        [key]: { loading: false, result },
-      };
+      setSubAgentResultEntry(key, { loading: false, result });
     } catch {
       // Non-critical: the user can still open the sub-agent session directly.
       // Marked as a retryable failure instead of a permanent empty result, so
       // a transient chat.history error does not blank the row forever.
-      subAgentResults = {
-        ...subAgentResults,
-        [key]: {
-          loading: false,
-          result: '',
-          error: true,
-          failedAt: Date.now(),
-        },
-      };
+      setSubAgentResultEntry(key, {
+        loading: false,
+        result: '',
+        error: true,
+        failedAt: Date.now(),
+      });
     }
   };
 
@@ -910,9 +936,7 @@
     setActionError: (message) => {
       actionError = message;
     },
-    updateSubAgentRunStatuses: (updates) => {
-      subAgentRunStatuses = { ...subAgentRunStatuses, ...updates };
-    },
+    updateSubAgentRunStatuses: applySubAgentRunStatusUpdates,
   });
 </script>
 
