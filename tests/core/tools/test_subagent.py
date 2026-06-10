@@ -218,9 +218,18 @@ class FakeChatLoop:
     seen_depths: list[int] = []
     seen_streaming: list[bool] = []
 
-    def __init__(self, runtime: Any, *, streaming: bool = False) -> None:
+    def __init__(
+        self,
+        runtime: Any,
+        *,
+        streaming: bool = False,
+        attachment_resolver: Any | None = None,
+        compaction_service: Any | None = None,
+    ) -> None:
         self._runtime = runtime
         self._streaming = streaming
+        self._attachment_resolver = attachment_resolver
+        self._compaction_service = compaction_service
         self._nesting_depth = 0
         self.seen_streaming.append(streaming)
 
@@ -988,6 +997,50 @@ async def test_subagent_tool_self_spawns_non_blocking_and_propagates_depth(
     assert manager.started[0][0] == "parent"
     assert FakeChatLoop.seen_depths == [4]
     assert FakeChatLoop.seen_streaming == [True]
+
+
+async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
+    # Arrange
+    resolver = object()
+    compaction_service = object()
+    parent_loop = SimpleNamespace(
+        _attachment_resolver=resolver,
+        _compaction_service=compaction_service,
+    )
+    runtime = SimpleNamespace(streaming_chat_loop=parent_loop)
+
+    # Act
+    sub_loop, _executor = subagent_module._make_subagent_executor(
+        runtime,
+        "worker",
+        "worker-session",
+        "do work",
+        make_context(nesting_depth=2),
+    )
+
+    # Assert
+    assert sub_loop._attachment_resolver is resolver
+    assert sub_loop._compaction_service is compaction_service
+    assert sub_loop._streaming is True
+    assert sub_loop._nesting_depth == 3
+
+
+async def test_make_subagent_executor_tolerates_runtime_without_streaming_loop() -> None:
+    # Arrange
+    runtime = SimpleNamespace()
+
+    # Act
+    sub_loop, _executor = subagent_module._make_subagent_executor(
+        runtime,
+        "worker",
+        "worker-session",
+        "do work",
+        make_context(),
+    )
+
+    # Assert
+    assert sub_loop._attachment_resolver is None
+    assert sub_loop._compaction_service is None
 
 
 async def test_subagent_completion_tracker_logs_unexpected_failures(
