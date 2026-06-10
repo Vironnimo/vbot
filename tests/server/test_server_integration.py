@@ -1,4 +1,4 @@
-"""Phase 4 backend contract coverage for the minimal WebUI."""
+"""Server integration tests using the real Runtime."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from server.app import create_app
 JsonObject = dict[str, Any]
 
 
-class Phase4Adapter:
+class StubAdapter:
     def __init__(self, *, block: bool = False) -> None:
         self._block = block
         self.request_started = asyncio.Event()
@@ -29,7 +29,7 @@ class Phase4Adapter:
         self.request_started.set()
         if self._block:
             await self.release.wait()
-        return {"content": "Phase 4 response", "tool_calls": None}
+        return {"content": "ok", "tool_calls": None}
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
         return response
@@ -38,21 +38,21 @@ class Phase4Adapter:
         self.request_started.set()
         if self._block:
             await self.release.wait()
-        yield {"type": "content_delta", "text": "Phase 4 response"}
+        yield {"type": "content_delta", "text": "ok"}
         yield {"type": "finish", "reason": "stop"}
 
 
-class Phase4Runtime(Runtime):
-    def __init__(self, config: Config, adapter: Phase4Adapter | None = None) -> None:
+class StubRuntime(Runtime):
+    def __init__(self, config: Config, adapter: StubAdapter | None = None) -> None:
         super().__init__(config)
-        self.adapter = adapter or Phase4Adapter()
+        self.adapter = adapter or StubAdapter()
 
     def get_adapter(self, _provider_id: str, _connection_id: str) -> ProviderAdapter:
         return cast(ProviderAdapter, self.adapter)
 
 
-def test_phase4_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
-    runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"))
+def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
+    runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
 
     with TestClient(app) as client:
@@ -77,8 +77,8 @@ def test_phase4_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
     }
 
 
-def test_phase4_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
-    runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"))
+def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
+    runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
 
     with TestClient(app) as client:
@@ -129,8 +129,8 @@ def test_phase4_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -
     assert delete_response.json()["result"]["agent_id"] == "coder"
 
 
-def test_phase4_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
-    runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"))
+def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
+    runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
     workspace = tmp_path / "outside"
 
@@ -159,8 +159,8 @@ def test_phase4_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> N
     assert (workspace / "SOUL.md").exists()
 
 
-def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
-    runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"))
+def test_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
+    runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
 
     with TestClient(app) as client:
@@ -201,9 +201,9 @@ def test_phase4_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
     ]
 
 
-def test_phase4_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
-    adapter = Phase4Adapter(block=True)
-    runtime = Phase4Runtime(Config(data_dir=tmp_path / "data"), adapter=adapter)
+def test_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
+    adapter = StubAdapter(block=True)
+    runtime = StubRuntime(Config(data_dir=tmp_path / "data"), adapter=adapter)
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:
