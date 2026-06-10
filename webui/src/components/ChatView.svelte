@@ -28,6 +28,7 @@
     markSessionError,
     prependHistory,
     removeQueuedMessage,
+    resetStaleRun,
     selectAgent,
     selectedAgent,
     setAgents,
@@ -338,6 +339,14 @@
     historyError = '';
     const sessionState = ensureSessionState(chatState, agentId, sessionId);
     runStream.closeSubscriptionsExcept(sessionState.key);
+    // Snapshot the run id we are about to ask the server about so the
+    // reconcile step below can distinguish a *stale* run (terminal event was
+    // missed, SSE gave up, bus buffer rolled, or the server restarted and
+    // the run is gone) from a *genuinely new* run that started between
+    // request and response — losing the latter would clobber state that
+    // the next WS `run_started` is about to re-establish. See plan
+    // `run-lifecycle-truth.md` Phase 2.1 "ChatView reconcile".
+    const staleRunId = sessionState.currentRun?.runId ?? '';
     try {
       const history = await rpc('chat.history', {
         agent_id: agentId,
@@ -347,6 +356,23 @@
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
       });
+      // History is the durable source of truth for which run is active. If
+      // it says "no active run" but the local state still claims a run is
+      // running *with the same run id we had before the request*, that run
+      // is dead — reset the live state and drop the SSE subscription so
+      // `canCreateNewSession(...)` unblocks and the timeline falls back to
+      // the just-loaded history. The `staleRunId === currentRun.runId`
+      // guard prevents a race where a new run legitimately started
+      // between request and response (a WS `run_started` will reassert
+      // running state for the new run).
+      if (
+        !history.active_run &&
+        isRunActive(sessionState) &&
+        sessionState.currentRun?.runId === staleRunId
+      ) {
+        resetStaleRun(sessionState);
+        runStream.closeSubscriptionFor(sessionState.key);
+      }
       runStream.attachRunStream(sessionState, history.active_run);
       await syncSessionQueue(sessionState);
     } catch (error) {

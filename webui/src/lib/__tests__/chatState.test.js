@@ -4,6 +4,7 @@ import {
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_CANCELLED,
   CHAT_STATUS_FAILED,
+  CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
   assistantRunChildProgressKey,
   addServerQueuedMessage,
@@ -14,8 +15,10 @@ import {
   ensureSessionState,
   highestContiguousRunEventSequence,
   highestRunEventSequence,
+  isRunActive,
   loadHistory,
   removeQueuedMessage,
+  resetStaleRun,
   selectedAgent,
   setAgents,
   syncQueueFromServer,
@@ -3504,6 +3507,130 @@ describe('chat state helpers', () => {
       input_tokens: 8432,
       output_tokens: 512,
     });
+  });
+
+  it('resetStaleRun clears the live run state while preserving history and run events', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-stale',
+    );
+
+    // Seed the session with a running run, some streamed content, and a
+    // tool-call phase transition so streamingPhase is non-zero before reset.
+    startRun(sessionState, {
+      run_id: 'run-stale',
+      sse_url: '/api/runs/run-stale/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          sequence: 1,
+          run_id: 'run-stale',
+          type: 'run_started',
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+        {
+          sequence: 2,
+          run_id: 'run-stale',
+          type: 'reasoning_delta',
+          payload: { reasoning_delta: 'thinking...' },
+        },
+        {
+          sequence: 3,
+          run_id: 'run-stale',
+          type: 'tool_call_started',
+          payload: {
+            tool_call: {
+              id: 'call-one',
+              index: 0,
+              name: 'read',
+              arguments: {},
+            },
+          },
+        },
+        {
+          sequence: 4,
+          run_id: 'run-stale',
+          type: 'assistant_output_delta',
+          payload: { content_delta: 'partial response' },
+        },
+      ],
+    });
+
+    // Confirm preconditions: the session is running with live run state
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.streamStatus).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.currentRun).toEqual({
+      runId: 'run-stale',
+      sseUrl: '/api/runs/run-stale/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    expect(sessionState.streamingItems).not.toHaveLength(0);
+    expect(sessionState.streamingRunEvents).not.toHaveLength(0);
+    expect(sessionState.seenStreamingEventKeys.size).toBeGreaterThan(0);
+    expect(sessionState.streamingPhase).toBeGreaterThan(0);
+    expect(sessionState.runEvents).not.toHaveLength(0);
+    expect(sessionState.messages).toEqual([]);
+
+    const runEventsBefore = sessionState.runEvents.slice();
+
+    resetStaleRun(sessionState);
+
+    // After reset: live run state is cleared
+    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.streamStatus).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.currentRun).toBeNull();
+    expect(sessionState.streamingItems).toEqual([]);
+    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(sessionState.streamingPhase).toBe(0);
+    expect(sessionState.seenStreamingEventKeys).toEqual(new Set());
+
+    // History source (about to be reloaded) is preserved
+    expect(sessionState.runEvents).toEqual(runEventsBefore);
+
+    // canCreateNewSession now allows a new session because no run is active
+    expect(canCreateNewSession(sessionState)).toBe(true);
+    expect(isRunActive(sessionState)).toBe(false);
+  });
+
+  it('resetStaleRun leaves loaded messages intact', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-stale-history',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      { id: 'assistant-one', role: 'assistant', content: 'Hello!' },
+    ]);
+    startRun(sessionState, {
+      run_id: 'run-history',
+      sse_url: '/api/runs/run-history/events',
+      status: CHAT_STATUS_RUNNING,
+      events: [
+        {
+          sequence: 1,
+          run_id: 'run-history',
+          type: 'run_started',
+          payload: { status: CHAT_STATUS_RUNNING },
+        },
+      ],
+    });
+
+    const messagesBefore = sessionState.messages;
+    const runEventsBefore = sessionState.runEvents.slice();
+
+    resetStaleRun(sessionState);
+
+    expect(sessionState.messages).toBe(messagesBefore);
+    expect(sessionState.messages).toEqual([
+      { id: 'user-one', role: 'user', content: 'Hi' },
+      { id: 'assistant-one', role: 'assistant', content: 'Hello!' },
+    ]);
+    expect(sessionState.runEvents).toEqual(runEventsBefore);
+    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.currentRun).toBeNull();
   });
 });
 
