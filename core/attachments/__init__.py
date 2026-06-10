@@ -1,5 +1,19 @@
 """Attachment storage public API."""
 
-from core.attachments.attachments import AttachmentRecord, AttachmentStore
+from core.attachments.attachments import (
+    AttachmentError,
+    AttachmentNotFoundError,
+    AttachmentRecord,
+    AttachmentStore,
+    AttachmentTooLargeError,
+    AttachmentTypeNotAllowedError,
+)
 
-__all__ = ["AttachmentRecord", "AttachmentStore"]
+__all__ = [
+    "AttachmentError",
+    "AttachmentNotFoundError",
+    "AttachmentRecord",
+    "AttachmentStore",
+    "AttachmentTooLargeError",
+    "AttachmentTypeNotAllowedError",
+]
