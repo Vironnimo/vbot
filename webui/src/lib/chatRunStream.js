@@ -1,3 +1,4 @@
+import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
 import {
   TERMINAL_RUN_EVENTS,
@@ -11,6 +12,11 @@ import {
 
 const SSE_RECONNECT_DELAY_MS = 500;
 const MAX_SSE_RECONNECT_ATTEMPTS = 3;
+// Dedup only has to cover events that can still be re-delivered through
+// App.svelte's bounded `runServerEvents` list (500 entries), so the cap just
+// needs to comfortably exceed that window; everything older can be forgotten
+// without risking a duplicate (handoff3 B10).
+const MAX_HANDLED_RUN_SERVER_EVENT_KEYS = 2000;
 const RUN_EVENT_FLUSH_DELAY_MS = 33;
 const DELAYED_RUN_EVENT_TYPES = new Set([
   'assistant_output_delta',
@@ -37,7 +43,9 @@ export function createChatRunStream({
   const pendingReconnects = {};
   const pendingRunEventQueues = {};
   const pendingRunEventFlushes = {};
-  const handledRunServerEventKeys = Object.create(null);
+  const handledRunServerEventKeys = createBoundedKeySet(
+    MAX_HANDLED_RUN_SERVER_EVENT_KEYS,
+  );
 
   function subscribeToRun(sessionState, sseUrl, options = {}) {
     if (!sseUrl) {
@@ -313,10 +321,10 @@ export function createChatRunStream({
   function handleServerEvents(singleEvent, events) {
     for (const serverEvent of normalizedRunServerEvents(singleEvent, events)) {
       const eventKey = runServerEventKey(serverEvent);
-      if (!eventKey || handledRunServerEventKeys[eventKey]) {
+      if (!eventKey || handledRunServerEventKeys.has(eventKey)) {
         continue;
       }
-      handledRunServerEventKeys[eventKey] = true;
+      handledRunServerEventKeys.add(eventKey);
       handleRunServerEvent(serverEvent);
     }
   }
