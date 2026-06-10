@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -567,6 +568,44 @@ async def test_handoff_command_action_reports_channel_limitation(
     bot.send_message.assert_awaited_once_with(
         chat_id=12345,
         text="This command is not available from Telegram channels yet.",
+    )
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_message_handlers_ignore_edited_messages_and_channel_posts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telegram = pytest.importorskip("telegram")
+    telegram_ext = pytest.importorskip("telegram.ext")
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+
+    def make_real_message(**content: Any) -> Any:
+        return telegram.Message(
+            message_id=1,
+            date=datetime.now(UTC),
+            chat=telegram.Chat(id=12345, type="private"),
+            from_user=telegram.User(id=50, first_name="A", is_bot=False),
+            **content,
+        )
+
+    text_handler, media_handler = adapter._build_message_handlers(telegram_ext)
+    text_message = make_real_message(text="hi")
+    photo_message = make_real_message(
+        photo=[telegram.PhotoSize(file_id="f", file_unique_id="u", width=1, height=1)]
+    )
+
+    assert text_handler.check_update(telegram.Update(update_id=1, message=text_message))
+    assert not text_handler.check_update(telegram.Update(update_id=2, edited_message=text_message))
+    assert not text_handler.check_update(telegram.Update(update_id=3, channel_post=text_message))
+    assert media_handler.check_update(telegram.Update(update_id=4, message=photo_message))
+    assert not media_handler.check_update(
+        telegram.Update(update_id=5, edited_message=photo_message)
     )
     await adapter.stop()
 
