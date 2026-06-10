@@ -1,4 +1,4 @@
-"""Phase 2 backend integration tests."""
+"""Core chat loop integration tests."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ class FakeAdapter(ProviderAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict]:
-        raise NotImplementedError("streaming is outside Phase 2 integration scope")
+        raise NotImplementedError("streaming not implemented in this stub")
         yield {}
 
     def normalize_response(self, response: JsonObject) -> JsonObject:
@@ -75,12 +75,12 @@ def resources_dir(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_phase2_agent_sends_message_and_persists_assistant_response(
+async def test_agent_sends_message_and_persists_assistant_response(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = FakeAdapter({"content": "Phase 2 works", "reasoning": None, "tool_calls": None})
+    adapter = FakeAdapter({"content": "assistant response", "reasoning": None, "tool_calls": None})
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
     config._data["APP_VERSION"] = "test-version"
@@ -100,13 +100,13 @@ async def test_phase2_agent_sends_message_and_persists_assistant_response(
         assistant = await ChatLoop(runtime).send("coder", "Hello", session_id="session-one")
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
-        assert assistant.content == "Phase 2 works"
+        assert assistant.content == "assistant response"
         assert runtime.has_provider_credentials("fake-provider") is True
         assert runtime.get_provider_credentials("fake-provider") == "test-key"
         assert [message.role for message in messages] == ["user", "assistant", "run_summary"]
         assert messages[0].content == "Hello"
         assert messages[1].model == "fake-provider/fake-model-v1"
-        assert messages[1].content == "Phase 2 works"
+        assert messages[1].content == "assistant response"
         assert adapter.requests[0].model_id == "fake-model-v1"
         assert adapter.requests[0].kwargs["thinking_effort"] == "high"
         assert adapter.requests[0].kwargs["temperature"] is None
