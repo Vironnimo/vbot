@@ -207,50 +207,79 @@ export function createChatRunStream({
   }
 
   function trackSubAgentRunStatus(event) {
-    const status = statusFromRunEvent(event);
-    if (!status) {
-      return;
-    }
-
     const updates = {};
-    if (event.run_id) {
-      updates[`run:${event.run_id}`] = status;
-    }
-    if (event.agent_id && event.session_id) {
-      updates[`session:${event.agent_id}::${event.session_id}`] = status;
-    }
 
-    // A queued sub-agent spawn's persisted descriptor only knows its
-    // queue_item_id. Recording the queue→run mapping when the queued run
-    // starts lets presentation resolve that row to its own run id, so its
-    // dot/result/duration lookups stay run-scoped even though the descriptor
-    // never learns the run id.
-    if (
-      event.type === 'run_started' &&
-      event.run_id &&
-      typeof event.payload?.queue_item_id === 'string' &&
-      event.payload.queue_item_id.length > 0
-    ) {
-      updates[`queueRun:${event.payload.queue_item_id}`] = event.run_id;
-    }
-
-    // Terminal events carry the run's real wall-clock duration. A non-blocking
-    // sub-agent spawn returns immediately, so the parent's spawn tool call has a
-    // ~0s duration; the child run's duration is the meaningful runtime to show.
-    const durationMs = runEventDurationMs(event);
-    if (durationMs !== null) {
+    // The most recent tool call a run made, so a running sub-agent row can
+    // show live activity instead of its frozen prompt preview. Recorded for
+    // every run (like the `run:` status keys); only sub-agent rows read it,
+    // run-scoped first with the session key as the run-id-less fallback.
+    const toolName = toolNameFromRunEvent(event);
+    if (toolName) {
       if (event.run_id) {
-        updates[`runDuration:${event.run_id}`] = durationMs;
+        updates[`runTool:${event.run_id}`] = toolName;
       }
       if (event.agent_id && event.session_id) {
-        updates[`sessionDuration:${event.agent_id}::${event.session_id}`] =
-          durationMs;
+        updates[`sessionTool:${event.agent_id}::${event.session_id}`] =
+          toolName;
+      }
+    }
+
+    const status = statusFromRunEvent(event);
+    if (status) {
+      if (event.run_id) {
+        updates[`run:${event.run_id}`] = status;
+      }
+      if (event.agent_id && event.session_id) {
+        updates[`session:${event.agent_id}::${event.session_id}`] = status;
+      }
+
+      // A reused child session must not surface the previous run's last tool
+      // on run-id-less rows, so a fresh run clears the session-scoped name.
+      if (event.type === 'run_started' && event.agent_id && event.session_id) {
+        updates[`sessionTool:${event.agent_id}::${event.session_id}`] = '';
+      }
+
+      // A queued sub-agent spawn's persisted descriptor only knows its
+      // queue_item_id. Recording the queue→run mapping when the queued run
+      // starts lets presentation resolve that row to its own run id, so its
+      // dot/result/duration lookups stay run-scoped even though the descriptor
+      // never learns the run id.
+      if (
+        event.type === 'run_started' &&
+        event.run_id &&
+        typeof event.payload?.queue_item_id === 'string' &&
+        event.payload.queue_item_id.length > 0
+      ) {
+        updates[`queueRun:${event.payload.queue_item_id}`] = event.run_id;
+      }
+
+      // Terminal events carry the run's real wall-clock duration. A
+      // non-blocking sub-agent spawn returns immediately, so the parent's
+      // spawn tool call has a ~0s duration; the child run's duration is the
+      // meaningful runtime to show.
+      const durationMs = runEventDurationMs(event);
+      if (durationMs !== null) {
+        if (event.run_id) {
+          updates[`runDuration:${event.run_id}`] = durationMs;
+        }
+        if (event.agent_id && event.session_id) {
+          updates[`sessionDuration:${event.agent_id}::${event.session_id}`] =
+            durationMs;
+        }
       }
     }
 
     if (Object.keys(updates).length > 0) {
       updateSubAgentRunStatuses(updates);
     }
+  }
+
+  function toolNameFromRunEvent(event) {
+    if (event.type !== 'tool_call_started') {
+      return '';
+    }
+    const name = event.payload?.tool_call?.name;
+    return typeof name === 'string' ? name.trim() : '';
   }
 
   function runEventDurationMs(event) {

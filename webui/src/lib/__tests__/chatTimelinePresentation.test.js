@@ -6,6 +6,7 @@ import {
   subAgentDisplayResult,
   subAgentDotStatus,
   subAgentEffectiveRunId,
+  subAgentLastToolName,
   subAgentNeedsStatusVerification,
   subAgentResultEntryAllowsFetch,
   subAgentResultKey,
@@ -348,6 +349,47 @@ describe('chatTimelinePresentation', () => {
         'sessionDuration:worker::session-child': 8700,
       }),
     ).toBe(3100);
+  });
+
+  it('resolves the last tool name strictly by run id when it is known', () => {
+    const tool = runningSubAgentTool();
+    expect(subAgentLastToolName(tool, { 'runTool:run-child': 'bash' })).toBe(
+      'bash',
+    );
+    // The session-scoped name may belong to another run of the same reused
+    // child session, so a row with a known run id must not use it (B6).
+    expect(
+      subAgentLastToolName(tool, {
+        'sessionTool:worker::session-child': 'read',
+      }),
+    ).toBe('');
+    expect(subAgentLastToolName(tool, {})).toBe('');
+  });
+
+  it('falls back to the session-scoped tool name only when no run id is known', () => {
+    const tool = queuedSubAgentTool();
+    expect(
+      subAgentLastToolName(tool, {
+        'sessionTool:worker::session-child': 'read',
+      }),
+    ).toBe('read');
+    expect(
+      subAgentLastToolName(tool, {
+        'queueRun:queue-item-1': 'run-from-queue',
+        'runTool:run-from-queue': 'bash',
+        'sessionTool:worker::session-child': 'read',
+      }),
+    ).toBe('bash');
+  });
+
+  it('reports no last tool name for subagent_result rows', () => {
+    const resultTool = runningSubAgentTool({
+      name: 'subagent_result',
+      arguments: { agent_id: 'worker', session_id: 'session-child' },
+    });
+    expect(
+      subAgentLastToolName(resultTool, { 'runTool:run-child': 'bash' }),
+    ).toBe('');
   });
 
   it('labels a non-blocking spawn with the child run runtime, not the spawn call', () => {

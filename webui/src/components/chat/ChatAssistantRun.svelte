@@ -15,6 +15,7 @@
     subAgentDisplayResult,
     subAgentDotStatus,
     subAgentEffectiveRunId,
+    subAgentLastToolName,
     subAgentNavigationTarget,
     subAgentNeedsStatusVerification,
     subAgentPreview,
@@ -235,6 +236,10 @@
             dotStatus,
             subAgentStatuses,
           )}
+          {@const lastToolName =
+            dotStatus === 'running'
+              ? subAgentLastToolName(child, subAgentStatuses)
+              : ''}
           <details class="tool-event run-tool-event subagent-tool-event">
             <summary class="tool-event-line subagent-line">
               <span
@@ -250,7 +255,11 @@
               <span class="subagent-agent">
                 {t('agents.form.id', 'Agent ID')}: {subAgentAgentId(child)}
               </span>
-              {#if subAgentPreview(child)}
+              {#if lastToolName}
+                <span class="te-arg subagent-preview subagent-activity">
+                  {lastToolName}
+                </span>
+              {:else if subAgentPreview(child)}
                 <span class="te-arg subagent-preview">
                   {subAgentPreview(child)}
                 </span>

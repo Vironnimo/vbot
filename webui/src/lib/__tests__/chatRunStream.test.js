@@ -514,3 +514,116 @@ describe('createChatRunStream() queue removal on run_started (regression for B7)
     expect(harness.syncSessionQueue).not.toHaveBeenCalled();
   });
 });
+
+describe('createChatRunStream() last-tool-name tracking for sub-agent rows', () => {
+  let chatState;
+  const DISPLAYED_AGENT_ID = 'alpha';
+  const DISPLAYED_SESSION_ID = 'session-displayed';
+  const CHILD_AGENT_ID = 'child-agent';
+  const CHILD_SESSION_ID = 'session-child';
+  const CHILD_RUN_ID = 'run-child-7';
+
+  const childToolCallStartedEvent = (toolName, sequence = 2) => ({
+    type: 'run_output',
+    payload: {
+      run_id: CHILD_RUN_ID,
+      agent_id: CHILD_AGENT_ID,
+      session_id: CHILD_SESSION_ID,
+      run_event_type: 'tool_call_started',
+      run_event_sequence: sequence,
+      output: {
+        tool_call: {
+          id: `call-${sequence}`,
+          index: 0,
+          name: toolName,
+          arguments: {},
+        },
+      },
+    },
+  });
+
+  beforeEach(() => {
+    chatState = createChatState();
+    setAgents(chatState, [
+      {
+        id: DISPLAYED_AGENT_ID,
+        name: 'Alpha',
+        current_session_id: DISPLAYED_SESSION_ID,
+      },
+    ]);
+  });
+
+  it('records runTool and sessionTool entries from a bridged child tool_call_started event, keeping only the latest name', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents(childToolCallStartedEvent('read', 2));
+    expect(harness.subAgentRunStatuses[`runTool:${CHILD_RUN_ID}`]).toBe('read');
+    expect(
+      harness.subAgentRunStatuses[
+        `sessionTool:${CHILD_AGENT_ID}::${CHILD_SESSION_ID}`
+      ],
+    ).toBe('read');
+
+    harness.stream.handleServerEvents(childToolCallStartedEvent('bash', 5));
+    expect(harness.subAgentRunStatuses[`runTool:${CHILD_RUN_ID}`]).toBe('bash');
+    expect(
+      harness.subAgentRunStatuses[
+        `sessionTool:${CHILD_AGENT_ID}::${CHILD_SESSION_ID}`
+      ],
+    ).toBe('bash');
+  });
+
+  it('records no tool entries when the tool_call_started payload has no usable name', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    const event = childToolCallStartedEvent('  ', 2);
+    harness.stream.handleServerEvents(event);
+
+    expect(harness.subAgentRunStatuses).toEqual({});
+  });
+
+  it('clears the session-scoped tool name when a new run starts in the same child session', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents(childToolCallStartedEvent('bash', 2));
+    expect(
+      harness.subAgentRunStatuses[
+        `sessionTool:${CHILD_AGENT_ID}::${CHILD_SESSION_ID}`
+      ],
+    ).toBe('bash');
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-child-8',
+        agent_id: CHILD_AGENT_ID,
+        session_id: CHILD_SESSION_ID,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        status: 'running',
+        output: { status: 'running' },
+      },
+    });
+
+    expect(
+      harness.subAgentRunStatuses[
+        `sessionTool:${CHILD_AGENT_ID}::${CHILD_SESSION_ID}`
+      ],
+    ).toBe('');
+    // The previous run's run-scoped entry stays untouched; rows resolve it
+    // strictly by run id, so it cannot leak into the new run's row.
+    expect(harness.subAgentRunStatuses[`runTool:${CHILD_RUN_ID}`]).toBe('bash');
+  });
+});

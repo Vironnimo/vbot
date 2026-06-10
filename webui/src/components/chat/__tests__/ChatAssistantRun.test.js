@@ -283,3 +283,76 @@ describe('ChatAssistantRun cancel buttons', () => {
     expect(onCancelSubAgent).toHaveBeenCalledWith({ tool: child });
   });
 });
+
+describe('ChatAssistantRun sub-agent activity preview', () => {
+  let mountedComponent;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  function previewSpan() {
+    return document.querySelector('.subagent-preview');
+  }
+
+  it('shows the child run last tool name instead of the prompt while running', () => {
+    const item = createAssistantRunItem({
+      items: [
+        createSubAgentChild({ status: 'running', dataStatus: 'running' }),
+      ],
+    });
+    mountedComponent = mountRun({
+      item,
+      subAgentStatuses: { 'runTool:run-child': 'bash' },
+    });
+
+    const preview = previewSpan();
+    expect(preview).toBeTruthy();
+    expect(preview.textContent.trim()).toBe('bash');
+    expect(preview.classList.contains('subagent-activity')).toBe(true);
+  });
+
+  it('keeps the prompt preview while running until the child makes a tool call', () => {
+    const item = createAssistantRunItem({
+      items: [
+        createSubAgentChild({ status: 'running', dataStatus: 'running' }),
+      ],
+    });
+    mountedComponent = mountRun({
+      item,
+      subAgentStatuses: {},
+    });
+
+    const preview = previewSpan();
+    expect(preview).toBeTruthy();
+    expect(preview.textContent.trim()).toBe('Inspect');
+    expect(preview.classList.contains('subagent-activity')).toBe(false);
+  });
+
+  it('reverts to the prompt preview once the child run settled, even with a leftover tool entry', () => {
+    const item = createAssistantRunItem({
+      items: [
+        createSubAgentChild({ status: 'success', dataStatus: 'completed' }),
+      ],
+    });
+    mountedComponent = mountRun({
+      item,
+      subAgentStatuses: { 'runTool:run-child': 'bash' },
+    });
+
+    const preview = previewSpan();
+    expect(preview).toBeTruthy();
+    expect(preview.textContent.trim()).toBe('Inspect');
+    expect(preview.classList.contains('subagent-activity')).toBe(false);
+  });
+});
