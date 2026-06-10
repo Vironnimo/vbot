@@ -45,6 +45,7 @@ _TYPING_REFRESH_SECONDS = 4.0
 _FAILED_REPLY = "Sorry, I couldn't complete that request. Please try again."
 _CANCELLED_REPLY = "Sorry, this request was cancelled before completion."
 _EMPTY_ASSISTANT_REPLY = "I finished processing your message, but no reply text was produced."
+_UNSUPPORTED_COMMAND_REPLY = "This command is not available from Telegram channels yet."
 _SYSTEM_REMINDER_TEMPLATE = (
     "This session is receiving messages via Telegram "
     "(channel: {channel_id}, chat: {chat_id}).\n"
@@ -727,6 +728,10 @@ class TelegramChannelAdapter(ChannelAdapter):
                     await self.send(_format_failed_reply(), reply_plan.platform_target)
                     return
                 await self._relay_run_events(run, reply_plan.platform_target)
+            case _:
+                # Recognized commands without a channel implementation (e.g. /handoff)
+                # must reply instead of silently swallowing the message.
+                await self.send(_UNSUPPORTED_COMMAND_REPLY, reply_plan.platform_target)
 
     def _log_command_action_failure(
         self,
