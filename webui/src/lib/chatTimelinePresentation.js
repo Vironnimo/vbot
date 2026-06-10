@@ -265,6 +265,32 @@ export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
   return null;
 };
 
+// Name of the most recent tool call the child run made, recorded from bridged
+// child `tool_call_started` events. Resolved strictly by run id when one is
+// known — a session-keyed entry may describe a different run of a reused child
+// session (B6) — with the session key only as the run-id-less fallback.
+// Returns '' when the child has made no tool call yet (or the entry was
+// reset on run start / evicted from the capped projection).
+export const subAgentLastToolName = (tool, subAgentStatuses = {}) => {
+  if (toolNameForRunTool(tool) !== 'subagent') {
+    return '';
+  }
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+  const runId = subAgentEffectiveRunId(tool, statuses);
+  if (runId) {
+    return trimmedString(statuses[`runTool:${runId}`]);
+  }
+
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
+  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const sessionId = subAgentSessionId(tool);
+  if (agentId && sessionId) {
+    return trimmedString(statuses[`sessionTool:${agentId}::${sessionId}`]);
+  }
+  return '';
+};
+
 // Status label for a sub-agent tool row. Prefers the child run's real runtime
 // over the spawn tool's own call duration, which is ~0s for a non-blocking spawn
 // that returns the moment the child run starts.
