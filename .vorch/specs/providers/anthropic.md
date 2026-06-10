@@ -20,6 +20,7 @@ Anthropic Messages API adapter and Anthropic-style request/response normalizatio
 ## Reasoning
 
 - `thinking_effort: none` sends `thinking: {type: disabled}`. Active Anthropic efforts send adaptive thinking, summarized display, and `output_config.effort` for efforts above `minimal`.
+- Anthropic rejects a sampling `temperature` while thinking is active. When the outgoing request activates thinking (adaptive via effort, or a raw `thinking` kwarg with type `adaptive`/`enabled`), `_build_payload` drops the caller `temperature` and skips the provider-default `temperature`. `thinking: {type: disabled}` does not conflict — temperature stays.
 - If injected `model_lookup` says reasoning is unsupported, Anthropic thinking/reasoning controls are stripped.
 - Opaque `thinking` and `redacted_thinking` blocks from provider responses are preserved under `reasoning_meta.content_blocks` and may be resent for the active tool-use continuation.
 - Plain readable `reasoning` text without opaque metadata is not converted into Anthropic thinking blocks.

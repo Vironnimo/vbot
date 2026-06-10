@@ -206,9 +206,18 @@ class AnthropicAdapter(ProviderAdapter):
             reasoning_supported=self._model_reasoning_supported(model_id),
         )
 
+        # Anthropic rejects a sampling temperature when thinking is active
+        # (only the default is accepted), so the pair must never reach the
+        # wire — drop the caller value and skip the provider default.
+        thinking_active = _anthropic_thinking_active(payload, request_kwargs)
+        if thinking_active:
+            request_kwargs.pop("temperature", None)
+
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
+                if thinking_active and key == "temperature":
+                    continue
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
@@ -824,6 +833,20 @@ def _apply_anthropic_reasoning(
         if thinking_effort != "minimal":
             payload["output_config"] = {"effort": thinking_effort}
         payload["thinking"]["display"] = "summarized"
+
+
+def _anthropic_thinking_active(
+    payload: dict[str, Any],
+    request_kwargs: dict[str, Any],
+) -> bool:
+    """Return True when the outgoing request activates thinking.
+
+    A raw ``thinking`` caller kwarg wins over the value derived from
+    ``thinking_effort`` because ``request_kwargs`` is applied onto the
+    payload last.
+    """
+    thinking = request_kwargs.get("thinking", payload.get("thinking"))
+    return isinstance(thinking, dict) and thinking.get("type") in {"adaptive", "enabled"}
 
 
 def _extract_anthropic_text(content_blocks: Any) -> str | None:
