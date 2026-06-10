@@ -7,6 +7,7 @@ Handles both the OpenAI Platform ``/chat/completions`` endpoint (default
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -295,13 +296,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             headers = await self._build_headers()
             try:
                 response = await self._client.post(endpoint_path, json=payload, headers=headers)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             classify_http_status(response.status_code, detail=_http_error_detail(response))
-            return dict(response.json())
+            return dict(_decode_response_json(response, "OpenAI provider"))
 
         return await retry_async(_do_request)
 
@@ -321,9 +320,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             if response.status_code >= 400:
@@ -360,10 +357,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     yield delta
             if not seen_finish_delta:
                 raise NetworkError("Stream ended without response completion event")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
 
@@ -439,6 +436,23 @@ class OpenAISubscriptionResponsesPolicy:
 def _http_error_detail(response: httpx.Response, body: str | None = None) -> str:
     reason = response.text if body is None else body
     return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
+
+
+def _decode_response_json(response: httpx.Response, context: str) -> dict[str, Any]:
+    """Decode a 2xx response body to JSON or raise a non-retryable ProviderError."""
+    try:
+        decoded = response.json()
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"{context} sent malformed JSON in response: {exc.msg}",
+            retryable=False,
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise ProviderError(
+            f"{context} sent non-object JSON in response",
+            retryable=False,
+        )
+    return decoded
 
 
 def _normalize_catalog_raw(raw: Mapping[str, Any]) -> Mapping[str, Any]:

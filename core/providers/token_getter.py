@@ -153,9 +153,7 @@ class OAuthTokenGetter:
                         "Editor-Version": COPILOT_EDITOR_VERSION,
                     },
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
         finally:
             if close_client:
@@ -184,9 +182,7 @@ class OAuthTokenGetter:
                     },
                     headers={"Accept": "application/json"},
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
         finally:
             if close_client:

@@ -202,13 +202,22 @@ def classify_http_status(
 def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     """Wrap an httpx network exception with the appropriate error type.
 
-    Converts ``httpx.ConnectError`` into ``NetworkError`` (retryable and not
-    provider-specific), while timeout-related exceptions are wrapped as
-    ``ProviderTimeoutError`` (retryable).
+    Maps ``httpx.TimeoutException`` (and its subclasses) to
+    ``ProviderTimeoutError`` (retryable). All other ``httpx.TransportError``
+    subclasses — ``ConnectError``, ``ReadError``, ``WriteError``,
+    ``RemoteProtocolError``, ``ProtocolError``, ``ProxyError``, ``UnsupportedProtocol``,
+    ``LocalProtocolError``, ``NetworkError``, and any other transport-level
+    failure — are wrapped as ``NetworkError`` (retryable and not
+    provider-specific). ``NetworkError`` deliberately stays a non-``ProviderError``
+    so it never triggers model fallback (see ``.vorch/specs/providers.md`` gotchas).
     """
-    if isinstance(error, httpx.ConnectError):
+    if isinstance(error, httpx.TimeoutException):
+        return ProviderTimeoutError(f"Request failed: {error}")
+    if isinstance(error, httpx.TransportError):
         return NetworkError(f"Connection failed: {error}")
-    return ProviderTimeoutError(f"Request failed: {error}")
+    # Anything else (shouldn't happen at request-submission sites): surface as
+    # a transport failure so retry semantics match.
+    return NetworkError(f"Connection failed: {error}")
 
 
 async def iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
