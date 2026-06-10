@@ -583,10 +583,11 @@ def _to_openai_user_content_part(part: Any) -> dict[str, Any]:
     if part_type == "media":
         base64_data = part.get("base64")
         media_type = part.get("media_type")
-        if not isinstance(base64_data, str):
-            base64_data = "" if base64_data is None else str(base64_data)
-        if not isinstance(media_type, str) or not media_type:
-            media_type = "application/octet-stream"
+        if not isinstance(base64_data, str) or not isinstance(media_type, str) or not media_type:
+            raise ProviderError(
+                "media content block requires string base64 and media_type fields",
+                retryable=False,
+            )
         return {
             "type": "image_url",
             "image_url": {"url": f"data:{media_type};base64,{base64_data}"},

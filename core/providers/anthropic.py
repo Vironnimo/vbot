@@ -734,15 +734,19 @@ def _to_anthropic_user_content_block(block: Any) -> dict[str, Any]:
     if block_type == "media":
         base64_data = block.get("base64")
         media_type = block.get("media_type")
-        if isinstance(base64_data, str) and isinstance(media_type, str):
-            return {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": media_type,
-                    "data": base64_data,
-                },
-            }
+        if not isinstance(base64_data, str) or not isinstance(media_type, str) or not media_type:
+            raise ProviderError(
+                "media content block requires string base64 and media_type fields",
+                retryable=False,
+            )
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": base64_data,
+            },
+        }
     if block_type == "text":
         text = block.get("text")
         return {"type": "text", "text": "" if text is None else str(text)}
