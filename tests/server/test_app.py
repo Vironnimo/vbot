@@ -10,10 +10,18 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.chat import ChatLoop
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunStatus
 from core.runtime import Runtime
 from core.utils.config import Config
-from server.app import ServerEventBus, _register_run_event_bridge, create_app
+from server.app import (
+    ServerEventBus,
+    _active_runs_snapshot,
+    _bus_epoch,
+    _bus_last_sequence,
+    _parse_query_string,
+    _register_run_event_bridge,
+    create_app,
+)
 
 
 def test_create_app_does_not_mount_webui_when_build_is_absent(monkeypatch, tmp_path: Path) -> None:
@@ -267,6 +275,98 @@ async def _wait_for_events(event_bus: ServerEventBus, count: int) -> None:
             return
         await asyncio.sleep(0)
     raise AssertionError(f"expected at least {count} events, got {len(event_bus.events)}")
+
+
+# -- Unit tests for the /ws connection-ready handshake helpers --
+
+
+def test_parse_query_string_returns_blank_for_missing_or_whitespace() -> None:
+    assert _parse_query_string(None) == ""
+    assert _parse_query_string("") == ""
+    assert _parse_query_string("   ") == ""
+    assert _parse_query_string("  abc  ") == "abc"
+
+
+def test_bus_epoch_returns_property_value_from_bus() -> None:
+    bus = ServerEventBus()
+    bus._epoch = "epoch-xyz"  # type: ignore[attr-defined]
+    assert _bus_epoch(bus) == "epoch-xyz"
+
+
+def test_bus_last_sequence_uses_property_value_from_bus() -> None:
+    bus = ServerEventBus()
+    bus.publish("agent.created", {"id": "a"})
+    bus.publish("agent.updated", {"id": "a"})
+    assert _bus_last_sequence(bus) == 2
+
+
+def test_bus_last_sequence_is_zero_for_empty_bus() -> None:
+    bus = ServerEventBus()
+    assert _bus_last_sequence(bus) == 0
+
+
+def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
+    tmp_path: Path,
+) -> None:
+    chat_runs = ChatRunManager()
+    snapshot: list[Any] = []
+    chat_runs.active_runs = lambda: list(snapshot)  # type: ignore[method-assign]
+
+    running_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-running",
+                "agent_id": "coder",
+                "session_id": "session-running",
+                "status": RunStatus.RUNNING,
+            },
+        )(),
+    )
+    terminal_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-terminal",
+                "agent_id": "coder",
+                "session_id": "session-terminal",
+                "status": RunStatus.COMPLETED,
+            },
+        )(),
+    )
+    snapshot.extend([running_run, terminal_run])
+
+    state = type("State", (), {"chat_runs": chat_runs})()
+    result = _active_runs_snapshot(state)
+
+    assert result == [
+        {
+            "run_id": "run-running",
+            "agent_id": "coder",
+            "session_id": "session-running",
+            "status": "running",
+            "sse_url": "/api/runs/run-running/events",
+        }
+    ]
+
+
+def test_active_runs_snapshot_returns_empty_list_when_run_manager_missing() -> None:
+    state = type("State", (), {})()
+    result = _active_runs_snapshot(state)
+
+    assert result == []
+
+
+def test_active_runs_snapshot_returns_empty_list_when_manager_lacks_accessor() -> None:
+    chat_runs = ChatRunManager()
+    state = type("State", (), {"chat_runs": chat_runs})()
+    result = _active_runs_snapshot(state)
+
+    assert result == []
 
 
 def _write_webui_build(tmp_path: Path) -> Path:

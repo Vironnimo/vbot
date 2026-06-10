@@ -1037,3 +1037,84 @@ async def test_tool_call_cancel_isolates_state_between_tool_call_ids() -> None:
     assert run.tool_call_cancelled("tool-2") is False
     assert run.cancel_tool_call("tool-2") is True
     assert run.tool_call_cancelled("tool-2") is True
+
+
+async def test_active_runs_returns_running_runs_and_omits_terminal_runs() -> None:
+    """active_runs() exposes only RUNNING entries; terminal ones are filtered out."""
+    manager = ChatRunManager()
+    running_release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def running_execute(_run: Run) -> str:
+        started.set()
+        await running_release.wait()
+        return "active"
+
+    async def finishing_execute(_run: Run) -> str:
+        return "done"
+
+    running_run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=running_execute,
+    )
+    await started.wait()
+
+    finishing_run = await manager.start(
+        agent_id="coder",
+        session_id="session-two",
+        executor=finishing_execute,
+    )
+    assert await finishing_run.wait() == "done"
+    assert finishing_run.status == RunStatus.COMPLETED
+
+    active = manager.active_runs()
+
+    assert active == [running_run]
+    assert all(run.status == RunStatus.RUNNING for run in active)
+    assert manager.active_run(agent_id="coder", session_id="session-two") is None
+
+    running_release.set()
+    assert await running_run.wait() == "active"
+
+    assert manager.active_runs() == []
+
+
+async def test_active_runs_returns_runs_across_multiple_sessions() -> None:
+    """active_runs() returns the running run from every session that has one."""
+    manager = ChatRunManager()
+    started_events = {
+        "session-one": asyncio.Event(),
+        "session-two": asyncio.Event(),
+        "session-three": asyncio.Event(),
+    }
+    releases = {session: asyncio.Event() for session in started_events}
+
+    async def execute(_run: Run) -> str:
+        started_events[_run.session_id].set()
+        await releases[_run.session_id].wait()
+        return _run.session_id
+
+    runs_by_session: dict[str, Run] = {}
+    for session_id in started_events:
+        runs_by_session[session_id] = await manager.start(
+            agent_id="coder",
+            session_id=session_id,
+            executor=execute,
+        )
+
+    for _session_id, event in started_events.items():
+        await event.wait()
+
+    active = manager.active_runs()
+
+    assert set(active) == set(runs_by_session.values())
+    assert {run.session_id for run in active} == set(runs_by_session)
+    assert all(run.status == RunStatus.RUNNING for run in active)
+    assert len(active) == len(runs_by_session)
+
+    for session_id, release in releases.items():
+        release.set()
+        assert await runs_by_session[session_id].wait() == session_id
+
+    assert manager.active_runs() == []

@@ -41,7 +41,7 @@ Run event payload ownership stays with the domain that emits the event. `core/ch
 - `ChatRunManager.list_queued(...)`, `remove_queued(...)`, and `update_queued(...)` are raw queue controls. They include internal items; public RPC filtering belongs in `server/rpc/chat_methods.py`.
 - `ChatRunManager.get(run_id)`, `active_run(...)`, `cancel(run_id)`, and `cancel_by_session(...)` are the lookup/cancellation surface used by server RPCs, slash commands, channels, tools, and sub-agent cleanup.
 - `ChatRunManager.has_activity_for_agent(agent_id)` reports whether an agent owns any active or queued work.
-- `ChatRunManager.add_run_started_callback(callback)` registers a process-local observer for every Run the manager starts, including queued/internal Runs; the returned callable unregisters it.
+- `ChatRunManager.active_runs() -> list[Run]` returns a snapshot (fresh list) of all entries in `_active_by_session` whose `status == RunStatus.RUNNING`. Public accessor mirroring `active_run(...)`; used by the `/ws` handshake to include active runs in the `connection_ready` snapshot.
 
 ## Cross-Domain Contracts
 

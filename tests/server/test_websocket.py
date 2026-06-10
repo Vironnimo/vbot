@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.runs import ChatRunManager, RunStatus
 from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
 from server.app import _parse_after_sequence, create_app
 from server.delegates import RUN_DELTA_EVENT_TYPES, RUN_OUTPUT_EVENT_TYPES, SERVER_EVENT_TYPES
@@ -51,6 +52,9 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
                 },
             )
             run_id = response.json()["result"]["run_id"]
+            # First frame is the connection_ready hello; skip it.
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
             events = [websocket.receive_json() for _ in range(5)]
 
     assert [event["type"] for event in events] == [
@@ -94,6 +98,9 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
                 },
             )
             run_id = response.json()["result"]["run_id"]
+            # First frame is the connection_ready hello; skip it.
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
             events = [websocket.receive_json() for _ in range(5)]
 
     assert [event["type"] for event in events] == [
@@ -142,6 +149,10 @@ def test_websocket_receives_agent_created_event_via_rpc(tmp_path: Path) -> None:
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
     with TestClient(app) as client, client.websocket_connect("/ws") as websocket:
+        # First frame is the connection_ready hello; skip it.
+        hello = websocket.receive_json()
+        assert hello["type"] == "connection_ready"
+
         response = client.post(
             "/api/rpc",
             json={"method": "agent.create", "params": {"id": "writer", "name": "Writer"}},
@@ -167,6 +178,10 @@ def test_websocket_receives_app_error_events(tmp_path: Path) -> None:
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
     with TestClient(app) as client, client.websocket_connect("/ws") as websocket:
+        # First frame is the connection_ready hello; skip it.
+        hello = websocket.receive_json()
+        assert hello["type"] == "connection_ready"
+
         app.state.event_bus.publish(APP_ERROR_EVENT, {"message": "Background task failed"})
         event = websocket.receive_json()
 
@@ -588,3 +603,210 @@ async def test_event_bus_subscribe_after_sequence_higher_skips_all_replays() -> 
 
     # Generator closed — subscriber removed
     assert bus.subscriber_count == 0
+
+
+# -- Connection-ready handshake tests (Phase 1.1, Task 2) --
+
+
+def _override_bus_epoch(bus: ServerEventBus, *, epoch: str | None = None) -> str:
+    """Return the bus's epoch, optionally overriding it for the test.
+
+    The bus's ``epoch`` is a read-only property backed by ``_epoch``. Tests
+    that need a known epoch value mutate ``_epoch`` directly; tests that just
+    want to learn the bus's current epoch leave it alone and read the
+    property.
+    """
+    if epoch is not None:
+        bus._epoch = epoch  # type: ignore[attr-defined]
+    return bus.epoch
+
+
+def _attach_chat_runs_active_runs(chat_runs: ChatRunManager) -> list[Any]:
+    """Add a test-only ``active_runs()`` accessor to a ChatRunManager.
+
+    Task 3 introduces the real method; this shim mirrors the same return shape
+    so the handshake tests can run in isolation.
+    """
+    snapshot: list[Any] = []
+
+    def active_runs() -> list[Any]:
+        return list(snapshot)
+
+    chat_runs.active_runs = active_runs  # type: ignore[method-assign]
+    return snapshot
+
+
+def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_replay(
+    tmp_path: Path,
+) -> None:
+    """A fresh /ws connect receives a connection_ready hello first; pre-connect
+    bus events are *not* re-delivered afterwards. Live events published after
+    the connect still flow to the client."""
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        bus = app.state.event_bus
+        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
+
+        for index in range(3):
+            bus.publish("agent.created", {"id": f"pre-{index}"})
+
+        with client.websocket_connect("/ws") as websocket:
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
+            assert hello["epoch"] == bus_epoch
+            assert hello["last_sequence"] == 3
+            assert hello["active_runs"] == []
+            # Critical: no "sequence" field on the hello frame — it must not feed
+            # the client's lastSequence bookkeeping.
+            assert "sequence" not in hello
+
+            bus.publish("agent.created", {"id": "post-0"})
+            bus.publish("agent.updated", {"id": "post-0"})
+
+            first_live = websocket.receive_json()
+            second_live = websocket.receive_json()
+
+    assert first_live["type"] == "agent.created"
+    assert first_live["payload"] == {"id": "post-0"}
+    assert first_live["sequence"] == 4
+    assert second_live["type"] == "agent.updated"
+    assert second_live["sequence"] == 5
+
+
+def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
+    tmp_path: Path,
+) -> None:
+    """Resume path: same-epoch + after_sequence>0 replays retained events newer
+    than the client's marker, then continues with live events."""
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        bus = app.state.event_bus
+        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
+
+        for index in range(5):
+            bus.publish("agent.created", {"id": f"event-{index + 1}"})
+
+        with client.websocket_connect(f"/ws?after_sequence=3&epoch={bus_epoch}") as websocket:
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
+            assert hello["epoch"] == bus_epoch
+            assert hello["last_sequence"] == 5
+
+            replayed = [websocket.receive_json() for _ in range(2)]
+            assert [event["sequence"] for event in replayed] == [4, 5]
+            assert [event["payload"]["id"] for event in replayed] == [
+                "event-4",
+                "event-5",
+            ]
+
+
+def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
+    tmp_path: Path,
+) -> None:
+    """B1 regression (server half): a stale or missing epoch must not strand
+    the client. The hello frame is still sent, and only events published
+    *after* the connect are delivered (no historical replay)."""
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        bus = app.state.event_bus
+        bus_epoch = _override_bus_epoch(bus, epoch="epoch-abc")
+
+        for index in range(5):
+            bus.publish("agent.created", {"id": f"event-{index + 1}"})
+
+        # Stale epoch path: client passes a different (older) epoch string.
+        with client.websocket_connect("/ws?after_sequence=3000&epoch=stale-epoch") as websocket:
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
+            assert hello["epoch"] == bus_epoch
+            assert hello["last_sequence"] == 5
+
+            bus.publish("agent.created", {"id": "live-1"})
+            bus.publish("agent.updated", {"id": "live-2"})
+
+            live_events = [websocket.receive_json() for _ in range(2)]
+            assert [event["sequence"] for event in live_events] == [6, 7]
+            assert [event["payload"]["id"] for event in live_events] == [
+                "live-1",
+                "live-2",
+            ]
+
+    # Build a fresh app so the bus is empty (no retained events to begin with).
+    app2 = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app2) as client:
+        bus2 = app2.state.event_bus
+        bus2_epoch = _override_bus_epoch(bus2, epoch="epoch-abc")
+
+        # Missing epoch path: client sends only after_sequence=3000, no epoch.
+        with client.websocket_connect("/ws?after_sequence=3000") as websocket:
+            hello = websocket.receive_json()
+            assert hello["type"] == "connection_ready"
+            assert hello["epoch"] == bus2_epoch
+            assert hello["last_sequence"] == 0
+
+            bus2.publish("agent.created", {"id": "live-1"})
+
+            live_event = websocket.receive_json()
+            assert live_event["sequence"] == 1
+            assert live_event["payload"] == {"id": "live-1"}
+
+
+def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_terminal(
+    tmp_path: Path,
+) -> None:
+    """The connection_ready.active_runs snapshot lists only running runs and
+    exposes the SSE endpoint URL for each."""
+    runtime = StubRuntime(tmp_path, StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+
+    running_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-running",
+                "agent_id": "coder",
+                "session_id": "session-running",
+                "status": RunStatus.RUNNING,
+            },
+        )(),
+    )
+    terminal_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-terminal",
+                "agent_id": "coder",
+                "session_id": "session-terminal",
+                "status": RunStatus.COMPLETED,
+            },
+        )(),
+    )
+
+    with TestClient(app) as client:
+        _override_bus_epoch(app.state.event_bus, epoch="epoch-abc")
+
+        chat_runs: ChatRunManager = app.state.chat_runs
+        active_snapshot = _attach_chat_runs_active_runs(chat_runs)
+        active_snapshot.extend([running_run, terminal_run])
+
+        with client.websocket_connect("/ws") as websocket:
+            hello = websocket.receive_json()
+
+    assert hello["type"] == "connection_ready"
+    assert hello["active_runs"] == [
+        {
+            "run_id": "run-running",
+            "agent_id": "coder",
+            "session_id": "session-running",
+            "status": "running",
+            "sse_url": "/api/runs/run-running/events",
+        }
+    ]
