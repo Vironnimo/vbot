@@ -504,6 +504,17 @@ class ChatRunManager:
             return None
         return run
 
+    def active_runs(self) -> list[Run]:
+        """Return a snapshot of every currently running run across all sessions.
+
+        Mirrors :meth:`active_run` for callers that need the full set (for
+        example, the WebSocket handshake snapshot sent to a freshly connected
+        client). Entries whose status has moved off ``RUNNING`` since being
+        recorded are filtered out; the returned list is a fresh list, so
+        callers may mutate it without affecting the manager.
+        """
+        return [run for run in self._active_by_session.values() if run.status == RunStatus.RUNNING]
+
     def has_activity_for_agent(self, agent_id: str) -> bool:
         """Return whether an agent owns any running run or queued run item."""
         for (active_agent_id, _session_id), run in self._active_by_session.items():
