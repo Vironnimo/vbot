@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createChatRunStream } from '../chatRunStream.js';
 import {
@@ -197,6 +197,125 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(harness.subAgentRunStatuses).toEqual({});
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
+  });
+});
+
+describe('createChatRunStream() SSE reconnect budget (regression for B2)', () => {
+  let chatState;
+  const DISPLAYED_AGENT_ID = 'alpha';
+  const DISPLAYED_SESSION_ID = 'session-displayed';
+  const RUN_ID = 'run-reconnect-1';
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    chatState = createChatState();
+    setAgents(chatState, [
+      {
+        id: DISPLAYED_AGENT_ID,
+        name: 'Alpha',
+        current_session_id: DISPLAYED_SESSION_ID,
+      },
+    ]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setupRunningStream() {
+    const subscriptions = [];
+    const subscribeRunEvents = vi.fn((sseUrl, handlers, options) => {
+      const subscription = { sseUrl, handlers, options, close: vi.fn() };
+      subscriptions.push(subscription);
+      return subscription;
+    });
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents,
+    });
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      epoch: 'epoch-b2',
+      last_sequence: 0,
+      active_runs: [
+        {
+          run_id: RUN_ID,
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: `/api/runs/${RUN_ID}/events`,
+        },
+      ],
+    });
+    expect(subscriptions).toHaveLength(1);
+    return { subscriptions, harness };
+  }
+
+  function runEvent(sequence) {
+    return {
+      data: {
+        type: 'tool_call_started',
+        run_id: RUN_ID,
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        sequence,
+        payload: {},
+      },
+    };
+  }
+
+  it('resets the reconnect budget once events flow again, so transient drops spread over a run never exhaust it', () => {
+    const { subscriptions } = setupRunningStream();
+
+    // More drops than MAX_SSE_RECONNECT_ATTEMPTS, each preceded by a
+    // successfully delivered event. With the per-run accumulating counter
+    // this gave up on the 4th drop; with the reset every drop is attempt 0
+    // and reconnects after the base 500ms delay.
+    for (let drop = 0; drop < 5; drop += 1) {
+      const subscription = subscriptions[subscriptions.length - 1];
+      subscription.handlers.onEvent(runEvent(drop + 1));
+      subscription.handlers.onError(new Error('transient drop'));
+      vi.advanceTimersByTime(500);
+      expect(subscriptions).toHaveLength(drop + 2);
+    }
+  });
+
+  it('gives up only after consecutive failed reconnects, with exponential backoff between attempts', () => {
+    const { subscriptions, harness } = setupRunningStream();
+
+    // Attempt 0 → 500ms delay.
+    subscriptions[0].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(499);
+    expect(subscriptions).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(subscriptions).toHaveLength(2);
+
+    // Attempt 1 → 1000ms delay.
+    subscriptions[1].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(999);
+    expect(subscriptions).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(subscriptions).toHaveLength(3);
+
+    // Attempt 2 → 2000ms delay.
+    subscriptions[2].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(1999);
+    expect(subscriptions).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    expect(subscriptions).toHaveLength(4);
+
+    // Attempt 3 hits MAX_SSE_RECONNECT_ATTEMPTS → permanent close.
+    harness.setActionError.mockClear();
+    subscriptions[3].handlers.onError(new Error('drop'));
+    vi.runAllTimers();
+    expect(subscriptions).toHaveLength(4);
+    expect(subscriptions[3].close).toHaveBeenCalled();
+    expect(harness.setActionError).toHaveBeenCalledTimes(1);
+    expect(harness.setActionError.mock.calls[0][0]).not.toContain(
+      'Reconnecting',
+    );
   });
 });
 
