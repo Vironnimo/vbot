@@ -294,16 +294,14 @@ class AnthropicAdapter(ProviderAdapter):
                     json=payload,
                     headers=headers,
                 )
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             detail = self._build_error_detail(response.status_code, response.text)
             classify_http_status(
                 response.status_code, extra_retryable={_HTTP_OVERLOADED}, detail=detail
             )
-            return dict(response.json())
+            return dict(_decode_response_json(response, "Anthropic provider"))
 
         return await retry_async(_do_request)
 
@@ -362,9 +360,7 @@ class AnthropicAdapter(ProviderAdapter):
             )
             try:
                 response = await self._client.send(request, stream=True)
-            except httpx.TimeoutException as exc:
-                raise wrap_network_error(exc) from exc
-            except httpx.ConnectError as exc:
+            except httpx.TransportError as exc:
                 raise wrap_network_error(exc) from exc
 
             # If the status indicates an error, read and close the response
@@ -428,12 +424,29 @@ class AnthropicAdapter(ProviderAdapter):
                     break
             if not seen_message_stop:
                 raise NetworkError("Stream ended without message_stop event")
-        except httpx.ReadError as exc:
-            raise NetworkError(f"Stream read failed: {exc}") from exc
         except httpx.TimeoutException as exc:
             raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
         finally:
             await response.aclose()
+
+
+def _decode_response_json(response: httpx.Response, context: str) -> dict[str, Any]:
+    """Decode a 2xx response body to JSON or raise a non-retryable ProviderError."""
+    try:
+        decoded = response.json()
+    except json.JSONDecodeError as exc:
+        raise ProviderError(
+            f"{context} sent malformed JSON in response: {exc.msg}",
+            retryable=False,
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise ProviderError(
+            f"{context} sent non-object JSON in response",
+            retryable=False,
+        )
+    return decoded
 
 
 def _normalize_anthropic_stream_event(
