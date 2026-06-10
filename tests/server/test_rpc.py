@@ -4881,6 +4881,35 @@ class TestServerEventFromRunEvent:
         assert "usage" not in result["payload"]
         assert result["payload"]["status"] == "failed"
 
+    def test_run_started_includes_output_with_queue_item_id(self) -> None:
+        """run_started WS summary surfaces queue_item_id so the client can drop the queued item."""
+        from core.runs import RUN_STARTED_EVENT
+
+        event = self._make_event(
+            RUN_STARTED_EVENT,
+            {"status": "running", "queue_item_id": "qi-abc-123"},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["type"] == delegates.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
+        assert result["payload"]["output"] == {
+            "status": "running",
+            "queue_item_id": "qi-abc-123",
+        }
+
+    def test_run_started_includes_output_without_queue_item_id(self) -> None:
+        """run_started remains backward compatible when no queue_item_id is present."""
+        from core.runs import RUN_STARTED_EVENT
+
+        event = self._make_event(
+            RUN_STARTED_EVENT,
+            {"status": "running"},
+        )
+        result = delegates._server_event_from_run_event(event)
+
+        assert result["type"] == delegates.SERVER_EVENT_TYPES[RUN_STARTED_EVENT]
+        assert result["payload"]["output"] == {"status": "running"}
+
 
 # ---------------------------------------------------------------------------
 # prompt.* RPC handlers
