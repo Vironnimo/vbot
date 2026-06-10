@@ -212,6 +212,20 @@ export function createChatRunStream({
       updates[`session:${event.agent_id}::${event.session_id}`] = status;
     }
 
+    // A queued sub-agent spawn's persisted descriptor only knows its
+    // queue_item_id. Recording the queue→run mapping when the queued run
+    // starts lets presentation resolve that row to its own run id, so its
+    // dot/result/duration lookups stay run-scoped even though the descriptor
+    // never learns the run id.
+    if (
+      event.type === 'run_started' &&
+      event.run_id &&
+      typeof event.payload?.queue_item_id === 'string' &&
+      event.payload.queue_item_id.length > 0
+    ) {
+      updates[`queueRun:${event.payload.queue_item_id}`] = event.run_id;
+    }
+
     // Terminal events carry the run's real wall-clock duration. A non-blocking
     // sub-agent spawn returns immediately, so the parent's spawn tool call has a
     // ~0s duration; the child run's duration is the meaningful runtime to show.

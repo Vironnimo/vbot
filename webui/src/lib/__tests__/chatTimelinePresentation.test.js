@@ -5,7 +5,9 @@ import {
   isRowCancellable,
   subAgentDisplayResult,
   subAgentDotStatus,
+  subAgentEffectiveRunId,
   subAgentNeedsStatusVerification,
+  subAgentResultEntryAllowsFetch,
   subAgentResultKey,
   subAgentResultTextFromMessages,
   subAgentRunDurationMs,
@@ -28,6 +30,26 @@ function runningSubAgentTool(overrides = {}) {
         session_id: 'session-child',
         run_id: 'run-child',
         status: 'running',
+      },
+      artifacts: [],
+    },
+    ...overrides,
+  };
+}
+
+function queuedSubAgentTool(overrides = {}) {
+  return {
+    name: 'subagent',
+    status: 'success',
+    arguments: { agent_id: 'worker', content: 'Inspect the project' },
+    result: {
+      ok: true,
+      error: null,
+      data: {
+        agent_id: 'worker',
+        session_id: 'session-child',
+        queue_item_id: 'queue-item-1',
+        status: 'queued',
       },
       artifacts: [],
     },
@@ -90,6 +112,33 @@ describe('chatTimelinePresentation', () => {
     expect(status).toBe('success');
   });
 
+  it('ignores a stale session status for a row with a known run id (B6)', () => {
+    const tool = runningSubAgentTool();
+
+    // A previous run of the same reused child session left its terminal
+    // status under the session key; this spawn's own run has no status yet,
+    // so the dot must stay running instead of showing the old run's success.
+    const status = subAgentDotStatus(tool, null, {
+      'session:worker::session-child': 'completed',
+    });
+
+    expect(status).toBe('running');
+  });
+
+  it('settles a queued spawn through the queue→run mapping, not the session key', () => {
+    const tool = queuedSubAgentTool();
+
+    expect(
+      subAgentDotStatus(tool, null, {
+        'queueRun:queue-item-1': 'run-from-queue',
+        'run:run-from-queue': 'completed',
+        'session:worker::session-child': 'running',
+      }),
+    ).toBe('success');
+    // Without the mapping the queued descriptor keeps the dot running.
+    expect(subAgentDotStatus(tool, null, {})).toBe('running');
+  });
+
   it('flags a frozen-descriptor running row for status verification when no live status has arrived', () => {
     const tool = runningSubAgentTool();
 
@@ -99,14 +148,26 @@ describe('chatTimelinePresentation', () => {
     expect(subAgentNeedsStatusVerification(tool, 'running', {})).toBe(true);
   });
 
-  it('does not flag a row once a session status has arrived', () => {
-    const tool = runningSubAgentTool();
+  it('does not flag a run-id-less row once a session status has arrived', () => {
+    const tool = queuedSubAgentTool();
 
     expect(
       subAgentNeedsStatusVerification(tool, 'running', {
         'session:worker::session-child': 'running',
       }),
     ).toBe(false);
+  });
+
+  it('still flags a row with a known run id when only a session status exists (B6)', () => {
+    const tool = runningSubAgentTool();
+
+    // The session entry may describe another run of the same reused child
+    // session, so it must not suppress verification of this specific run.
+    expect(
+      subAgentNeedsStatusVerification(tool, 'running', {
+        'session:worker::session-child': 'completed',
+      }),
+    ).toBe(true);
   });
 
   it('does not flag a row once a run status has arrived', () => {
@@ -139,11 +200,51 @@ describe('chatTimelinePresentation', () => {
     );
   });
 
-  it('keys a sub-agent result by its target agent and session', () => {
+  it('keys a sub-agent result by run id when known, by session otherwise', () => {
     expect(subAgentResultKey(runningSubAgentTool())).toBe(
+      'worker::session-child::run-child',
+    );
+    expect(subAgentResultKey(queuedSubAgentTool())).toBe(
       'worker::session-child',
     );
+    expect(
+      subAgentResultKey(queuedSubAgentTool(), {
+        'queueRun:queue-item-1': 'run-from-queue',
+      }),
+    ).toBe('worker::session-child::run-from-queue');
     expect(subAgentResultKey({ name: 'subagent', arguments: {} })).toBe('');
+  });
+
+  it('resolves the effective run id from the descriptor or the queue mapping', () => {
+    expect(subAgentEffectiveRunId(runningSubAgentTool())).toBe('run-child');
+    expect(subAgentEffectiveRunId(queuedSubAgentTool())).toBe('');
+    expect(
+      subAgentEffectiveRunId(queuedSubAgentTool(), {
+        'queueRun:queue-item-1': 'run-from-queue',
+      }),
+    ).toBe('run-from-queue');
+  });
+
+  it('allows fetching when no entry exists and retries failed entries after the cooldown', () => {
+    const now = 1_000_000;
+    expect(subAgentResultEntryAllowsFetch(null, now)).toBe(true);
+    expect(subAgentResultEntryAllowsFetch(undefined, now)).toBe(true);
+    // Loading and successful entries never refetch.
+    expect(
+      subAgentResultEntryAllowsFetch({ loading: true, result: '' }, now),
+    ).toBe(false);
+    expect(
+      subAgentResultEntryAllowsFetch({ loading: false, result: 'done' }, now),
+    ).toBe(false);
+    // Failed entries become fetchable again only after the cooldown.
+    const failedEntry = {
+      loading: false,
+      result: '',
+      error: true,
+      failedAt: now,
+    };
+    expect(subAgentResultEntryAllowsFetch(failedEntry, now + 1000)).toBe(false);
+    expect(subAgentResultEntryAllowsFetch(failedEntry, now + 20000)).toBe(true);
   });
 
   it('requests a result only for a finished non-blocking spawn without inline output', () => {
@@ -217,17 +318,35 @@ describe('chatTimelinePresentation', () => {
     expect(subAgentResultTextFromMessages(messages)).toBe('All done.');
   });
 
-  it('resolves the child run duration by run id, then session', () => {
+  it('resolves the child run duration strictly by run id when it is known', () => {
     const tool = runningSubAgentTool();
     expect(subAgentRunDurationMs(tool, { 'runDuration:run-child': 4200 })).toBe(
       4200,
     );
+    // The session-scoped duration may belong to another run of the same
+    // reused child session, so a row with a known run id must not use it (B6).
+    expect(
+      subAgentRunDurationMs(tool, {
+        'sessionDuration:worker::session-child': 8700,
+      }),
+    ).toBeNull();
+    expect(subAgentRunDurationMs(tool, {})).toBeNull();
+  });
+
+  it('falls back to the session duration only when no run id is known', () => {
+    const tool = queuedSubAgentTool();
     expect(
       subAgentRunDurationMs(tool, {
         'sessionDuration:worker::session-child': 8700,
       }),
     ).toBe(8700);
-    expect(subAgentRunDurationMs(tool, {})).toBeNull();
+    expect(
+      subAgentRunDurationMs(tool, {
+        'queueRun:queue-item-1': 'run-from-queue',
+        'runDuration:run-from-queue': 3100,
+        'sessionDuration:worker::session-child': 8700,
+      }),
+    ).toBe(3100);
   });
 
   it('labels a non-blocking spawn with the child run runtime, not the spawn call', () => {

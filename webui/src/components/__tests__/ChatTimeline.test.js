@@ -3641,13 +3641,14 @@ describe('ChatTimeline', () => {
     expect(onRequestSubAgentResult).toHaveBeenCalledWith(
       'beta',
       'sub-session-running',
+      'beta::sub-session-running::sub-run-completed',
     );
   });
 
   it('renders a fetched non-blocking sub-agent result in the tool body', () => {
     mountCompletedNonBlockingSubAgent({
       subAgentResults: {
-        'beta::sub-session-running': {
+        'beta::sub-session-running::sub-run-completed': {
           loading: false,
           result: 'Investigation complete.',
         },
