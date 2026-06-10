@@ -4,7 +4,7 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 
 ## Overview
 
-`core/channels/telegram.py` implements the first concrete `ChannelAdapter`. It uses `python-telegram-bot` async long polling, receives Telegram text/photos/documents, maps each allowed Telegram chat into a normal Agent Session, and relays only final assistant text back to Telegram. It stores inbound files through the runtime `AttachmentStore` before triggering Runs with canonical chat content blocks. It does not own channel config storage, RPC methods, or the `channel_send` tool registration lifecycle; those stay in the parent channels domain.
+`core/channels/telegram.py` implements the first concrete `ChannelAdapter`. It uses `python-telegram-bot` async long polling, receives Telegram text/photos/documents, maps each allowed Telegram chat into a normal Agent Session, and relays only final assistant text back to Telegram. It stores inbound files through the runtime `AttachmentStore` (downloaded inside the per-chat worker, not the update handler) before triggering Runs with canonical chat content blocks. It does not own channel config storage, RPC methods, or the `channel_send` tool registration lifecycle; those stay in the parent channels domain.
 
 ## Data Model
 
@@ -27,9 +27,10 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 
 - Telegram tokens resolve through `runtime.resolve_environment_credential()` when available, which currently prefers process environment over the data-dir `.env` fallback. Without that runtime hook, the adapter reads `os.environ` directly.
 - Empty `allowed_chat_ids` denies all inbound Telegram chats.
-- Pure text messages are command-dispatched before entering the per-chat queue. Recognized commands reply immediately and do not trigger a Run; unknown slash text follows the normal inbound chat path.
+- Pure text messages are command-dispatched before entering the per-chat queue. Directly handled commands (e.g. `/stop`, `/help`) reply eagerly from the update handler and do not trigger a Run; unknown slash text follows the normal inbound chat path.
 - Command actions are channel-safe: `/compact` calls `TriggerService.compact_session()` and replies with its result, `/retry` calls `TriggerService.retry_run()` and relays that Run's final reply, and `/new` replies that starting a new Session is unavailable from Telegram channels until routing has persisted rotation state. Any other recognized command action (e.g. `/handoff`) replies that the command is not available from Telegram channels — recognized commands never fall through silently.
-- Per-chat queues serialize normal inbound messages for a Telegram chat. Eager text command dispatch still lets recognized commands such as cancellation be handled while a previous queued message is waiting on a Run.
+- PTB processes this adapter's updates sequentially (`concurrent_updates` stays off; the per-chat queue owns ordering), so the update handler must never await slow work. Command actions (compact = model call, retry = full Run relay) and media downloads are enqueued into the per-chat queue and executed by its worker; only routing, eager command replies, and album buffering happen in the handler.
+- Per-chat queues serialize inbound messages, command actions, and media work for a Telegram chat. Eager text command dispatch still lets directly handled commands such as `/stop` cancel a Run that a queued message — or a queued `/retry`/`/compact` action — is waiting on.
 - Non-text content is never slash-command-dispatched, even if a `TextBlock` contains slash-looking text.
 - Run relay keeps the latest assistant-output event text and sends it only after `run_completed`. Failed runs and trigger/command exceptions send generic user-facing failure text; cancelled runs send a generic cancellation reply; completed runs with no assistant text send a generic empty-output reply.
 - While a Run is relayed (and while a `/compact` action runs) the adapter shows Telegram's `typing` chat action, refreshed every `_TYPING_REFRESH_SECONDS` (4 s, since Telegram expires the action after ~5 s) by a background task scoped to an async context manager. The indicator is best-effort and cosmetic: `send_chat_action` failures stop it quietly (debug log) without affecting the reply, and it is always cancelled when the relay/compact block exits.
@@ -44,6 +45,6 @@ Telegram adapter for vBot channels. Owns Telegram long polling, Telegram chat ro
 - Outbound image files use `send_photo`; non-image files use `send_document`. Multiple files are partitioned into image and document batches, sent in groups of at most 10 homogeneous media items, and the caption is attached only to the first item of the first batch.
 - Inbound captions become a leading `TextBlock`. Photos store the largest photo variant and become `MediaBlock`; image documents become `MediaBlock`; text documents become immediate `TextBlock` values using stored `text_content`; other documents become `FileBlock`.
 - Inbound media requires the runtime-owned `AttachmentStore`. Without it, media processing logs a warning and does not trigger a Run for that payload.
-- Telegram albums are grouped by `media_group_id` for 500 ms before triggering one Run with the accumulated blocks.
+- Telegram albums are grouped by `media_group_id`; the 500 ms flush window (`_ALBUM_FLUSH_SECONDS`) restarts with each buffered item, so slow album delivery does not split one album into multiple Runs. The handler buffers raw messages only; downloads happen in the per-chat worker after the flush.
 - User-facing Telegram failure replies must not leak internal exception text. Trigger, compact, retry, media-ingest, and lifecycle failures are logged with channel/session/target/action context and traceback detail for operators.
 - Lifecycle stop tolerates Telegram `RuntimeError` from already-stopped components; other lifecycle failures are warnings, not hard shutdown failures.
