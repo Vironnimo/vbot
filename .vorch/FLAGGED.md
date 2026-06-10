@@ -267,3 +267,9 @@ Several test names and fixture names from earlier in the project still reference
 **Why it can be removed safely:** with `extra_headers` gone from the JSON, the merge is a no-op. If a future contributor adds `extra_headers` back to the provider config, the merge would silently re-introduce the leak that Phase 5 was designed to prevent. The current implementation is correct but offers a backdoor.
 
 **Why deferred:** removing it is a one-line change, but it changes behavior under a (currently unused) configuration shape. A test would have to assert that adding `extra_headers` to the provider JSON does *not* cause Codex headers to appear on the wire in the default mode — which is already tested by `test_default_mode_send_targets_chat_completions_endpoint`. Likely safe to remove; better as a deliberate follow-up.
+
+## 2026-06-11 — One-off vitest suite-level failure under quality-frontend.py with mixed path targets
+
+A `python scripts/quality-frontend.py <4 source files + 3 test files>` run failed its vitest gate with `TypeError: Cannot read properties of undefined (reading 'config')` thrown at top-level `describe(...)` in ~10 test files, including files untouched by the change (`toastState.test.js`, `wakewordSettings.test.js`). Re-running the exact same vitest invocation (`npx vitest run --reporter=verbose src/lib src/lib src/components/chat src/components <3 test files>`, overlapping/duplicate directory targets included) passed 36/36 files, as did file-scoped and full-scan runs immediately after.
+
+**Why deferred:** not reproducible in three attempts — looks like a transient Vitest 4 worker/context crash, not a target-translation bug in `quality-frontend.py`. Nothing actionable without a reproduction; noted here so a recurrence has a trail.
