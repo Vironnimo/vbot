@@ -1030,6 +1030,7 @@ export function subscribeServerEvents(handlers = {}, options = {}) {
       options.path ?? WEBSOCKET_ENDPOINT,
       options.baseUrl,
       options.afterSequence ?? 0,
+      options.epoch,
     ),
   );
   const cleanupCallbacks = [];
@@ -1226,12 +1227,15 @@ function buildHttpUrlWithAfterSequence(path, afterSequence = 0) {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function buildWebSocketUrl(path, baseUrl, afterSequence = 0) {
-  return buildWebSocketUrlWithParams(
-    path,
-    baseUrl,
-    afterSequence > 0 ? { after_sequence: String(afterSequence) } : {},
-  );
+function buildWebSocketUrl(path, baseUrl, afterSequence = 0, epoch) {
+  const params = {};
+  if (afterSequence > 0) {
+    params.after_sequence = String(afterSequence);
+  }
+  if (isNonEmptyString(epoch)) {
+    params.epoch = epoch;
+  }
+  return buildWebSocketUrlWithParams(path, baseUrl, params);
 }
 
 function buildWebSocketUrlWithParams(path, baseUrl, params = {}) {
