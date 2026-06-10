@@ -55,9 +55,7 @@ _UNSUPPORTED_COMMAND_REPLY = "This command is not available from Telegram channe
 _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
-_UNSUPPORTED_MESSAGE_TYPE_REPLY = (
-    "Sorry, this message type isn't supported yet. I can process text, photos, and documents."
-)
+_UNSUPPORTED_MESSAGE_TYPE_REPLY = "Sorry, this message type isn't supported yet."
 _SYSTEM_REMINDER_TEMPLATE = (
     "This session is receiving messages via Telegram "
     "(channel: {channel_id}, chat: {chat_id}).\n"
@@ -160,16 +158,19 @@ class TelegramChannelAdapter(ChannelAdapter):
         # UpdateType.MESSAGE restricts handlers to new messages: edited messages must not
         # trigger new Runs, and channel posts are out of scope for chat routing.
         new_messages_only = telegram_ext.filters.UpdateType.MESSAGE
+        media_message_types = (
+            telegram_ext.filters.PHOTO
+            | telegram_ext.filters.Document.ALL
+            | telegram_ext.filters.VOICE
+            | telegram_ext.filters.AUDIO
+            | telegram_ext.filters.VIDEO
+            | telegram_ext.filters.VIDEO_NOTE
+        )
         # Animations carry a backward-compat `document` field and normally hit the media
         # handler first; the ANIMATION filter here only catches them if Telegram ever
         # stops setting that field.
         unsupported_message_types = (
-            telegram_ext.filters.VOICE
-            | telegram_ext.filters.AUDIO
-            | telegram_ext.filters.VIDEO
-            | telegram_ext.filters.VIDEO_NOTE
-            | telegram_ext.filters.ANIMATION
-            | telegram_ext.filters.Sticker.ALL
+            telegram_ext.filters.ANIMATION | telegram_ext.filters.Sticker.ALL
         )
         return [
             telegram_ext.MessageHandler(
@@ -177,8 +178,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                 self._handle_inbound_message,
             ),
             telegram_ext.MessageHandler(
-                (telegram_ext.filters.PHOTO | telegram_ext.filters.Document.ALL)
-                & new_messages_only,
+                media_message_types & new_messages_only,
                 self._handle_inbound_media,
             ),
             telegram_ext.MessageHandler(
@@ -475,6 +475,11 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
             return blocks
 
+        audio_video_block = await self._build_audio_video_block(message)
+        if audio_video_block is not None:
+            blocks.append(audio_video_block)
+            return blocks
+
         document = getattr(message, "document", None)
         if document is None:
             return blocks
@@ -509,6 +514,33 @@ class TelegramChannelAdapter(ChannelAdapter):
             )
         )
         return blocks
+
+    async def _build_audio_video_block(self, message: Any) -> MediaBlock | None:
+        """Store one voice/audio/video/video-note payload and return its media block."""
+        media_sources: tuple[tuple[str, Any], ...] = (
+            ("voice", _default_voice_filename),
+            ("audio", _default_audio_filename),
+            ("video", _default_video_filename),
+            ("video_note", _default_video_note_filename),
+        )
+        for attribute_name, default_filename_builder in media_sources:
+            media_object = getattr(message, attribute_name, None)
+            if media_object is None:
+                continue
+
+            file_id = getattr(media_object, "file_id", None)
+            if not isinstance(file_id, str) or not file_id.strip():
+                return None
+
+            filename = default_filename_builder(media_object)
+            record = await self._store_inbound_attachment(file_id=file_id, filename=filename)
+            return MediaBlock(
+                type="media",
+                attachment_id=record.id,
+                filename=record.filename,
+                media_type=record.media_type,
+            )
+        return None
 
     async def _store_inbound_attachment(self, *, file_id: str, filename: str) -> Any:
         attachment_store = self._attachment_store
@@ -1026,6 +1058,33 @@ def _default_document_filename(document: Any) -> str:
     if isinstance(file_unique_id, str) and file_unique_id.strip():
         return f"telegram-document-{file_unique_id.strip()}"
     return "telegram-document"
+
+
+def _media_filename(media_object: Any, prefix: str, extension: str) -> str:
+    filename = getattr(media_object, "file_name", None)
+    if isinstance(filename, str) and filename.strip():
+        return filename.strip()
+
+    file_unique_id = getattr(media_object, "file_unique_id", None)
+    if isinstance(file_unique_id, str) and file_unique_id.strip():
+        return f"{prefix}-{file_unique_id.strip()}{extension}"
+    return f"{prefix}{extension}"
+
+
+def _default_voice_filename(voice: Any) -> str:
+    return _media_filename(voice, "telegram-voice", ".ogg")
+
+
+def _default_audio_filename(audio: Any) -> str:
+    return _media_filename(audio, "telegram-audio", "")
+
+
+def _default_video_filename(video: Any) -> str:
+    return _media_filename(video, "telegram-video", ".mp4")
+
+
+def _default_video_note_filename(video_note: Any) -> str:
+    return _media_filename(video_note, "telegram-video-note", ".mp4")
 
 
 def _is_image_media_type(media_type: str) -> bool:
