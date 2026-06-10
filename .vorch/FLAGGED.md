@@ -267,3 +267,9 @@ Several test names and fixture names from earlier in the project still reference
 **Why it can be removed safely:** with `extra_headers` gone from the JSON, the merge is a no-op. If a future contributor adds `extra_headers` back to the provider config, the merge would silently re-introduce the leak that Phase 5 was designed to prevent. The current implementation is correct but offers a backdoor.
 
 **Why deferred:** removing it is a one-line change, but it changes behavior under a (currently unused) configuration shape. A test would have to assert that adding `extra_headers` to the provider JSON does *not* cause Codex headers to appear on the wire in the default mode — which is already tested by `test_default_mode_send_targets_chat_completions_endpoint`. Likely safe to remove; better as a deliberate follow-up.
+
+## 2026-06-10 — WebUI: legacy `streamingItems` tool-call path is dead in the render flow
+
+`ChatTimeline.svelte` renders exclusively through `visibleTimelineItemsForRender`, which filters out all `streamingItems` entries (`includeStreamingToolCalls: false`, `includeStreamingAssistantAndReasoning: false`). Since tool-call deltas now reach the rendered timeline through compressed `streamingRunEvents` (`appendCompressedToolCallDeltaEvent` in `chatState.js`), the entire `streamingItems` machinery — `appendToolCallStreamingItem`, `appendTextStreamingItem`, the `includeStreaming*` options in `buildVisibleTimelineItems`, `shouldRenderStreamingItem`, `labelForStreamingItem`, `streamingToolName` — only serves the non-render selector `visibleTimelineItems`, which no component uses (tests only).
+
+**Why deferred:** removal touches `chatState.js`, `chatTimeline.js`, `chatTimelinePresentation.js`, and a sizable block of tests; purely cleanup, no user-visible behavior. Worth doing as its own commit so the streaming-preview fix stays reviewable.
