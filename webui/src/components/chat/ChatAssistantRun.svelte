@@ -15,8 +15,10 @@
     subAgentDisplayResult,
     subAgentDotStatus,
     subAgentNavigationTarget,
+    subAgentNeedsStatusVerification,
     subAgentPreview,
     subAgentResultKey,
+    subAgentRunId,
     subAgentShouldFetchResult,
     subAgentToolStatusLabel,
     timestampForItem,
@@ -37,6 +39,7 @@
     onReasoningOpenChange = () => {},
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
+    onVerifySubAgentStatus = () => {},
     onRetry = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
@@ -93,6 +96,40 @@
   $effect(() => {
     for (const target of subAgentResultFetchTargets) {
       onRequestSubAgentResult(target.agentId, target.sessionId);
+    }
+  });
+
+  // A sub-agent row whose "running" dot comes only from the frozen persisted
+  // descriptor (no live `run:`/`session:` status has ever arrived) needs a
+  // verification round-trip against chat.history so it can settle to a terminal
+  // state. The parent (ChatView) owns the once-per-key guard and the history
+  // call; we just surface the rows that need it.
+  const subAgentVerificationTargets = $derived(
+    visibleRunChildren(item)
+      .filter((child) => isSubAgentTool(child))
+      .filter((child) =>
+        subAgentNeedsStatusVerification(
+          child,
+          subAgentDotStatus(child, item, subAgentStatuses),
+          subAgentStatuses,
+        ),
+      )
+      .map((child) => {
+        const target = subAgentNavigationTarget(child);
+        if (!target) {
+          return null;
+        }
+        return {
+          ...target,
+          runId: subAgentRunId(child),
+        };
+      })
+      .filter(Boolean),
+  );
+
+  $effect(() => {
+    for (const target of subAgentVerificationTargets) {
+      onVerifySubAgentStatus(target.agentId, target.sessionId, target.runId);
     }
   });
 </script>

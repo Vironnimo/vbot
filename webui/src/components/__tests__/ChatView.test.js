@@ -12,6 +12,14 @@ const linkSessionToChannelMock = vi.fn(async () => ({ ok: true }));
 const listQueueMock = vi.fn(async () => ({ items: [] }));
 const removeFromQueueMock = vi.fn(async () => ({ ok: true }));
 const updateQueueItemMock = vi.fn(async () => ({ ok: true }));
+const applyConnectionSnapshotMock = vi.fn();
+const closeSubscriptionForMock = vi.fn();
+// Per-mount references to the real chatState and runStream created inside
+// ChatView. The reconcile tests use these to introspect live session state
+// (and, for the staleRunId-guard test, to mutate `currentRun.runId` while
+// a `chat.history` request is in flight).
+const testChatStateRefs = [];
+const testRunStreamRefs = [];
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -31,6 +39,38 @@ vi.mock('$lib/api.js', () => ({
   removeFromQueue: (...args) => removeFromQueueMock(...args),
   updateQueueItem: (...args) => updateQueueItemMock(...args),
 }));
+
+// Wrap the real run-stream factory so the wiring test can observe calls to
+// `applyConnectionSnapshot` independently of whatever side effects the real
+// implementation triggers (sub-agent status updates, `subscribeRunEvents`
+// attach, etc.). The wiring assertion is purely "the effect called the run
+// stream's `applyConnectionSnapshot` with the snapshot prop", which the spy
+// captures cleanly while the real `chatRunStream.js` runs untouched.
+//
+// The reconcile tests need two more hooks: (1) a `closeSubscriptionFor` spy
+// that records the session key the reconcile path passed in, and (2) access
+// to the live `chatState` and `runStream` references created inside ChatView
+// (so the staleRunId-guard test can mutate `currentRun.runId` while a
+// `chat.history` request is in flight).
+vi.mock('../../lib/chatRunStream.js', async () => {
+  const actual = await vi.importActual('../../lib/chatRunStream.js');
+  return {
+    ...actual,
+    createChatRunStream: (options) => {
+      const stream = actual.createChatRunStream(options);
+      testChatStateRefs.push(options.chatState);
+      testRunStreamRefs.push(stream);
+      return {
+        ...stream,
+        applyConnectionSnapshot: applyConnectionSnapshotMock,
+        closeSubscriptionFor: (sessionKey) => {
+          closeSubscriptionForMock(sessionKey);
+          return stream.closeSubscriptionFor(sessionKey);
+        },
+      };
+    },
+  };
+});
 
 const { default: ChatView } = await import('../ChatView.svelte');
 
@@ -52,6 +92,10 @@ describe('ChatView', () => {
     removeFromQueueMock.mockResolvedValue({ ok: true });
     updateQueueItemMock.mockReset();
     updateQueueItemMock.mockResolvedValue({ ok: true });
+    applyConnectionSnapshotMock.mockReset();
+    closeSubscriptionForMock.mockReset();
+    testChatStateRefs.length = 0;
+    testRunStreamRefs.length = 0;
     mountedComponent = null;
   });
 
@@ -1861,8 +1905,586 @@ describe('ChatView', () => {
     expect(document.body.textContent).toContain('Parent:');
     expect(document.body.textContent).toContain('orchestrator/parent-session');
   });
-});
 
+  it('applies a non-null connectionSnapshot prop to the run stream', async () => {
+    const { createChatViewConnectionSnapshotHarness } =
+      await import('./chatViewConnectionSnapshotHarness.svelte.js');
+    const harness = createChatViewConnectionSnapshotHarness();
+    const snapshot = {
+      type: 'connection_ready',
+      epoch: 'bus-epoch-1',
+      last_sequence: 42,
+      active_runs: [
+        {
+          run_id: 'run-snapshot-1',
+          agent_id: 'alpha',
+          session_id: 'session-1',
+          status: 'running',
+          sse_url: '/api/runs/run-snapshot-1/events',
+        },
+      ],
+    };
+    harness.setConnectionSnapshot(snapshot);
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get connectionSnapshot() {
+          return harness.connectionSnapshot;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => applyConnectionSnapshotMock.mock.calls.length === 1,
+      100,
+    );
+
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledWith(snapshot);
+  });
+
+  it('does not re-apply the same connectionSnapshot reference (dedup)', async () => {
+    const { createChatViewConnectionSnapshotHarness } =
+      await import('./chatViewConnectionSnapshotHarness.svelte.js');
+    const harness = createChatViewConnectionSnapshotHarness();
+    const snapshot = {
+      type: 'connection_ready',
+      epoch: 'bus-epoch-1',
+      last_sequence: 42,
+      active_runs: [],
+    };
+    harness.setConnectionSnapshot(snapshot);
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+        get connectionSnapshot() {
+          return harness.connectionSnapshot;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => applyConnectionSnapshotMock.mock.calls.length === 1,
+      100,
+    );
+
+    // Re-assign the harness to the same snapshot object. Svelte 5's `$state`
+    // setter no-ops for the same reference, but the test still documents the
+    // dedup contract: even if the effect re-runs for the same reference, the
+    // call must not happen again.
+    harness.setConnectionSnapshot(snapshot);
+    flushSync();
+
+    expect(applyConnectionSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles a stuck running session when chat.history reports no active_run (B3 regression)', async () => {
+    const activeRuns = {
+      'session-1': {
+        run_id: 'run-stuck',
+        sse_url: '/api/runs/run-stuck/events',
+        status: 'running',
+        events: [],
+      },
+    };
+    rpcMock.mockImplementation(createChatRpcMock({ activeRuns }));
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T00:01:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    // Initial mount attaches the SSE stream for the active run from history.
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+
+    // The server has lost the run (terminal event missed, bus buffer rolled,
+    // or server restarted and the run is gone) — clear `activeRuns` so the
+    // next `chat.history` response no longer carries an `active_run`.
+    delete activeRuns['session-1'];
+
+    // Trigger a second `loadHistoryForSession` via the sessions drawer.
+    findButtonByText('Sessions')?.click();
+    await waitForCondition(
+      () => document.body.textContent.includes('session-1'),
+      100,
+    );
+    findButtonByText('session-1')?.click();
+
+    // Reconcile: the "Cancel run" button disappears, "New Session" is no
+    // longer disabled (so `canCreateNewSession(...)` is now true), and the
+    // run stream's `closeSubscriptionFor` was called for this session key.
+    await waitForCondition(
+      () => findButtonByText('Cancel run') === undefined,
+      100,
+    );
+
+    expect(findButtonByText('Cancel run')).toBeUndefined();
+    expect(findButtonByText('New Session')?.disabled).toBe(false);
+    expect(closeSubscriptionForMock).toHaveBeenCalledWith('alpha::session-1');
+    // No new SSE attach — the dead run is gone, not replaced.
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the session running when chat.history still reports the same active_run', async () => {
+    const activeRuns = {
+      'session-1': {
+        run_id: 'run-stuck',
+        sse_url: '/api/runs/run-stuck/events',
+        status: 'running',
+        events: [],
+      },
+    };
+    rpcMock.mockImplementation(createChatRpcMock({ activeRuns }));
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T00:01:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+
+    // `chat.history` still reports the same active run — the active_run is
+    // present on the second call, so no reconcile must fire.
+    findButtonByText('Sessions')?.click();
+    await waitForCondition(
+      () => document.body.textContent.includes('session-1'),
+      100,
+    );
+    findButtonByText('session-1')?.click();
+
+    // `attachRunStream` runs again via `runStream.attachRunStream(...)` for
+    // the second history load. The run is still the same id, so the
+    // `alreadySubscribed` dedup inside `attachRunStream` prevents a
+    // redundant SSE attach — `subscribeRunEvents` count stays at 1.
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'session-1',
+        ).length >= 2,
+      100,
+    );
+
+    expect(findButtonByText('Cancel run')).toBeTruthy();
+    expect(findButtonByText('New Session')?.disabled).toBe(true);
+    expect(closeSubscriptionForMock).not.toHaveBeenCalled();
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reset the session when currentRun.runId changes during the chat.history await', async () => {
+    // First history call: returns the running run so the session mounts in a
+    // running state with `currentRun.runId = 'run-stuck'`.
+    const initialActiveRuns = {
+      'session-1': {
+        run_id: 'run-stuck',
+        sse_url: '/api/runs/run-stuck/events',
+        status: 'running',
+        events: [],
+      },
+    };
+
+    // Second history call: returns no `active_run`. Held on a deferred so
+    // the test can mutate `currentRun.runId` between the request and the
+    // response — the exact race the `staleRunId` guard exists for.
+    let resolveSecondHistory;
+    const secondHistoryDeferred = new Promise((resolve) => {
+      resolveSecondHistory = resolve;
+    });
+    let chatHistoryCallCount = 0;
+
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'agent.list') {
+        return { agents: [createAgent()] };
+      }
+      if (method === 'chat.history') {
+        chatHistoryCallCount += 1;
+        if (chatHistoryCallCount === 1) {
+          return {
+            session_id: params.session_id,
+            messages: [
+              {
+                id: 'assistant-one',
+                role: 'assistant',
+                content: 'Hello',
+              },
+            ],
+            has_more: false,
+            active_run: initialActiveRuns[params.session_id],
+          };
+        }
+        return secondHistoryDeferred;
+      }
+      if (method === 'chat.commands') {
+        return { items: [] };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T00:01:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    // Wait for the first `chat.history` response to land and the SSE stream
+    // to be attached for the initial active run.
+    await waitForCondition(() => Boolean(findButtonByText('Cancel run')), 100);
+    expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
+
+    // Trigger a second `loadHistoryForSession`. This call is held on the
+    // deferred so we can race in a state mutation before it resolves.
+    findButtonByText('Sessions')?.click();
+    await waitForCondition(
+      () => document.body.textContent.includes('session-1'),
+      100,
+    );
+    findButtonByText('session-1')?.click();
+
+    // Wait for the second `chat.history` call to be in flight.
+    await waitForCondition(() => chatHistoryCallCount >= 2, 100);
+
+    // Race: a *new* run legitimately starts before the deferred response
+    // resolves. Simulate by mutating the live session state to a different
+    // `runId` than the one the loader captured as `staleRunId`.
+    const chatState = testChatStateRefs.at(-1);
+    const sessionState = chatState.sessions['alpha::session-1'];
+    expect(sessionState.currentRun?.runId).toBe('run-stuck');
+    sessionState.currentRun = {
+      runId: 'run-replacement',
+      sseUrl: '/api/runs/run-replacement/events',
+      status: 'running',
+    };
+    flushSync();
+
+    // Resolve the deferred with no `active_run` — history is unaware of the
+    // brand-new run (it started after the request was sent).
+    resolveSecondHistory({
+      session_id: 'session-1',
+      messages: [
+        {
+          id: 'assistant-one',
+          role: 'assistant',
+          content: 'Hello',
+        },
+      ],
+      has_more: false,
+    });
+    // The await resumes and runs the reconcile branch. `listQueue` is mocked
+    // separately in `api.js` and does not hit `rpcMock`, so the total
+    // `rpcMock` call count is `agent.list + chat.history × 2 + chat.commands`
+    // = 4. Wait for the second history response to land by waiting for the
+    // await chain inside `loadHistoryForSession` to reach the `await
+    // syncSessionQueue(sessionState)` call.
+    await waitForCondition(
+      () => chatHistoryCallCount >= 2 && sessionState.currentRun !== null,
+      100,
+    );
+    flushSync();
+
+    // Guard fired: `staleRunId === 'run-stuck'` and the live
+    // `currentRun.runId === 'run-replacement'`, so the reset branch did
+    // not run. The session is still in the running state and the
+    // `closeSubscriptionFor` reconcile hook was not called.
+    expect(sessionState.status).toBe('running');
+    expect(sessionState.currentRun?.runId).toBe('run-replacement');
+    expect(closeSubscriptionForMock).not.toHaveBeenCalled();
+    expect(findButtonByText('Cancel run')).toBeTruthy();
+    expect(findButtonByText('New Session')?.disabled).toBe(true);
+  });
+
+  // Helper: render a single running sub-agent tool row in the parent
+  // timeline (mirrors the fast-subagent test setup). The caller is
+  // responsible for installing an `rpcMock.mockImplementation` first; this
+  // helper does NOT overwrite it (the verify tests pass a custom mock that
+  // must keep responding after the mount completes).
+  async function mountChatViewWithRunningSubAgent() {
+    mountedComponent = mount(ChatView, {
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Spawn background sub-agent');
+
+    await waitForCondition(
+      () => subscribeRunEventsMock.mock.calls.length === 1,
+      100,
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_started',
+        run_id: 'run-verify-1',
+        sequence: 1,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+            arguments: {
+              agent_id: 'alpha',
+              blocking: false,
+              content: 'Inspect the project',
+            },
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'subagent_session_started',
+        run_id: 'run-verify-1',
+        sequence: 2,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+          },
+          data: {
+            agent_id: 'alpha',
+            session_id: 'sub-session-1',
+            run_id: 'verify-run',
+            status: 'running',
+          },
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'tool_call_result',
+        run_id: 'run-verify-1',
+        sequence: 3,
+        payload: {
+          tool_call: {
+            id: 'call-verify-1',
+            index: 0,
+            name: 'subagent',
+          },
+          result: JSON.stringify({
+            ok: true,
+            data: {
+              agent_id: 'alpha',
+              session_id: 'sub-session-1',
+              run_id: 'verify-run',
+              status: 'running',
+            },
+          }),
+        },
+      },
+    });
+    flushSync();
+
+    // The sub-agent row is in the parent timeline, dot still "running"
+    // because the frozen persisted descriptor says so.
+    const runningRow = document.querySelector('.subagent-tool-event');
+    expect(runningRow).not.toBeNull();
+    expect(runningRow?.querySelector('.te-dot.running')).not.toBeNull();
+    return runningRow;
+  }
+
+  // Custom RPC mock factory for the sub-agent verification tests. The
+  // default `createChatRpcMock` returns plain assistant messages for
+  // `sub-session-1`; the verify path needs to see a `run_summary` (or an
+  // `active_run`) in the response. The test passes the response override
+  // for `sub-session-1`; everything else falls through to the default
+  // behaviour.
+  function createVerifyRpcMock({ subSessionHistory }) {
+    const fallback = createChatRpcMock({
+      streamResponse: {
+        run_id: 'run-verify-1',
+        sse_url: '/api/runs/run-verify-1/events',
+        status: 'running',
+        events: [],
+      },
+    });
+    return async (method, params) => {
+      if (method === 'chat.history' && params?.session_id === 'sub-session-1') {
+        return subSessionHistory;
+      }
+      return fallback(method, params);
+    };
+  }
+
+  it('verifySubAgentStatus: settles a stuck running sub-agent dot from a run_summary in chat.history (B5 regression)', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [
+            {
+              id: 'sub-assistant-original',
+              role: 'assistant',
+              content: 'Sub-agent response',
+            },
+            {
+              id: 'sub-run-summary-1',
+              role: 'run_summary',
+              run_id: 'verify-run',
+              status: 'completed',
+              timing: { duration_ms: 4200 },
+            },
+          ],
+          has_more: false,
+        },
+      }),
+    );
+
+    await mountChatViewWithRunningSubAgent();
+
+    // The verification call hits the public exported method (same one
+    // the future `onVerifySubAgentStatus` callback chain will invoke).
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    // Dot settled to "done" (status "completed" → dot "success") and the
+    // child duration rendered in the time label.
+    const settledRow = document.querySelector('.subagent-tool-event');
+    expect(settledRow).not.toBeNull();
+    expect(settledRow?.querySelector('.te-dot.running')).toBeNull();
+    expect(settledRow?.querySelector('.te-dot.done')).not.toBeNull();
+    expect(settledRow?.querySelector('.te-time')?.textContent?.trim()).toBe(
+      '4.2s',
+    );
+
+    // The verify path targeted the right RPC (at least one verify
+    // round-trip; the row's settled "success" dot also triggers the
+    // existing `requestSubAgentResult` lookup, so more than one call is
+    // expected and acceptable).
+    const verifyHistoryCalls = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    );
+    expect(verifyHistoryCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('verifySubAgentStatus: keeps the dot running when chat.history reports an active_run, with a once-per-key guard', async () => {
+    rpcMock.mockImplementation(
+      createVerifyRpcMock({
+        subSessionHistory: {
+          session_id: 'sub-session-1',
+          messages: [],
+          has_more: false,
+          active_run: {
+            run_id: 'verify-run',
+            sse_url: '/api/runs/verify-run/events',
+            status: 'running',
+            events: [],
+          },
+        },
+      }),
+    );
+
+    await mountChatViewWithRunningSubAgent();
+
+    // First call: chat.history returns active_run → dot stays "running".
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    const stillRunningRow = document.querySelector('.subagent-tool-event');
+    expect(stillRunningRow).not.toBeNull();
+    expect(stillRunningRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(stillRunningRow?.querySelector('.te-dot.done')).toBeNull();
+
+    const historyCallCountAfterFirst = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    ).length;
+
+    // Second call with the same key: the once-per-key guard must short-
+    // circuit and not issue a second `chat.history` round-trip.
+    await mountedComponent.verifySubAgentStatus(
+      'alpha',
+      'sub-session-1',
+      'verify-run',
+    );
+    flushSync();
+
+    const historyCallCountAfterSecond = rpcMock.mock.calls.filter(
+      ([method, params]) =>
+        method === 'chat.history' &&
+        params?.session_id === 'sub-session-1' &&
+        params?.limit === 20,
+    ).length;
+
+    expect(historyCallCountAfterSecond).toBe(historyCallCountAfterFirst);
+
+    // The dot is still running — the verify path did not flip it to
+    // "done".
+    const finalRow = document.querySelector('.subagent-tool-event');
+    expect(finalRow?.querySelector('.te-dot.running')).not.toBeNull();
+    expect(finalRow?.querySelector('.te-dot.done')).toBeNull();
+  });
+});
 function createChatRpcMock({
   usage,
   contextWindow = 262144,

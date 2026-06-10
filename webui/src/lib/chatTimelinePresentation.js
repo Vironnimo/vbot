@@ -358,6 +358,12 @@ export const subAgentAgentId = (tool) => {
   );
 };
 
+export const subAgentRunId = (tool) => {
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
+  return trimmedString(data.run_id) || trimmedString(args.run_id);
+};
+
 export const subAgentPreview = (tool) => {
   const args = subAgentArguments(tool);
   const toolName = toolNameForRunTool(tool);
@@ -440,6 +446,47 @@ export const subAgentShouldFetchResult = (tool, dotStatus) => {
     return false;
   }
   return Boolean(subAgentNavigationTarget(tool));
+};
+
+// The sub-agent dot falls back to the frozen persisted descriptor's `status`
+// (subAgentResultData.status) when no external `run:`/`session:` status has
+// arrived. That fallback is what produces a "running" dot forever after a missed
+// terminal event, a rolled replay buffer, or a server restart. When neither the
+// `run:<run_id>` nor the `session:<agent_id>::<session_id>` key has been seen
+// at all, the only thing telling us the child is still running is that frozen
+// descriptor, and the run component should ask the parent to verify against
+// durable chat.history.
+export const subAgentNeedsStatusVerification = (
+  tool,
+  dotStatus,
+  subAgentStatuses = {},
+) => {
+  if (dotStatus !== 'running') {
+    return false;
+  }
+  const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
+
+  const args = subAgentArguments(tool);
+  const data = subAgentResultData(tool);
+  const runId = trimmedString(data.run_id) || trimmedString(args.run_id);
+  if (runId && Object.prototype.hasOwnProperty.call(statuses, `run:${runId}`)) {
+    return false;
+  }
+
+  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const sessionId = subAgentSessionId(tool);
+  if (
+    agentId &&
+    sessionId &&
+    Object.prototype.hasOwnProperty.call(
+      statuses,
+      `session:${agentId}::${sessionId}`,
+    )
+  ) {
+    return false;
+  }
+
+  return true;
 };
 
 // Returns the value to render in the tool's Result row. With a fetched result it
