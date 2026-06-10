@@ -50,11 +50,16 @@ export function createChatRunStream({
     clearPendingReconnect(sessionState.key);
     const afterSequence =
       options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
-    const retryAttempt = options.retryAttempt ?? 0;
+    let retryAttempt = options.retryAttempt ?? 0;
     const subscription = subscribeRunEvents(
       sseUrl,
       {
         onEvent: ({ data }) => {
+          // Events are flowing, so a later drop is a fresh transient failure,
+          // not a continuation of earlier ones. Without this reset the
+          // attempts accumulate across the whole run and a handful of drops
+          // hours apart would permanently close the live stream.
+          retryAttempt = 0;
           queueRunEvent(sessionState, data);
         },
         onError: (error) => {
@@ -266,16 +271,19 @@ export function createChatRunStream({
         return;
       }
       closeRunSubscription(sessionKey);
-      pendingReconnects[sessionKey] = setTimeout(() => {
-        delete pendingReconnects[sessionKey];
-        if (sessionState.currentRun?.runId !== currentRun.runId) {
-          return;
-        }
-        subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
-          afterSequence: highestContiguousRunEventSequence(sessionState),
-          retryAttempt: retryAttempt + 1,
-        });
-      }, SSE_RECONNECT_DELAY_MS);
+      pendingReconnects[sessionKey] = setTimeout(
+        () => {
+          delete pendingReconnects[sessionKey];
+          if (sessionState.currentRun?.runId !== currentRun.runId) {
+            return;
+          }
+          subscribeToRun(sessionState, currentRun.sseUrl || sseUrl, {
+            afterSequence: highestContiguousRunEventSequence(sessionState),
+            retryAttempt: retryAttempt + 1,
+          });
+        },
+        SSE_RECONNECT_DELAY_MS * 2 ** retryAttempt,
+      );
       return;
     }
 
