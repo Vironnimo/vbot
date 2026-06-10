@@ -12,6 +12,7 @@ export function createConnectionState() {
   return {
     status: CONNECTION_STATUS_RECONNECTING,
     lastSequence: 0,
+    epoch: '',
     _connection: null,
     _reconnectTimer: null,
     _reconnectAttempt: 0,
@@ -36,6 +37,14 @@ export function connect(state, handlers = {}) {
         _scheduleReconnect(state, handlers);
       },
       onEvent: (event) => {
+        if (event.type === 'connection_ready') {
+          state.epoch = event.epoch ?? '';
+          state.lastSequence = Number.isFinite(event.last_sequence)
+            ? event.last_sequence
+            : 0;
+          handlers.onEvent?.(event);
+          return;
+        }
         if (event.sequence > state.lastSequence) {
           state.lastSequence = event.sequence;
         }
@@ -46,6 +55,7 @@ export function connect(state, handlers = {}) {
       WebSocket: handlers._WebSocket,
       baseUrl: handlers._baseUrl,
       afterSequence,
+      epoch: state.epoch,
     },
   );
 

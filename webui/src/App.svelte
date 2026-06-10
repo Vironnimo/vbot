@@ -75,6 +75,7 @@
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
+  const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
   const RUN_SERVER_EVENT_TYPES = new Set([
     'run_started',
     'run_output',
@@ -104,6 +105,12 @@
   let pendingSubAgentNavigation = $state(null);
   let providerAuthEvent = $state(null);
   let runServerEvents = $state([]);
+  // Holds the most recent `/ws` `connection_ready` hello frame (epoch,
+  // last_sequence, active_runs). The frame has no `payload.run_id`/
+  // `run_event_sequence`, so `runServerEvents` cannot ingest it — it lives
+  // alongside the lifecycle list and is forwarded to ChatView as a separate
+  // prop. ChatView decides what (if anything) to do with the snapshot.
+  let connectionSnapshot = $state(null);
   let desktopCapabilities = $state(null);
   let wakewordStatus = $state({ enabled: false, state: 'off' });
   let settingsPanelTarget = $state('');
@@ -231,6 +238,15 @@
       return;
     }
 
+    if (event.type === CONNECTION_READY_EVENT_TYPE) {
+      // Stash the full hello frame so ChatView can hydrate from the snapshot
+      // instead of relying on the WS replay buffer. Do NOT append to
+      // `runServerEvents`: the frame has no `run_id`/`run_event_sequence`,
+      // so `runServerEventKey` would drop it on the floor.
+      connectionSnapshot = event;
+      return;
+    }
+
     if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
       runServerEvents = [...runServerEvents, event].slice(
         -MAX_RUN_SERVER_EVENTS,
@@ -263,6 +279,14 @@
       selectView('settings');
     }
   };
+
+  // Exposed for tests so the routing in `handleServerEvent` can be verified
+  // without depending on ChatView's internal state. Production code reads
+  // `connectionSnapshot` via the `<ChatView connectionSnapshot={...} />` prop
+  // binding above.
+  export function getConnectionSnapshot() {
+    return connectionSnapshot;
+  }
 
   onMount(() => {
     let cancelled = false;
@@ -340,6 +364,7 @@
       {navigateToSubAgent}
       {pendingSubAgentNavigation}
       {runServerEvents}
+      {connectionSnapshot}
       {wakewordStatus}
       {desktopCapabilities}
       onNavigateToVoiceSettings={navigateToVoiceSettings}
