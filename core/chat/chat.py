@@ -76,6 +76,7 @@ from core.chat.messages import (
     _notes_to_synthetic_user_message,
     _restore_active_tool_continuation,
     _session_has_any_content_blocks,
+    _strip_assistant_reasoning_fields,
 )
 from core.chat.messages import (
     InputOrigin as InputOrigin,
@@ -430,6 +431,10 @@ class ChatLoop:
                             "Primary model unavailable. Switched to "
                             f"{fallback_model_str} for this run."
                         )
+                        # The reused messages list may carry current-turn
+                        # reasoning/reasoning_meta from the primary provider;
+                        # stale meta must never reach the fallback provider.
+                        _strip_assistant_reasoning_fields(messages)
                         try:
                             return await self._send_until_final(
                                 agent,
