@@ -201,6 +201,14 @@ class SubAgentBatchTracker:
                 f"agent={parent_key[0]} session={parent_key[1]} run={parent_key[2]}",
             )
         )
+        # The completion note embeds every pending entry's full result and the
+        # tool contract forbids fetching them again via subagent_result, so no
+        # later fetch will ever mark them. Without this the batch (including
+        # each child's complete final output string) leaks for the lifetime of
+        # the server process.
+        for pending_entry in pending_entries:
+            pending_entry.fetched = True
+        self._prune_if_finished(parent_key, batch)
 
     def mark_fetched(
         self,
