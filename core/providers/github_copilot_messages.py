@@ -8,7 +8,6 @@ responses/stream events back to the adapter delta contract consumed by chat.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,10 +15,6 @@ from core.providers.anthropic import apply_anthropic_cache_usage
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
-
-SSE_DATA_PREFIX = "data: "
-SSE_EVENT_PREFIX = "event: "
-SSE_DONE_MARKER = "[DONE]"
 
 TEXT_BLOCK_TYPE = "text"
 TOOL_USE_BLOCK_TYPE = "tool_use"
@@ -107,29 +102,6 @@ def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, A
     if usage is not None:
         normalized["usage"] = usage
     return normalized
-
-
-def normalize_copilot_messages_sse_line(
-    line: str,
-    state: CopilotMessagesStreamState,
-) -> list[dict[str, Any]]:
-    """Normalize one Anthropic-like Copilot SSE line into vBot deltas."""
-
-    if line.startswith(SSE_EVENT_PREFIX):
-        return []
-    if not line.startswith(SSE_DATA_PREFIX):
-        return []
-
-    data = line[len(SSE_DATA_PREFIX) :]
-    if not data.strip() or data.strip() == SSE_DONE_MARKER:
-        return []
-    try:
-        event = json.loads(data)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(event, dict):
-        return []
-    return normalize_copilot_messages_stream_event(event, state)
 
 
 def normalize_copilot_messages_stream_event(

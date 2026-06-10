@@ -20,7 +20,6 @@ from server.rpc import (
     settings_methods,
 )
 from server.rpc import errors as rpc_errors
-from server.rpc.dispatcher import dispatch_method as _dispatch_rpc_method
 from server.rpc.dispatcher import dispatch_rpc as _dispatch_rpc_envelope
 from server.rpc.methods import build_method_handlers
 
@@ -48,11 +47,6 @@ async def dispatch_rpc(state: Any, request: Any) -> JsonObject:
     """Dispatch one JSON-RPC-like vBot server request."""
     _sync_legacy_aliases()
     return await _dispatch_rpc_envelope(state, request, build_method_handlers())
-
-
-async def _dispatch_method(state: Any, method: str, params: JsonObject) -> JsonObject:
-    _sync_legacy_aliases()
-    return await _dispatch_rpc_method(state, method, params, build_method_handlers())
 
 
 def _sync_legacy_aliases() -> None:

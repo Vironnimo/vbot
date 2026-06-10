@@ -267,3 +267,22 @@ Several test names and fixture names from earlier in the project still reference
 **Why it can be removed safely:** with `extra_headers` gone from the JSON, the merge is a no-op. If a future contributor adds `extra_headers` back to the provider config, the merge would silently re-introduce the leak that Phase 5 was designed to prevent. The current implementation is correct but offers a backdoor.
 
 **Why deferred:** removing it is a one-line change, but it changes behavior under a (currently unused) configuration shape. A test would have to assert that adding `extra_headers` to the provider JSON does *not* cause Codex headers to appear on the wire in the default mode — which is already tested by `test_default_mode_send_targets_chat_completions_endpoint`. Likely safe to remove; better as a deliberate follow-up.
+
+## 2026-06-11 — Dead-code sweep: test-only public APIs left in place
+
+A vulture + reference sweep removed confirmed dead code (see commit `chore: remove dead code`).
+These candidates were deliberately **not** removed because they are public APIs exercised only by
+tests — possibly superseded, but deleting them means rewriting the tests that use them:
+
+- `core/storage/storage.py` — per-section `update_appearance_settings` / `update_skill_directory_settings` /
+  `update_recall_settings` / `update_debug_settings` / `update_web_search_settings` / `update_defaults` /
+  `update_compaction_settings`. Production goes through `update_settings_sections` (one transaction over
+  the private `_apply_*` helpers); the public per-section wrappers are used only by
+  `tests/core/storage/test_storage*.py` and mirrored by the fake in `tests/server/test_rpc.py`.
+- `core/recall/vector_store.py` — `upsert_session` is unused by the vector backend (`vector.py` writes via
+  `upsert_many_chunks`) but is the seeding helper for `tests/core/recall/test_vector_store.py`.
+- `core/providers/github_copilot_responses.py` — `iter_responses_sse_deltas` is a stateless wrapper around
+  `iter_responses_sse_deltas_with_state`; production uses only the `_with_state` variant, ~20 tests use the wrapper.
+
+**Why deferred:** removing them is a test refactor, not a dead-code deletion — each needs its tests
+rewritten against the surviving API and re-verified. Do it per-domain when those tests are touched anyway.
