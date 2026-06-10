@@ -474,6 +474,26 @@ export function isRunActive(sessionState) {
   return sessionState?.status === CHAT_STATUS_RUNNING;
 }
 
+// Reset a session's live Run state when history has confirmed the Run is no
+// longer active (e.g. the terminal event was missed, the SSE stream gave up,
+// the bus buffer rolled, or the server restarted). Leaving `runEvents` and
+// `messages` untouched lets the freshly loaded history become the displayed
+// source: with `currentRun` null, `selectTrackedRunTimelineSource` falls back
+// to the persisted history and the session stops being treated as running.
+export function resetStaleRun(sessionState) {
+  if (!sessionState) {
+    return sessionState;
+  }
+  sessionState.status = CHAT_STATUS_IDLE;
+  sessionState.streamStatus = CHAT_STATUS_IDLE;
+  sessionState.currentRun = null;
+  sessionState.streamingItems = [];
+  sessionState.streamingRunEvents = [];
+  sessionState.streamingPhase = 0;
+  sessionState.seenStreamingEventKeys = new Set();
+  return sessionState;
+}
+
 export function normalizeRunEvent(event) {
   if (!event || typeof event !== 'object') {
     return null;

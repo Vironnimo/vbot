@@ -373,6 +373,11 @@ export function createChatRunStream({
     delete activeSubscriptions[sessionKey];
   }
 
+  function closeSubscriptionFor(sessionKey) {
+    closeRunSubscription(sessionKey);
+    clearPendingReconnect(sessionKey);
+  }
+
   function closeSubscriptionsExcept(sessionKey) {
     for (const key of Object.keys(activeSubscriptions)) {
       if (key === sessionKey) {
@@ -477,6 +482,7 @@ export function createChatRunStream({
   return {
     applyConnectionSnapshot,
     attachRunStream,
+    closeSubscriptionFor,
     closeSubscriptions,
     closeSubscriptionsExcept,
     handleServerEvents,
