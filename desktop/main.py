@@ -187,8 +187,6 @@ def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
                 time.sleep(0.05 * (attempt + 1))
                 continue
             return
-        else:
-            return
 
 
 def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:

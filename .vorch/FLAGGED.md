@@ -273,3 +273,22 @@ Several test names and fixture names from earlier in the project still reference
 A `python scripts/quality-frontend.py <4 source files + 3 test files>` run failed its vitest gate with `TypeError: Cannot read properties of undefined (reading 'config')` thrown at top-level `describe(...)` in ~10 test files, including files untouched by the change (`toastState.test.js`, `wakewordSettings.test.js`). Re-running the exact same vitest invocation (`npx vitest run --reporter=verbose src/lib src/lib src/components/chat src/components <3 test files>`, overlapping/duplicate directory targets included) passed 36/36 files, as did file-scoped and full-scan runs immediately after.
 
 **Why deferred:** not reproducible in three attempts — looks like a transient Vitest 4 worker/context crash, not a target-translation bug in `quality-frontend.py`. Nothing actionable without a reproduction; noted here so a recurrence has a trail.
+
+## 2026-06-11 — Dead-code sweep: test-only public APIs left in place
+
+A vulture + reference sweep removed confirmed dead code (see commit `chore: remove dead code`).
+These candidates were deliberately **not** removed because they are public APIs exercised only by
+tests — possibly superseded, but deleting them means rewriting the tests that use them:
+
+- `core/storage/storage.py` — per-section `update_appearance_settings` / `update_skill_directory_settings` /
+  `update_recall_settings` / `update_debug_settings` / `update_web_search_settings` / `update_defaults` /
+  `update_compaction_settings`. Production goes through `update_settings_sections` (one transaction over
+  the private `_apply_*` helpers); the public per-section wrappers are used only by
+  `tests/core/storage/test_storage*.py` and mirrored by the fake in `tests/server/test_rpc.py`.
+- `core/recall/vector_store.py` — `upsert_session` is unused by the vector backend (`vector.py` writes via
+  `upsert_many_chunks`) but is the seeding helper for `tests/core/recall/test_vector_store.py`.
+- `core/providers/github_copilot_responses.py` — `iter_responses_sse_deltas` is a stateless wrapper around
+  `iter_responses_sse_deltas_with_state`; production uses only the `_with_state` variant, ~20 tests use the wrapper.
+
+**Why deferred:** removing them is a test refactor, not a dead-code deletion — each needs its tests
+rewritten against the surviving API and re-verified. Do it per-domain when those tests are touched anyway.

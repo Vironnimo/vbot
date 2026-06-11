@@ -267,11 +267,6 @@ class GitHubCopilotModelPolicy:
             return "none" if self.allows_any_reasoning_controls else None
         return closest_supported_effort(normalized_effort, self.allowed_reasoning_efforts)
 
-    def allows_openai_reasoning_effort(self, thinking_effort: str) -> bool:
-        """Compatibility alias used by existing Copilot tests and adapter code."""
-
-        return self.allows_reasoning_effort(thinking_effort)
-
     def supports_request_parameter(self, parameter_name: str) -> bool:
         return parameter_name in self.supported_request_parameters
 

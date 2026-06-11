@@ -713,16 +713,6 @@ class ChannelService:
             exc_info=(type(error), error, error.__traceback__),
         )
 
-    def _cancel_stop_task(self, channel_id: str) -> None:
-        task = self._adapter_stop_tasks.pop(channel_id, None)
-        if task is None or task.done():
-            return
-
-        if task is asyncio.current_task():
-            return
-
-        task.cancel()
-
     def _active_adapter(self, channel_id: str) -> ChannelAdapter:
         task = self._adapter_tasks.get(channel_id)
         adapter = self._adapters.get(channel_id)

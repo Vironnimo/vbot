@@ -21,21 +21,6 @@ def _connection_has_credentials(runtime: Any, provider_id: str, connection_id: s
     return bool(runtime.provider_credentials.has_credentials(provider_id, connection_id))
 
 
-async def _first_usable_provider_credential(
-    runtime: Any,
-    provider_id: str,
-    provider: Any,
-) -> tuple[Any, str]:
-    for connection in provider.connections:
-        connection_id = f"{provider_id}:{connection.id}"
-        if runtime.provider_credentials.has_credentials(provider_id, connection_id):
-            credential = await _runtime_provider_credential(
-                runtime, provider_id, connection_id, connection
-            )
-            return connection, str(credential)
-    raise ConfigError(f"Provider credentials not found for provider '{provider_id}'")
-
-
 async def _runtime_provider_credential(
     runtime: Any,
     provider_id: str,
