@@ -20,7 +20,8 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - `ChatSession.begin_defer_notes()` / `flush_deferred_notes()` — bracket tool dispatch so notes created during a tool-use turn are persisted after that turn's tool-result messages.
 - `ChatSession.drain_pending_notes()` — returns queued note messages and clears only the in-memory pending-note buffer.
 - `ChatSession.activate_skill_context(name, data)` — stores one activated skill's `<skill_content>` context once per Session, persists it as an internal skill-context note, and returns a stable tool result envelope.
-- `ChatSession.skill_context_messages()` — restores activated skill contexts as provider request messages.
+- `ChatSession.skill_context_messages(messages=None)` — restores activated skill contexts as provider request messages. Callers that already hold the session's loaded messages pass them to avoid a second full session read (the chat loop does this in `_build_request_messages`).
+- `ChatSession.bookend_timestamps()` — returns `(first, last)` message timestamps by reading only the first and last complete JSONL lines (backward chunked tail read). Returns `None` when the fast path cannot answer (empty file, partial trailing write, unparseable bookend line); callers must then fall back to `load()`, which owns partial-write recovery.
 - `ChatSession.delete()` — deletes the session file and its metadata sidecar (both `missing_ok`).
 - `ChatSessionManager(data_dir)` — the path-free entry point for sessions: `create` / `get` / `get_or_create` / `exists` / `list` / `delete(agent_id, session_id)` resolve agent session roots so callers never construct `.jsonl` paths; all validate the session ID first.
 - `ChatSessionManager.get_metadata(agent_id, session_id)` / `set_metadata(...)` — read/write arbitrary JSON-object metadata through the current sidecar file using atomic replace.
@@ -34,7 +35,7 @@ The Sessions domain owns persistence and file-format details. Chat code may appe
 - Metadata sidecars use `<session-id>.meta.json` beside the session file.
 - Session IDs must be 1-128 ASCII letters, digits, hyphen, or underscore and must not start with punctuation.
 - Public/server-facing session identifiers are UUID strings. Internal helpers may accept custom IDs, but must validate them before any path construction.
-- `list_with_metadata()` derives `created_at` and `last_active_at` from first and last persisted messages; empty sessions fall back to the session file mtime.
+- `list_with_metadata()` derives `created_at` and `last_active_at` from first and last persisted messages; empty sessions fall back to the session file mtime. It uses `bookend_timestamps()` so listing does not load full session files; the full `load()` path runs only when the fast path returns `None`.
 - Unknown future fields in persisted message JSON may appear; session storage validates through `ChatMessage.from_dict()` and should not depend on provider-specific metadata shape.
 
 ## Cross-Domain Rules
