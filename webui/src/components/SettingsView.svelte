@@ -140,7 +140,7 @@
       subtitle: () =>
         t(
           'settings.providers.subtitle',
-          'API-key presence and endpoint metadata for available providers.',
+          'Connected providers and their credentials.',
         ),
     },
     {

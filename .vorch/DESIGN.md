@@ -326,6 +326,14 @@ Two types:
 - **Simple** — Absolute-positioned list below trigger. Uses `surface-2` + `border-2`.
 - **Searchable** — Fixed-positioned panel (escapes any `overflow: hidden` ancestor). Has a filter input header with a search icon. Panel border uses accent tint `rgba(accent, 0.3)` to signal "elevated and interactive".
 
+### Modal pick lists
+
+Choice steps inside modals (e.g. provider/connection selection in the provider
+connect modal) render as a vertical list of full-width button cards: `bg` fill,
+`border-2` border, 6px radius, name in Sans (`text-hi`) with detail line in
+mono (`text-lo`). Hover/focus shifts to accent border + `accent-dim` tint, the
+same interaction language as dropdown options.
+
 ### Inline SVG icons
 
 If we use inline SVGs without explicit `width` and `height`, they can suddenly render far too large because size falls back to browser/default layout behavior. To prevent that, always set SVG icon dimensions explicitly.

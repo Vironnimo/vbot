@@ -1108,9 +1108,7 @@ async function openProvidersPanel() {
   await waitForCondition(() => buttonByText('Providers'));
   buttonByText('Providers').click();
   flushSync();
-  await waitForCondition(() =>
-    document.body.textContent.includes('OpenRouter'),
-  );
+  await waitForCondition(() => buttonByText('Add provider'));
 }
 
 async function openChannelsPanel() {
@@ -1734,6 +1732,7 @@ function settingsPayload(options = {}) {
   if (options.eligibleProvider === false) {
     openrouter.credentials_configured = false;
     openrouter.status = 'missing_credentials';
+    openrouter.connections[0].configured = false;
   }
 
   const providers = [openrouter, provider('openai', 'OpenAI', null)];
@@ -1797,7 +1796,15 @@ function provider(id, name, modelsEndpoint) {
     name,
     base_url: `https://${id}.example.test`,
     models_endpoint: modelsEndpoint,
-    connections: [],
+    connections: [
+      {
+        id: `${id}:api-key`,
+        type: 'api_key',
+        label: 'API Key',
+        configured: true,
+        credential_key: `${id.toUpperCase()}_API_KEY`,
+      },
+    ],
     credentials_configured: true,
     status: 'configured',
     model_count: 1,
