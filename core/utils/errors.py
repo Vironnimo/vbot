@@ -16,6 +16,16 @@ class ConfigError(VBotError):
     """
 
 
+class StorageError(VBotError):
+    """Raised for invalid storage data or unsafe storage paths.
+
+    Lives here (not in ``core/storage/``) because the settings domain's
+    section normalizers raise it too; a storage-package home would force
+    a settings -> storage import cycle. ``core.storage.errors`` re-exports
+    it as the storage domain's canonical error.
+    """
+
+
 class ProviderError(VBotError):
     """Provider / API errors.
 

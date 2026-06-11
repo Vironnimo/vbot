@@ -2,8 +2,9 @@
 
 ``StorageManager`` owns the data-directory lifecycle, ``.env`` credential snapshots,
 and serialized read-modify-write transactions over ``settings.json``. Section
-normalization is delegated to :mod:`core.storage.settings_normalizers` and prompt
-fragments to :class:`core.storage.prompt_fragments.PromptFragmentStore`.
+normalization is delegated to :mod:`core.settings.normalizers` (the settings domain
+owns the section schemas) and prompt fragments to
+:class:`core.storage.prompt_fragments.PromptFragmentStore`.
 """
 
 from __future__ import annotations
@@ -18,10 +19,7 @@ from typing import Any, Protocol, TypeVar
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.settings import SettingsValidationError, load_validated_settings_json
-from core.storage.atomic import remove_temporary_file, temporary_path
-from core.storage.errors import StorageError
-from core.storage.prompt_fragments import PromptFragmentStore
-from core.storage.settings_normalizers import (
+from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     coerce_defaults_section,
     coerce_defaults_update,
@@ -40,6 +38,9 @@ from core.storage.settings_normalizers import (
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
 )
+from core.storage.atomic import remove_temporary_file, temporary_path
+from core.storage.errors import StorageError
+from core.storage.prompt_fragments import PromptFragmentStore
 from core.utils.config import build_environment_snapshot, read_env_file
 
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")

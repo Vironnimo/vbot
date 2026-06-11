@@ -1,5 +1,10 @@
 """Settings domain public API."""
 
+from core.settings.normalizers import (
+    DEFAULT_APPEARANCE_LANGUAGE,
+    DEFAULT_RECALL_SETTINGS,
+    SUPPORTED_APPEARANCE_LANGUAGES,
+)
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     SettingsValidationError,
@@ -28,8 +33,11 @@ from core.settings.validation import (
 
 __all__ = [
     "AGENT_DEFAULT_FIELDS",
+    "DEFAULT_APPEARANCE_LANGUAGE",
+    "DEFAULT_RECALL_SETTINGS",
     "JsonDiagnostic",
     "JsonValidationReport",
+    "SUPPORTED_APPEARANCE_LANGUAGES",
     "SettingsDiagnostic",
     "SettingsValidationError",
     "SettingsValidationReport",
