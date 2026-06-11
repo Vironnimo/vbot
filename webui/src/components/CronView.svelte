@@ -48,8 +48,8 @@
   );
   let modalTitle = $derived(
     formMode === FORM_MODE_CREATE
-      ? t('cron.modal.createTitle', 'Create Cron Job')
-      : t('cron.modal.editTitle', 'Edit Cron Job'),
+      ? t('cron.modal.createTitle', 'Create cron job')
+      : t('cron.modal.editTitle', 'Edit cron job'),
   );
   let agentOptions = $derived(
     viewState.agents.map((agent) => ({
@@ -386,7 +386,7 @@
         <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
           <path d="M7 1v12M1 7h12" />
         </svg>
-        {t('cron.newJob', 'New Job')}
+        {t('cron.newJob', 'New job')}
       </button>
     </div>
   </header>
@@ -438,8 +438,8 @@
             <th>{t('cron.table.schedule', 'Schedule')}</th>
             <th>{t('cron.table.timezone', 'Timezone')}</th>
             <th>{t('cron.table.status', 'Status')}</th>
-            <th>{t('cron.table.lastFired', 'Last Fired')}</th>
-            <th>{t('cron.table.nextFire', 'Next Fire')}</th>
+            <th>{t('cron.table.lastFired', 'Last fired')}</th>
+            <th>{t('cron.table.nextFire', 'Next fire')}</th>
             <th>{t('cron.table.actions', 'Actions')}</th>
           </tr>
         </thead>

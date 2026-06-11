@@ -233,7 +233,7 @@ describe('ChatView', () => {
     );
 
     expect(findButtonByText('Sessions')).toBeTruthy();
-    expect(findButtonByText('New Session')).toBeTruthy();
+    expect(findButtonByText('New session')).toBeTruthy();
     expect(findButtonByText('Refresh')).toBeFalsy();
     expect(document.body.querySelector('.chat-refresh')).toBeNull();
   });
@@ -2095,7 +2095,7 @@ describe('ChatView', () => {
     );
     findButtonByText('session-1')?.click();
 
-    // Reconcile: the "Cancel run" button disappears, "New Session" is no
+    // Reconcile: the "Cancel run" button disappears, "New session" is no
     // longer disabled (so `canCreateNewSession(...)` is now true), and the
     // run stream's `closeSubscriptionFor` was called for this session key.
     await waitForCondition(
@@ -2104,7 +2104,7 @@ describe('ChatView', () => {
     );
 
     expect(findButtonByText('Cancel run')).toBeUndefined();
-    expect(findButtonByText('New Session')?.disabled).toBe(false);
+    expect(findButtonByText('New session')?.disabled).toBe(false);
     expect(closeSubscriptionForMock).toHaveBeenCalledWith('alpha::session-1');
     // No new SSE attach — the dead run is gone, not replaced.
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
@@ -2165,7 +2165,7 @@ describe('ChatView', () => {
     );
 
     expect(findButtonByText('Cancel run')).toBeTruthy();
-    expect(findButtonByText('New Session')?.disabled).toBe(true);
+    expect(findButtonByText('New session')?.disabled).toBe(true);
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
@@ -2300,7 +2300,7 @@ describe('ChatView', () => {
     expect(sessionState.currentRun?.runId).toBe('run-replacement');
     expect(closeSubscriptionForMock).not.toHaveBeenCalled();
     expect(findButtonByText('Cancel run')).toBeTruthy();
-    expect(findButtonByText('New Session')?.disabled).toBe(true);
+    expect(findButtonByText('New session')?.disabled).toBe(true);
   });
 
   // Helper: render a single running sub-agent tool row in the parent
