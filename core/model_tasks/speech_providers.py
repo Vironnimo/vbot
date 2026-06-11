@@ -8,9 +8,9 @@ from typing import Any
 
 import httpx
 
+from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.providers.errors import ProviderError
 from core.providers.task_client import ProviderTaskClient
-from core.speech.types import SpeechSynthesisResult, SpeechTranscriptionResult
 
 JsonObject = dict[str, Any]
 OPENROUTER_TRANSCRIPTIONS_ENDPOINT = "/audio/transcriptions"

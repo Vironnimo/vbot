@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from core.model_tasks import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH, TaskModelError
+from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
+from core.model_tasks.model_tasks import TaskModelError, parse_task_model_target_id
+from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
+from core.model_tasks.speech_providers import ProviderSpeechClient
+from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.providers.task_client import TaskClientRuntime
-from core.speech.local import LocalSpeechError, LocalSpeechExecutor
-from core.speech.providers import ProviderSpeechClient
-from core.speech.types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.utils.errors import TaskError
 from core.utils.logging import get_logger
 
@@ -213,8 +214,6 @@ class SpeechService:
 
     def _parse_target(self, target: str) -> Any:
         try:
-            from core.model_tasks import parse_task_model_target_id
-
             return parse_task_model_target_id(target)
         except TaskModelError as exc:
             raise SpeechConfigurationError(str(exc)) from exc

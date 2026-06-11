@@ -15,7 +15,7 @@ from core.attachments import AttachmentStore
 from core.chat import ChatError, ChatLoop, ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
-from core.speech import SpeechExecutionError
+from core.model_tasks import SpeechExecutionError
 
 TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})

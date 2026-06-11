@@ -7,8 +7,12 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.model_tasks import (
+    SpeechConfigurationError,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 from core.runs import ChatRunManager
-from core.speech import SpeechConfigurationError, SpeechSynthesisResult, SpeechTranscriptionResult
 from server.app import create_app
 
 

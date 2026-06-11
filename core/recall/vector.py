@@ -41,7 +41,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from core.embeddings import (
+from core.model_tasks import (
     EmbeddingError,
     EmbeddingResult,
     EmbeddingService,
