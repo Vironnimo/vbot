@@ -7,8 +7,13 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
+    ALLOWED_THINKING_EFFORTS,
+    MAX_TEMPERATURE,
+    MIN_TEMPERATURE,
     SettingsValidationError,
     parse_settings_update,
+    validate_temperature,
+    validate_thinking_effort,
 )
 from core.settings.validation import (
     JsonDiagnostic,
@@ -33,10 +38,13 @@ from core.settings.validation import (
 
 __all__ = [
     "AGENT_DEFAULT_FIELDS",
+    "ALLOWED_THINKING_EFFORTS",
     "DEFAULT_APPEARANCE_LANGUAGE",
     "DEFAULT_RECALL_SETTINGS",
     "JsonDiagnostic",
     "JsonValidationReport",
+    "MAX_TEMPERATURE",
+    "MIN_TEMPERATURE",
     "SUPPORTED_APPEARANCE_LANGUAGES",
     "SettingsDiagnostic",
     "SettingsValidationError",
@@ -56,4 +64,6 @@ __all__ = [
     "validate_data_dir_config",
     "validate_settings_data",
     "validate_settings_file",
+    "validate_temperature",
+    "validate_thinking_effort",
 ]

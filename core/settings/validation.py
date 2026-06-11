@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -848,6 +849,9 @@ def _validate_temperature_value(
         _error(diagnostics, path, "must be a number")
         return
     temperature = float(value)
+    if not math.isfinite(temperature):
+        _error(diagnostics, path, "must be finite")
+        return
     if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
         _error(
             diagnostics,
