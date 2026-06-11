@@ -8,7 +8,8 @@ the server, WebUI, CLI, desktop shell, and channel integrations.
 ## 1. Requirements
 
 - Python **3.11+**
-- Node.js
+- Node.js (not needed on hosts that use a prebuilt `webui/dist` via
+  `--skip-webui-build`)
 - at least one configured provider credential or OAuth connection
 
 ## 2. Setup
@@ -47,6 +48,59 @@ To also remove the optional autostart task:
 
 ```powershell
 .\scripts\uninstall.ps1 -RemoveAutostart
+```
+
+### Install with the script on Linux
+
+The Linux installer mirrors the Windows one: it installs the Python package in
+editable mode, builds the WebUI, and prepares `~/.vbot` with the same
+conservative rules (existing valid `settings.json` and `.env` are kept, invalid
+`settings.json` stops the script, existing port settings are respected unless
+`--port` is passed).
+
+```bash
+scripts/install.sh
+```
+
+Common options:
+
+```bash
+scripts/install.sh --enable-autostart
+scripts/install.sh --start-server
+scripts/install.sh --data-dir ~/.vbot --port 8420
+scripts/install.sh --skip-webui-build
+```
+
+Notes:
+
+- On PEP 668 systems (Debian, Raspberry Pi OS) the script must run inside a
+  virtual environment. It fails early with instructions otherwise:
+
+  ```bash
+  python3 -m venv ~/vbot-venv
+  source ~/vbot-venv/bin/activate
+  scripts/install.sh
+  ```
+
+- `--enable-autostart` writes a systemd user unit to
+  `~/.config/systemd/user/vbot.service` and enables login lingering so the
+  server starts at boot, without root. Manage it with
+  `systemctl --user status|start|stop vbot`.
+- `--skip-webui-build` is for low-memory hosts (Pi 3 class) where `npm install`
+  is not practical: build the WebUI on another machine
+  (`cd webui && npm install && npm run build`) and copy `webui/dist` into the
+  checkout first. On a Pi 5 the default on-device build is fine.
+
+To uninstall the Python package while keeping the data directory untouched:
+
+```bash
+scripts/uninstall.sh
+```
+
+To also remove the systemd user unit:
+
+```bash
+scripts/uninstall.sh --remove-autostart
 ```
 
 ### Install Python dependencies
