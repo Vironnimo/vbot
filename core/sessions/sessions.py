@@ -28,6 +28,7 @@ SESSION_LINE_ENDING_BYTES = b"\n"
 SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
+_TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
 
 
@@ -134,19 +135,30 @@ class ChatSession:
         self._persist_skill_context_note(name, content)
         return tool_success({"content": content, "resources": list(resources)})
 
-    def skill_context_messages(self) -> list[JsonObject]:
-        """Return currently activated skill context as provider request messages."""
-        activated_contents = self._load_activated_skill_contents()
+    def skill_context_messages(
+        self,
+        messages: list[ChatMessage] | None = None,
+    ) -> list[JsonObject]:
+        """Return currently activated skill context as provider request messages.
+
+        Callers that already hold this session's loaded messages may pass them
+        to avoid a second full session read.
+        """
+        activated_contents = self._load_activated_skill_contents(messages)
         return [
             {"role": "user", "content": content}
             for _name, content in sorted(activated_contents.items())
         ]
 
-    def _load_activated_skill_contents(self) -> dict[str, str]:
+    def _load_activated_skill_contents(
+        self,
+        preloaded_messages: list[ChatMessage] | None = None,
+    ) -> dict[str, str]:
         if self._activated_skill_contents:
             return dict(self._activated_skill_contents)
 
-        activated_contents = _skill_contexts_from_messages(self.load())
+        source_messages = self.load() if preloaded_messages is None else preloaded_messages
+        activated_contents = _skill_contexts_from_messages(source_messages)
         self._activated_skill_names = set(activated_contents)
         self._activated_skill_contents = dict(activated_contents)
         return activated_contents
@@ -155,6 +167,27 @@ class ChatSession:
         from core.chat.chat import ChatMessage
 
         self.append(ChatMessage.note(_skill_context_note_content(name, content)))
+
+    def bookend_timestamps(self) -> tuple[str, str] | None:
+        """Return (first, last) message timestamps without loading the full session.
+
+        Reads only the first and last complete JSONL lines. Returns None when
+        the fast path cannot determine both timestamps (empty file, partial
+        trailing write, unparseable bookend line); callers must then fall back
+        to load(), which also handles partial-write recovery.
+        """
+        try:
+            first_line = _read_first_complete_line(self.path)
+            last_line = _read_last_complete_line(self.path)
+        except OSError:
+            return None
+        if first_line is None or last_line is None:
+            return None
+        first_timestamp = _timestamp_from_line(first_line)
+        last_timestamp = _timestamp_from_line(last_line)
+        if first_timestamp is None or last_timestamp is None:
+            return None
+        return first_timestamp, last_timestamp
 
     def load(self) -> list[ChatMessage]:
         """Load all valid JSONL messages from this session file."""
@@ -350,6 +383,10 @@ class ChatSessionManager:
         return dict(data)
 
     def _activity_timestamps(self, session: ChatSession) -> tuple[str, str]:
+        bookends = session.bookend_timestamps()
+        if bookends is not None:
+            return bookends
+
         fallback_timestamp = self._file_mtime(session.path)
         messages = session.load()
         if not messages:
@@ -413,6 +450,62 @@ def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]
         if isinstance(name, str) and isinstance(content, str):
             contexts[name] = content
     return contexts
+
+
+def _read_first_complete_line(path: Path) -> bytes | None:
+    """Return the first non-blank, newline-terminated line, or None."""
+    with path.open("rb") as session_file:
+        for line in session_file:
+            if not line.endswith(SESSION_LINE_ENDING_BYTES):
+                return None
+            if line.strip():
+                return line
+    return None
+
+
+def _read_last_complete_line(path: Path) -> bytes | None:
+    """Return the last non-blank, newline-terminated line via backward reads, or None.
+
+    Returns None for an empty file or when the file does not end with a
+    newline (a partial trailing write that load() recovery must handle).
+    """
+    with path.open("rb") as session_file:
+        session_file.seek(0, os.SEEK_END)
+        file_size = session_file.tell()
+        if file_size == 0:
+            return None
+        session_file.seek(file_size - 1)
+        if session_file.read(1) != SESSION_LINE_ENDING_BYTES:
+            return None
+
+        buffer = b""
+        position = file_size
+        while position > 0:
+            read_size = min(_TAIL_CHUNK_SIZE, position)
+            position -= read_size
+            session_file.seek(position)
+            buffer = session_file.read(read_size) + buffer
+            lines = buffer.split(SESSION_LINE_ENDING_BYTES)
+            # The buffer's first segment may continue an earlier, unread line.
+            candidates = lines if position == 0 else lines[1:]
+            for line in reversed(candidates):
+                if line.strip():
+                    return line + SESSION_LINE_ENDING_BYTES
+    return None
+
+
+def _timestamp_from_line(line: bytes) -> str | None:
+    """Extract the timestamp field from one JSONL message line, or None."""
+    try:
+        data = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    timestamp = data.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp:
+        return None
+    return timestamp
 
 
 def _append_bytes(path: Path, data: bytes) -> None:
