@@ -1,5 +1,5 @@
 <script>
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
 
   let {
     traces = [],
@@ -59,7 +59,7 @@
       if (Number.isNaN(date.getTime())) {
         return timestamp;
       }
-      return date.toLocaleString();
+      return date.toLocaleString(activeLocaleTag());
     } catch {
       return timestamp;
     }

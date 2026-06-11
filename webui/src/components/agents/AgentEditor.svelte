@@ -12,7 +12,7 @@
     createAgentFormValues,
     normalizeAgentForm,
   } from '$lib/agentForm.js';
-  import { t } from '$lib/i18n.js';
+  import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
     modelSelectionValue,
@@ -22,7 +22,7 @@
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
-  const timestampFormatter = new Intl.DateTimeFormat(undefined, {
+  const timestampFormatter = new Intl.DateTimeFormat(activeLocaleTag(), {
     dateStyle: 'medium',
     timeStyle: 'short',
   });
