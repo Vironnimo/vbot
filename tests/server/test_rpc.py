@@ -744,6 +744,9 @@ class StubStorage:
     def set_data_dir_credential(self, key: str, value: str) -> None:
         self._credentials[key] = value
 
+    def remove_data_dir_credential(self, key: str) -> bool:
+        return self._credentials.pop(key, None) is not None
+
     def read_prompt_fragment(self, name: str) -> str:
         if name not in self._prompt_fragments:
             raise StorageError(f"Unknown prompt fragment: {name}")
@@ -1137,6 +1140,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "credential_key": "ANTHROPIC_API_KEY",
                         }
                     ],
                     "credentials_configured": False,
@@ -1156,6 +1160,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": False,
+                            "credential_key": "OLLAMA_API_KEY",
                         }
                     ],
                     "credentials_configured": False,
@@ -1182,6 +1187,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "type": "api_key",
                             "label": "API Key",
                             "configured": True,
+                            "credential_key": "OPENAI_API_KEY",
                         },
                     ],
                     "credentials_configured": True,
@@ -1716,6 +1722,77 @@ async def test_provider_set_key_rejects_ambiguous_api_key_connection(tmp_path: P
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
     assert "multiple API key connections" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_removes_data_dir_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-test")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.unset_key",
+            "params": {"provider_id": "openrouter"},
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "provider_id": "openrouter",
+            "connection_id": "openrouter:api-key",
+            "credential_key": "OPENROUTER_API_KEY",
+            "removed": True,
+            "configured": False,
+        },
+    }
+    assert state.runtime.storage.load_environment() == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_reports_still_configured_from_process_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.unset_key",
+            "params": {"provider_id": "openrouter"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["removed"] is False
+    assert response["result"]["configured"] is True
+
+
+@pytest.mark.asyncio
+async def test_provider_unset_key_rejects_oauth_connection(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider_with_secondary_connection())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.unset_key",
+            "params": {"provider_id": "openrouter", "connection_id": "openrouter:oauth"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "not an API key connection" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

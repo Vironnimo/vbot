@@ -53,6 +53,7 @@ from cli.provider_management import (
     provider_list,
     provider_set_key,
     provider_status,
+    provider_unset_key,
 )
 from cli.server_management import (
     CommandResult,
@@ -489,6 +490,9 @@ def dispatch_provider_command(
     list_providers: Callable[[ServerInstance], CommandResult],
     provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
     set_provider_key: Callable[[ServerInstance, str, str, str | None, bool], CommandResult],
+    unset_provider_key_fn: Callable[
+        [ServerInstance, str, str | None], CommandResult
+    ] = provider_unset_key,
     connect_provider_fn: Callable[[ServerInstance, str, str], CommandResult] = provider_connect,
     disconnect_provider_fn: Callable[
         [ServerInstance, str, str], CommandResult
@@ -511,6 +515,8 @@ def dispatch_provider_command(
             args.connection,
             args.refresh_models,
         )
+    if args.command == "unset-key":
+        return unset_provider_key_fn(instance, args.provider, args.connection)
     if args.command == "connect":
         return connect_provider_fn(instance, args.provider, args.connection)
     if args.command == "disconnect":

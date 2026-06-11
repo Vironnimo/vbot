@@ -190,6 +190,49 @@ class StorageManager:
             remove_temporary_file(temp_path)
             raise StorageError(f"Cannot write {env_path}: {exc}") from exc
 
+    def remove_data_dir_credential(self, key: str) -> bool:
+        """Remove one credential from ``<data_dir>/.env``.
+
+        Returns whether a matching entry existed. Process-environment values
+        are never touched; removing a key that is also set in the process
+        environment leaves that credential resolvable.
+        """
+
+        if not ENV_KEY_PATTERN.fullmatch(key):
+            raise StorageError(f"Invalid environment key: {key}")
+
+        env_path = self.data_dir / ".env"
+        if not env_path.exists():
+            return False
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise StorageError(f"Cannot read {env_path}: {exc}") from exc
+
+        updated_lines: list[str] = []
+        removed = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                candidate_key = stripped.partition("=")[0].strip()
+                if candidate_key == key:
+                    removed = True
+                    continue
+            updated_lines.append(line)
+
+        if not removed:
+            return False
+
+        self.ensure_directories()
+        temp_path = temporary_path(self.data_dir, env_path)
+        try:
+            temp_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+            os.replace(temp_path, env_path)
+        except OSError as exc:
+            remove_temporary_file(temp_path)
+            raise StorageError(f"Cannot write {env_path}: {exc}") from exc
+        return True
+
     def build_environment_snapshot(self) -> dict[str, str]:
         """Return process-env-over-data-dir merged credentials without mutation."""
 

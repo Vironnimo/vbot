@@ -98,6 +98,35 @@ def provider_set_key(
     )
 
 
+def provider_unset_key(
+    instance: ServerInstance,
+    provider_id: str,
+    connection_id: str | None = None,
+) -> CommandResult:
+    """Remove an API-key provider credential via `provider.unset_key` RPC."""
+
+    params: dict[str, Any] = {"provider_id": provider_id}
+    if connection_id is not None:
+        params["connection_id"] = connection_id
+
+    payload = _rpc_call(instance, "provider.unset_key", params)
+    if not payload.ok:
+        return payload.to_command_result()
+
+    resolved_connection_id = _string_or_default(payload.data.get("connection_id"), "?")
+    credential_key = _string_or_default(payload.data.get("credential_key"), "?")
+    if not payload.data.get("removed"):
+        message = f"no stored credential {credential_key} for {resolved_connection_id}"
+    else:
+        message = f"removed {resolved_connection_id} credential {credential_key}"
+    if payload.data.get("configured"):
+        message = (
+            f"{message}\nstill configured from the process environment; "
+            "unset the variable there to fully disable the connection"
+        )
+    return CommandResult(ok=True, message=message, instance=instance)
+
+
 def provider_connect(
     instance: ServerInstance,
     provider_id: str,
