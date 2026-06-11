@@ -42,12 +42,10 @@ def test_parse_args_supports_provider_set_key_options() -> None:
         [
             "provider",
             "set-key",
-            "--provider",
             "openrouter",
+            "sk-or-test",
             "--connection",
             "openrouter:api-key",
-            "--value",
-            "sk-or-test",
             "--refresh-models",
             "--host",
             "localhost",
@@ -74,7 +72,6 @@ def test_parse_args_supports_provider_status_options() -> None:
         [
             "provider",
             "status",
-            "--provider",
             "openrouter",
             "--connection",
             "openrouter:api-key",
@@ -415,6 +412,161 @@ def test_provider_set_key_can_refresh_models(
     ]
 
 
+def test_parse_args_supports_provider_oauth_commands() -> None:
+    connect_args = cli_main.parse_args(
+        ["provider", "connect", "openai", "--connection", "openai:subscription"]
+    )
+    status_args = cli_main.parse_args(
+        ["provider", "connect-status", "openai", "--connection", "openai:subscription"]
+    )
+
+    assert connect_args.command == "connect"
+    assert connect_args.provider == "openai"
+    assert connect_args.connection == "openai:subscription"
+    assert status_args.command == "connect-status"
+
+
+def test_provider_connect_prints_device_flow_instructions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "user_code": "ABCD-1234",
+                    "verification_uri": "https://example.com/device",
+                    "expires_in": 900,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_connect(instance, "openai", "openai:subscription")
+
+    assert result.ok is True
+    assert result.message.splitlines() == [
+        "device flow started for openai:subscription",
+        "user_code: ABCD-1234",
+        "verification_uri: https://example.com/device",
+        "expires_in_seconds: 900",
+        (
+            "enter the user code at the verification URI in a browser; then check "
+            "progress with: provider connect-status openai --connection openai:subscription"
+        ),
+    ]
+    assert calls == [
+        {
+            "method": "provider.connect",
+            "params": {"provider_id": "openai", "connection_id": "openai:subscription"},
+        }
+    ]
+
+
+def test_provider_disconnect_posts_disconnect_rpc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "openai",
+                    "connection_id": "openai:subscription",
+                    "status": "disconnected",
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_disconnect(instance, "openai", "openai:subscription")
+
+    assert result == CommandResult(
+        ok=True, message="disconnected openai:subscription", instance=instance
+    )
+    assert calls == [
+        {
+            "method": "provider.disconnect",
+            "params": {"provider_id": "openai", "connection_id": "openai:subscription"},
+        }
+    ]
+
+
+def test_provider_connect_status_formats_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        assert json == {
+            "method": "provider.connection_status",
+            "params": {"provider_id": "openai", "connection_id": "openai:subscription"},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {"connected": True, "flow_active": False},
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_connect_status(instance, "openai", "openai:subscription")
+
+    assert result == CommandResult(
+        ok=True,
+        message="openai:subscription: connected=yes flow_active=no",
+        instance=instance,
+    )
+
+
+def test_provider_oauth_commands_surface_rpc_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": False,
+                "error": {
+                    "code": "oauth_not_supported",
+                    "message": "provider connection 'openai:api-key' is not an OAuth connection",
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_connect(instance, "openai", "openai:api-key")
+
+    assert result == CommandResult(
+        ok=False,
+        message=(
+            "oauth_not_supported: provider connection 'openai:api-key' is not an OAuth connection"
+        ),
+        instance=instance,
+    )
+
+
 def test_run_provider_set_key_dispatches_and_prints_plain_output(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -455,12 +607,10 @@ def test_run_provider_set_key_dispatches_and_prints_plain_output(
         [
             "provider",
             "set-key",
-            "--provider",
             "openrouter",
+            "sk-or-test",
             "--connection",
             "openrouter:api-key",
-            "--value",
-            "sk-or-test",
             "--host",
             "localhost",
             "--port",

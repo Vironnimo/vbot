@@ -56,6 +56,10 @@ def make_result(
         ["agent", "create"],
         ["agent", "update"],
         ["agent", "delete"],
+        ["session"],
+        ["session", "list"],
+        ["session", "create"],
+        ["session", "link-channel"],
         ["channel"],
         ["channel", "add"],
         ["channel", "list"],
@@ -78,14 +82,36 @@ def make_result(
         ["provider", "list"],
         ["provider", "status"],
         ["provider", "set-key"],
+        ["provider", "connect"],
+        ["provider", "disconnect"],
+        ["provider", "connect-status"],
         ["model"],
         ["model", "list"],
         ["model", "refresh"],
+        ["task-model"],
+        ["task-model", "list"],
+        ["task-model", "targets"],
+        ["task-model", "options"],
+        ["task-model", "set"],
+        ["task-model", "clear"],
         ["skill"],
         ["skill", "list"],
+        ["cron"],
+        ["cron", "list"],
+        ["cron", "create"],
+        ["cron", "update"],
+        ["cron", "delete"],
+        ["cron", "enable"],
+        ["cron", "disable"],
         ["config"],
         ["config", "get"],
         ["config", "set"],
+        ["debug"],
+        ["debug", "status"],
+        ["debug", "traces"],
+        ["debug", "trace"],
+        ["debug", "clear"],
+        ["debug", "probe"],
         ["doctor"],
         ["doctor", "settings"],
         ["doctor", "config"],
@@ -133,7 +159,6 @@ def test_parse_args_supports_agent_update_fields() -> None:
         [
             "agent",
             "update",
-            "--id",
             "coder",
             "--name",
             "Coder Two",
@@ -142,6 +167,10 @@ def test_parse_args_supports_agent_update_fields() -> None:
             "--clear-temperature",
             "--thinking-effort",
             "none",
+            "--memory-prompt-mode",
+            "agent",
+            "--custom-system-prompt",
+            "true",
             "--allowed-tools",
             "read_file",
             "edit_file",
@@ -160,6 +189,8 @@ def test_parse_args_supports_agent_update_fields() -> None:
     assert args.model == "openai/gpt-5.2"
     assert args.clear_temperature is True
     assert args.thinking_effort == "none"
+    assert args.memory_prompt_mode == "agent"
+    assert args.custom_system_prompt == "true"
     assert args.allowed_tools == ["read_file", "edit_file"]
     assert args.allowed_skills == ["debugging", "vbot-cli"]
     assert args.current_session_id == "session-one"
@@ -278,7 +309,6 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
         [
             "agent",
             "update",
-            "--id",
             "coder",
             "--name",
             "Coder Two",
@@ -377,7 +407,6 @@ def test_run_model_refresh_dispatches_provider_and_prints_plain_output(
         [
             "model",
             "refresh",
-            "--provider",
             "openai",
             "--host",
             "localhost",

@@ -33,6 +33,8 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "workspace": "C:/data/workspace-coder",
         "temperature": 0.4,
         "thinking_effort": "high",
+        "memory_prompt_mode": "agent_user",
+        "custom_system_prompt_enabled": False,
         "allowed_tools": ["*"],
         "allowed_skills": ["debugging"],
         "current_session_id": "session-one",
@@ -94,6 +96,8 @@ def test_agent_show_posts_rpc_and_formats_detail(
         "workspace: C:/data/workspace-coder",
         "temperature: 0.4",
         "thinking_effort: high",
+        "memory_prompt_mode: agent_user",
+        "custom_system_prompt_enabled: no",
         "allowed_tools: *",
         "allowed_skills: debugging",
         "current_session_id: session-one",
@@ -183,6 +187,7 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
         message=(
             "no agent fields provided; use one of: --name, --model, --fallback-model, "
             "--temperature, --clear-temperature, --thinking-effort, --clear-thinking-effort, "
+            "--memory-prompt-mode, --custom-system-prompt, "
             "--allowed-tools, --allowed-skills, --current-session-id"
         ),
         instance=instance,

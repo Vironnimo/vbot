@@ -139,7 +139,7 @@ def test_prompt_preview_posts_rpc_and_includes_rendered_text(
 
 
 def test_parse_args_supports_prompt_update_file() -> None:
-    args = cli_main.parse_args(["prompt", "update", "--name", "tools.md", "--file", "tools.txt"])
+    args = cli_main.parse_args(["prompt", "update", "tools.md", "--file", "tools.txt"])
 
     assert args.area == "prompt"
     assert args.command == "update"
@@ -168,7 +168,7 @@ def test_run_dispatches_prompt_update_file(
         return CommandResult(ok=True, message="updated tools.md", instance=resolved_instance)
 
     exit_code = cli_main.run(
-        ["prompt", "update", "--name", "tools.md", "--file", str(content_file)],
+        ["prompt", "update", "tools.md", "--file", str(content_file)],
         resolve=fake_resolve,
         update_prompt_fn=fake_update,
     )

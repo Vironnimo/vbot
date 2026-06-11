@@ -17,6 +17,8 @@ AGENT_UPDATE_FLAGS = (
     "--clear-temperature",
     "--thinking-effort",
     "--clear-thinking-effort",
+    "--memory-prompt-mode",
+    "--custom-system-prompt",
     "--allowed-tools",
     "--allowed-skills",
     "--current-session-id",
@@ -126,6 +128,7 @@ def _format_agent_row(agent: object) -> str:
 
 
 def _format_agent_detail(agent: Mapping[str, Any]) -> str:
+    custom_prompt_text = _bool_text(agent.get("custom_system_prompt_enabled"))
     return "\n".join(
         [
             "agent:",
@@ -136,6 +139,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
             f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
             f"temperature: {_value_text(agent.get('temperature'))}",
             f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
+            f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",
+            f"custom_system_prompt_enabled: {custom_prompt_text}",
             f"allowed_tools: {_format_string_list(agent.get('allowed_tools'))}",
             f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
             f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
@@ -152,6 +157,14 @@ def _format_string_list(value: object) -> str:
     if not value:
         return "[]"
     return ",".join(str(item) for item in value)
+
+
+def _bool_text(value: object) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "unknown"
 
 
 def _value_text(value: object) -> str:
