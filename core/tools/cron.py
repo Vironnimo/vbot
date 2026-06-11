@@ -22,7 +22,6 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.automation.cron import CronJob, CronService
 
-CronAction = Literal["create", "list", "update", "delete", "enable", "disable"]
 CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
