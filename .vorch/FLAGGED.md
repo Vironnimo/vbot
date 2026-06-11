@@ -309,3 +309,12 @@ Linux installer (`scripts/install.sh` + `uninstall.sh`, systemd user unit) now e
 
 **Why deferred:** CI is an infrastructure decision the user hasn't made; the sqlite-vec check
 needs the physical Pi.
+
+## 2026-06-11 — server/app.py pokes ChatLoop privates for compaction wiring
+
+`server/app.py` `_initialize_app_state` builds `CompactionService(SummarizationStrategy())` and
+injects it post-hoc via `chat_loop._compaction_service = ...` on the runtime-owned loops (also the
+streaming loop). The clean fix is to construct the canonical ChatLoops in `Runtime.start()` with a
+compaction service (constructor injection), removing the server-side private poke. Found during the
+deep-modules audit (A3); deferred because it changes Runtime bootstrap wiring and the server tests
+around `app.state.compaction_service`, which is out of scope for the audit fixes.

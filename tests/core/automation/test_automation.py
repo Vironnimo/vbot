@@ -244,3 +244,23 @@ async def test_trigger_run_queues_via_chat_run_manager_when_session_is_busy() ->
         session_id="session-one",
     )
     chat_run_manager.active_run.assert_not_called()
+
+
+async def test_compact_session_delegates_to_command_chat_loop() -> None:
+    # Arrange
+    chat_loop = SimpleNamespace(compact_session=AsyncMock(return_value="Context compacted."))
+    trigger_chat_loop = SimpleNamespace(compact_session=AsyncMock())
+    trigger_service = TriggerService(
+        cast(Any, chat_loop),
+        cast(Any, Mock()),
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, trigger_chat_loop),
+    )
+
+    # Act
+    reply = await trigger_service.compact_session("coder", "session-one")
+
+    # Assert
+    chat_loop.compact_session.assert_awaited_once_with("coder", "session-one")
+    trigger_chat_loop.compact_session.assert_not_awaited()
+    assert reply == "Context compacted."
