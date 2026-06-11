@@ -45,6 +45,7 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 - Failures include server RPC error code/message when available. For bounded identifiers such as providers, connections, settings keys, agents, channels, prompt fragments, and log files, prefer available-candidate output and `did you mean` suggestions when the CLI has enough local/RPC-returned candidates.
 - CLI-managed lifecycle logs belong under `<data_dir>/logs/` through the managed `LogManager`. Background server startup must not bypass that logger or rely on raw child stdout/stderr.
 - Tests mirror the module split under `tests/cli/`. When changing parser shape, command behavior, output text, target resolution, or lifecycle behavior, update the focused CLI tests.
+- The bundled product skill `resources/skills/vbot-cli/` (SKILL.md plus `references/commands.md`) teaches vBot's own agents the CLI surface. When command shapes, areas, or flags change, update that skill in the same change.
 
 ## Constraints & Gotchas
 
