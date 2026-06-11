@@ -552,7 +552,7 @@
       <div>
         <div class="detail-heading">
           {formMode === AGENT_FORM_MODE_CREATE
-            ? t('agents.create', 'Create Agent')
+            ? t('agents.create', 'Create agent')
             : agent?.name || formValues.name || agent?.id}
         </div>
         <div class="detail-sub">{detailSubtitle}</div>
@@ -569,12 +569,12 @@
                   'agents.deleteDisabledMinimum',
                   'The last remaining agent cannot be deleted.',
                 )
-              : t('agents.delete', 'Delete Agent')}
+              : t('agents.delete', 'Delete agent')}
             onclick={deleteSelectedAgent}
           >
             {isDeleting
               ? t('common.loading', 'Loading…')
-              : t('agents.delete', 'Delete Agent')}
+              : t('agents.delete', 'Delete agent')}
           </button>
         {/if}
       </div>

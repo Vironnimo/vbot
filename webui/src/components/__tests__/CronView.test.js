@@ -139,11 +139,11 @@ describe('CronView', () => {
     flushSync();
 
     await waitForCondition(() => {
-      const button = findButtonByText('New Job');
+      const button = findButtonByText('New job');
       return Boolean(button && !button.disabled);
     });
 
-    buttonByText('New Job').click();
+    buttonByText('New job').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
