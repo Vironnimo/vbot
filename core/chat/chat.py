@@ -612,7 +612,7 @@ class ChatLoop:
             history = _embed_notes_into_request(session_messages)
             request_messages = [
                 *system_messages,
-                *session.skill_context_messages(),
+                *session.skill_context_messages(session_messages),
                 *history,
             ]
         else:
@@ -637,7 +637,7 @@ class ChatLoop:
             history = _embed_notes_into_request(tail_messages)
             request_messages = [
                 *system_messages,
-                *session.skill_context_messages(),
+                *session.skill_context_messages(session_messages),
                 summary_synthetic_message,
                 *history,
             ]
