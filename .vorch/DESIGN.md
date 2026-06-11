@@ -296,6 +296,8 @@ Three visual levels:
 
 Primary save buttons inside long editor panels stay enabled even when the form is already clean. When nothing changed, the interaction should confirm trust via lightweight success feedback instead of disabling the control.
 
+**Save model for settings/config surfaces:** every settings-style panel auto-saves changes with a short debounce (800ms) *and* keeps an explicit Save button at the bottom of the panel for users who do not trust auto-save. Clicking Save on a clean form shows an "Already saved" success toast. This is the general scheme for all settings/config surfaces in the app; only entity create/edit forms (agents, channels, cron jobs) stay explicit-save-only, because half-typed entities must not persist.
+
 3. **Tertiary (`pane-action`, `tl-btn`)** — Smallest footprint. `border` border, `text-lo` / `text-med` color, 3px radius. Hover becomes accent.
 
 Destructive actions (Archive, Delete) use the secondary style but hover to `red` border and tint.
@@ -305,6 +307,8 @@ Destructive actions (Archive, Delete) use the secondary style but hover to `red`
 **Default input (`s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring.
 
 **Modal input** — Same as default but uses the deepest `bg` as background for contrast against the `surface` modal backdrop.
+
+**Read-only value (`s-value-box`)** — Same geometry and mono type as the default input, but visually non-interactive: structural `border` (not `border-2`), transparent background, `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
 
 **Chat composer** — A `bg`-filled rounded rectangle (10px radius) with `border-2` border. Contains an auto-resizing textarea (max 182px, hidden scrollbar) and action buttons flush to the bottom-right. Focus applies the accent border + glow.
 
@@ -363,6 +367,7 @@ Code blocks: `bg` fill, `border` border, `surface-2` header bar with language la
 
 ## Do's and Don'ts
 
+- Do use sentence case for buttons, modal titles, action labels, and table headers ("Create agent", "New session") — title case is reserved for nav/view names that are proper nouns of the app (Chat, Agents, System Prompt). Mono-caps section labels are uppercased by CSS, not in the string.
 - Do use IBM Plex Sans for all human-readable UI text.
 - Do use IBM Plex Mono for anything that names a system artifact: model IDs, tool names, timestamps, section labels, code.
 - Do use the accent color sparingly — active state, primary action, focus ring only.
