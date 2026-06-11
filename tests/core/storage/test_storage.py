@@ -162,6 +162,47 @@ def test_set_data_dir_credential_rejects_invalid_value(tmp_path: Path, value: st
         storage.set_data_dir_credential("OPENROUTER_API_KEY", value)
 
 
+def test_remove_data_dir_credential_removes_key_and_preserves_other_lines(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text(
+        "# Provider keys\nOPENROUTER_API_KEY=old\nOTHER_KEY=value\nOPENROUTER_API_KEY=duplicate\n",
+        encoding="utf-8",
+    )
+
+    removed = storage.remove_data_dir_credential("OPENROUTER_API_KEY")
+
+    assert removed is True
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+        "# Provider keys\nOTHER_KEY=value\n"
+    )
+
+
+def test_remove_data_dir_credential_returns_false_for_missing_key(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    (tmp_path / ".env").write_text("OTHER_KEY=value\n", encoding="utf-8")
+
+    removed = storage.remove_data_dir_credential("OPENROUTER_API_KEY")
+
+    assert removed is False
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OTHER_KEY=value\n"
+
+
+def test_remove_data_dir_credential_returns_false_without_env_file(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.remove_data_dir_credential("OPENROUTER_API_KEY") is False
+
+
+@pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])
+def test_remove_data_dir_credential_rejects_invalid_env_key(tmp_path: Path, key: str) -> None:
+    storage = StorageManager(tmp_path)
+
+    with pytest.raises(StorageError):
+        storage.remove_data_dir_credential(key)
+
+
 def test_resolves_data_dir_from_config_attribute(tmp_path: Path) -> None:
     data_dir = tmp_path / "configured"
     storage = StorageManager(config=ConfigWithDataDir(data_dir))
