@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from core.embeddings.providers import (
+from core.model_tasks.embeddings_providers import (
     DEFAULT_EMBEDDING_TIMEOUT,
     EMBEDDINGS_ENDPOINT,
     ProviderEmbeddingClient,

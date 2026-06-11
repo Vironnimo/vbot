@@ -16,12 +16,11 @@ from core.automation import CronService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
+from core.compaction import CompactionService, SummarizationStrategy
 from core.debug import DebugTraceStore, ProviderDebugRecorder
-from core.embeddings import EmbeddingService
 from core.extensions import ExtensionRegistry
-from core.image import ImageService
 from core.memory import MemoryService
-from core.model_tasks import TaskModelService
+from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
 from core.models.models import Model, ModelRegistry
 from core.prompts import SkillPromptRegistry, SystemPromptManager
 from core.providers.adapter import ModelLookup, ProviderAdapter
@@ -51,7 +50,6 @@ from core.runtime.interfaces import (
 )
 from core.sessions import ChatSessionManager
 from core.skills.skills import SkillRegistry
-from core.speech import SpeechService
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -294,8 +292,19 @@ class Runtime:
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
-        self._chat_loop = ChatLoop(self, streaming=False, attachment_resolver=resolver)
-        self._streaming_chat_loop = ChatLoop(self, streaming=True, attachment_resolver=resolver)
+        compaction_service = CompactionService(SummarizationStrategy())
+        self._chat_loop = ChatLoop(
+            self,
+            streaming=False,
+            attachment_resolver=resolver,
+            compaction_service=compaction_service,
+        )
+        self._streaming_chat_loop = ChatLoop(
+            self,
+            streaming=True,
+            attachment_resolver=resolver,
+            compaction_service=compaction_service,
+        )
         self._trigger_service = TriggerService(
             self._chat_loop,
             self._chat_run_manager,
@@ -305,7 +314,9 @@ class Runtime:
         self._channel_service = ChannelService(
             self._trigger_service,
             self._chat_sessions,
-            self,
+            agent_store=self._agents,
+            data_root=self._storage.data_dir,
+            credential_resolver=self.resolve_environment_credential,
             attachment_store=self._attachment_store,
             command_dispatcher=self._command_dispatcher,
         )
@@ -666,6 +677,11 @@ class Runtime:
     # ------------------------------------------------------------------
     # Read-only registry access
     # ------------------------------------------------------------------
+
+    @property
+    def config(self) -> ConfigProtocol:
+        """The injected configuration. Available before ``start()``."""
+        return self._config
 
     @property
     def providers(self) -> ProviderRegistry:

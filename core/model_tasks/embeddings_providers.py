@@ -9,11 +9,12 @@ against OpenRouter's :code:`/api/v1/embeddings` endpoint — the same
 shape the standard OpenAI platform endpoint returns — so the client
 is reusable for any provider that mirrors that contract.
 
-Mirrors :mod:`core.image.providers` and :mod:`core.speech.providers`:
-the client takes the resolved provider/connection/credential/model
-tuple, builds an ``httpx`` request with the connection's auth header,
-and runs it through :func:`core.utils.retry.retry_async` so transient
-network/HTTP errors follow the project retry policy.
+Mirrors :mod:`core.model_tasks.image_providers` and
+:mod:`core.model_tasks.speech_providers`: all three share the request
+plumbing (target resolution, auth headers, POST/classify/parse cycle,
+retry policy) through
+:class:`core.providers.task_client.ProviderTaskClient`; this module
+owns only the embeddings payload shape and response parsing.
 """
 
 from __future__ import annotations
@@ -21,11 +22,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
-
-from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.errors import ProviderError
-from core.utils.retry import retry_async
+from core.providers.task_client import ProviderTaskClient
 
 JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
@@ -33,39 +31,8 @@ DEFAULT_EMBEDDING_TIMEOUT = 60.0
 _PAYLOAD_DETAIL_LIMIT = 500
 
 
-class ProviderEmbeddingClient:
+class ProviderEmbeddingClient(ProviderTaskClient):
     """OpenAI-compatible embedding HTTP client bound to one target."""
-
-    def __init__(
-        self,
-        *,
-        provider: Any,
-        connection: Any,
-        credential: str,
-        model_id: str,
-    ) -> None:
-        self._provider = provider
-        self._connection = connection
-        self._credential = credential
-        self._model_id = model_id
-        self._base_url = connection.base_url or provider.base_url
-
-    @classmethod
-    def from_runtime(cls, runtime: Any, target_ref: Any) -> ProviderEmbeddingClient:
-        """Create a client from runtime provider configuration and credentials."""
-
-        provider = runtime.providers.get(target_ref.provider_id)
-        connection = provider.get_connection(target_ref.local_connection_id)
-        credential = runtime.provider_credentials.get_credentials(
-            target_ref.provider_id,
-            target_ref.connection_id,
-        )
-        return cls(
-            provider=provider,
-            connection=connection,
-            credential=credential,
-            model_id=target_ref.model_id,
-        )
 
     async def embed(self, inputs: list[str], *, options: JsonObject) -> list[list[float]]:
         """Call the provider's ``/api/v1/embeddings`` endpoint.
@@ -79,31 +46,14 @@ class ProviderEmbeddingClient:
         """
 
         payload = _build_embeddings_payload(self._model_id, inputs, options)
-
-        async def _do_request() -> list[list[float]]:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=DEFAULT_EMBEDDING_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        EMBEDDINGS_ENDPOINT,
-                        json=payload,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_embeddings_response(response)
-                return _parse_embeddings_response(response.json(), expected_count=len(inputs))
-
-        return await retry_async(_do_request)
-
-    def _headers(self) -> dict[str, str]:
-        auth = self._connection.auth
-        headers = {auth.header: f"{auth.prefix}{self._credential}"}
-        if self._provider.extra_headers:
-            headers.update(self._provider.extra_headers)
-        return headers
+        return await self.post_and_parse(
+            EMBEDDINGS_ENDPOINT,
+            timeout=DEFAULT_EMBEDDING_TIMEOUT,
+            parse=lambda response: _parse_embeddings_response(
+                response.json(), expected_count=len(inputs)
+            ),
+            json=payload,
+        )
 
 
 def _build_embeddings_payload(
@@ -134,16 +84,6 @@ def _build_embeddings_payload(
     elif isinstance(dimensions, float) and not isinstance(dimensions, bool) and dimensions > 0:
         payload["dimensions"] = int(dimensions)
     return payload
-
-
-def _classify_embeddings_response(response: httpx.Response) -> None:
-    """Classify an embeddings HTTP response, including body detail on error."""
-
-    detail = response.text if response.status_code >= 400 else ""
-    classify_http_status(
-        response.status_code,
-        detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
-    )
 
 
 def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[list[float]]:

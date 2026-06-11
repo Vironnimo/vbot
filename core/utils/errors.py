@@ -16,6 +16,16 @@ class ConfigError(VBotError):
     """
 
 
+class StorageError(VBotError):
+    """Raised for invalid storage data or unsafe storage paths.
+
+    Lives here (not in ``core/storage/``) because the settings domain's
+    section normalizers raise it too; a storage-package home would force
+    a settings -> storage import cycle. ``core.storage.errors`` re-exports
+    it as the storage domain's canonical error.
+    """
+
+
 class ProviderError(VBotError):
     """Provider / API errors.
 
@@ -32,7 +42,19 @@ class ProviderError(VBotError):
         self.retryable = retryable
 
 
-class EmbeddingError(VBotError):
+class TaskError(VBotError):
+    """Common base for expected task-model execution errors.
+
+    The specialized task domains (speech, image, embeddings) mirror the
+    same error family: configuration missing, target unsupported, or
+    provider execution failed. Their domain bases (``SpeechError``,
+    ``ImageError``, ``EmbeddingError``) derive from this class so
+    callers can treat "a task-model execution failed" uniformly without
+    importing every domain.
+    """
+
+
+class EmbeddingError(TaskError):
     """Base class for expected embedding errors.
 
     Embedding execution sits between :class:`ImageError`-style provider

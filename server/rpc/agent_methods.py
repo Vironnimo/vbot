@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any, cast
 
 from core.channels import ChannelConfigError
 from core.memory import MEMORY_PROMPT_MODES
+from core.settings import (
+    ALLOWED_THINKING_EFFORTS,
+    MAX_TEMPERATURE,
+    MIN_TEMPERATURE,
+    SettingsValidationError,
+    validate_temperature,
+    validate_thinking_effort,
+)
 from server.events import AGENT_CREATED_EVENT, AGENT_DELETED_EVENT, AGENT_UPDATED_EVENT
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id, _channel_system_reminder
@@ -25,9 +32,8 @@ from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import _optional_bool, _optional_string, _required_string
 
 JsonObject = dict[str, Any]
-ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
-MIN_TEMPERATURE = 0.0
-MAX_TEMPERATURE = 2.0
+
+__all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 
 
 def _list_agents(state: Any) -> JsonObject:
@@ -266,22 +272,10 @@ def _validate_temperature(
     label: str = "params.temperature",
     allow_none: bool = False,
 ) -> float | None:
-    if value is None:
-        if allow_none:
-            return None
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a number")
-
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a number")
-    temperature = float(value)
-    if not math.isfinite(temperature):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be finite")
-    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"{label} must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}",
-        )
-    return temperature
+    try:
+        return validate_temperature(value, label=label, allow_none=allow_none)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 def _validate_thinking_effort(
@@ -290,20 +284,10 @@ def _validate_thinking_effort(
     label: str = "params.thinking_effort",
     allow_none: bool = False,
 ) -> str | None:
-    if value is None:
-        if allow_none:
-            return None
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a string")
-
-    if not isinstance(value, str):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"{label} must be a string")
-    if value not in ALLOWED_THINKING_EFFORTS:
-        allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"{label} must be one of: {allowed}",
-        )
-    return value
+    try:
+        return validate_thinking_effort(value, label=label, allow_none=allow_none)
+    except SettingsValidationError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
 
 def _validate_string_list(key: str, value: Any) -> list[str]:

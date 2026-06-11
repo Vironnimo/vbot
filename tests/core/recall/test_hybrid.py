@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.embeddings import EmbeddingResult
+from core.model_tasks import EmbeddingResult
 from core.recall import RecallBackendContext, RecallRequest
 from core.recall.hybrid import (
     _FETCH_MARGIN,
