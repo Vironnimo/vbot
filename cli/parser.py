@@ -82,6 +82,7 @@ PROVIDER_HELP = {
     "list": "List provider connections and usability",
     "status": "Show one provider or connection status",
     "set-key": "Set an API-key provider credential",
+    "unset-key": "Remove an API-key provider credential",
     "connect": "Start the OAuth device flow for one provider connection",
     "disconnect": "Remove the stored OAuth token for one provider connection",
     "connect-status": "Show OAuth connection and device-flow state",
@@ -485,6 +486,23 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "--refresh-models",
         action="store_true",
         help="Refresh this provider's model catalog after setting the key",
+    )
+
+    unset_key_parser = _add_command_parser(
+        provider_subparsers,
+        "unset-key",
+        PROVIDER_HELP["unset-key"],
+        example="provider unset-key openai",
+    )
+    unset_key_parser.description = (
+        "Remove an API key from the target data-dir .env through the server RPC contract. "
+        "Process-environment credentials are not touched. Example: provider unset-key openai"
+    )
+    unset_key_parser.add_argument("provider", metavar="<provider-id>", help="Provider id to clear")
+    unset_key_parser.add_argument(
+        "--connection",
+        metavar="<provider:connection-id>",
+        help="Required when the provider has multiple API-key connections",
     )
 
     for command in ("connect", "disconnect", "connect-status"):

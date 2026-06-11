@@ -412,6 +412,97 @@ def test_provider_set_key_can_refresh_models(
     ]
 
 
+def test_parse_args_supports_provider_unset_key_options() -> None:
+    args = cli_main.parse_args(
+        [
+            "provider",
+            "unset-key",
+            "openrouter",
+            "--connection",
+            "openrouter:api-key",
+        ]
+    )
+
+    assert args.area == "provider"
+    assert args.command == "unset-key"
+    assert args.provider == "openrouter"
+    assert args.connection == "openrouter:api-key"
+
+
+def test_provider_unset_key_posts_unset_key_rpc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "openrouter",
+                    "connection_id": "openrouter:api-key",
+                    "credential_key": "OPENROUTER_API_KEY",
+                    "removed": True,
+                    "configured": False,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_unset_key(instance, provider_id="openrouter")
+
+    assert result == CommandResult(
+        ok=True,
+        message="removed openrouter:api-key credential OPENROUTER_API_KEY",
+        instance=instance,
+    )
+    assert calls == [
+        {
+            "url": f"{instance.url}/api/rpc",
+            "json": {
+                "method": "provider.unset_key",
+                "params": {"provider_id": "openrouter"},
+            },
+            "timeout": 10.0,
+        }
+    ]
+
+
+def test_provider_unset_key_reports_remaining_process_env_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(url: str, *, json: dict[str, Any], timeout: float) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider_id": "openrouter",
+                    "connection_id": "openrouter:api-key",
+                    "credential_key": "OPENROUTER_API_KEY",
+                    "removed": False,
+                    "configured": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_unset_key(instance, provider_id="openrouter")
+
+    assert result.ok is True
+    assert "no stored credential OPENROUTER_API_KEY" in result.message
+    assert "still configured from the process environment" in result.message
+
+
 def test_parse_args_supports_provider_oauth_commands() -> None:
     connect_args = cli_main.parse_args(
         ["provider", "connect", "openai", "--connection", "openai:subscription"]

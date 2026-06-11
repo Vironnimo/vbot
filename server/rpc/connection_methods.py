@@ -126,6 +126,40 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
+    unsupported_fields = sorted(set(params) - {"provider_id", "connection_id"})
+    if unsupported_fields:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unsupported provider unset-key fields: {', '.join(unsupported_fields)}",
+        )
+
+    provider_id = _required_string(params, "provider_id")
+    raw_connection_id = params.get("connection_id")
+    connection_id = (
+        _required_string(params, "connection_id") if raw_connection_id is not None else None
+    )
+
+    try:
+        runtime = state.runtime
+        connection = _api_key_connection(runtime, provider_id, connection_id)
+        public_connection_id = f"{provider_id}:{connection.id}"
+        credential_key = connection.auth.credential_key
+        removed = bool(runtime.storage.remove_data_dir_credential(credential_key))
+        runtime.reload_provider_credentials()
+        configured = runtime.provider_credentials.has_credentials(provider_id, public_connection_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    return {
+        "provider_id": provider_id,
+        "connection_id": public_connection_id,
+        "credential_key": credential_key,
+        "removed": removed,
+        "configured": configured,
+    }
+
+
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
     unsupported_fields = sorted(set(params) - {"provider_id"})
     if unsupported_fields:
@@ -390,6 +424,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
         "provider.set_key": _set_provider_key,
+        "provider.unset_key": _unset_provider_key,
         "provider.connect": _connect_provider,
         "provider.disconnect": _disconnect_provider,
         "provider.connection_status": _provider_connection_status,

@@ -156,6 +156,8 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
         "label": connection.label,
         "configured": _connection_has_credentials(runtime, provider_id, connection_id),
     }
+    if getattr(connection, "type", "") == "api_key":
+        response["credential_key"] = connection.auth.credential_key
     if getattr(connection, "type", "") == "oauth":
         oauth_config = getattr(connection, "oauth", None)
         response["connectable"] = bool(
