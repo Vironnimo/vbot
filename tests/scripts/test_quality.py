@@ -88,7 +88,7 @@ def test_main_runs_pytest_verbose(monkeypatch, capsys):
 
     monkeypatch.setattr(module.sys, "argv", ["quality.py", "core/runtime/"])
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, encoding, errors):
         commands.append(cmd)
         if cmd[2] == "pytest":
             return module.subprocess.CompletedProcess(
@@ -130,7 +130,7 @@ def test_main_filters_pytest_failure_output(monkeypatch, capsys):
 
     monkeypatch.setattr(module.sys, "argv", ["quality.py", "tests/example/test_demo.py"])
 
-    def fake_run(cmd, capture_output, text):
+    def fake_run(cmd, capture_output, text, encoding, errors):
         if cmd[2] == "pytest":
             return module.subprocess.CompletedProcess(cmd, 1, stdout=pytest_output, stderr="")
         return module.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
