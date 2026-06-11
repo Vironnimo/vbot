@@ -43,6 +43,7 @@
   });
   const MIN_SUBMITTED_TURN_SPACER_HEIGHT = 360;
   const LOAD_OLDER_SCROLL_THRESHOLD = 48;
+  const SESSION_SCROLL_POSITION_LIMIT = 100;
 
   let timelineItems = $derived(visibleTimelineItemsForRender(sessionState));
   let timelineDateKeys = $derived(
@@ -68,6 +69,16 @@
   let shouldRenderSubmittedTurnScrollSpacer = $derived(
     hasSubmittedTurnUserItem(),
   );
+  let sessionScrollKey = $derived(sessionState?.key ?? '');
+  // Per-session scroll memory: the scroll container survives session
+  // switches (sub-agent "View session", drawer picks, "Return to current
+  // session"), so each displayed session's position is saved on switch-away
+  // and restored on switch-back. Deliberately plain (non-reactive)
+  // bookkeeping: the map is read and written inside the scroll pre-effect,
+  // and a SvelteMap would register itself as a dependency of that effect.
+  let renderedSessionScrollKey = null;
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const sessionScrollPositions = new Map();
 
   $effect(() => {
     if (
@@ -80,8 +91,20 @@
     }
   });
 
+  // One pre-effect owns both scroll behaviors so they cannot fight: a
+  // session switch saves the outgoing session's position (in a pre-effect
+  // the DOM still shows the old session) and restores the incoming one's
+  // after render, while content changes within the same session keep the
+  // stick-to-bottom behavior.
   $effect.pre(() => {
     timelineSignature;
+    const key = sessionScrollKey;
+    if (key !== renderedSessionScrollKey) {
+      saveSessionScrollPosition(renderedSessionScrollKey);
+      renderedSessionScrollKey = key;
+      tick().then(() => restoreSessionScrollPosition(key));
+      return;
+    }
     const shouldAutoscroll =
       !hasPendingSubmittedTurnScroll() && isNearBottom(scrollContainer);
     if (shouldAutoscroll) {
@@ -199,6 +222,39 @@
 
   function hasPendingSubmittedTurnScroll() {
     return pendingSubmittedTurnScrollKey > handledSubmittedTurnScrollKey;
+  }
+
+  function saveSessionScrollPosition(key) {
+    if (!key || !scrollContainer) {
+      return;
+    }
+    sessionScrollPositions.delete(key);
+    sessionScrollPositions.set(key, {
+      top: scrollContainer.scrollTop,
+      atBottom: isNearBottom(scrollContainer),
+    });
+    while (sessionScrollPositions.size > SESSION_SCROLL_POSITION_LIMIT) {
+      const oldestKey = sessionScrollPositions.keys().next().value;
+      sessionScrollPositions.delete(oldestKey);
+    }
+  }
+
+  function restoreSessionScrollPosition(key) {
+    if (key !== renderedSessionScrollKey) {
+      // A newer switch superseded this restore; its own restore handles it.
+      return;
+    }
+    if (!key || !scrollContainer || hasPendingSubmittedTurnScroll()) {
+      return;
+    }
+    const saved = sessionScrollPositions.get(key);
+    if (saved && !saved.atBottom) {
+      scrollContainer.scrollTo?.(0, saved.top);
+      return;
+    }
+    // First view of this session, or the user left it at the bottom: start
+    // at the newest content (content may have grown while away).
+    scrollContainer.scrollTo?.(0, scrollContainer.scrollHeight);
   }
 
   function scrollSubmittedTurnIntoView() {
