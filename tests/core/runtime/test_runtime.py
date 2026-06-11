@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -679,7 +680,7 @@ async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Pat
     """ChatLoop wires Run cancellation to Runtime.process_manager.cancel_scope()."""
     adapter = _BlockingAdapter()
     process_manager = _RecordingProcessManager()
-    runtime = _ChatRuntimeStub(tmp_path, adapter, process_manager)
+    runtime: Any = _ChatRuntimeStub(tmp_path, adapter, process_manager)
     runtime.chat_sessions.create("agent-one", session_id="session-one")
     chat_loop = ChatLoop(runtime)
 
@@ -808,6 +809,8 @@ class _ChatRuntimeStub:
         self.provider_credentials = _StubCredentials()
         self.chat_sessions = ChatSessionManager(tmp_path)
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.extensions = None
         self.system_prompts = _StubPrompts()
         self.tools = ToolRegistry()
         self.storage = SimpleNamespace(data_dir=tmp_path)

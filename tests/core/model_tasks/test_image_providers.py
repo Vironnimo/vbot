@@ -9,14 +9,14 @@ import httpx
 import pytest
 import respx
 
-from core.image.providers import (
+from core.model_tasks.image_providers import (
     _IMAGE_CONFIG_KEYS,
     _OPENAI_IMAGE_KEYS,
     ProviderImageClient,
     _build_openai_image_payload,
     _build_openrouter_image_payload,
 )
-from core.image.types import ImageGenerationResult
+from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,8 @@ Persisted agent configuration and workspace lifecycle management.
 - `create(agent_id, name, **fields) -> Agent` — persists `agent.json`, creates `sessions/`, creates the first Session, sets `current_session_id`, and seeds workspace files. Returned value is the effective resolved Agent; persisted raw unset fields stay unset on disk.
 - `get(agent_id) -> Agent` — returns the effective Agent with `defaults.agent` applied.
 - `list() -> list[Agent]` — returns effective Agents with `defaults.agent` applied.
-- Agent reads pass `agent.json` through `core/settings/validation.py` before constructing `Agent` objects. Malformed JSON or schema errors raise `AgentError` with file/path diagnostics instead of being normalized later.
+- Agent reads pass `agent.json` through `core/settings/validation.py` before constructing `Agent` objects. Malformed JSON or schema errors raise `AgentError` with file/path diagnostics instead of being normalized later. The load path validates **once**: `_agent_from_dict` trusts the validated mapping and only normalizes shapes (workspace fallback, `allowed_tools` sanitization, optional-field defaults).
+- Field schema rules live in `core/settings` (single authority): `validate_temperature` / `validate_thinking_effort` plus the constants `ALLOWED_THINKING_EFFORTS`, `MIN_TEMPERATURE`, `MAX_TEMPERATURE`. `AgentStore` create/update and the server's `agent.*` RPC param validation both delegate to them, wrapping `SettingsValidationError` into `AgentError` / `invalid_request` respectively.
 - `update(agent_id, **changes) -> Agent` — updates mutable fields only; `id` is immutable. Raw values are written unchanged and the returned Agent is resolved after write.
 - `delete(agent_id) -> Path` — moves active data under `<data_dir>/archive/<agent-id>/`.
 ## Conventions

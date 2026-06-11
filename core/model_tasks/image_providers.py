@@ -6,13 +6,10 @@ import base64
 import re
 from typing import Any
 
-import httpx
-
-from core.image.types import ImageGenerationResult, JsonObject
-from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.model_tasks.image_types import ImageGenerationResult, JsonObject
 from core.providers.errors import ProviderError
+from core.providers.task_client import ProviderTaskClient
 from core.utils.logging import get_logger
-from core.utils.retry import retry_async
 
 _CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 _OPENAI_IMAGES_GENERATIONS_ENDPOINT = "/images/generations"
@@ -55,39 +52,8 @@ _OPENAI_IMAGE_KEYS: tuple[str, ...] = (
 )
 
 
-class ProviderImageClient:
+class ProviderImageClient(ProviderTaskClient):
     """Small provider HTTP client bound to one image-generation target."""
-
-    def __init__(
-        self,
-        *,
-        provider: Any,
-        connection: Any,
-        credential: str,
-        model_id: str,
-    ) -> None:
-        self._provider = provider
-        self._connection = connection
-        self._credential = credential
-        self._model_id = model_id
-        self._base_url = connection.base_url or provider.base_url
-
-    @classmethod
-    def from_runtime(cls, runtime: Any, target_ref: Any) -> ProviderImageClient:
-        """Create a client from runtime provider configuration and credentials."""
-
-        provider = runtime.providers.get(target_ref.provider_id)
-        connection = provider.get_connection(target_ref.local_connection_id)
-        credential = runtime.provider_credentials.get_credentials(
-            target_ref.provider_id,
-            target_ref.connection_id,
-        )
-        return cls(
-            provider=provider,
-            connection=connection,
-            credential=credential,
-            model_id=target_ref.model_id,
-        )
 
     async def generate(
         self,
@@ -121,23 +87,12 @@ class ProviderImageClient:
             self._model_id,
         )
 
-        async def _do_request() -> ImageGenerationResult:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=_DEFAULT_IMAGE_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        _CHAT_COMPLETIONS_ENDPOINT,
-                        json=payload,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_image_response(response)
-                return _parse_image_response(response.json(), model=self._model_id)
-
-        return await retry_async(_do_request)
+        return await self.post_and_parse(
+            _CHAT_COMPLETIONS_ENDPOINT,
+            timeout=_DEFAULT_IMAGE_TIMEOUT,
+            parse=lambda response: _parse_image_response(response.json(), model=self._model_id),
+            json=payload,
+        )
 
     async def _generate_openai(
         self,
@@ -155,34 +110,16 @@ class ProviderImageClient:
             self._model_id,
         )
 
-        async def _do_request() -> ImageGenerationResult:
-            async with httpx.AsyncClient(
-                base_url=self._base_url,
-                timeout=_DEFAULT_IMAGE_TIMEOUT,
-            ) as client:
-                try:
-                    response = await client.post(
-                        _OPENAI_IMAGES_GENERATIONS_ENDPOINT,
-                        json=payload,
-                        headers=self._headers(),
-                    )
-                except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                    raise wrap_network_error(exc) from exc
-                _classify_image_response(response)
-                return _parse_openai_image_response(
-                    response.json(),
-                    model=self._model_id,
-                    requested_output_format=requested_output_format,
-                )
-
-        return await retry_async(_do_request)
-
-    def _headers(self) -> dict[str, str]:
-        auth = self._connection.auth
-        headers = {auth.header: f"{auth.prefix}{self._credential}"}
-        if self._provider.extra_headers:
-            headers.update(self._provider.extra_headers)
-        return headers
+        return await self.post_and_parse(
+            _OPENAI_IMAGES_GENERATIONS_ENDPOINT,
+            timeout=_DEFAULT_IMAGE_TIMEOUT,
+            parse=lambda response: _parse_openai_image_response(
+                response.json(),
+                model=self._model_id,
+                requested_output_format=requested_output_format,
+            ),
+            json=payload,
+        )
 
 
 def _is_omittable_option(value: Any) -> bool:
@@ -257,16 +194,6 @@ def _build_openai_image_payload(
         if key in options and not _is_omittable_option(options[key]):
             payload[key] = options[key]
     return payload
-
-
-def _classify_image_response(response: httpx.Response) -> None:
-    """Classify an image generation HTTP response, including body detail on error."""
-
-    detail = response.text if response.status_code >= 400 else ""
-    classify_http_status(
-        response.status_code,
-        detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
-    )
 
 
 def _parse_image_response(payload: JsonObject, *, model: str) -> ImageGenerationResult:

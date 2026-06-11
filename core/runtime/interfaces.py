@@ -4,7 +4,9 @@ Defines typing.Protocol contracts that enable constructor-injection
 and testability without dragging in concrete implementations.
 """
 
-from typing import Any, Protocol
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.agents.agents import Agent
 from core.models.models import Model
@@ -12,6 +14,21 @@ from core.providers.providers import ProviderConfig
 from core.sessions import ChatSession
 from core.skills.skills import SkillMetadata
 from core.tools.tools import Tool
+
+if TYPE_CHECKING:
+    from core.agents.agents import AgentStore
+    from core.chat import ChatLoop
+    from core.extensions import ExtensionRegistry
+    from core.models.models import ModelRegistry
+    from core.prompts import SystemPromptManager
+    from core.providers.adapter import ProviderAdapter
+    from core.providers.providers import ProviderRegistry
+    from core.runs import ChatRunManager
+    from core.sessions import ChatSessionManager
+    from core.skills.skills import SkillRegistry
+    from core.storage import StorageManager
+    from core.tools.process_manager import ProcessManager
+    from core.tools.tools import ToolRegistry
 
 
 class LoggerProtocol(Protocol):
@@ -172,4 +189,84 @@ class ChatSessionManagerProtocol(Protocol):
 
     def create(self, agent_id: str, session_id: str | None = None) -> ChatSession:
         """Create a chat session for an agent."""
+        ...
+
+
+class RuntimeServices(Protocol):
+    """Service surface of a started runtime, as consumed by core modules.
+
+    Mirrors the service accessors :class:`core.runtime.runtime.Runtime`
+    exposes after ``start()``. Modules that genuinely need the whole
+    runtime handle (chat loop, sub-agent coordination) type their
+    parameter with this protocol and access services directly — a missing
+    attribute is a wiring bug, not a silently disabled feature.
+    """
+
+    @property
+    def agents(self) -> AgentStore:
+        """Persisted agent store."""
+        ...
+
+    @property
+    def providers(self) -> ProviderRegistry:
+        """Provider config registry."""
+        ...
+
+    @property
+    def models(self) -> ModelRegistry:
+        """Model catalog registry."""
+        ...
+
+    @property
+    def provider_credentials(self) -> ProviderCredentialResolverProtocol:
+        """Central provider credential resolution."""
+        ...
+
+    @property
+    def storage(self) -> StorageManager:
+        """Data-directory, settings, and prompt-fragment storage."""
+        ...
+
+    @property
+    def chat_sessions(self) -> ChatSessionManager:
+        """Persisted chat session manager."""
+        ...
+
+    @property
+    def chat_run_manager(self) -> ChatRunManager:
+        """Shared run lifecycle manager and busy-session queue."""
+        ...
+
+    @property
+    def tools(self) -> ToolRegistry:
+        """Runtime tool registry."""
+        ...
+
+    @property
+    def skills(self) -> SkillRegistry:
+        """Loaded skill metadata registry."""
+        ...
+
+    @property
+    def extensions(self) -> ExtensionRegistry | None:
+        """Loaded extension hooks, or ``None`` when none are loaded."""
+        ...
+
+    @property
+    def system_prompts(self) -> SystemPromptManager:
+        """System prompt assembly."""
+        ...
+
+    @property
+    def process_manager(self) -> ProcessManager:
+        """Shared host process lifecycle management."""
+        ...
+
+    @property
+    def streaming_chat_loop(self) -> ChatLoop:
+        """Canonical resolver-wired streaming chat loop."""
+        ...
+
+    def get_adapter(self, provider_id: str, connection_id: str) -> ProviderAdapter:
+        """Build a wired provider adapter for one connection."""
         ...

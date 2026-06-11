@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -80,7 +81,7 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
             }
         ]
     )
-    runtime = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     # Act: start the run, then cancel it from a background task. The

@@ -14,26 +14,21 @@ from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from core.attachments.attachments import (
     AttachmentNotFoundError,
-    AttachmentStore,
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
 )
-from core.chat import ChatLoop, CommandDispatcher
-from core.compaction import CompactionService, SummarizationStrategy
-from core.image import (
+from core.model_tasks import (
     ImageConfigurationError,
     ImageError,
     ImageExecutionError,
     ImageUnsupportedTargetError,
-)
-from core.runs import ChatRunManager, RunNotFoundError, RunStatus
-from core.settings import SettingsValidationError, load_validated_settings_json
-from core.speech import (
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
+from core.runs import ChatRunManager, RunNotFoundError, RunStatus
+from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.delegates import RPC_ERROR_INVALID_REQUEST, bridge_run_to_event_bus, dispatch_rpc
@@ -93,7 +88,6 @@ WEBUI_DIST_DIR = Path(__file__).resolve().parents[1] / "webui" / "dist"
 DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
-DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
 UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
 
 
@@ -158,7 +152,7 @@ def create_app(
 
     @app.post("/api/upload")
     async def upload_attachment(request: Request, file: UploadFile) -> JsonObject:
-        attachment_store = _runtime_attachment_store(request.app.state.runtime)
+        attachment_store = request.app.state.runtime.attachment_store
         filename = file.filename or "upload.bin"
         try:
             data = await _read_upload_file_with_limit(
@@ -184,7 +178,7 @@ def create_app(
 
     @app.get("/api/attachments/{attachment_id}")
     async def get_attachment(request: Request, attachment_id: str) -> FileResponse:
-        attachment_store = _runtime_attachment_store(request.app.state.runtime)
+        attachment_store = request.app.state.runtime.attachment_store
         try:
             record = attachment_store.get(attachment_id)
         except AttachmentNotFoundError as exc:
@@ -194,13 +188,13 @@ def create_app(
     @app.post("/api/speech/transcribe")
     async def transcribe_speech(request: Request, file: UploadFile) -> JsonObject:
         runtime = request.app.state.runtime
-        speech_service = _runtime_speech_service(request.app.state.runtime)
+        speech_service = runtime.speech
         filename = file.filename or "recording.webm"
         media_type = file.content_type or "application/octet-stream"
         try:
             audio = await _read_upload_file_with_limit(
                 file,
-                max_size_bytes=_runtime_speech_upload_max_size_bytes(runtime),
+                max_size_bytes=runtime.speech_upload_max_size_bytes,
                 upload_kind="Speech audio",
             )
             result = await speech_service.transcribe(
@@ -216,7 +210,7 @@ def create_app(
 
     @app.post("/api/speech/synthesize")
     async def synthesize_speech(request: Request) -> Response:
-        speech_service = _runtime_speech_service(request.app.state.runtime)
+        speech_service = request.app.state.runtime.speech
         try:
             payload = await request.json()
         except json.JSONDecodeError as exc:
@@ -235,7 +229,7 @@ def create_app(
 
     @app.get("/api/speech/artifacts/{artifact_id}")
     async def get_speech_artifact(request: Request, artifact_id: str) -> FileResponse:
-        speech_service = _runtime_speech_service(request.app.state.runtime)
+        speech_service = request.app.state.runtime.speech
         try:
             artifact = speech_service.get_artifact(artifact_id)
         except SpeechError as exc:
@@ -248,7 +242,7 @@ def create_app(
 
     @app.get("/api/images/artifacts/{artifact_id}")
     async def get_image_artifact(request: Request, artifact_id: str) -> FileResponse:
-        image_service = _runtime_image_service(request.app.state.runtime)
+        image_service = request.app.state.runtime.image
         try:
             artifact = image_service.get_artifact(artifact_id)
         except ImageError as exc:
@@ -331,21 +325,14 @@ def _initialize_app_state(
     app: FastAPIType, runtime: Runtime, *, server_bind: ServerBindState
 ) -> None:
     app.state.runtime = runtime
-    app.state.chat_runs = _runtime_chat_runs(runtime)
+    app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
-    app.state.compaction_service = CompactionService(SummarizationStrategy())
-    chat_loop = _runtime_chat_loop(runtime)
-    chat_loop._compaction_service = app.state.compaction_service
-    app.state.chat_loop = chat_loop
-
-    streaming_chat_loop = getattr(runtime, "streaming_chat_loop", None)
-    if streaming_chat_loop is not None:
-        streaming_chat_loop._compaction_service = app.state.compaction_service
-
-    app.state.command_dispatcher = _runtime_command_dispatcher(runtime)
-    app.state.log_viewer = LogViewer(_runtime_data_dir(runtime))
+    app.state.chat_loop = runtime.chat_loop
+    app.state.streaming_chat_loop = runtime.streaming_chat_loop
+    app.state.command_dispatcher = runtime.command_dispatcher
+    app.state.log_viewer = LogViewer(runtime.storage.data_dir)
     app.state.agent_delete_lock = asyncio.Lock()
     app.state.server_bind = dict(server_bind)
 
@@ -363,91 +350,6 @@ def _unregister_run_event_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.run_event_bridge_unsubscribe = None
-
-
-def _runtime_chat_runs(runtime: Any) -> ChatRunManager:
-    run_manager = getattr(runtime, "chat_runs", None)
-    if isinstance(run_manager, ChatRunManager):
-        return run_manager
-
-    try:
-        run_manager = runtime.chat_run_manager
-    except AttributeError:
-        run_manager = None
-    except RuntimeError:
-        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
-            "core.runtime"
-        ):
-            raise
-        run_manager = None
-    if isinstance(run_manager, ChatRunManager):
-        runtime.chat_runs = run_manager
-        return run_manager
-
-    run_manager = ChatRunManager()
-    runtime.chat_runs = run_manager
-    return run_manager
-
-
-def _runtime_chat_loop(runtime: Any) -> Any:
-    try:
-        chat_loop = runtime.chat_loop
-    except AttributeError:
-        chat_loop = getattr(runtime, "_chat_loop", None)
-    except RuntimeError:
-        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
-            "core.runtime"
-        ):
-            raise
-        chat_loop = getattr(runtime, "_chat_loop", None)
-    if chat_loop is not None:
-        return chat_loop
-    return ChatLoop(runtime)
-
-
-def _runtime_command_dispatcher(runtime: Any) -> CommandDispatcher:
-    try:
-        command_dispatcher = runtime.command_dispatcher
-    except AttributeError:
-        command_dispatcher = getattr(runtime, "_command_dispatcher", None)
-    except RuntimeError:
-        if runtime.__class__.__name__ == "Runtime" and runtime.__class__.__module__.startswith(
-            "core.runtime"
-        ):
-            raise
-        command_dispatcher = getattr(runtime, "_command_dispatcher", None)
-    if isinstance(command_dispatcher, CommandDispatcher):
-        return command_dispatcher
-    return CommandDispatcher(ChatRunManager())
-
-
-def _runtime_attachment_store(runtime: Any) -> AttachmentStore:
-    try:
-        attachment_store = runtime.attachment_store
-    except (AttributeError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail="Attachment store is unavailable") from exc
-
-    if not isinstance(attachment_store, AttachmentStore):
-        raise HTTPException(status_code=503, detail="Attachment store is unavailable")
-
-    return attachment_store
-
-
-def _runtime_speech_service(runtime: Any) -> Any:
-    try:
-        return runtime.speech
-    except (AttributeError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail="Speech service is unavailable") from exc
-
-
-def _runtime_speech_upload_max_size_bytes(runtime: Any) -> int:
-    try:
-        value = runtime.speech_upload_max_size_bytes
-    except (AttributeError, RuntimeError):
-        value = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    return DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 
 
 async def _read_upload_file_with_limit(
@@ -482,13 +384,6 @@ def _speech_http_exception(error: SpeechError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(error))
 
 
-def _runtime_image_service(runtime: Any) -> Any:
-    try:
-        return runtime.image
-    except (AttributeError, RuntimeError) as exc:
-        raise HTTPException(status_code=503, detail="Image service is unavailable") from exc
-
-
 def _image_http_exception(error: ImageError) -> HTTPException:
     if isinstance(error, ImageConfigurationError):
         return HTTPException(status_code=409, detail=str(error))
@@ -503,13 +398,6 @@ def _app_chat_runs(state: Any) -> ChatRunManager:
     run_manager = getattr(state, "chat_runs", None)
     if isinstance(run_manager, ChatRunManager):
         return run_manager
-
-    runtime = getattr(state, "runtime", None)
-    runtime_run_manager = getattr(runtime, "chat_runs", None)
-    if isinstance(runtime_run_manager, ChatRunManager):
-        state.chat_runs = runtime_run_manager
-        return runtime_run_manager
-
     raise HTTPException(status_code=503, detail="Chat run manager is unavailable")
 
 
@@ -569,27 +457,11 @@ def _default_server_bind() -> ServerBindState:
 
 
 def _runtime_config(runtime: Any) -> Config | None:
-    config = getattr(runtime, "_config", None)
+    """Read the runtime's public config when present — bind resolution runs pre-start."""
+    config = getattr(runtime, "config", None)
     if isinstance(config, Config):
         return config
     return None
-
-
-def _runtime_data_dir(runtime: Any) -> Path:
-    data_dir = getattr(runtime, "_data_dir", None)
-    if isinstance(data_dir, Path):
-        return data_dir
-
-    storage = getattr(runtime, "storage", None)
-    storage_data_dir = getattr(storage, "data_dir", None)
-    if isinstance(storage_data_dir, Path):
-        return storage_data_dir
-
-    config = _runtime_config(runtime)
-    if config is not None:
-        return Path(config.data_dir).expanduser()
-
-    raise RuntimeError("Runtime data directory is unavailable")
 
 
 def _coerce_bind_host(value: Any) -> str:

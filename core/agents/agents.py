@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import shutil
@@ -11,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
@@ -20,7 +19,12 @@ from core.memory import (
     validate_memory_prompt_mode,
 )
 from core.sessions import ChatSessionManager
-from core.settings import SettingsValidationError, load_validated_agent_json
+from core.settings import (
+    SettingsValidationError,
+    load_validated_agent_json,
+    validate_temperature,
+    validate_thinking_effort,
+)
 from core.tools.availability import sanitize_configured_allowed_tools
 
 DEFAULT_FALLBACK_MODEL = ""
@@ -30,9 +34,6 @@ DEFAULT_THINKING_EFFORT: str | None = None
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
-ALLOWED_THINKING_EFFORTS = {"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
-MIN_TEMPERATURE = 0.0
-MAX_TEMPERATURE = 2.0
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -301,9 +302,8 @@ class AgentStore:
             data = load_validated_agent_json(agent_path)
         except SettingsValidationError as exc:
             raise AgentError(str(exc)) from exc
-        agent_id = _validate_string_field("id", data["id"], allow_empty=False)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
-        agent = _agent_from_dict(data, default_workspace=self._default_workspace(agent_id))
+        agent = _agent_from_dict(data, default_workspace=self._default_workspace(data["id"]))
         self._seed_workspace(Path(agent.workspace))
         if workspace_missing:
             self._write_agent(agent)
@@ -377,27 +377,17 @@ def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
 
 
 def _validate_temperature(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise AgentError("temperature must be a number")
-    temperature = float(value)
-    if not math.isfinite(temperature):
-        raise AgentError("temperature must be finite")
-    if temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
-        raise AgentError(f"temperature must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}")
-    return temperature
+    try:
+        return validate_temperature(value, label="temperature", allow_none=True)
+    except SettingsValidationError as exc:
+        raise AgentError(str(exc)) from exc
 
 
 def _validate_thinking_effort(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise AgentError("thinking_effort must be a string")
-    if value not in ALLOWED_THINKING_EFFORTS:
-        allowed = ", ".join(repr(item) for item in sorted(ALLOWED_THINKING_EFFORTS))
-        raise AgentError(f"thinking_effort must be one of: {allowed}")
-    return value
+    try:
+        return validate_thinking_effort(value, label="thinking_effort", allow_none=True)
+    except SettingsValidationError as exc:
+        raise AgentError(str(exc)) from exc
 
 
 def _validate_memory_prompt_mode(value: Any) -> MemoryPromptMode:
@@ -441,32 +431,30 @@ def _utc_now() -> str:
 
 
 def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | None = None) -> Agent:
-    agent_id = _validate_string_field("id", data["id"], allow_empty=False)
+    """Build an Agent from a mapping already validated by ``load_validated_agent_json``.
+
+    Field rules are enforced once by ``core.settings.validate_agent_data`` at load
+    time; this constructor only normalizes shapes (workspace fallback, tool
+    sanitization, optional-field defaults) without re-validating.
+    """
+    temperature = data.get("temperature")
     return Agent(
-        id=agent_id,
-        name=_validate_string_field("name", data["name"], allow_empty=False),
-        model=_validate_string_field("model", data["model"], allow_empty=True),
-        fallback_model=_validate_string_field(
-            "fallback_model", data["fallback_model"], allow_empty=True
-        ),
+        id=data["id"],
+        name=data["name"],
+        model=data["model"],
+        fallback_model=data["fallback_model"],
         workspace=str(_workspace_from_data(data.get("workspace"), default_workspace)),
-        temperature=_validate_temperature(data.get("temperature")),
-        thinking_effort=_validate_thinking_effort(data.get("thinking_effort")),
-        memory_prompt_mode=_validate_memory_prompt_mode(
-            data.get("memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        temperature=None if temperature is None else float(temperature),
+        thinking_effort=data.get("thinking_effort"),
+        memory_prompt_mode=cast(
+            MemoryPromptMode, data.get("memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
         ),
-        allowed_tools=_validate_allowed_items("allowed_tools", data["allowed_tools"]),
-        allowed_skills=_validate_allowed_items("allowed_skills", data["allowed_skills"]),
-        custom_system_prompt_enabled=_validate_bool_field(
-            "custom_system_prompt_enabled",
-            data.get(
-                "custom_system_prompt_enabled",
-                DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
-            ),
+        allowed_tools=sanitize_configured_allowed_tools(data["allowed_tools"]),
+        allowed_skills=list(data["allowed_skills"]),
+        custom_system_prompt_enabled=data.get(
+            "custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
         ),
-        current_session_id=_validate_string_field(
-            "current_session_id", data.get("current_session_id", ""), allow_empty=True
-        ),
+        current_session_id=data.get("current_session_id", ""),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )

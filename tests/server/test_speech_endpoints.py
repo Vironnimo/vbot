@@ -7,8 +7,12 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.model_tasks import (
+    SpeechConfigurationError,
+    SpeechSynthesisResult,
+    SpeechTranscriptionResult,
+)
 from core.runs import ChatRunManager
-from core.speech import SpeechConfigurationError, SpeechSynthesisResult, SpeechTranscriptionResult
 from server.app import create_app
 
 
@@ -89,6 +93,10 @@ class _SpeechRuntime:
     ) -> None:
         self.storage = type("Storage", (), {"data_dir": data_dir})()
         self.chat_runs = ChatRunManager()
+        self.chat_run_manager = self.chat_runs
+        self.chat_loop = object()
+        self.streaming_chat_loop = object()
+        self.command_dispatcher = object()
         self.speech = _FailingSpeech() if fail else _Speech()
         self.speech_upload_max_size_bytes = speech_upload_max_size_bytes
 

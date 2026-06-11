@@ -12,7 +12,7 @@ import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
 from core.chat import ChatMessage
-from core.embeddings import EmbeddingError, EmbeddingResult
+from core.model_tasks import EmbeddingError, EmbeddingResult
 from core.recall import RecallBackendContext, RecallRequest, VectorRecallBackend
 from core.recall.vector import (
     _CHUNK_FETCH_MULTIPLIER,

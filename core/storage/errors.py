@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from core.utils.errors import VBotError
+from core.utils.errors import StorageError
 
-
-class StorageError(VBotError):
-    """Raised for invalid storage data or unsafe storage paths."""
+__all__ = ["StorageError"]

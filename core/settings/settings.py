@@ -225,7 +225,7 @@ def _parse_defaults_update(defaults: Any) -> JsonObject:
             continue
 
         if field == "temperature":
-            agent_defaults[field] = _validate_temperature(
+            agent_defaults[field] = validate_temperature(
                 value,
                 label="params.defaults.agent.temperature",
                 allow_none=True,
@@ -233,7 +233,7 @@ def _parse_defaults_update(defaults: Any) -> JsonObject:
             continue
 
         if field == "thinking_effort":
-            agent_defaults[field] = _validate_thinking_effort(
+            agent_defaults[field] = validate_thinking_effort(
                 value,
                 label="params.defaults.agent.thinking_effort",
                 allow_none=True,
@@ -375,12 +375,13 @@ def _positive_integer(value: Any, label: str) -> int:
     return cast("int", value)
 
 
-def _validate_temperature(
+def validate_temperature(
     value: Any,
     *,
     label: str,
     allow_none: bool = False,
 ) -> float | None:
+    """Validate one agent ``temperature`` value against the canonical schema rules."""
     if value is None:
         if allow_none:
             return None
@@ -398,12 +399,13 @@ def _validate_temperature(
     return temperature
 
 
-def _validate_thinking_effort(
+def validate_thinking_effort(
     value: Any,
     *,
     label: str,
     allow_none: bool = False,
 ) -> str | None:
+    """Validate one agent ``thinking_effort`` value against the canonical schema rules."""
     if value is None:
         if allow_none:
             return None

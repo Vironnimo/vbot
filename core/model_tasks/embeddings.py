@@ -22,8 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core.embeddings.providers import ProviderEmbeddingClient
-from core.model_tasks import TASK_TEXT_EMBEDDING, TaskModelError, parse_task_model_target_id
+from core.model_tasks.constants import TASK_TEXT_EMBEDDING
+from core.model_tasks.embeddings_providers import ProviderEmbeddingClient
+from core.model_tasks.task_execution import TaskBindingResolver
+from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -82,10 +84,12 @@ class EmbeddingService:
     def __init__(
         self,
         model_tasks: Any,
-        runtime: Any,
+        runtime: TaskClientRuntime,
     ) -> None:
-        self._model_tasks = model_tasks
         self._runtime = runtime
+        self._resolver = TaskBindingResolver(
+            model_tasks, configuration_error=EmbeddingConfigurationError
+        )
 
     async def embed(self, texts: list[str]) -> EmbeddingResult:
         """Embed a batch of texts using the configured binding.
@@ -109,9 +113,7 @@ class EmbeddingService:
                     f"Embedding input at index {index} is not a string"
                 )
 
-        binding = self._binding_for(TASK_TEXT_EMBEDDING)
-        options = self._model_tasks.options_with_defaults(binding)
-        target_ref = self._parse_target(binding.target)
+        _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
 
         if target_ref.kind == "local":
             raise EmbeddingUnsupportedTargetError(
@@ -164,23 +166,10 @@ class EmbeddingService:
         malformed bindings, but never executes a request.
         """
 
-        binding = self._binding_for(TASK_TEXT_EMBEDDING)
-        target_ref = self._parse_target(binding.target)
+        binding = self._resolver.binding_for(TASK_TEXT_EMBEDDING)
+        target_ref = self._resolver.parse_target(binding.target)
         if target_ref.kind == "local":
             raise EmbeddingUnsupportedTargetError(
                 f"Embedding does not support local targets: {target_ref.target}"
             )
         return (target_ref.provider_id, target_ref.model_id)
-
-    def _binding_for(self, task_type: str) -> Any:
-        try:
-            return self._model_tasks.binding_for(task_type)
-        except TaskModelError as exc:
-            raise EmbeddingConfigurationError(str(exc)) from exc
-
-    @staticmethod
-    def _parse_target(target: str) -> Any:
-        try:
-            return parse_task_model_target_id(target)
-        except TaskModelError as exc:
-            raise EmbeddingConfigurationError(str(exc)) from exc

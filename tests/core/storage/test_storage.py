@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
+from core.settings import DEFAULT_APPEARANCE_LANGUAGE
 from core.storage import (
-    DEFAULT_APPEARANCE_LANGUAGE,
     PHASE_TWO_DIRECTORIES,
     StorageError,
     StorageManager,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.speech.types import SpeechSynthesisResult, SpeechTranscriptionResult
+from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.utils.errors import VBotError
 
 
