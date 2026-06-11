@@ -7,6 +7,7 @@
     attachmentUrlForBlock,
     avatarForItem,
     compactToolValue,
+    errorMessagePresentation,
     formatTime,
     hasAssistantContent,
     hasReadableReasoning,
@@ -206,6 +207,19 @@
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html renderMarkdown(textFromMessage(item.message))}
             </div>
+          {/if}
+        {:else if item.message.role === 'error'}
+          {@const errorPresentation = errorMessagePresentation(
+            textFromMessage(item.message),
+          )}
+          <p class="msg-body-text">{errorPresentation.summary}</p>
+          {#if errorPresentation.details}
+            <details class="error-details">
+              <summary class="error-details-summary">
+                {t('chat.errorDetails', 'Details')}
+              </summary>
+              <pre class="error-details-body">{errorPresentation.details}</pre>
+            </details>
           {/if}
         {:else}
           <p
