@@ -23,7 +23,8 @@ CLI commands require a running vBot server and go through its RPC surface.
 ## Requirements
 
 - Python **3.11+**
-- Node.js for WebUI development and builds
+- Node.js for WebUI development and builds (not needed on hosts that use a
+  prebuilt `webui/dist` via `--skip-webui-build`)
 
 ## Quick Start
 
@@ -59,6 +60,34 @@ Remove the optional autostart task too:
 
 ```powershell
 .\scripts\uninstall.ps1 -RemoveAutostart
+```
+
+On Linux (e.g. a Raspberry Pi), the equivalent installer behaves the same way.
+On PEP 668 systems such as Debian and Raspberry Pi OS it must run inside a
+virtual environment and tells you how to create one otherwise:
+
+```bash
+scripts/install.sh
+```
+
+Optional autostart via a systemd user unit that starts at boot:
+
+```bash
+scripts/install.sh --enable-autostart
+```
+
+On low-memory hosts (Pi 3 class), skip the on-device WebUI build and use a
+`webui/dist` built on another machine and copied over:
+
+```bash
+scripts/install.sh --skip-webui-build
+```
+
+Uninstall mirrors the Windows script and leaves `~/.vbot` untouched:
+
+```bash
+scripts/uninstall.sh
+scripts/uninstall.sh --remove-autostart
 ```
 
 ### Manual development install
