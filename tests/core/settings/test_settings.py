@@ -358,3 +358,18 @@ def test_validate_agent_data_rejects_invalid_memory_prompt_mode() -> None:
             diagnostics=tuple(diagnostics),
         )
     ) == [("error", "$.memory_prompt_mode", "must be one of: agent, agent_user, off")]
+
+
+def test_validate_agent_data_rejects_non_finite_temperature() -> None:
+    data = _valid_agent_data()
+    data["temperature"] = float("nan")
+
+    diagnostics = validate_agent_data(data)
+
+    assert diagnostics_as_tuples(
+        SettingsValidationReport(
+            file_path=Path("agent.json"),
+            exists=True,
+            diagnostics=tuple(diagnostics),
+        )
+    ) == [("error", "$.temperature", "must be finite")]
