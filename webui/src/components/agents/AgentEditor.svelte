@@ -22,6 +22,10 @@
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const timestampFormatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
   const WILDCARD_ACCESS = '*';
   const THINKING_EFFORT_OPTIONS = Object.freeze([
     '',
@@ -516,6 +520,19 @@
     return value || EMPTY_VALUE;
   }
 
+  function displayTimestamp(value) {
+    if (!value) {
+      return EMPTY_VALUE;
+    }
+
+    const parsedValue = Date.parse(value);
+    if (Number.isNaN(parsedValue)) {
+      return value;
+    }
+
+    return timestampFormatter.format(new Date(parsedValue));
+  }
+
   function viewErrorMessage(error, fallback) {
     if (error?.code === 'last_agent') {
       return t('errors.minimumAgents', 'At least one agent must remain.');
@@ -967,12 +984,12 @@
 
     <div class="detail-group">
       <div class="detail-group-title">
-        {t('agents.detail.session', 'Session')}
+        {t('agents.detail.metadata', 'Metadata')}
       </div>
       <div class="detail-fields">
         <div class="f wide">
           <div class="f-label">
-            {t('agents.detail.sessionId', 'Session ID')}
+            {t('agents.detail.sessionId', 'Current session ID')}
           </div>
           <div class="f-value mono agents-view__wrap-value">
             {displayValue(agent?.current_session_id)}
@@ -981,13 +998,13 @@
         <div class="f">
           <div class="f-label">{t('agents.detail.created', 'Created')}</div>
           <div class="f-value mono agents-view__wrap-value">
-            {displayValue(agent?.created_at)}
+            {displayTimestamp(agent?.created_at)}
           </div>
         </div>
         <div class="f">
           <div class="f-label">{t('agents.detail.updated', 'Updated')}</div>
           <div class="f-value mono agents-view__wrap-value">
-            {displayValue(agent?.updated_at)}
+            {displayTimestamp(agent?.updated_at)}
           </div>
         </div>
       </div>
