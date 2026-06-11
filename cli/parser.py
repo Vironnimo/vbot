@@ -437,7 +437,7 @@ def _add_log_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     log_subparsers = log_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(log_subparsers, "list", LOG_HELP["list"], example="log list")
     read_parser = _add_command_parser(
-        log_subparsers, "read", LOG_HELP["read"], example="log read vbot-2026-06-11.log"
+        log_subparsers, "read", LOG_HELP["read"], example="log read 2026-06-11.log"
     )
     read_parser.add_argument("file", metavar="<log-file>", help="Daily log file name to read")
 
